@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md)
 
+Use the [revised milestones](implementation-milestones.md) for feature order: early middleware, then streaming/interruption, later SchemaBinary and persistent sessions. The optional [Cruster backend](cruster-backend.md) handles internal cluster RPC separately from the browser's Effect RPC compatibility boundary; this document retains the detailed protocol proposals.
+
 This document preserves a design discussion from the original PLAN.md. APIs and package names are proposals, not implemented guarantees. Original citation placeholders are retained; verify external API and protocol claims against the installed dependencies before implementation.
 
 ## Contents

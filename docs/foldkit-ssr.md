@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md)
 
+Use the [revised milestones](implementation-milestones.md) for current sequencing: native SSR follows Remote/SQL/streaming/live, then Data.satisfy and resume complete the fullstack showcase. This original discussion retains the rendering and hydration details. The [reuse strategy](reuse-strategy.md) keeps Foldkit's public browser/SSR contracts as the compatibility boundary.
+
 This document preserves a design discussion from the original PLAN.md. APIs and package names are proposals, not implemented guarantees. Original citation placeholders are retained; verify external API and protocol claims against the installed dependencies before implementation.
 
 ## Contents

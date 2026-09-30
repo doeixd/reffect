@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md)
 
+Unary RPC remains the first major public demo in the [revised milestones](implementation-milestones.md), after kernel bootstrap, Foldkit Query conformance, and general functions/Effect IR. Middleware follows unary early; streaming/Scope/interruption follow Query → SQLx. Read those milestones for current sequencing and this discussion for the stock-client MVP details.
+
 This document preserves a design discussion from the original PLAN.md. APIs and package names are proposals, not implemented guarantees. Original citation placeholders are retained; verify external API and protocol claims against the installed dependencies before implementation.
 
 ## Contents

@@ -44,6 +44,14 @@ Prefix review commits with review(....
 - [PLAN.md](PLAN.md) - start here for the vision, design constraints, consolidated roadmap, and acceptance criteria.
 - [PROGRESS.md](PROGRESS.md) - completed work, validation, current status, and remaining questions.
 - [docs/README.md](docs/README.md) - index of the detailed design discussions. Read the relevant documents before implementing a feature:
+  - [docs/op-expr-revision-convo.md](docs/op-expr-revision-convo.md) - overview of the later design revision, reading order, and changes that supersede earlier proposals.
+  - [docs/compiler-design-revision.md](docs/compiler-design-revision.md) - revised semantic kernel, typed laws, checked traits, representation boundaries, compiler passes, and explainable planning.
+  - [docs/implementation-milestones.md](docs/implementation-milestones.md) - current detailed milestones 0–15, starting with kernel bootstrap and Foldkit Query conformance.
+  - [docs/conformance-and-diagnostics.md](docs/conformance-and-diagnostics.md) - conformance obligations, diagnostics, postponed scope, and todo-fullstack showcase.
+  - [docs/foldkit-ir-design.md](docs/foldkit-ir-design.md) - existing Expr/Query reuse, symbolic inputs, dependencies, deterministic transitions, normalization, and semantic identity.
+  - [docs/gen2-semantic-kernel.md](docs/gen2-semantic-kernel.md) - Gen2-inspired law witnesses/evidence policy, checked traits, representations, capabilities/effects, and planning.
+  - [docs/reuse-strategy.md](docs/reuse-strategy.md) - adaptation, dependencies/contracts, semantic ports, and deferred shared-kernel extraction.
+  - [docs/cruster-backend.md](docs/cruster-backend.md) - optional later cluster/durable backend; keep it separate from the base runtime and browser RPC.
   - [docs/architecture.md](docs/architecture.md) - typed DSL/IR, CType/Schema, ownership, Services/Layers, fibers/Scope, platform lowering, validation, and operation registry.
   - [docs/rpc-mvp.md](docs/rpc-mvp.md) - shared RPC contracts, unary JSON/HTTP, and the stock-client MVP.
   - [docs/rpc-protocol.md](docs/rpc-protocol.md) - middleware, streaming/backpressure, cancellation, sessions, serializers, and transports.
@@ -51,5 +59,7 @@ Prefix review commits with review(....
   - [docs/foldkit-ssr.md](docs/foldkit-ssr.md) - server rendering, routing/init/view, hydration, SSG, and HTML streaming.
   - [docs/foldkit-remote.md](docs/foldkit-remote.md) - native RemoteServer, Query IR/conformance, Sources, SQLx, live data, and SSR resume.
 
-The docs preserve the original proposals, including provisional APIs and unresolved citation placeholders. Check PROGRESS.md and code for actual support; verify Effect v4 API details against installed dependencies before implementation. PLAN.md supplies the consolidated sequence where the original discussions suggest different demo orderings.
+The docs preserve evolving proposals, including provisional APIs, historical upstream/licensing claims, and unresolved citation placeholders. Check PROGRESS.md and code for actual support; verify Effect v4 API details against installed dependencies before implementation. Start with the revision overview and revised design/milestones for current direction, then consult the earlier topic docs for details. PLAN.md follows the detailed revised milestones where discussions suggest different orderings or numbering.
+
+Current design priorities: typed law/evidence and checked traits enter the kernel early; Foldkit Entity/Query conformance is the first meaningful workload; the compiler exposes check/derive/normalize/plan/verify/optimize/ownership/lower/emit/build and explains valid implementation choices. Defer shared-kernel extraction, complex cross-fiber ownership, broad concurrency, law-driven optimization, and Cruster integration until their workloads and conformance foundations are ready.
 </Important files>

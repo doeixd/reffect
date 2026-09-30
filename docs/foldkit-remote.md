@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md)
 
+The later [Foldkit IR design](foldkit-ir-design.md) and [reuse strategy](reuse-strategy.md) specify consuming existing Entity/Query IR, protocol schemas, and conformance fixtures. The [revised milestones](implementation-milestones.md) move Query → Rust conformance before general Effect functions and RPC. [Cruster](cruster-backend.md) is a later optional distributed implementation beneath native application services.
+
 This document preserves a design discussion from the original PLAN.md. APIs and package names are proposals, not implemented guarantees. Original citation placeholders are retained; verify external API and protocol claims against the installed dependencies before implementation.
 
 ## Contents

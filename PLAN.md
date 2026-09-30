@@ -1,78 +1,106 @@
 # Effect Native roadmap
 
-Effect Native is an ahead-of-time compiler for a statically representable subset of Effect v4 programs. TypeScript executes an Effect-shaped DSL to construct typed IR; a reference interpreter runs that IR through official Effect, and a native backend lowers it to Rust.
+Effect Native is an ahead-of-time semantic compiler for a statically representable subset of Effect v4 programs. TypeScript executes an Effect-shaped DSL to construct typed IR; a reference interpreter runs that IR through official Effect, and a native backend lowers it to Rust.
 
-This file is the entry point for the vision and sequencing. Detailed design discussions live in [docs/](docs/README.md). Read [PROGRESS.md](PROGRESS.md) for completed work and current implementation status; roadmap items below describe intended capabilities, not shipped features.
+This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md) tracks actual implementation status. The [documentation index](docs/README.md) covers the detailed designs; the [later operation/expression revision](docs/op-expr-revision-convo.md) explains changes to the initial plan. Capabilities below are intended, not shipped.
 
 ## How to use this plan
 
-1. Read the constraints below before choosing an implementation approach.
-2. Use the document map to read the design relevant to the task.
-3. Check PROGRESS.md and the actual code before assuming an API or milestone exists.
-4. Build the smallest vertically complete capability and validate it against the official Effect implementation.
+1. Read the constraints before choosing an implementation approach.
+2. Read the revised design and milestones, then the task-specific reference documents below.
+3. Check PROGRESS.md and actual code before assuming an API or milestone exists.
+4. Build the smallest complete capability and validate its semantics against the reference implementation.
 5. Record completed work, validation, and remaining questions in PROGRESS.md. Update this roadmap when priorities or constraints change.
 
 ## Design constraints
 
-- Effect stays a dependency and the semantic reference implementation. The JS interpreter delegates execution to official Effect.
+- Effect remains a dependency and semantic oracle. The JS interpreter delegates execution to official Effect; public Schema, RPC, and HTTP descriptions supply boundary contracts.
 - Initially compile explicit typed IR built by symbolic callbacks. Arbitrary TypeScript control flow, generators, operators, loops, and opaque callbacks are outside the compiled subset; build-time TypeScript remains unrestricted.
-- Every runtime value has a known CType and native representation. Effect Schema supplies semantic type descriptions; host-dependent transforms require a native implementation or a later hybrid target.
-- Match is the initial branching construct. Predicates and structured collection/effect combinators represent branching and iteration as data.
-- Infer moves, borrows, sharing, and cloning. Ref expresses shared mutable identity; RcRef/RcMap express resource lifetime. Neither is an alias for Rust borrowing or memory reference counting.
-- Compile Effect composition, Context lookups, Layers, and other abstractions away whenever their observable semantics permit it. Preserve Layer sharing/freshness, cancellation, finalizers, and resource lifetimes.
-- Use Tokio, Hyper/Tower/Axum, Serde, and SQLx for their native facilities. Keep the Effect-specific runtime focused on supervision, interruption, Scope, observable Exit/Cause, and related semantic adapters.
-- The compiler is an Effect library with Services and Layers. The CLI, tests, editors, and build integrations consume the same public compiler API.
-- Preserve stock client compatibility: official Effect RPC clients and Foldkit hydration/resume protocols are acceptance targets.
-- Keep the IR stable as later syntax producers and hybrid targets broaden authoring options.
+- Every runtime value has a CType and known native representation. Keep semantic Schema, native memory, wire codecs, and storage mappings distinct.
+- Operations carry input/output types, effects, required capabilities, typed laws/evidence, and target implementations. Separate pure Expr, effectful computation, and deterministic state-transition data.
+- Match is the initial branching construct. Predicates and structured collection/effect combinators represent branching and iteration as data; normalize composition into canonical IR.
+- Derive dependencies and checked semantic traits. Track backend capabilities, program effects, external requirements, and laws separately. Use stable semantic identities rather than display names.
+- Introduce law witnesses and assurance policy in the kernel, then enable optimizations only when the evidence/conformance infrastructure supports them. Operation semantics define behavior across backends, including numeric, string, null, and ordering edge cases.
+- Infer moves, borrows, sharing, and cloning conservatively first. Ref expresses shared mutable identity; RcRef/RcMap express resource lifetime. Expand scope/fiber ownership analysis when concurrency workloads demand it.
+- Compile Effect composition, Context lookups, and Layers away where observable semantics permit. Preserve Layer sharing/freshness, interruption, finalizers, Exit/Cause when observable, and resource lifetimes.
+- Use Tokio, Hyper/Tower/Axum, Serde, and SQLx as native substrates. Keep the Effect-specific runtime small; Cruster is an optional later distributed/durable profile.
+- Adapt small Gen2 kernel primitives and consume existing Foldkit Entity/Query IR, protocol schemas, and conformance fixtures where possible. Defer shared-kernel extraction until real commonality is demonstrated.
+- The compiler is an Effect library with Services/Layers; CLI, editors, tests, and build integrations consume the same public stages and diagnostics.
+- Make target selection and fallback planning explainable. Refuse unsupported operations when no semantics-preserving implementation exists; expose any later hybrid-host requirement explicitly.
+- Preserve stock Effect RPC clients, Foldkit hydration, and Remote resume compatibility. Keep browser RPC separate from internal cluster RPC.
+- Keep the IR stable as later syntax producers and targets broaden authoring options.
 
 ## Document map
 
-| Document                                             | Read when working on                                                                                                                                               |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [Compiler architecture](docs/architecture.md)        | CType/Schema, Expr, Predicate, Match, functions, ownership, Services/Layers, fibers, Scope, platform lowering, validation, operation registry, original milestones |
-| [RPC MVP](docs/rpc-mvp.md)                           | First stock-client demo, shared contracts, unary JSON/HTTP, typed handlers, initial cancellation and streaming upgrades                                            |
-| [RPC protocol and transports](docs/rpc-protocol.md)  | Middleware, stream acknowledgements/backpressure, sessions, reverse RPC, notifications, JSON/NDJSON/SchemaBinary, WebSocket/TCP, custom codecs                     |
-| [Compiler library API and CLI](docs/compiler-api.md) | Declarative Compile.Spec, targets, compiler services/stages, check/run/watch, results, diagnostics, extension and support metadata                                 |
-| [Foldkit SSR and SSG](docs/foldkit-ssr.md)           | Server-reachable init/view/routing, HTML IR, hydration compatibility, native rendering, SSG, streaming HTML                                                        |
-| [Foldkit Remote and SQL](docs/foldkit-remote.md)     | Native RemoteServer, Sources, Entity/Query IR, conformance tests, storage bindings, SQLx, authorization, mutations, liveHub, SSR resume                            |
+| Document                                                               | Read when working on                                                                                         |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| [Revision overview](docs/op-expr-revision-convo.md)                    | Changes from the initial proposal, reading order, and precedence                                             |
+| [Revised compiler design](docs/compiler-design-revision.md)            | Current architecture, reuse, repository shape, CType/Operation/Law/Trait, compiler stages, API, and CLI      |
+| [Revised implementation milestones](docs/implementation-milestones.md) | Detailed milestone 0–15 scope, acceptance, conservative ownership, and later targets                         |
+| [Conformance and diagnostics](docs/conformance-and-diagnostics.md)     | Test obligations, semantic diagnostics, postponed scope, and todo-fullstack target                           |
+| [Foldkit IR design](docs/foldkit-ir-design.md)                         | Expr/Query adaptation, symbolic inputs, dependencies, identity, deterministic transitions, and normalization |
+| [Gen2 semantic kernel](docs/gen2-semantic-kernel.md)                   | Law witnesses/evidence policy, checked traits, representation separation, and explainable planning           |
+| [Reuse strategy](docs/reuse-strategy.md)                               | Adaptation versus dependency/contract reuse, semantic ports, and deferred shared extraction                  |
+| [Cruster backend](docs/cruster-backend.md)                             | Optional cluster/durable integration, workflows, internal RPC, and runtime isolation                         |
+| [Original compiler architecture](docs/architecture.md)                 | Foundational DSL/IR, ownership, Services/Layers, fibers/Scope, platform lowering, and original examples      |
+| [RPC MVP](docs/rpc-mvp.md)                                             | Shared contracts, unary JSON/HTTP, and stock-client demo                                                     |
+| [RPC protocol](docs/rpc-protocol.md)                                   | Middleware, backpressure, sessions, reverse RPC, serialization, and transports                               |
+| [Compiler API](docs/compiler-api.md)                                   | Build specs, services, results, watch/dev, diagnostics, and CLI details                                      |
+| [Foldkit SSR](docs/foldkit-ssr.md)                                     | Server graph, HTML IR, hydration, SSG, and streaming rendering                                               |
+| [Foldkit Remote and SQL](docs/foldkit-remote.md)                       | Sources, storage bindings, authorization, queries, liveHub, and SSR resume                                   |
 
-The documents preserve the original discussions and examples. API spellings and package names are provisional. Some discussions propose different demo orderings; the sequence below consolidates them around their dependencies. Original citation placeholders do not resolve to sources: verify external claims against the installed Effect v4 API and relevant upstream specifications when implementing them.
+The later revision takes precedence on the changes described in its overview. Earlier discussions remain detailed references. API names, repository and licensing observations, and unresolved citation placeholders are historical proposal material; verify upstream details before implementation.
 
 ## Implementation sequence
 
-The original architecture defines milestones 0–9; the RPC and Foldkit discussions add concrete demonstration paths. Use this sequence for planning while retaining those detailed proposals in the linked documents.
+Use the numbered milestones in the [revised implementation plan](docs/implementation-milestones.md). Its final condensed sequence groups and numbers some later steps differently; the numbering below follows the detailed milestone definitions.
 
-| Step                                   | Scope                                                                                                                                   | Acceptance evidence                                                                                             |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 1. IR kernel and reference interpreter | CType, Expr, Predicate, Match, Fn, Effect, stable serialization; primitive and structured data                                          | Validated IR executes through official Effect; property/differential fixtures establish reference semantics     |
-| 2. Pure Rust backend                   | Pure functions, structs/enums, strings, predicates, collections; move/borrow analysis                                                   | Generated Rust builds and matches JS reference results for the supported subset                                 |
-| 3. Effect basics and compiler API      | Async/typed failure, Services, Layer planning, Scope, timers/retry; library stages and thin CLI                                         | A real CLI application builds through the public API; resource and Layer semantics have reference coverage      |
-| 4. Unary RPC MVP                       | Shared RpcGroup/Schema contracts, codecs, dispatcher, JSON/HTTP transport                                                               | An unmodified Effect RpcClient calls the generated Rust binary and observes matching successes and typed errors |
-| 5. Request semantics and concurrency   | Middleware/request services, interruption/finalizers, structured concurrency and required synchronization primitives                    | Client interruption finalizes native resources; auth/context and concurrent handler behavior match Effect       |
-| 6. Native Remote and query semantics   | In-memory Sources, normalized responses, Entity/Query IR interpreter                                                                    | Stock foldkit-remote talks to Rust; upstream query conformance cases agree on IDs and ordering                  |
-| 7. SQL and streaming                   | Storage bindings → SQLx; scoped cursors, RPC chunks/acknowledgements, NDJSON and bounded backpressure                                   | Database-backed RPC/Remote works; stopping consumption closes streams and scoped resources                      |
-| 8. Foldkit SSR integration             | Native route/Flags/init/view renderer, Data.satisfy, in-process Remote handlers, minimal resume payload                                 | Stock Foldkit hydrates native HTML; resumed data avoids duplicate startup fetching                              |
-| 9. Broader coverage and targets        | WebSocket sessions, notifications/reverse RPC, SchemaBinary/TCP/custom codecs, richer resources, syntax widening and Node/native hybrid | Each new profile has explicit compatibility tests and reports unsupported or host-dependent operations          |
+| Milestone                         | Scope                                                                                                                        | Acceptance evidence                                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 0. Semantic kernel                | Gen2-inspired representations, Operation/Law/Trait/Capability, CType/Expr/Program/Target, diagnostics and pass skeleton      | A minimal arithmetic C.fn emits a compilable Rust crate; this is a smoke test                                    |
+| 1. Foldkit Query → Rust           | Consume Entity Expr/Query and existing evaluator/conformance cases                                                           | JS evaluator, Drizzle, and generated Rust agree on strings, nulls, predicates, ordering, and structured values   |
+| 2. Functions and Effect IR        | General C.fn, Match, Predicate, succeed/fail/map/flatMap; official Effect reference interpreter; conservative ownership      | Same supported IR matches Effect and Rust; primitive copies, moves, simple borrows and necessary clones compile  |
+| 3. Unary RPC and early middleware | Shared RpcGroup/Schema, async typed handlers, Services/basic Layers, JSON/HTTP; request auth/context immediately after unary | Stock Effect RpcClient calls native handlers with matching success/error behavior and request services           |
+| 4. Native RemoteServer            | Existing wire contracts, validation, authorization, grouping, traversal, normalization, mutations, limits; in-memory Sources | Stock foldkit-remote works without native-specific client code; native behavior matches the JS server            |
+| 5. Query → SQLx                   | Semantic query planning and build-time storage metadata; portable authorization                                              | JS, Drizzle, and Rust/SQLx conformance agree; unsupported callbacks are refused                                  |
+| 6. Streaming and interruption     | Stream lowering, NDJSON chunks/acks/backpressure, cancellation, explicit async Scope/finalizers                              | Client interruption closes native resources; completion/finalization traces match Effect                         |
+| 7. Remote live                    | Subscription interest, cursors, changes/deletes, re-authorization, minimal re-reads and patches                              | Stock live subscriptions receive matching changes and finalize on cancellation                                   |
+| 8. Foldkit SSR                    | Server-reachable routing/Flags/init/view, HTML IR and serializer                                                             | Stock Foldkit hydration adopts native HTML using the existing handoff protocol                                   |
+| 9. SSR data and resume            | Data.satisfy, direct in-process Remote handlers, minimal resume payload                                                      | Browser resumes required data without duplicate startup fetches; todo-fullstack combines SSR/RPC/Remote/SQL/live |
+| 10. SchemaBinary                  | Specialized codecs and framing                                                                                               | Effect↔Rust bidirectional encoding/decoding and canonical-byte checks where required                             |
+| 11. Persistent RPC                | WebSocket sessions, notifications, reverse RPC, two-way cancellation; independent serialization/transports                   | Stock client compatibility and session cleanup hold across supported profiles                                    |
+| 12. Broader concurrency           | Fibers, all/race/fork/join, Ref/Queue/PubSub/Deferred/FiberRef; advanced scope ownership and law-backed optimization         | Effect semantics, finalizer traces, and inferred ownership pass conformance and generated Rust validation        |
+| 13. Distributed profile           | Optional Cruster entities, persisted delivery, workflows, activities, timers, sharding                                       | Requested distributed capabilities select a verified implementation; ordinary programs omit cluster dependencies |
+| 14. Additional targets/codecs     | Registered native serializers/libraries and WASM experiments                                                                 | Target-specific implementations satisfy explicit support and conformance obligations                             |
+| 15. Syntax widening               | Optional operators/control flow/await/Promise transforms producing the same IR                                               | New syntax preserves existing IR semantics and backend behavior                                                  |
 
-Pure SSR/SSG can be explored after unary RPC without waiting for Remote/SQL. The integrated SSR demo depends on data loading and resume support. Extend runtime coverage in response to these demos rather than attempting the full Effect surface before proving interoperability.
+Hybrid JS hosting follows solid native semantics and explicitly reports the host requirement through compiler explanations. Implement runtime coverage in response to workloads; defer complex cross-fiber borrowing and law-driven optimizations until their validation foundations exist.
 
-The intended combined showcase is one generated Rust binary serving Foldkit HTML, Effect RPC, Remote data, live streams, and SQLx-backed storage while an ordinary TypeScript browser bundle hydrates and uses stock clients.
+The first meaningful compiler workload is Foldkit Query conformance. Unary RPC remains the first major public demo. The combined showcase is `examples/todo-fullstack`: one Rust binary serving Foldkit HTML, Effect RPC, Remote data/live subscriptions, and SQLx-backed storage while the ordinary browser bundle hydrates and uses stock clients.
+
+## Compiler pipeline
+
+`check → derive → normalize → plan → verify → optimize → ownership → lower → emit → build`
+
+Check local invariants; derive dependencies, traits, requirements, and scope relationships; normalize composition; select implementations; verify required capabilities/laws; apply justified rewrites; assign ownership; lower and emit target code; build artifacts. Expose stages through the Effect API and record selected/rejected strategies and valid fallback reasons for `Compile.explain`.
 
 ## Validation strategy
 
-- Compare the same IR through the official Effect JS interpreter and generated Rust, including failure and resource behavior when observable.
-- Test RPC interoperability with the official client, including cancellation, streaming, middleware, and framing as each profile becomes supported.
-- Cross-encode/decode SchemaBinary with Effect; compare bytes where canonical encoding requires it.
-- Run Entity/Query conformance cases against reference, SQL, and Rust implementations.
-- Compare Foldkit rendering output and verify successful stock hydration and Remote resume.
+- Compare operation/IR results through reference JS or official Effect and generated Rust, including numeric, null, string, and ordering edge cases.
+- Generate Schema-driven law property tests and track subject-indexed evidence separately from claims.
+- Reuse Entity/Query fixtures across evaluator, Drizzle, and Rust/SQLx; compare NativeRemoteServer with the existing JS server.
+- Test official RPC client interoperability, including middleware, cancellation, backpressure, framing, and session lifetime as supported.
+- Cross-encode/decode codecs with Effect and compare bytes where canonical output is required.
+- Compare Foldkit rendering, stock hydration, and Remote resume; compare observable Exit/Cause and finalizer/interruption traces for runtime features.
 
-Use [AGENTS.md](AGENTS.md) for repository tooling, commit, and review requirements.
+Use [AGENTS.md](AGENTS.md) for tooling, commits, and required subagent review.
 
 ## Decisions to settle during implementation
 
-- Exact public names and package/crate boundaries: C/Compiled/Native and effect-native are design vocabulary, not a finalized API.
-- The supported portable Schema subset and boundary representations for numeric, JSON, SQL, and binary values.
-- The installed Effect version and precise RPC wire/profile semantics to pin for compatibility tests.
-- Ownership/access-mode rules, escaping task captures, and when shared ownership or cloning is necessary.
-- Which Effect semantics require runtime representation and which can be erased for each capability profile.
-- The extension contract for native intrinsics, platform backends, and serializers; later syntax and hybrid-host boundaries.
+- Exact public names/package boundaries and which Gen2 primitives are appropriate to adapt.
+- Portable Schema subset and distinct native/wire/storage representations, including numeric semantics.
+- Stable identity/serialization rules, law witness typing, evidence provenance, trust policy, and checked-trait derivation.
+- Installed Effect/Foldkit versions and precise protocol profiles to pin for compatibility tests.
+- Ownership/access modes, escaping captures, and observable runtime semantics for each capability profile.
+- Conditions under which fallback preserves semantics, limits, security, and the negotiated protocol.
+- Native extension contracts and the compatibility obligations for optional Cruster, syntax widening, and hybrid hosting.
