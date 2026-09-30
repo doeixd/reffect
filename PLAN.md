@@ -1,8 +1,8 @@
-# Effect Native roadmap
+# reffect roadmap
 
-Effect Native is an ahead-of-time semantic compiler for a statically representable subset of Effect v4 programs. TypeScript executes an Effect-shaped DSL to construct typed IR; a reference interpreter runs that IR through official Effect, and a native backend lowers it to Rust.
+reffect is an ahead-of-time semantic compiler for a statically representable subset of Effect v4 programs. TypeScript executes an Effect-shaped DSL to construct typed IR; a reference interpreter runs that IR through official Effect, and a native backend lowers it to Rust.
 
-This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md) tracks actual implementation status. The [documentation index](docs/README.md) covers the detailed designs; the [later operation/expression revision](docs/op-expr-revision-convo.md) explains changes to the initial plan. Capabilities below are intended, not shipped.
+This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md) tracks actual implementation status. The [documentation index](docs/README.md) covers the detailed designs; the [later operation/expression revision](docs/op-expr-revision-convo.md) explains changes to the initial plan. The [milestone 0 kernel](packages/reffect/README.md) implements the arithmetic smoke path; broader capabilities below remain intended, not shipped.
 
 ## How to use this plan
 
@@ -18,7 +18,7 @@ This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md
 
 - Effect remains a dependency and semantic oracle. The JS interpreter delegates execution to official Effect; public Schema, RPC, and HTTP descriptions supply boundary contracts.
 - Initially compile explicit typed IR built by symbolic callbacks. Arbitrary TypeScript control flow, generators, operators, loops, and opaque callbacks are outside the compiled subset; build-time TypeScript remains unrestricted.
-- Every runtime value has a CType and known native representation. Keep semantic Schema, native memory, wire codecs, and storage mappings distinct.
+- Every runtime value has an IRType and known native representation. Keep semantic Schema, native memory, wire codecs, and storage mappings distinct.
 - Operations carry input/output types, effects, required capabilities, typed laws/evidence, and target implementations. Separate pure Expr, effectful computation, and deterministic state-transition data.
 - Match is the initial branching construct. Predicates and structured collection/effect combinators represent branching and iteration as data; normalize composition into canonical IR.
 - Derive dependencies and checked semantic traits. Track backend capabilities, program effects, external requirements, and laws separately. Use stable semantic identities rather than display names.

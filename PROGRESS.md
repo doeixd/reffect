@@ -1,5 +1,25 @@
 # Progress
 
+## 2026-09-30 — Milestone 0 arithmetic compiler path
+
+- Implemented `packages/reffect` with immutable, pipeable IRType/Expr/Fn/Program factories, typed semantic references, operation signatures/metadata, subject-indexed laws and evidence policy. `R.U64` is exact bigint/u64 with modular add/sub/mul; data-first and data-last arithmetic preserve tuple inference without user casts.
+- Added the official Effect v4 reference evaluator, structured diagnostics, public check/derive/normalize/plan/verify/optimize/ownership/lower/emit/build API, Compiler/Cargo services, explainable implementation selection, Rust library/evaluator emission, and scoped offline Cargo validation. Pure Expr rejects effects/requirements; the backend refuses unregistered operations/representations and invalid plans. Law registrations remain claims; normalization/optimization are identity stages and ownership is primitive copy.
+- Added `examples/expr/main.ts`, package usage docs and strict type-contract fixtures. User examples/tests have no casts or semantic-object spreading. IR consumers use exhaustive Effect Match handlers and built-in Exit predicates.
+- Pinned Effect/platform-node to 4.0.0-rc.118, installed language-service editor support, and aligned utils Vite+ to 0.3.2. The prior starter suite-detection failure is resolved. Native conformance covers 23 cases in both debug/release, plus public build/evaluator failure and overwrite-refusal behavior.
+- Native setup initially found Coreutils `link.exe`; installed minimal Visual Studio Build Tools 18.10.2 C++ compiler/Windows SDK components and validated under `VsDevCmd.bat -arch=x64 -host_arch=x64`. No global PATH change or alternate semantic backend was added. See [research/evidence](docs/research/semantic-kernel.md) for exact dependencies, decisions and installer outcomes.
+- Added the requested commit/push cadence, current-branch/workspace constraint, and deliberate post-work/post-commit review checklist to AGENTS.md.
+- Published `962bb9d` (compiler path) and `cb99634` (review corrections) to origin/master after post-commit validation. Task-scoped `vp check` passes without warnings; `vp exec tsc -p packages/reffect/tsconfig.json --noEmit` passes; `vp test` passes 12 tests, including fresh Cargo debug/release builds and shared-DAG native parity; `vp run -r build` passes (the review change rebuilt reffect freshly; the post-commit repeat was cached). `vp exec node --experimental-transform-types examples/expr/main.ts` passes native/reference overflow parity.
+- Full-root `vp check` is blocked by formatting in four concurrently added, untracked documents: docs/effect-adjacent-projects.md, docs/effect-ecosystem.md, docs/effect-schema.md and docs/effect-v4-api-scope.md. These files are preserved and excluded from task commits; all task files pass scoped checking.
+- Review checked binder/type/arity boundaries, semantic identity collisions, evidence policy, target capabilities, output exclusivity, native failure reporting and call-site inference. Windows cleanup of a failed child process takes about 60 seconds through the official Node process adapter; successful native parity runs take about 9 seconds. This is an upstream/platform integration limitation to investigate before broader process-heavy workloads, not a skipped failure test.
+- Independent review identified mutable builtin Schema internals and exponential expansion of shared expression graphs. The follow-up freezes the local checked Schema/AST/checks and lowers shared applications into dependency-ordered Rust locals. Regression tests cover both failures, and independent follow-up review plus strict/non-native checks found no corrections; main-agent fresh native validation also passes.
+- Remaining roadmap: milestone 1 Foldkit Entity Expr/Query adaptation and existing evaluator/Drizzle/Rust conformance. General Effect IR, RPC, runtime adapters, migration and later milestones remain unimplemented.
+
+## 2026-09-30 — Semantic kernel preparation
+
+- Reviewed the revised kernel and milestone acceptance alongside the starter workspace; checked primary Gen2, Effect v4 migration, package registry, and Rust arithmetic sources.
+- Recorded the milestone 0 design and validation obligations in [docs/research/semantic-kernel.md](docs/research/semantic-kernel.md). Implementation follows that record: bigint/u64 modular arithmetic, explicit symbolic IR, public Effect stages and scoped platform dependencies.
+- Incorporating user-directed authoring refinements: IRType naming, pipeable typed factories/combinators, typed semantic references, and cast/spread-free examples/tests; rationale and API source checks are recorded in the same research document.
+
 ## 2026-09-30 — Commit hooks and discretionary delegation
 
 - Removed the tracked pre-commit hook, staged-file configuration, and package prepare script that installed the Vite+ dispatcher. Disabled the local dispatcher, removing its generated pre/post-commit shims and hooksPath; installs no longer recreate it.

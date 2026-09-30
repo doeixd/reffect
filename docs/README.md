@@ -1,4 +1,4 @@
-# Effect Native design documents
+# reffect design documents
 
 Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. Use [PROGRESS.md](../PROGRESS.md) for implementation status.
 
@@ -39,6 +39,10 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 ## Runtime lowering reference
 
 [Lowering Effect onto the Rust ecosystem](runtime-lowering.md) covers the candidate crate/primitive catalogue, direct lowering versus adapters versus dedicated runtime, operation/service/semantic registry families, Layer wiring, Ref specialization, caches/pools, batching, schedules, streams, and support reporting. The duplicated pasted conversation is integrated as one edited reference. Candidate mappings and research leads require verification; coverage percentages are not measured support.
+
+## Kernel research
+
+[Semantic kernel bootstrap research](research/semantic-kernel.md) records the milestone 0 numeric semantics, pinned Effect v4 API checks, kernel/registry boundaries, and differential/native acceptance criteria.
 
 ## Migration tooling and research
 

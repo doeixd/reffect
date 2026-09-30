@@ -2,11 +2,13 @@
 
 A semantic compiler for a statically representable subset of Effect v4 programs, authored in TypeScript and compiled to Rust.
 
-TypeScript builders construct typed IR. A reference interpreter runs that IR through official Effect, while the compiler selects native representations, verifies supported semantics, infers ownership, and emits Rust. The proposed compiled authoring namespace is `R`, with APIs such as `R.fn`, `R.Effect`, and `R.Match`.
+TypeScript builders construct typed IR. A reference interpreter runs that IR through official Effect, while the compiler selects native representations, verifies supported semantics, infers ownership, and emits Rust. The compiled authoring namespace is `R`; the initial kernel implements `R.fn` and `R.U64`, with `R.Effect` and `R.Match` planned for later milestones.
 
 ## Status
 
-This repository currently contains the design documentation and a Vite+ starter workspace. The compiler, Rust runtime, migration tools, and `R` exports are not implemented yet.
+The milestone 0 kernel is implemented in [packages/reffect](packages/reffect/README.md): immutable symbolic function/expression IR, exact unsigned 64-bit arithmetic, Effect v4 reference execution, structured compiler diagnostics/stages, explainable Rust planning, and scoped Cargo build/validation. Generated dependency-free Rust agrees with the reference on boundary cases in debug and release builds.
+
+The workspace also contains the original starter website and utilities. Foldkit Query adaptation, general Effect IR, native runtime adapters, RPC and migration tooling remain roadmap targets.
 
 The first meaningful target is Foldkit Entity Expr/Query conformance through generated Rust. The first major public demo is a stock Effect RPC client talking to a native server. The fullstack showcase aims to combine Foldkit SSR, Remote data/live updates, Effect RPC, and SQLx/Postgres in one Rust executable.
 
@@ -34,4 +36,6 @@ vp run -r build
 
 `vp run ready` runs the combined validation script. `vp run dev` starts the existing starter website, which is not a compiler UI.
 
-The starter currently has a Vitest suite-detection failure; see [PROGRESS.md](PROGRESS.md) for the exact validation results.
+Tests include fresh Cargo compilation and native/reference conformance. Install Rust and the platform linker/SDK; on Windows run native checks from a Visual Studio developer shell so MSVC takes precedence over other `link.exe` programs. The previous starter suite-detection failure is fixed by aligning Vite+ versions.
+
+Run the expression example with `vp exec node --experimental-transform-types examples/expr/main.ts`. See [PROGRESS.md](PROGRESS.md) for exact validation results and implementation boundaries.
