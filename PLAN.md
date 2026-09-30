@@ -24,6 +24,7 @@ This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md
 - Infer moves, borrows, sharing, and cloning conservatively first. Ref expresses shared mutable identity; RcRef/RcMap express resource lifetime. Expand scope/fiber ownership analysis when concurrency workloads demand it.
 - Compile Effect composition, Context lookups, and Layers away where observable semantics permit. Preserve Layer sharing/freshness, interruption, finalizers, Exit/Cause when observable, and resource lifetimes.
 - Use Tokio, Hyper/Tower/Axum, Serde, and SQLx as native substrates. Keep the Effect-specific runtime small; Cruster is an optional later distributed/durable profile.
+- Classify supported lowering as generated/direct code, an existing substrate plus a semantic adapter, or dedicated semantic runtime. Distinguish operation, service, and semantic runtime implementation entries; select reachable crates/features through the planner and verify observable behavior before treating a mapping as equivalent.
 - Adapt small Gen2 kernel primitives and consume existing Foldkit Entity/Query IR, protocol schemas, and conformance fixtures where possible. Defer shared-kernel extraction until real commonality is demonstrated.
 - The compiler is an Effect library with Services/Layers; CLI, editors, tests, and build integrations consume the same public stages and diagnostics.
 - Make target selection and fallback planning explainable. Refuse unsupported operations when no semantics-preserving implementation exists; expose any later hybrid-host requirement explicitly.
@@ -31,6 +32,8 @@ This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md
 - Keep the IR stable as later syntax producers and targets broaden authoring options.
 
 ## Document map
+
+The [runtime lowering reference](docs/runtime-lowering.md) supplements the revised design with Rust substrate candidates, the three implementation registry families, compile-time service/Layer wiring, and conformance obligations. It preserves the existing milestone order and initial symbolic-builder restriction.
 
 | Document                                                               | Read when working on                                                                                         |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -84,6 +87,8 @@ The first meaningful compiler workload is Foldkit Query conformance. Unary RPC r
 
 Check local invariants; derive dependencies, traits, requirements, and scope relationships; normalize composition; select implementations; verify required capabilities/laws; apply justified rewrites; assign ownership; lower and emit target code; build artifacts. Expose stages through the Effect API and record selected/rejected strategies and valid fallback reasons for `Compile.explain`.
 
+Planning should distinguish operation, service, and semantic runtime requirements. Explain generated specializations, selected substrates/adapters, remaining semantic obligations, and reachable Cargo crates/features. Registry metadata can enter the kernel early; implement entries only as workloads require them. Compile-time batching, Schedule state machines, Ref specialization, and stream fusion remain subject to semantic/evidence checks.
+
 ## Validation strategy
 
 - Compare operation/IR results through reference JS or official Effect and generated Rust, including numeric, null, string, and ordering edge cases.
@@ -92,6 +97,7 @@ Check local invariants; derive dependencies, traits, requirements, and scope rel
 - Test official RPC client interoperability, including middleware, cancellation, backpressure, framing, and session lifetime as supported.
 - Cross-encode/decode codecs with Effect and compare bytes where canonical output is required.
 - Compare Foldkit rendering, stock hydration, and Remote resume; compare observable Exit/Cause and finalizer/interruption traces for runtime features.
+- For substrate adapters, compare supported lifecycle/policy behavior with Effect: Queue/PubSub shutdown and strategy, shared completion, scoped cache/pool release, Layer sharing/freshness, timer interruption, and batching/schedule/stream semantics. Verify that generated dependencies include only reachable implementations.
 
 Use [AGENTS.md](AGENTS.md) for tooling, commits, and required subagent review.
 
@@ -104,3 +110,4 @@ Use [AGENTS.md](AGENTS.md) for tooling, commits, and required subagent review.
 - Ownership/access modes, escaping captures, and observable runtime semantics for each capability profile.
 - Conditions under which fallback preserves semantics, limits, security, and the negotiated protocol.
 - Native extension contracts and the compatibility obligations for optional Cruster, syntax widening, and hybrid hosting.
+- Operation/service/semantic-runtime registry boundaries, crate/feature metadata, supported adapter profiles, and evidence required to select direct lowering versus a wrapper.

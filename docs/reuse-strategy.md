@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Revision overview](op-expr-revision-convo.md)
 
+See [runtime lowering](runtime-lowering.md) for the later candidate Rust-substrate catalogue and the distinction between operation implementations, service implementations, and semantic adapters. Prefer eliminating abstractions or adapting verified execution machinery; crate availability alone does not establish parity with Effect.
+
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.
 
 ## Contents

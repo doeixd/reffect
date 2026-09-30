@@ -6,6 +6,8 @@ Read the [later design revision overview](op-expr-revision-convo.md) first for c
 
 ## Revised design and implementation references
 
+The later [runtime lowering reference](runtime-lowering.md) integrates the supplied Rust-substrate conversation once. It extends implementation selection and registry guidance while retaining the revised milestone sequence.
+
 | Document                                                          | Focus                                                                                       |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | [Revision overview](op-expr-revision-convo.md)                    | Changes, reading order, and precedence over earlier proposals                               |
@@ -31,6 +33,10 @@ Read the [later design revision overview](op-expr-revision-convo.md) first for c
 These six documents preserve the original PLAN.md discussions. The seven extracted revision documents preserve the later conversation, including its final revised plan. All retain code samples, diagrams, and provisional APIs; some include unresolved citation placeholders or historical repository/licensing observations. They describe intended behavior, not implemented support or verified upstream facts. Use the roadmap for current sequencing and verify dependency-specific claims before implementation.
 
 Edit the individual documents directly as the design evolves. Keep the roadmap and this index aligned with document names and scope.
+
+## Runtime lowering reference
+
+[Lowering Effect onto the Rust ecosystem](runtime-lowering.md) covers the candidate crate/primitive catalogue, direct lowering versus adapters versus dedicated runtime, operation/service/semantic registry families, Layer wiring, Ref specialization, caches/pools, batching, schedules, streams, and support reporting. The duplicated pasted conversation is integrated as one edited reference. Candidate mappings and research leads require verification; coverage percentages are not measured support.
 
 ## One-time extraction scripts
 

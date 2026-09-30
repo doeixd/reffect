@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Revision overview](op-expr-revision-convo.md)
 
+For additional adapter obligations, see [runtime lowering](runtime-lowering.md): validate substrate policy/lifecycle parity, distinguish operation/service/semantic requirements in support reports, and verify reachable dependency selection. Candidate crate mappings are not conformance evidence.
+
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.
 
 ## Contents

@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Revision overview](op-expr-revision-convo.md)
 
+The later [runtime lowering reference](runtime-lowering.md) adds implementation-registry and Rust-substrate guidance without changing these milestones. Establish operation/service/semantic-runtime metadata in kernel/planning work; implement and verify entries as the corresponding workload arrives. Generated batching, schedules, Ref specialization, and stream fusion require semantic evidence before optimization.
+
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.
 
 ## Contents

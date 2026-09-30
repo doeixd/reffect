@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md)
 
+The [runtime lowering reference](runtime-lowering.md) expands the small-runtime principle into a candidate substrate catalogue and three lowering strategies. Use it for service registries, Layer wiring, specialization, and adapter conformance before adding runtime machinery.
+
 For updated kernel and sequencing decisions, read the [revised compiler design](compiler-design-revision.md), [Gen2 law/evidence design](gen2-semantic-kernel.md), and [revised milestones](implementation-milestones.md). This original discussion remains a detailed semantic reference; the later revision introduces checked semantic traits, first-class law evidence, and an expanded planning/verification pipeline.
 
 This document preserves a design discussion from the original PLAN.md. APIs and package names are proposals, not implemented guarantees. Original citation placeholders are retained; verify external API and protocol claims against the installed dependencies before implementation.

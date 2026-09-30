@@ -32,6 +32,8 @@ Build Effect Native: an ahead-of-time semantic compiler and small native runtime
 
 The compiler must know what each operation means, which types and representations it uses, what effects and dependencies it has, which laws justify transformations, and why a target implementation was chosen. Compile abstractions away while preserving observable behavior: success/failure, interruption, resource finalization, Layer sharing, and protocol compatibility.
 
+Compile Effect semantics onto Rust std/Tokio and suitable crates. Prefer generated code when an abstraction can disappear; otherwise reuse execution machinery with a verified semantic adapter. Keep dedicated runtime code focused on the observable Effect behavior that those strategies cannot supply.
+
 The first meaningful workload is existing Foldkit Entity Expr/Query conformance running through a generated Rust evaluator. Unary Effect RPC is the first major public demo. The combined showcase is `examples/todo-fullstack`: one native executable serving Foldkit SSR, Effect RPC, Remote data/live updates, and SQLx/Postgres, with an ordinary Foldkit/Effect browser client. These are targets, not implemented features.
 
 # Read before working
@@ -59,6 +61,8 @@ The [revision overview](docs/op-expr-revision-convo.md), [revised compiler desig
 
 Preserved discussions contain provisional API spellings, unresolved citation placeholders, and historical upstream/licensing observations. They are design context. Verify external facts against the installed dependency version and authoritative upstream material before implementation; do not infer shipped support from an example.
 
+Read [runtime lowering](docs/runtime-lowering.md) when choosing Rust substrates or designing implementation registries, services/Layers, Ref specialization, caching/pools, batching, schedules, or streams. Its crate catalogue is a candidate list, not dependency approval or proven semantic equivalence. It supplements the revised design without changing milestones or admitting ordinary generators into the initial compiled subset.
+
 # Implementation guidance
 
 ## Effect v4 and reference semantics
@@ -83,6 +87,9 @@ Preserved discussions contain provisional API spellings, unresolved citation pla
 - Record selected implementations, rejected candidates, and fallback reasons. Verify capabilities, traits, laws, and compatibility before accepting a plan. Fallback must preserve behavior, bounds, security, and the requested protocol; expose later JS-host requirements explicitly.
 - Start ownership conservatively: copy primitives, move single-use values, borrow read-only inputs, use obvious exclusive mutation, and clone only for necessary duplicated ownership. Add complex scope/fiber lifetime inference when real concurrency workloads exist.
 - Use Tokio, Axum/Hyper/Tower, Serde, and SQLx for execution facilities. Keep native runtime code focused on Effect-specific semantics that cannot be erased.
+- Distinguish operation implementations, service implementations, and semantic runtime implementations in registration and support reports. Derive reachable requirements, then explain the selected substrate, generated specialization, semantic adapter, and Cargo crates/features. Avoid unconditional dependencies for unused capabilities.
+- Verify each supported mapping rather than aliasing similarly named primitives. Queue/PubSub strategies and shutdown, shared Deferred completion, Scope/finalization, Layer identity, cache/pool lifecycle, and Stream/Sink/Schedule semantics need explicit conformance. Direct timer or semaphore lowering still needs the required interruption/resource contract.
+- Consider compile-time batching, Schedule state machines, Ref specialization, and stream fusion before adding general runtime machinery. Apply these rewrites only when their supported semantics and evidence justify them; do not infer equivalence from crate availability or reuse-percentage estimates.
 - Adapt small Gen2 primitives; consume existing Foldkit Entity/Query IR, protocol schemas, and conformance fixtures where possible. Preserve source semantics in Rust ports. Defer extracting a shared cross-project kernel.
 - Keep Cruster optional and later. Ordinary programs should not acquire distributed dependencies. Browser Effect RPC compatibility and internal cluster RPC remain separate boundaries.
 
