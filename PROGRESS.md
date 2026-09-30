@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-09-30 — Milestone 2 synchronous Boolean/u64 profile
+
+- Added immutable Boolean/Never witnesses, Boolean/u64 predicates, exhaustive pure/computation `R.Match.bool`, separate typed Computation nodes, and `R.Effect.succeed/fail/map/flatMap`. The four-argument `R.fn` and `R.Effect.fn` declare success/error channels; mixed pure/effectful programs retain the existing pipeline. Builders execute once with symbolic lexical continuation parameters.
+- Official Effect interpretation preserves selected branches, failed-source short-circuiting and nested continuation scope. Checking rejects escaped parameters, inconsistent channels and unsupported reachable operations. Planning records typed effect/capability references and the selected generated Rust Result adapter; canonical representations and the target are checked even without operations. Ownership explicitly uses primitive copying.
+- Rust emission uses branch-local helpers, bool/u64/Result/Infallible, and no dependencies. A fresh depth-32 release test exposed optimizer inlining that rebuilt an exponential branch tree and exhausted rustc memory; helper `#[inline(never)]` preserves sharing and debug/release now pass. Depth-128 source-size checks cover linear lowering.
+- Added `NativeRunner.run` with tuple/result inference, artifact/function identity checking, input/output Schema validation and official Exit results. Domain failures return status zero; malformed/wrong-channel/out-of-range outputs and process failures remain distinct errors. The existing pure-u64 decimal bridge/Cargo.validate remain compatible.
+- Added strict type contracts, native/reference differential cases for both branches, all predicates, nested map/flatMap, overflow, Boolean/u64 failures and Never channels, plus a runnable [Effect example](examples/effect/main.ts). Typed failure payloads are compared separately from reference debug stack annotations.
+- Validation: root `vp check` passes without warnings; strict `vp exec tsc -p packages/reffect/tsconfig.json --noEmit` passes; all 27 tests in five files pass, including fresh native debug/release and malformed-output checks; `vp run -r build` passes (reffect fresh, starter builds cached). All three expression, Query and Effect examples pass fresh native/reference checks.
+- Self-review traced channel widening, lexical binder checks, selected-branch evaluation, implementation/target identity, immutable canonical schemas, shared graph lowering and native protocol boundaries. Corrected forged channel joins, mutable Never schema exposure and empty-graph target acceptance before publication; no new Foldkit-Plus issues were found.
+- Scope: this completes the initial synchronous Boolean/u64 slice of milestone 2. Owned strings/records, explicit union representations/full tagged Match and move/borrow/clone inference remain the next work; async effects, defects, interruption, services and finalizers are unsupported. See [research](docs/research/basic-effect-ir.md) and [public API](packages/reffect/README.md#synchronous-effect-profile).
+
 ## 2026-09-30 — Basic Effect IR preparation
 
 - Reviewed milestone 2, the revised pipeline, current scalar kernel/compiler and existing native/Foldkit evidence. Checked installed Effect RC.118 success/failure/sequencing/Exit APIs against official source and Rust Result/Infallible semantics.

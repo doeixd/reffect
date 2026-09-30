@@ -1,6 +1,4 @@
 export {
-  R,
-  Reference,
   Operation,
   Law,
   Evidence,
@@ -17,11 +15,16 @@ export {
   CompileError,
   Diagnostic,
   U64Type,
+  BoolType,
+  NeverType,
   AddU64,
   SubU64,
   MulU64,
   apply,
 } from "./kernel.ts";
+export { R } from "./authoring.ts";
+export { Reference } from "./reference.ts";
+export { Computation, EffectFn, SyncEffects } from "./effect-ir.ts";
 export type {
   OperationRef,
   Capability,
@@ -48,3 +51,5 @@ export type { ProcessResult } from "./cargo.ts";
 export type { GeneratedFiles } from "./cargo.ts";
 export { Foldkit } from "./foldkit.ts";
 export type { FoldkitArtifact, QueryAnalysis } from "./foldkit.ts";
+
+export { NativeRunner } from "./native-runner.ts";

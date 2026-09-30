@@ -36,6 +36,25 @@ export const typeChecks = () => {
   Operation.make(customRef, [R.U64, R.U64], R.U64, (a, b) => a + b).pipe(
     Operation.withLaws([Law.associative(customRef, Evidence.claim("fixture"))]),
   );
+  const effect = R.fn([R.Bool, R.U64], R.U64, R.U64, (condition, value) =>
+    R.Match.bool(condition, R.Effect.succeed(value), R.Effect.fail(value)).pipe(
+      R.Effect.map((result) => R.U64.add(result, value)),
+      R.Effect.flatMap((result) => R.Effect.succeed(result)),
+    ),
+  );
+  Reference.run(effect, [true, 1n]);
+  // @ts-expect-error Boolean inputs are not bigint
+  Reference.run(effect, [1n, 1n]);
+  // @ts-expect-error error payload must match the declared channel
+  R.fn([], R.U64, R.U64, () => R.Effect.fail(R.Bool.literal(true)));
+  // @ts-expect-error success payload must match the declared channel
+  R.fn([], R.Bool, R.U64, () => R.Effect.succeed(R.U64.literal(1n)));
+  // @ts-expect-error pure Match branches must agree
+  R.Match.bool(R.Bool.literal(true), R.Bool.literal(true), R.U64.literal(1n));
+  // @ts-expect-error pure/effectful branches cannot be mixed
+  R.Match.bool(R.Bool.literal(true), R.Bool.literal(true), R.Effect.succeed(R.Bool.literal(false)));
+  // @ts-expect-error exhaustive Match requires both arms
+  R.Match.bool(R.Bool.literal(true), R.Bool.literal(true));
   const Item = Entity.define("Item", Schema.Struct({ id: Schema.String, rank: Schema.Number }));
   const query = Query.from(Item).pipe(Query.where(EntityExpr.eq(Item.fields.rank, 1)));
   Foldkit.compile({ Items: query });

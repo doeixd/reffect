@@ -1,6 +1,6 @@
-# reffect kernel bootstrap
+# reffect semantic compiler
 
-An implemented milestone 0 slice of the semantic compiler: exact unsigned arithmetic, symbolic function IR, reference execution through official Effect v4, explainable Rust planning, and Cargo integration.
+Implemented profiles cover unsigned arithmetic, Foldkit Query conformance, and synchronous Boolean/u64 Effect computations with official Effect reference execution, explainable Rust planning, and Cargo integration.
 
 ```ts
 import { Effect } from "effect";
@@ -24,9 +24,9 @@ pub fn r_Add(p0: u64, p1: u64) -> u64 {
 
 ## Supported semantics
 
-- `R.U64` is an exact bigint in `0..2^64-1`, with native Rust `u64`. `literal`, `add`, `sub`, and `mul` construct immutable expressions. Arithmetic is modulo `2^64` in every build profile.
-- `R.fn` invokes a build-time callback with symbolic parameters, and `R.program` declares named entry functions. Symbols belong to their function. Runtime branching/operators/generators are outside this subset.
-- `Reference.run` validates arguments, checks the graph, and returns an official Effect. This is pure expression evaluation; general compiled Effect IR comes later.
+- `R.U64` is an exact bigint in `0..2^64-1`, with native Rust `u64`. `literal`, `add`, `sub`, `mul`, `eq`, and `lt` construct immutable expressions. Arithmetic is modulo `2^64` in every build profile.
+- `R.fn` invokes a build-time callback with symbolic parameters, and `R.program` declares named entry functions. Symbols belong to their function or lexical continuation. Use exhaustive `R.Match.bool` for runtime branching; ordinary runtime TypeScript operators/generators are outside this subset.
+- `Reference.run` validates arguments, checks the graph, and returns an official Effect. Pure expressions and supported synchronous computations share this entry point.
 - `IRType.make` constructs semantic witnesses; `Operation.make` declares complete typed signatures and reference evaluators. Values support Effect-style `.pipe` composition through focused combinators, including `IRType.withTraits`, `Operation.withCapabilities/withEffects/withRequirements/withLaws`, and `Target.withCapabilities`. Arithmetic supports data-first and data-last forms.
 - `SemanticRef` factories create typed type, operation, target, capability, effect, requirement and trait references. Semantic lookups use these objects; strings are their serialized/display identities. `Native.U64`, `Capabilities.U64`, `Targets.RustStd` and `Traits` expose the builtin objects. The initial Rust target accepts only verified built-in operations and representations.
 - `Law.associative/commutative` name typed operation references and receive evidence from `Evidence.claim/tested/proven/builtin`. Evidence policies are named constants. Built-in algebraic registrations are **claims**; no optimization uses them. Traits for the builtin u64 representation are checked from its registered witness, not arbitrary declarations.
@@ -76,4 +76,27 @@ Containment accepts evaluated non-NUL ASCII operands until upstream Unicode/NUL 
 
 All 27 upstream fixtures run against evaluate, the unchanged licensed upstream Drizzle compiler/SQLite, and fresh native debug/release crates. See [integration research](../../docs/research/foldkit-query.md) for the Drizzle RC.118 import limitation and [upstream issue reproductions](../../docs/research/foldkit-plus-issues.md). Normalization and optimization remain identity steps; the canonical predicate/order lists are retained, borrowed scalar inputs and copied row indices have conservative ownership, and shared expression nodes lower once.
 
-Run `vp exec node --experimental-transform-types examples/query/main.ts` for a native/reference search example. Additional general representations, compiled Effect computations, RPC, concurrency, and native runtime adapters follow the roadmap.
+Run `vp exec node --experimental-transform-types examples/query/main.ts` for a native/reference search example. Additional general representations, RPC, concurrency, and asynchronous runtime adapters follow the roadmap.
+
+## Synchronous Effect profile
+
+```ts
+const Difference = R.fn([R.U64, R.U64], R.U64, R.U64, (a, b) =>
+  R.Match.bool(R.U64.lt(a, b), R.Effect.succeed(R.U64.sub(b, a)), R.Effect.fail(a)).pipe(
+    R.Effect.map((value) => R.U64.mul(value, R.U64.literal(2n))),
+  ),
+);
+const artifact = await Effect.runPromise(Compile.run(R.program({ Difference })));
+```
+
+The fourth-argument `R.fn` form declares success and error witnesses. `R.Effect.fn` is the explicit equivalent. `R.Effect.succeed/fail/map/flatMap` construct immutable computation nodes; builders run once with symbolic inputs. `R.Bool` offers literal/not/eq and `R.Predicate` exposes eqU64/ltU64/eqBool/not aliases. Match accepts either two pure expressions or two computations and runs only the selected arm. Failed sources skip their continuations.
+
+`R.Never` represents an uninhabited channel. Branches and sequencing may join Never with an existing witness; distinct non-Never witnesses require a future explicit union representation. Success and error payloads currently support canonical Boolean/u64 witnesses only. Services, defects, interruption, finalizers, async effects, strings, records, tagged unions and advanced ownership remain unsupported in this profile.
+
+Reference interpretation uses official Effect. Generated Rust uses bool/u64 and Result, with Infallible for Never. Planning records the generated synchronous adapter in `artifact.explanation.runtime`, and ownership explains primitive copying. Shared branch nodes emit shared helper functions, keeping generated size linear for repeated binary Match graphs. Helpers preserve lexical scopes and branch-local work.
+
+After writing/building the artifact, `NativeRunner.run(artifact, directory, "Difference", Difference, [2n, 7n], profile)` returns an official `Exit` (success 10n). Supply NodeServices for filesystem/process operations. The function argument preserves tuple/result types and must belong to the artifact. Domain failures return Exit failure with process status zero; invalid arguments, malformed output and process failures remain separate compiler/Cargo errors. Compare typed failure payloads, since reference failures also carry Effect debug stack annotations.
+
+The legacy pure-u64 decimal CLI stays compatible. Pure Boolean output is `bool:true/false`; Result output is `ok:u64:10`, `err:u64:7`, or the analogous Boolean token. The runner validates those tokens against the declared channel Schema.
+
+Run `vp exec node --experimental-transform-types examples/effect/main.ts` for fresh reference/native success and failure checks in debug and release. See [the design record](../../docs/research/basic-effect-ir.md) for boundaries and remaining milestone 2 work.

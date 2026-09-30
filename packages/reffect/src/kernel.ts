@@ -1,5 +1,6 @@
 import { Effect, Match, Pipeable, Schema } from "effect";
 import { dual } from "effect/Function";
+import type { EffectFn } from "./effect-ir.ts";
 
 export const Diagnostic = Schema.Struct({
   code: Schema.String,
@@ -38,6 +39,9 @@ export class SemanticRef<Kind extends string, Id extends string = string> extend
   static effect<const Id extends string>(id: Id) {
     return new SemanticRef("effect", id);
   }
+  static runtime<const Id extends string>(id: Id) {
+    return new SemanticRef("runtime", id);
+  }
   static requirement<const Id extends string>(id: Id) {
     return new SemanticRef("requirement", id);
   }
@@ -51,6 +55,8 @@ export type EffectRef = SemanticRef<"effect">;
 export type Requirement = SemanticRef<"requirement">;
 export const Capabilities = Object.freeze({
   U64: SemanticRef.capability("reffect/capability/u64@1"),
+  Bool: SemanticRef.capability("reffect/capability/bool@1"),
+  SyncResult: SemanticRef.capability("reffect/capability/sync-result@1"),
 });
 export const Targets = Object.freeze({ RustStd: SemanticRef.target("rust/std@1") });
 export const Traits = Object.freeze({
@@ -66,6 +72,11 @@ export interface NativeRepresentation {
 }
 export const Native = Object.freeze({
   U64: Object.freeze({ target: Targets.RustStd, type: "u64" }) satisfies NativeRepresentation,
+  Bool: Object.freeze({ target: Targets.RustStd, type: "bool" }) satisfies NativeRepresentation,
+  Never: Object.freeze({
+    target: Targets.RustStd,
+    type: "std::convert::Infallible",
+  }) satisfies NativeRepresentation,
 });
 
 export type Assurance = "claim" | "tested" | "proven" | "builtin";
@@ -266,6 +277,12 @@ export type Node =
       readonly _tag: "Apply";
       readonly operation: AnyOperation;
       readonly args: readonly Expr<unknown>[];
+    }
+  | {
+      readonly _tag: "Match";
+      readonly condition: Expr<boolean>;
+      readonly onTrue: Expr<unknown>;
+      readonly onFalse: Expr<unknown>;
     };
 export class Expr<A> extends Pipeable.Class {
   private constructor(
@@ -298,6 +315,16 @@ export class Expr<A> extends Pipeable.Class {
       }),
     );
   }
+  static match<A>(condition: Expr<boolean>, onTrue: Expr<A>, onFalse: Expr<NoInfer<A>>): Expr<A> {
+    if (!IRType.same(condition.type, BoolType) || !IRType.same(onTrue.type, onFalse.type))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        "Match",
+        "Boolean Match requires a Boolean condition and identical branch witnesses",
+      );
+    return new Expr(onTrue.type, Object.freeze({ _tag: "Match", condition, onTrue, onFalse }));
+  }
 }
 export const apply = Expr.apply;
 export class Fn<I extends readonly IRType<unknown>[] = readonly IRType<unknown>[], A = unknown>
@@ -323,15 +350,16 @@ export class Fn<I extends readonly IRType<unknown>[] = readonly IRType<unknown>[
     return new Fn(Object.freeze(Array.from(input)) as unknown as I, output, binder, build(...args));
   }
 }
+export type AnyFn = Fn | EffectFn;
 export class Program extends Pipeable.Class {
-  private constructor(readonly functions: Readonly<Record<string, Fn>>) {
+  private constructor(readonly functions: Readonly<Record<string, AnyFn>>) {
     super();
     Object.freeze(this);
   }
-  static make(this: void, functions: Readonly<Record<string, Fn>>): Program {
+  static make(this: void, functions: Readonly<Record<string, AnyFn>>): Program {
     return new Program(Object.freeze(Object.fromEntries(Object.entries(functions))));
   }
-  static add(name: string, fn: Fn) {
+  static add(name: string, fn: AnyFn) {
     return (self: Program): Program =>
       Program.make(Object.fromEntries(Object.entries(self.functions).concat([[name, fn]])));
   }
@@ -374,6 +402,14 @@ class U64Witness extends IRType<bigint> {
     (that: Expr<bigint>): (self: Expr<bigint>) => Expr<bigint>;
     (self: Expr<bigint>, that: Expr<bigint>): Expr<bigint>;
   } = dual(2, (a: Expr<bigint>, b: Expr<bigint>) => Expr.apply(MulU64, a, b));
+  readonly eq: {
+    (that: Expr<bigint>): (self: Expr<bigint>) => Expr<boolean>;
+    (self: Expr<bigint>, that: Expr<bigint>): Expr<boolean>;
+  } = dual(2, (a: Expr<bigint>, b: Expr<bigint>) => Expr.apply(EqU64, a, b));
+  readonly lt: {
+    (that: Expr<bigint>): (self: Expr<bigint>) => Expr<boolean>;
+    (self: Expr<bigint>, that: Expr<bigint>): Expr<boolean>;
+  } = dual(2, (a: Expr<bigint>, b: Expr<bigint>) => Expr.apply(LtU64, a, b));
 }
 export const U64Type = new U64Witness();
 const binary = <const Id extends string>(
@@ -397,14 +433,72 @@ const binary = <const Id extends string>(
 export const AddU64 = binary("reffect/u64.add.wrap@1", (a, b) => BigInt.asUintN(64, a + b), true);
 export const SubU64 = binary("reffect/u64.sub.wrap@1", (a, b) => BigInt.asUintN(64, a - b));
 export const MulU64 = binary("reffect/u64.mul.wrap@1", (a, b) => BigInt.asUintN(64, a * b), true);
-export const R = Object.freeze({
-  fn: Fn.make,
-  program: Program.make,
-  literal: Expr.literal,
-  U64: U64Type,
-});
+class BoolWitness extends IRType<boolean> {
+  constructor() {
+    // Own the AST so freezing this witness never mutates the upstream shared Schema.Boolean.
+    const schema = Schema.Boolean.check(Schema.makeFilter(() => true));
+    for (const check of schema.ast.checks ?? []) Object.freeze(check);
+    if (schema.ast.checks) Object.freeze(schema.ast.checks);
+    Object.freeze(schema.ast);
+    Object.freeze(schema);
+    super(
+      SemanticRef.type("reffect/bool@1"),
+      schema,
+      Native.Bool,
+      Object.freeze([Traits.Copyable, Traits.Cloneable, Traits.Eq, Traits.TotallyOrdered]),
+    );
+    Object.freeze(this);
+  }
+  literal(value: boolean) {
+    return Expr.literal(this, value);
+  }
+  readonly not = (value: Expr<boolean>) => Expr.apply(NotBool, value);
+  readonly eq: {
+    (that: Expr<boolean>): (self: Expr<boolean>) => Expr<boolean>;
+    (self: Expr<boolean>, that: Expr<boolean>): Expr<boolean>;
+  } = dual(2, (a: Expr<boolean>, b: Expr<boolean>) => Expr.apply(EqBool, a, b));
+}
+export const BoolType = new BoolWitness();
+const neverSchema = Schema.Never.check(Schema.makeFilter(() => true));
+for (const check of neverSchema.ast.checks ?? []) Object.freeze(check);
+if (neverSchema.ast.checks) Object.freeze(neverSchema.ast.checks);
+Object.freeze(neverSchema.ast);
+Object.freeze(neverSchema);
+export const NeverType = IRType.make(
+  SemanticRef.type("reffect/never@1"),
+  neverSchema,
+  Native.Never,
+);
+export const EqU64 = Operation.make(
+  SemanticRef.operation("reffect/u64.eq@1"),
+  [U64Type, U64Type],
+  BoolType,
+  (a, b) => a === b,
+).pipe(Operation.withCapabilities([Capabilities.U64, Capabilities.Bool]));
+export const LtU64 = Operation.make(
+  SemanticRef.operation("reffect/u64.lt@1"),
+  [U64Type, U64Type],
+  BoolType,
+  (a, b) => a < b,
+).pipe(Operation.withCapabilities([Capabilities.U64, Capabilities.Bool]));
+export const EqBool = Operation.make(
+  SemanticRef.operation("reffect/bool.eq@1"),
+  [BoolType, BoolType],
+  BoolType,
+  (a, b) => a === b,
+).pipe(Operation.withCapabilities([Capabilities.Bool]));
+export const NotBool = Operation.make(
+  SemanticRef.operation("reffect/bool.not@1"),
+  [BoolType],
+  BoolType,
+  (a) => !a,
+).pipe(Operation.withCapabilities([Capabilities.Bool]));
 
-export const checkFunction = (f: Fn, path: string): readonly Diagnostic[] => {
+export const checkExpression = (
+  root: Expr<unknown>,
+  bindings: ReadonlyMap<symbol, readonly IRType<unknown>[]>,
+  path: string,
+): readonly Diagnostic[] => {
   const issues: Diagnostic[] = [];
   const add = (code: string, at: string, message: string) =>
     issues.push({ code, stage: "check", path: at, message });
@@ -421,15 +515,22 @@ export const checkFunction = (f: Fn, path: string): readonly Diagnostic[] => {
     Match.value(e.node).pipe(
       Match.tagsExhaustive({
         Parameter: (n) => {
-          if (
-            n.binder !== f.binder ||
-            !Number.isInteger(n.index) ||
-            n.index < 0 ||
-            n.index >= f.input.length
-          )
+          const input = bindings.get(n.binder);
+          if (!input || !Number.isInteger(n.index) || n.index < 0 || n.index >= input.length)
             add("FOREIGN_PARAMETER", at, "Parameter is outside this function's binder");
-          else if (!IRType.same(f.input[n.index], e.type))
+          else if (!IRType.same(input[n.index], e.type))
             add("TYPE_MISMATCH", at, "Parameter type witness differs from its declaration");
+        },
+        Match: (n) => {
+          if (
+            !IRType.same(n.condition.type, BoolType) ||
+            !IRType.same(n.onTrue.type, e.type) ||
+            !IRType.same(n.onFalse.type, e.type)
+          )
+            add("TYPE_MISMATCH", at, "Boolean Match condition/branch witnesses are inconsistent");
+          walk(n.condition, `${at}.condition`);
+          walk(n.onTrue, `${at}.onTrue`);
+          walk(n.onFalse, `${at}.onFalse`);
         },
         Literal: (n) => {
           if (!Schema.is(e.type.schema)(n.value))
@@ -468,10 +569,42 @@ export const checkFunction = (f: Fn, path: string): readonly Diagnostic[] => {
     active.delete(e);
     done.add(e);
   };
-  if (!IRType.same(f.body.type, f.output))
-    add("TYPE_MISMATCH", path, "Function body witness differs from declared output");
-  walk(f.body, `${path}.body`);
+  walk(root, path);
   return issues;
+};
+export const checkFunction = (f: Fn, path: string): readonly Diagnostic[] => [
+  ...(!IRType.same(f.body.type, f.output)
+    ? [
+        {
+          code: "TYPE_MISMATCH",
+          stage: "check",
+          path,
+          message: "Function body witness differs from declared output",
+        },
+      ]
+    : []),
+  ...checkExpression(f.body, new Map([[f.binder, f.input]]), `${path}.body`),
+];
+export const evaluateExpression = (
+  root: Expr<unknown>,
+  bindings: ReadonlyMap<symbol, readonly unknown[]>,
+): unknown => {
+  const cache = new Map<Expr<unknown>, unknown>();
+  const evaluate = (e: Expr<unknown>): unknown => {
+    if (cache.has(e)) return cache.get(e);
+    const value = Match.value(e.node).pipe(
+      Match.tagsExhaustive({
+        Parameter: (n) => bindings.get(n.binder)![n.index],
+        Literal: (n) => n.value,
+        Apply: (n) => n.operation.reference(...n.args.map(evaluate)),
+        Match: (n) => (evaluate(n.condition) ? evaluate(n.onTrue) : evaluate(n.onFalse)),
+      }),
+    );
+    Schema.decodeUnknownSync(e.type.schema)(value);
+    cache.set(e, value);
+    return value;
+  };
+  return evaluate(root);
 };
 const runUnknown = Effect.fn("Reference.runUnknown")(function* <
   I extends readonly IRType<unknown>[],
@@ -489,26 +622,12 @@ const runUnknown = Effect.fn("Reference.runUnknown")(function* <
         Effect.mapError((e) => fail("INVALID_INPUT", "reference", `args[${i}]`, e.message)),
       ),
     );
-  const cache = new Map<Expr<unknown>, unknown>();
-  const evaluate = (e: Expr<unknown>): unknown => {
-    if (cache.has(e)) return cache.get(e);
-    const value = Match.value(e.node).pipe(
-      Match.tagsExhaustive({
-        Parameter: (n) => values[n.index],
-        Literal: (n) => n.value,
-        Apply: (n) => n.operation.reference(...n.args.map(evaluate)),
-      }),
-    );
-    Schema.decodeUnknownSync(e.type.schema)(value);
-    cache.set(e, value);
-    return value;
-  };
   return yield* Effect.try({
-    try: () => evaluate(f.body) as A,
+    try: () => evaluateExpression(f.body, new Map([[f.binder, values]])) as A,
     catch: (cause) => fail("REFERENCE_FAILURE", "reference", "function.body", String(cause)),
   });
 });
-export const Reference = {
+export const PureReference = {
   runUnknown,
   run: <I extends readonly IRType<unknown>[], A>(f: Fn<I, A>, args: Inputs<I>) =>
     runUnknown(f, args),

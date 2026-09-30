@@ -1,6 +1,12 @@
-import { Context, Effect, Layer, Match, Pipeable, Schema } from "effect";
+import { Context, Effect, Layer, Match, Pipeable } from "effect";
 import { Cargo } from "./cargo.ts";
 import { Foldkit } from "./foldkit.ts";
+import { EffectFn, SyncEffects, checkEffectFunction } from "./effect-ir.ts";
+import type { Computation } from "./effect-ir.ts";
+import { lowerFunctions, emitFunctions } from "./lower.ts";
+import type { RustModule } from "./lower.ts";
+export { RustExpr } from "./lower.ts";
+export type { RustBinding, RustModule } from "./lower.ts";
 import {
   AddU64,
   Capabilities,
@@ -9,7 +15,14 @@ import {
   MulU64,
   SubU64,
   Targets,
+  SemanticRef,
   U64Type,
+  BoolType,
+  NeverType,
+  EqU64,
+  LtU64,
+  EqBool,
+  NotBool,
   checkFunction,
   fail,
 } from "./kernel.ts";
@@ -22,7 +35,6 @@ import type {
   OperationRef,
   Program,
   Requirement,
-  SemanticRef,
 } from "./kernel.ts";
 
 export interface Implementation {
@@ -33,7 +45,7 @@ export interface Implementation {
   readonly capabilities: readonly Capability[];
   readonly crates: readonly string[];
   readonly rationale: string;
-  readonly method: "wrapping_add" | "wrapping_sub" | "wrapping_mul";
+  readonly method: "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "eq" | "lt" | "not";
 }
 export class Target extends Pipeable.Class {
   private constructor(
@@ -64,19 +76,31 @@ const implementation = (
     operation,
     target: Targets.RustStd,
     strategy: "generated",
-    capabilities: Object.freeze([Capabilities.U64]),
+    capabilities: operation.capabilities,
     crates: Object.freeze([]),
     method,
-    rationale: `Rust u64::${method} preserves modulo 2^64 bigint semantics in every profile`,
+    rationale: `Verified primitive Rust ${method} implements ${operation.id} without coercion`,
   });
 const implementations = Object.freeze([
   implementation(AddU64 as AnyOperation, "wrapping_add"),
   implementation(SubU64 as AnyOperation, "wrapping_sub"),
   implementation(MulU64 as AnyOperation, "wrapping_mul"),
+  implementation(EqU64 as AnyOperation, "eq"),
+  implementation(LtU64 as AnyOperation, "lt"),
+  implementation(EqBool as AnyOperation, "eq"),
+  implementation(NotBool as AnyOperation, "not"),
 ]);
+const syncResultAdapter = Object.freeze({
+  ref: SemanticRef.runtime("rust/std-result@1"),
+  target: Targets.RustStd,
+  strategy: "generated" as const,
+  rationale:
+    "Synchronous typed success/failure lowers to std::result::Result; Boolean branches and continuations remain lazy",
+});
 export const Rust = Object.freeze({
+  syncResult: syncResultAdapter,
   std: Target.make(Targets.RustStd, implementations).pipe(
-    Target.withCapabilities([Capabilities.U64]),
+    Target.withCapabilities([Capabilities.U64, Capabilities.Bool, Capabilities.SyncResult]),
   ),
 });
 
@@ -86,6 +110,7 @@ export interface Analysis {
   readonly capabilities: readonly Capability[];
   readonly effects: readonly EffectRef[];
   readonly requirements: readonly Requirement[];
+  readonly types: readonly IRType<unknown>[];
 }
 export interface Selection {
   readonly operation: AnyOperation;
@@ -93,6 +118,7 @@ export interface Selection {
   readonly rejected: readonly { readonly id: string; readonly reason: string }[];
 }
 export class Plan extends Pipeable.Class {
+  readonly runtime: typeof syncResultAdapter | undefined;
   private constructor(
     readonly analysis: Analysis,
     readonly target: Target,
@@ -100,6 +126,7 @@ export class Plan extends Pipeable.Class {
     readonly crates: readonly string[],
   ) {
     super();
+    this.runtime = analysis.effects.length === 0 ? undefined : syncResultAdapter;
     Object.freeze(this);
   }
   static make(
@@ -125,35 +152,7 @@ export class Plan extends Pipeable.Class {
 export interface Ownership {
   readonly plan: Plan;
   readonly mode: "primitive-copy";
-}
-export type RustExpr =
-  | { readonly _tag: "Parameter"; readonly index: number }
-  | { readonly _tag: "Local"; readonly index: number }
-  | { readonly _tag: "Literal"; readonly value: bigint }
-  | {
-      readonly _tag: "Call";
-      readonly method: Implementation["method"];
-      readonly left: RustExpr;
-      readonly right: RustExpr;
-    };
-export const RustExpr = {
-  parameter: (index: number): RustExpr => Object.freeze({ _tag: "Parameter", index }),
-  local: (index: number): RustExpr => Object.freeze({ _tag: "Local", index }),
-  literal: (value: bigint): RustExpr => Object.freeze({ _tag: "Literal", value }),
-  call: (method: Implementation["method"], left: RustExpr, right: RustExpr): RustExpr =>
-    Object.freeze({ _tag: "Call", method, left, right }),
-};
-export interface RustBinding {
-  readonly index: number;
-  readonly value: RustExpr;
-}
-export interface RustModule {
-  readonly functions: readonly {
-    readonly name: string;
-    readonly arity: number;
-    readonly bindings: readonly RustBinding[];
-    readonly body: RustExpr;
-  }[];
+  readonly rationale: string;
 }
 export interface Artifact {
   readonly files: Readonly<Record<"Cargo.toml" | "src/lib.rs" | "src/main.rs", string>>;
@@ -186,7 +185,9 @@ const check = Effect.fn("Compile.check")(function* (program: Program) {
           },
         ]
       : []),
-    ...checkFunction(f, `functions.${name}`),
+    ...(f instanceof EffectFn
+      ? checkEffectFunction(f, `functions.${name}`)
+      : checkFunction(f, `functions.${name}`)),
   ]);
   if (!Object.keys(program.functions).length)
     return yield* fail("EMPTY_PROGRAM", "check", "functions", "At least one function is required");
@@ -201,14 +202,22 @@ const derive = Effect.fn("Compile.derive")(function* (
   yield* check(program);
   const found = new Map<OperationRef, AnyOperation>();
   const serializedIds = new Map<string, OperationRef>();
+  const types = new Set<IRType<unknown>>();
+  const effectRefs = new Set<EffectRef>();
   const visited = new Set<Expr<unknown>>();
   const walk = (e: Expr<unknown>) => {
     if (visited.has(e)) return;
     visited.add(e);
+    types.add(e.type);
     Match.value(e.node).pipe(
       Match.tagsExhaustive({
         Parameter: () => {},
         Literal: () => {},
+        Match: (n) => {
+          walk(n.condition);
+          walk(n.onTrue);
+          walk(n.onFalse);
+        },
         Apply: (n) => {
           const op = n.operation;
           if (
@@ -228,8 +237,51 @@ const derive = Effect.fn("Compile.derive")(function* (
       }),
     );
   };
+  const seenComputations = new Set<Computation<unknown, unknown>>();
+  const walkComputation = (c: Computation<unknown, unknown>) => {
+    if (seenComputations.has(c)) return;
+    seenComputations.add(c);
+    types.add(c.output);
+    types.add(c.error);
+    Match.value(c.node).pipe(
+      Match.tagsExhaustive({
+        Succeed: (n) => {
+          effectRefs.add(SyncEffects.Succeed);
+          walk(n.value);
+        },
+        Fail: (n) => {
+          effectRefs.add(SyncEffects.Fail);
+          walk(n.error);
+        },
+        Map: (n) => {
+          effectRefs.add(SyncEffects.Map);
+          walkComputation(n.source);
+          walk(n.body);
+        },
+        FlatMap: (n) => {
+          effectRefs.add(SyncEffects.FlatMap);
+          walkComputation(n.source);
+          walkComputation(n.body);
+        },
+        Match: (n) => {
+          effectRefs.add(SyncEffects.Match);
+          walk(n.condition);
+          walkComputation(n.onTrue);
+          walkComputation(n.onFalse);
+        },
+      }),
+    );
+  };
   yield* Effect.try({
-    try: () => Object.values(program.functions).forEach((f) => walk(f.body)),
+    try: () =>
+      Object.values(program.functions).forEach((f) => {
+        f.input.forEach((type) => types.add(type));
+        types.add(f.output);
+        if (f instanceof EffectFn) {
+          types.add(f.error);
+          walkComputation(f.body);
+        } else walk(f.body);
+      }),
     catch: (e) =>
       e instanceof CompileError ? e : fail("INVALID_IR", "derive", "program", String(e)),
   });
@@ -239,9 +291,20 @@ const derive = Effect.fn("Compile.derive")(function* (
   return Object.freeze({
     program,
     operations,
-    capabilities: collect(operations.flatMap((op) => op.capabilities)),
-    effects: collect(operations.flatMap((op) => op.effects)),
+    capabilities: collect([
+      ...operations.flatMap((op) => op.capabilities),
+      ...Array.from(types).flatMap((type): readonly Capability[] =>
+        IRType.same(type, U64Type)
+          ? [Capabilities.U64]
+          : IRType.same(type, BoolType)
+            ? [Capabilities.Bool]
+            : [],
+      ),
+      ...(effectRefs.size ? [Capabilities.SyncResult] : []),
+    ]),
+    effects: collect([...operations.flatMap((op) => op.effects), ...effectRefs]),
     requirements: collect(operations.flatMap((op) => op.requirements)),
+    types: Object.freeze(Array.from(types)),
   });
 });
 const normalize = Effect.fn("Compile.normalize")(function* (analysis: Analysis) {
@@ -253,6 +316,13 @@ const plan = Effect.fn("Compile.plan")(function* (
   analysis: Analysis,
   target: Target = Rust.std,
 ): Effect.fn.Return<Plan, CompileError> {
+  if (target.ref !== Targets.RustStd)
+    return yield* fail(
+      "UNSUPPORTED_TARGET",
+      "plan",
+      target.id,
+      "No verified lowering registered for this target",
+    );
   const derived = yield* derive(analysis.program);
   const selections: Selection[] = [];
   for (const op of derived.operations) {
@@ -285,6 +355,26 @@ const plan = Effect.fn("Compile.plan")(function* (
       );
     selections.push(Object.freeze({ operation: op, selected, rejected: Object.freeze(rejected) }));
   }
+  for (const capability of derived.capabilities) {
+    if (!target.capabilities.includes(capability))
+      return yield* fail(
+        "UNSUPPORTED_CAPABILITY",
+        "plan",
+        capability.id,
+        "Target lacks a required representation/control-flow capability",
+      );
+  }
+  if (
+    derived.effects.some(
+      (ref) => !Object.values(SyncEffects).some((supported) => supported === ref),
+    )
+  )
+    return yield* fail(
+      "UNSUPPORTED_EFFECT",
+      "plan",
+      "effects",
+      "No verified synchronous Result adapter for this effect",
+    );
   return Plan.make(
     derived,
     target,
@@ -295,6 +385,7 @@ const plan = Effect.fn("Compile.plan")(function* (
 const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
   const expected = yield* plan(p.analysis, p.target);
   if (
+    p.runtime !== expected.runtime ||
     p.selections.length !== expected.selections.length ||
     p.selections.some(
       (s, i) =>
@@ -309,32 +400,22 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
       "selections",
       "Selected plan does not cover the reachable graph with verified implementations",
     );
-  for (const f of Object.values(p.analysis.program.functions)) {
-    const visited = new Set<Expr<unknown>>();
-    const supported = (e: Expr<unknown>): boolean => {
-      if (visited.has(e)) return true;
-      visited.add(e);
-      return (
-        IRType.same(e.type, U64Type) &&
-        Match.value(e.node).pipe(
-          Match.tagsExhaustive({
-            Parameter: () => true,
-            Literal: () => true,
-            Apply: (n) => n.args.every(supported),
-          }),
-        )
-      );
-    };
-    if (
-      f.input.some((t) => !IRType.same(t, U64Type)) ||
-      !IRType.same(f.output, U64Type) ||
-      !supported(f.body)
-    )
+  for (const type of expected.analysis.types) {
+    if (![U64Type, BoolType, NeverType].some((builtin) => IRType.same(type, builtin)))
       return yield* fail(
         "UNSUPPORTED_REPRESENTATION",
         "verify",
-        "function",
-        "The Rust bootstrap target requires the checked builtin u64 representation",
+        type.id,
+        "Only canonical Boolean/u64/Never witnesses have registered native representations",
+      );
+  }
+  for (const f of Object.values(expected.analysis.program.functions)) {
+    if (f.input.some((type) => IRType.same(type, NeverType)))
+      return yield* fail(
+        "UNSUPPORTED_REPRESENTATION",
+        "verify",
+        "input",
+        "Never cannot be supplied as a runtime input",
       );
   }
   return expected;
@@ -346,7 +427,12 @@ const optimize = Effect.fn("Compile.optimize")(function* (p: Plan) {
 const analyzeOwnership = Effect.fn("Compile.ownership")(function* (
   p: Plan,
 ): Effect.fn.Return<Ownership, CompileError> {
-  return Object.freeze({ plan: yield* verify(p), mode: "primitive-copy" });
+  return Object.freeze({
+    plan: yield* verify(p),
+    mode: "primitive-copy",
+    rationale:
+      "Boolean/u64 are Copy; Never is uninhabited. Branch and continuation scopes keep values local.",
+  });
 });
 const lower = Effect.fn("Compile.lower")(function* (
   ownership: Ownership,
@@ -354,83 +440,17 @@ const lower = Effect.fn("Compile.lower")(function* (
   const p = yield* verify(ownership.plan);
   if (ownership.mode !== "primitive-copy")
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
-  const selected = new Map<OperationRef, Implementation>(
-    p.selections.map((s) => [s.operation.ref, s.selected]),
+  return lowerFunctions(
+    p.analysis.program,
+    new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
   );
-  return Object.freeze({
-    functions: Object.freeze(
-      Object.entries(p.analysis.program.functions).map(([name, f]) => {
-        const bindings: RustBinding[] = [];
-        const locals = new Map<Expr<unknown>, RustExpr>();
-        const expression = (e: Expr<unknown>): RustExpr => {
-          const existing = locals.get(e);
-          if (existing) return existing;
-          const result = Match.value(e.node).pipe(
-            Match.tagsExhaustive({
-              Parameter: (n) => RustExpr.parameter(n.index),
-              Literal: (n) => RustExpr.literal(Schema.decodeUnknownSync(U64Type.schema)(n.value)),
-              Apply: (n) => {
-                const value = RustExpr.call(
-                  selected.get(n.operation.ref)!.method,
-                  expression(n.args[0]),
-                  expression(n.args[1]),
-                );
-                const index = bindings.length;
-                bindings.push(Object.freeze({ index, value }));
-                return RustExpr.local(index);
-              },
-            }),
-          );
-          locals.set(e, result);
-          return result;
-        };
-        const body = expression(f.body);
-        return Object.freeze({
-          name,
-          arity: f.input.length,
-          bindings: Object.freeze(bindings),
-          body,
-        });
-      }),
-    ),
-  });
 });
-const render = (e: RustExpr): string =>
-  Match.value(e).pipe(
-    Match.tagsExhaustive({
-      Parameter: (n) => `p${n.index}`,
-      Local: (n) => `v${n.index}`,
-      Literal: (n) => `${n.value}u64`,
-      Call: (n) => `(${render(n.left)}).${n.method}(${render(n.right)})`,
-    }),
-  );
 const emit = Effect.fn("Compile.emit")(function* (
   p: Plan,
 ): Effect.fn.Return<Artifact, CompileError> {
   const verified = yield* verify(p);
   const module = yield* lower(yield* analyzeOwnership(verified));
-  const lib = module.functions
-    .map(
-      (f) =>
-        `pub fn r_${f.name}(${Array.from({ length: f.arity }, (_, i) => `p${i}: u64`).join(", ")}) -> u64 {\n${f.bindings.map((b) => `    let v${b.index} = ${render(b.value)};\n`).join("")}    ${render(f.body)}\n}\n`,
-    )
-    .join("\n");
-  const arms = module.functions
-    .map(
-      (f) =>
-        `        ${JSON.stringify(f.name)} if args.len() == ${f.arity + 1} => println!("{}", reffect_generated::r_${f.name}(${Array.from({ length: f.arity }, (_, i) => `args[${i + 1}].parse::<u64>().map_err(|_| "invalid u64")?`).join(", ")})),`,
-    )
-    .join("\n");
-  return Object.freeze({
-    explanation: verified,
-    stages,
-    files: Object.freeze({
-      "Cargo.toml":
-        '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n',
-      "src/lib.rs": lib,
-      "src/main.rs": `fn main() -> Result<(), &'static str> {\n    let args: Vec<String> = std::env::args().skip(1).collect();\n    match args.first().map(String::as_str).ok_or("missing function")? {\n${arms}\n        _ => return Err("unknown function or incorrect arity"),\n    }\n    Ok(())\n}\n`,
-    }),
-  });
+  return Object.freeze({ explanation: verified, stages, files: emitFunctions(module) });
 });
 const run = Effect.fn("Compile.run")(function* (program: Program, target: Target = Rust.std) {
   const checked = yield* check(program);
