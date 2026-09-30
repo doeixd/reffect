@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-09-30 — Migration design preparation
+
+- Reviewed prior compiler/API/milestone/conformance/runtime references and researched current Codemod, Effect-tsgo, upstream Effect migration material, and Grit/GritQL pages before integrating the supplied migration proposal.
+- Recorded sources, date/version limits, alternatives, design constraints, acceptance, and open questions in [docs/research/migration-tooling.md](docs/research/migration-tooling.md). Codemod remains a candidate; no tool dependencies or migration implementation are added. A passing native check establishes representability, not source-rewrite semantic equivalence.
+
+## 2026-09-30 — Preparation before features and plans
+
+- Added an explicit AGENTS.md requirement to review prior docs/code, research current primary sources online, assess the design and alternatives, and record evidence/decisions before creating an implementation plan or changing feature code.
+- Research/design records belong in the relevant docs/ reference, with source links, checked versions/dates, rationale, uncertainties, and validation criteria; PROGRESS.md links the record and the docs index tracks new documents.
+
 ## 2026-09-30 — Rust substrate and semantic adapter guidance
 
 - Added docs/runtime-lowering.md from the supplied conversation, integrating one copy of the duplicated passage and cleaning formatting. It retains the mapping catalogue, specialization/wiring examples, caching/pools, batching, Schedule/Stream, runtime boundaries, and implementation-research leads as proposals.

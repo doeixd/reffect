@@ -65,6 +65,17 @@ Read [runtime lowering](docs/runtime-lowering.md) when choosing Rust substrates 
 
 # Implementation guidance
 
+## Research and design before planning or implementation
+
+Before creating an implementation plan or starting a new feature, complete and record the preparation below. Do this before drafting the plan or changing feature code.
+
+1. Review prior work: read the relevant project docs, PLAN.md, PROGRESS.md, and existing code. Identify applicable decisions, constraints, milestone acceptance criteria, reusable components, and unresolved questions.
+2. Research online: consult current primary sources such as official API documentation, upstream source, specifications, and relevant research. Verify dependency versions and semantic compatibility; do not rely on remembered APIs, old conversation claims, or similarly named primitives.
+3. Assess the design: compare feasible approaches and their tradeoffs. Define supported behavior, IR/representation boundaries, effects and resource lifetimes, compatibility obligations, failure cases, and meaningful validation. Resolve what can be reused, generated, adapted, or deferred.
+4. Record the findings before proceeding: update an appropriate design/research document under docs/ (or the existing feature document) with source links, versions/date checked, relevant prior decisions, alternatives considered, chosen approach and rationale, assumptions, open questions, and acceptance/validation criteria. Link that record from PROGRESS.md and update the docs index when adding a document.
+
+Keep the record proportional to the work: concise evidence and design decisions are sufficient for a small feature. Mark uncertain claims explicitly. Use the recorded findings to write the plan and guide implementation; revisit them when new evidence changes the design.
+
 ## Effect v4 and reference semantics
 
 - Use the Effect best-practices skill and the available Effect API reference when writing or reviewing Effect code. Check every applicable pattern against v4; examples from other versions may differ. Prefer installed types/source and public APIs, then authoritative upstream docs when needed.
