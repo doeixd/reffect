@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Match, Pipeable } from "effect";
+import { Context, Effect, Layer, Match, Pipeable, Schema } from "effect";
 import { Cargo } from "./cargo.ts";
 import {
   AddU64,
@@ -127,6 +127,7 @@ export interface Ownership {
 }
 export type RustExpr =
   | { readonly _tag: "Parameter"; readonly index: number }
+  | { readonly _tag: "Local"; readonly index: number }
   | { readonly _tag: "Literal"; readonly value: bigint }
   | {
       readonly _tag: "Call";
@@ -134,10 +135,22 @@ export type RustExpr =
       readonly left: RustExpr;
       readonly right: RustExpr;
     };
+export const RustExpr = {
+  parameter: (index: number): RustExpr => Object.freeze({ _tag: "Parameter", index }),
+  local: (index: number): RustExpr => Object.freeze({ _tag: "Local", index }),
+  literal: (value: bigint): RustExpr => Object.freeze({ _tag: "Literal", value }),
+  call: (method: Implementation["method"], left: RustExpr, right: RustExpr): RustExpr =>
+    Object.freeze({ _tag: "Call", method, left, right }),
+};
+export interface RustBinding {
+  readonly index: number;
+  readonly value: RustExpr;
+}
 export interface RustModule {
   readonly functions: readonly {
     readonly name: string;
     readonly arity: number;
+    readonly bindings: readonly RustBinding[];
     readonly body: RustExpr;
   }[];
 }
@@ -343,32 +356,49 @@ const lower = Effect.fn("Compile.lower")(function* (
   const selected = new Map<OperationRef, Implementation>(
     p.selections.map((s) => [s.operation.ref, s.selected]),
   );
-  const expression = (e: Expr<unknown>): RustExpr => {
-    return Match.value(e.node).pipe(
-      Match.tagsExhaustive({
-        Parameter: (n): RustExpr => ({ _tag: "Parameter", index: n.index }),
-        Literal: (n): RustExpr => ({ _tag: "Literal", value: n.value as bigint }),
-        Apply: (n): RustExpr => ({
-          _tag: "Call",
-          method: selected.get(n.operation.ref)!.method,
-          left: expression(n.args[0]),
-          right: expression(n.args[1]),
-        }),
+  return Object.freeze({
+    functions: Object.freeze(
+      Object.entries(p.analysis.program.functions).map(([name, f]) => {
+        const bindings: RustBinding[] = [];
+        const locals = new Map<Expr<unknown>, RustExpr>();
+        const expression = (e: Expr<unknown>): RustExpr => {
+          const existing = locals.get(e);
+          if (existing) return existing;
+          const result = Match.value(e.node).pipe(
+            Match.tagsExhaustive({
+              Parameter: (n) => RustExpr.parameter(n.index),
+              Literal: (n) => RustExpr.literal(Schema.decodeUnknownSync(U64Type.schema)(n.value)),
+              Apply: (n) => {
+                const value = RustExpr.call(
+                  selected.get(n.operation.ref)!.method,
+                  expression(n.args[0]),
+                  expression(n.args[1]),
+                );
+                const index = bindings.length;
+                bindings.push(Object.freeze({ index, value }));
+                return RustExpr.local(index);
+              },
+            }),
+          );
+          locals.set(e, result);
+          return result;
+        };
+        const body = expression(f.body);
+        return Object.freeze({
+          name,
+          arity: f.input.length,
+          bindings: Object.freeze(bindings),
+          body,
+        });
       }),
-    );
-  };
-  return {
-    functions: Object.entries(p.analysis.program.functions).map(([name, f]) => ({
-      name,
-      arity: f.input.length,
-      body: expression(f.body),
-    })),
-  };
+    ),
+  });
 });
 const render = (e: RustExpr): string =>
   Match.value(e).pipe(
     Match.tagsExhaustive({
       Parameter: (n) => `p${n.index}`,
+      Local: (n) => `v${n.index}`,
       Literal: (n) => `${n.value}u64`,
       Call: (n) => `(${render(n.left)}).${n.method}(${render(n.right)})`,
     }),
@@ -381,7 +411,7 @@ const emit = Effect.fn("Compile.emit")(function* (
   const lib = module.functions
     .map(
       (f) =>
-        `pub fn r_${f.name}(${Array.from({ length: f.arity }, (_, i) => `p${i}: u64`).join(", ")}) -> u64 {\n    ${render(f.body)}\n}\n`,
+        `pub fn r_${f.name}(${Array.from({ length: f.arity }, (_, i) => `p${i}: u64`).join(", ")}) -> u64 {\n${f.bindings.map((b) => `    let v${b.index} = ${render(b.value)};\n`).join("")}    ${render(f.body)}\n}\n`,
     )
     .join("\n");
   const arms = module.functions

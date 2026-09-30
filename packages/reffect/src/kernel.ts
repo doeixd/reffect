@@ -338,13 +338,21 @@ export class Program extends Pipeable.Class {
 }
 
 export const U64Max = (1n << 64n) - 1n;
+const makeU64Schema = () => {
+  const schema = Schema.BigInt.check(
+    Schema.makeFilter((n) => (n >= 0n && n <= U64Max) || "Expected an unsigned 64-bit bigint"),
+  );
+  // This is a new checked AST, not the shared Schema.BigInt AST. Protect its semantic boundary.
+  for (const check of schema.ast.checks ?? []) Object.freeze(check);
+  if (schema.ast.checks) Object.freeze(schema.ast.checks);
+  Object.freeze(schema.ast);
+  return Object.freeze(schema);
+};
 class U64Witness extends IRType<bigint> {
   constructor() {
     super(
       SemanticRef.type("reffect/u64@1"),
-      Schema.BigInt.check(
-        Schema.makeFilter((n) => (n >= 0n && n <= U64Max) || "Expected an unsigned 64-bit bigint"),
-      ),
+      makeU64Schema(),
       Native.U64,
       Object.freeze([Traits.Copyable, Traits.Cloneable, Traits.Eq, Traits.TotallyOrdered]),
     );

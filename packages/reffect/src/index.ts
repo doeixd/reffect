@@ -34,12 +34,12 @@ export type {
   Symbols,
   AnyOperation,
 } from "./kernel.ts";
-export { Compile, Compiler, Rust, Target, Plan } from "./compiler.ts";
+export { Compile, Compiler, Rust, Target, Plan, RustExpr } from "./compiler.ts";
 export type {
   Implementation,
   Analysis,
   Ownership,
-  RustExpr,
+  RustBinding,
   RustModule,
   Artifact,
 } from "./compiler.ts";

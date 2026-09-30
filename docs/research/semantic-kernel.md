@@ -32,6 +32,8 @@ Compiler stages return official Effects and typed schema errors. Compiler and Ca
 
 ## Implementation evidence
 
+Independent post-commit review reproduced two kernel issues: the exposed builtin Schema/AST could be mutated to weaken range validation, and shared expression DAGs expanded exponentially during lowering/rendering. Freeze the locally constructed builtin Schema/AST/checks (without freezing the upstream shared BigInt AST), and lower applications once into dependency-ordered Rust locals. This preserves the reference evaluator's DAG sharing structurally; it is not a law-driven optimization. Regressions must show mutation cannot admit invalid literals and source size is linear for repeated-squaring DAGs, alongside native parity.
+
 ### Authoring API refinement (user direction)
 
 The public semantic witness is named **IRType**, superseding the earlier CType spelling for new code. User-authored values should be built through typed factories and immutable, data-last combinators composed with `pipe`; examples and tests must not need casts or object spreading. Preserve literal tuple inference for function/operation signatures and law subject types.

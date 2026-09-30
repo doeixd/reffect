@@ -34,7 +34,15 @@ const nested = R.fn([R.U64, R.U64], R.U64, (a, b) => {
 });
 const constant = R.fn([], R.U64, () => R.U64.literal(R.U64.max));
 const identity = R.fn([R.U64], R.U64, (a) => a);
-const program = R.program({ add, sub, mul, nested, constant, identity });
+const repeatSquare = (depth: number) =>
+  R.fn([R.U64], R.U64, (a) =>
+    Array.from({ length: depth }, (_, index) => index).reduce(
+      (value) => value.pipe(R.U64.mul(value)),
+      a,
+    ),
+  );
+const repeated = repeatSquare(16);
+const program = R.program({ add, sub, mul, nested, constant, identity, repeated });
 
 const diagnostics = (effect: Effect.Effect<unknown, CompileError>) =>
   Effect.runPromise(
@@ -87,8 +95,9 @@ test("reference and generated Rust agree at numeric boundaries in fresh debug an
         args: [R.U64.max],
         expected: yield* Reference.run(identity, [R.U64.max]),
       });
+      cases.push({ name: "repeated", args: [3n], expected: yield* Reference.run(repeated, [3n]) });
       const results = yield* cargo.validate(artifact, cases, ".");
-      expect(results).toHaveLength(46);
+      expect(results).toHaveLength(48);
       expect(results.every((r) => r.exitCode === 0)).toBe(true);
     }).pipe(
       Effect.provide(Compiler.layer),
@@ -109,6 +118,26 @@ test("builders produce immutable IR and exact bigint arithmetic", async () => {
   expect(() => R.U64.literal(R.U64.max + 1n)).toThrow();
   expect(await diagnostics(Reference.run(add, [-1n, 1n]))).toContain("INVALID_INPUT");
   expect(await diagnostics(Reference.runUnknown(add, [1n]))).toContain("ARITY_MISMATCH");
+});
+
+test("the exposed builtin Schema cannot be mutated to weaken u64 validation", async () => {
+  expect(() => Object.assign(R.U64.schema.ast, { checks: undefined })).toThrow();
+  expect(() => Object.assign(R.U64.schema, { ast: Schema.BigInt.ast })).toThrow();
+  const check = R.U64.schema.ast.checks?.[0];
+  expect(check).toBeDefined();
+  if (check) expect(Object.isFrozen(check)).toBe(true);
+  expect(() => R.U64.literal(-1n)).toThrow();
+  expect(() => R.U64.literal(R.U64.max + 1n)).toThrow();
+  expect(await diagnostics(Reference.runUnknown(identity, [-1n]))).toContain("INVALID_INPUT");
+  expect(Schema.is(Schema.BigInt)(-1n)).toBe(true);
+});
+
+test("shared arithmetic graphs generate linear-size Rust rather than duplicated trees", async () => {
+  const small = await Effect.runPromise(Compile.run(R.program({ square: repeatSquare(8) })));
+  const large = await Effect.runPromise(Compile.run(R.program({ square: repeatSquare(16) })));
+  expect(large.files["src/lib.rs"].length).toBeLessThan(small.files["src/lib.rs"].length * 3);
+  const deep = await Effect.runPromise(Compile.run(R.program({ square: repeatSquare(64) })));
+  expect(deep.files["src/lib.rs"].length).toBeLessThan(8192);
 });
 
 test("checks reject escaped binders, mismatched witnesses and invalid program declarations", async () => {

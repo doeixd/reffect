@@ -17,7 +17,8 @@ const value = await Effect.runPromise(Reference.run(Add, [R.U64.max, 1n])); // 0
 
 ```rust
 pub fn r_Add(p0: u64, p1: u64) -> u64 {
-    (p0).wrapping_add(p1)
+    let v0 = (p0).wrapping_add(p1);
+    v0
 }
 ```
 
