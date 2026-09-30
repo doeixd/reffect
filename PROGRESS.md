@@ -11,7 +11,7 @@
 ## 2026-09-30 — Project naming and GitHub publication
 
 - Recorded the user's canonical project name `reffect` and compiled DSL namespace `R` in AGENTS.md. Earlier Effect Native/effect-native and C examples remain historical context; naming does not imply existing exports.
-- Preparing the repository for the user's explicitly requested public GitHub publication, including a project README, the existing starter workspace, About description, and topics.
+- Published the reviewed project and existing starter workspace to [doeixd/reffect](https://github.com/doeixd/reffect) as a public GitHub repository using gh. Added a project README, design-stage About description, and topics: effect, effect-ts, typescript, rust, compiler, semantic-compiler, intermediate-representation, ahead-of-time, codemod, and vite-plus. Verified public visibility, metadata, and the master default branch; origin tracks the GitHub repository.
 - Subagent review confirmed migration design coverage, target/profile boundaries, semantic verification limits, naming guidance, links, and accurate publication status. Removed starter package author/repository/homepage/bugs placeholders identified during review before publication.
 
 ## 2026-09-30 — Preparation before features and plans
