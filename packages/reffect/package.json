@@ -1,0 +1,20 @@
+{
+  "name": "reffect",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.0-rc.118",
+    "effect": "4.0.0-rc.118"
+  },
+  "devDependencies": {
+    "vite-plus": "0.3.2"
+  }
+}

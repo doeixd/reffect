@@ -13,6 +13,7 @@
     "dev": "vp run website#dev"
   },
   "devDependencies": {
+    "@effect/language-service": "0.87.3",
     "vite-plus": "0.3.2"
   },
   "overrides": {

@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "strict": true, "target": "ES2022" },
+  "include": ["src", "tests", "vite.config.ts"]
+}
