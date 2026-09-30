@@ -38,6 +38,12 @@ Edit the individual documents directly as the design evolves. Keep the roadmap a
 
 [Lowering Effect onto the Rust ecosystem](runtime-lowering.md) covers the candidate crate/primitive catalogue, direct lowering versus adapters versus dedicated runtime, operation/service/semantic registry families, Layer wiring, Ref specialization, caches/pools, batching, schedules, streams, and support reporting. The duplicated pasted conversation is integrated as one edited reference. Candidate mappings and research leads require verification; coverage percentages are not measured support.
 
+## Migration tooling and research
+
+[Compiler-guided migration tooling](migration-tooling.md) integrates the migration conversation: an external codemod engine, compiler-owned compatibility reports, target reachability, mechanical/guided/architectural transformations, diagnostic-linked fixes, JSON/editor/agent workflows, and semantic validation. Commands, packages, and the future migration skill are proposals.
+
+[Migration tooling research](research/migration-tooling.md) records prior-design review, primary-source checks, versions/date limits, alternatives, rationale, acceptance, and open questions before design integration. It distinguishes native representability from rewrite equivalence and corrects the Grit organization versus successor-project maintenance assumption.
+
 ## One-time extraction scripts
 
 [scripts/Split-Plan.ps1](../scripts/Split-Plan.ps1) requires a copy of the original, unsplit plan and a destination directory without its six files:

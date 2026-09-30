@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Revision overview](op-expr-revision-convo.md)
 
+The later [migration tooling design](migration-tooling.md) uses compiler reachability and structured diagnostics as a semantic authority, with an external AST/workflow engine for eligible source rewrites. Mechanical fixes and guided/architectural decisions share the library API without widening the initial source subset.
+
 The later [runtime lowering reference](runtime-lowering.md) extends this design's implementation planning: distinguish operation, service, and semantic runtime entries; choose generated code, a verified substrate adapter, or dedicated runtime; record reachable crates/features and conformance obligations. It does not change the pass order or milestone sequence.
 
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.

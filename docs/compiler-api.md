@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md)
 
+[Migration tooling](migration-tooling.md) adds proposed analyze/check/fix orchestration, machine-readable compatibility reports, diagnostic-linked codemods, and shared editor/agent/CI consumers. A passing compiler check alone does not establish source-rewrite semantic parity.
+
 [Runtime lowering](runtime-lowering.md) extends the proposed support/explain API: report required operations, services, and semantic primitives separately, along with selected substrates, adapters, generated strategies, and reachable Cargo crates/features.
 
 The [revised compiler design](compiler-design-revision.md) expands the public stages to check/derive/normalize/plan/verify/optimize/ownership/lower/emit/build and adds explainable planning. Read the [Gen2 semantic kernel discussion](gen2-semantic-kernel.md) for evidence policy and implementation selection; retain this document for build specs, results, watch/dev, and integration details.

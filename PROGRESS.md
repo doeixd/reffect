@@ -4,6 +4,14 @@
 
 - Reviewed prior compiler/API/milestone/conformance/runtime references and researched current Codemod, Effect-tsgo, upstream Effect migration material, and Grit/GritQL pages before integrating the supplied migration proposal.
 - Recorded sources, date/version limits, alternatives, design constraints, acceptance, and open questions in [docs/research/migration-tooling.md](docs/research/migration-tooling.md). Codemod remains a candidate; no tool dependencies or migration implementation are added. A passing native check establishes representability, not source-rewrite semantic equivalence.
+- Integrated the supplied conversation into docs/migration-tooling.md and linked design/research from PLAN.md, AGENTS.md, the index, and relevant API/compiler/conformance/milestone/reuse references. All migration commands, packages, and agent-skill layouts remain proposals; target scope and existing core milestone order are preserved.
+- Research/preparation review found no corrections to design or source claims; its request to index the research record is addressed by the migration integration.
+- Validation: `vp check` passes; workspace builds pass using cached results. Root/workspace tests reproduce the documented starter Vitest suite-detection failure; no feature code was changed.
+
+## 2026-09-30 — Project naming and GitHub publication
+
+- Recorded the user's canonical project name `reffect` and compiled DSL namespace `R` in AGENTS.md. Earlier Effect Native/effect-native and C examples remain historical context; naming does not imply existing exports.
+- Preparing the repository for the user's explicitly requested public GitHub publication, including a project README, the existing starter workspace, About description, and topics.
 
 ## 2026-09-30 — Preparation before features and plans
 

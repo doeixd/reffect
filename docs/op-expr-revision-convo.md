@@ -4,6 +4,8 @@ The original conversation has been split into the seven documents below. All dis
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Implementation status](../PROGRESS.md)
 
+The later [migration design](migration-tooling.md) adds target-scoped analyze/check/fix workflows and diagnostic-linked codemods as compiler consumers. Its [research record](research/migration-tooling.md) documents preparation and upstream checks; the native milestone order remains unchanged.
+
 The subsequently supplied [runtime lowering conversation](runtime-lowering.md) supplements this revision with Rust-substrate candidates, three lowering strategies, and separate operation/service/semantic implementation registries. It retains the detailed milestone sequence and initial symbolic-builder scope.
 
 ## Reading order

@@ -28,7 +28,9 @@ release. Add a tool name to select part of the graph. For example, run
 
 # Project goal
 
-Build Effect Native: an ahead-of-time semantic compiler and small native runtime toolkit for a statically representable subset of Effect v4 programs. TypeScript authoring APIs construct typed, immutable IR; a reference interpreter executes it through official Effect, and the compiler derives a semantics-preserving Rust implementation.
+Build reffect: an ahead-of-time semantic compiler and small native runtime toolkit for a statically representable subset of Effect v4 programs. TypeScript authoring APIs construct typed, immutable IR; a reference interpreter executes it through official Effect, and the compiler derives a semantics-preserving Rust implementation.
+
+The canonical project name is **reffect**. Use **R** as the compiled authoring/DSL namespace in new designs and code, for example `R.fn`, `R.Effect`, and `R.Match`. Historical docs use Effect Native/effect-native and C/Compiled/Native; interpret them in light of this naming decision. The naming choice does not establish implemented package exports, and historical examples need not be mechanically rewritten.
 
 The compiler must know what each operation means, which types and representations it uses, what effects and dependencies it has, which laws justify transformations, and why a target implementation was chosen. Compile abstractions away while preserving observable behavior: success/failure, interruption, resource finalization, Layer sharing, and protocol compatibility.
 
@@ -62,6 +64,8 @@ The [revision overview](docs/op-expr-revision-convo.md), [revised compiler desig
 Preserved discussions contain provisional API spellings, unresolved citation placeholders, and historical upstream/licensing observations. They are design context. Verify external facts against the installed dependency version and authoritative upstream material before implementation; do not infer shipped support from an example.
 
 Read [runtime lowering](docs/runtime-lowering.md) when choosing Rust substrates or designing implementation registries, services/Layers, Ref specialization, caching/pools, batching, schedules, or streams. Its crate catalogue is a candidate list, not dependency approval or proven semantic equivalence. It supplements the revised design without changing milestones or admitting ordinary generators into the initial compiled subset.
+
+Read [migration tooling](docs/migration-tooling.md) and its [research record](docs/research/migration-tooling.md) when designing analyze/check/fix reports, source compatibility diagnostics, codemods, migration workflows, or agent/editor integration. Migration is a first-class compiler consumer; external tooling handles mechanical transformations while the compiler owns native representability.
 
 # Implementation guidance
 
@@ -111,6 +115,14 @@ Keep the record proportional to the work: concise evidence and design decisions 
 - Defer broad concurrency, advanced cross-fiber ownership, law-driven optimization, distributed execution, syntax widening, and hybrid hosting until their workloads and conformance foundations are ready.
 - Use meaningful differential/conformance tests: operations and law properties; Query evaluator/Drizzle/Rust; JS/native RemoteServer; official RPC client/native server; Effect↔Rust codecs; stock Foldkit hydration/resume; observable Exit/Cause and finalizer/interruption traces.
 - Record exact validation commands and results, including existing failures. Distinguish cached builds from fresh validation and proposed capabilities from implemented support.
+
+## Migration tooling
+
+- Analyze the requested native target's reachable graph. Preserve already supported code, browser-only code, and unrelated logic; never rewrite working code merely to make it look more native.
+- Reuse an established AST/workflow platform such as the Codemod candidate instead of implementing a custom codemod framework. Keep the adapter replaceable and validate/pin its supported version before use.
+- Separate mechanical fixes with established preconditions from compiler-guided choices and architectural migration. Register diagnostic/fix IDs, applicability, supported targets/versions, and semantic evidence centrally for CLI/editor/agent/CI consumers.
+- Use structured diagnostics and the public compiler API for analyze/check/repair. A passing check establishes representability for a supported profile; verify rewrite equivalence with semantic/conformance tests and builds.
+- Record meaningful choices and unresolved cases. Do not silently replace locale/numeric/concurrency semantics, change target/host requirements, or claim success by suppressing diagnostics. Migration into supported R builders remains separate from later source syntax widening.
 
 # Work, commits, and review
 

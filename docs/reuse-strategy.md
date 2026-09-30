@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Revision overview](op-expr-revision-convo.md)
 
+[Migration tooling](migration-tooling.md) extends the reuse approach to AST/workflow execution: investigate Codemod as an external engine and reuse verified Effect editor tooling hooks, while retaining compiler compatibility analysis and conformance in this project. See its [research record](research/migration-tooling.md) for current sources and limits.
+
 See [runtime lowering](runtime-lowering.md) for the later candidate Rust-substrate catalogue and the distinction between operation implementations, service implementations, and semantic adapters. Prefer eliminating abstractions or adapting verified execution machinery; crate availability alone does not establish parity with Effect.
 
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.

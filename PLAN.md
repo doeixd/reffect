@@ -27,6 +27,7 @@ This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md
 - Classify supported lowering as generated/direct code, an existing substrate plus a semantic adapter, or dedicated semantic runtime. Distinguish operation, service, and semantic runtime implementation entries; select reachable crates/features through the planner and verify observable behavior before treating a mapping as equivalent.
 - Adapt small Gen2 kernel primitives and consume existing Foldkit Entity/Query IR, protocol schemas, and conformance fixtures where possible. Defer shared-kernel extraction until real commonality is demonstrated.
 - The compiler is an Effect library with Services/Layers; CLI, editors, tests, and build integrations consume the same public stages and diagnostics.
+- Migration is a first-class consumer of compiler analysis/diagnostics. Delegate mechanical AST/workflow execution to an established platform; classify target-reachable work, preserve supported code, and distinguish representability checking from source-rewrite semantic equivalence.
 - Make target selection and fallback planning explainable. Refuse unsupported operations when no semantics-preserving implementation exists; expose any later hybrid-host requirement explicitly.
 - Preserve stock Effect RPC clients, Foldkit hydration, and Remote resume compatibility. Keep browser RPC separate from internal cluster RPC.
 - Keep the IR stable as later syntax producers and targets broaden authoring options.
@@ -34,6 +35,8 @@ This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md
 ## Document map
 
 The [runtime lowering reference](docs/runtime-lowering.md) supplements the revised design with Rust substrate candidates, the three implementation registry families, compile-time service/Layer wiring, and conformance obligations. It preserves the existing milestone order and initial symbolic-builder restriction.
+
+The [migration tooling design](docs/migration-tooling.md) and [research record](docs/research/migration-tooling.md) add target-scoped compatibility reports, diagnostic-linked fixes, mechanical/guided/architectural workflows, and agent/editor integration as consumers of the same compiler API.
 
 | Document                                                               | Read when working on                                                                                         |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -79,6 +82,8 @@ Use the numbered milestones in the [revised implementation plan](docs/implementa
 
 Hybrid JS hosting follows solid native semantics and explicitly reports the host requirement through compiler explanations. Implement runtime coverage in response to workloads; defer complex cross-fiber borrowing and law-driven optimizations until their validation foundations exist.
 
+Migration tooling accompanies supported native profiles: introduce source locations, structured compatibility reports, and fix metadata with compiler diagnostics, then add eligible codemods and workflows as capabilities stabilize. It does not reorder the core milestones or enable arbitrary source syntax in the initial compiler; full syntax widening remains later.
+
 The first meaningful compiler workload is Foldkit Query conformance. Unary RPC remains the first major public demo. The combined showcase is `examples/todo-fullstack`: one Rust binary serving Foldkit HTML, Effect RPC, Remote data/live subscriptions, and SQLx-backed storage while the ordinary browser bundle hydrates and uses stock clients.
 
 ## Compiler pipeline
@@ -98,6 +103,7 @@ Planning should distinguish operation, service, and semantic runtime requirement
 - Cross-encode/decode codecs with Effect and compare bytes where canonical output is required.
 - Compare Foldkit rendering, stock hydration, and Remote resume; compare observable Exit/Cause and finalizer/interruption traces for runtime features.
 - For substrate adapters, compare supported lifecycle/policy behavior with Effect: Queue/PubSub shutdown and strategy, shared completion, scoped cache/pool release, Layer sharing/freshness, timer interruption, and batching/schedule/stream semantics. Verify that generated dependencies include only reachable implementations.
+- For migrations, verify each eligible fix preserves behavior, refuses unmet preconditions, respects target reachability, leaves supported code unchanged, and is stable on repeat runs. Compiler checks, conformance tests, and native builds establish different parts of the result; report unresolved cases explicitly.
 
 Use [AGENTS.md](AGENTS.md) for tooling, commits, and required subagent review.
 
@@ -111,3 +117,4 @@ Use [AGENTS.md](AGENTS.md) for tooling, commits, and required subagent review.
 - Conditions under which fallback preserves semantics, limits, security, and the negotiated protocol.
 - Native extension contracts and the compatibility obligations for optional Cruster, syntax widening, and hybrid hosting.
 - Operation/service/semantic-runtime registry boundaries, crate/feature metadata, supported adapter profiles, and evidence required to select direct lowering versus a wrapper.
+- Migration source-to-IR locations, report schema, versioned diagnostic/fix registry, external engine adapter, evidence thresholds, and editor integration hooks.
