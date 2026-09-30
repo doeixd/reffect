@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-09-30 — Basic Effect IR preparation
+
+- Reviewed milestone 2, the revised pipeline, current scalar kernel/compiler and existing native/Foldkit evidence. Checked installed Effect RC.118 success/failure/sequencing/Exit APIs against official source and Rust Result/Infallible semantics.
+- Recorded the explicit Boolean/u64 channels, exhaustive Boolean Match, lexical continuation binding, fixed synchronous Result adapter and fresh native/official Effect acceptance in [basic Effect IR research](docs/research/basic-effect-ir.md). Owned/union representations and asynchronous runtime semantics remain separate future work.
+
 ## 2026-09-30 — Milestone 1 Foldkit encoded-primitive Query profile
 
 - Added direct consumption of published `foldkit-entity@0.4.0` Expr/Query through `Foldkit.compile/build/run` and `Compile.fromFoldkitQuery`. Checked snapshots preserve Entity owner tokens and field/input witnesses, reject unsupported representations, derive memoized support reports, and lower each shared expression node once. Artifacts explain selected generated operation implementations and have no Cargo dependencies.

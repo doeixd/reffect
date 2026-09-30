@@ -42,6 +42,8 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 ## Kernel research
 
+[Basic Effect IR research](research/basic-effect-ir.md) records the synchronous Boolean/u64 success/failure profile, lexical continuation scopes, Result lowering and milestone 2 conformance obligations.
+
 [Semantic kernel bootstrap research](research/semantic-kernel.md) records the milestone 0 numeric semantics, pinned Effect v4 API checks, kernel/registry boundaries, and differential/native acceptance criteria.
 
 [Foldkit Query native bootstrap](research/foldkit-query.md) records pinned upstream IR/fixtures, encoded-value semantics, representation limits, the native evaluator bridge, and three-interpreter validation for milestone 1.
