@@ -14,6 +14,8 @@ This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md
 
 ## Design constraints
 
+> **Later update:** The [project naming decision](AGENTS.md#project-goal) establishes **reffect** and the **R** DSL namespace. Historical names/examples in the detailed references remain context; use the new names in new designs.
+
 - Effect remains a dependency and semantic oracle. The JS interpreter delegates execution to official Effect; public Schema, RPC, and HTTP descriptions supply boundary contracts.
 - Initially compile explicit typed IR built by symbolic callbacks. Arbitrary TypeScript control flow, generators, operators, loops, and opaque callbacks are outside the compiled subset; build-time TypeScript remains unrestricted.
 - Every runtime value has a CType and known native representation. Keep semantic Schema, native memory, wire codecs, and storage mappings distinct.
@@ -88,6 +90,8 @@ The first meaningful compiler workload is Foldkit Query conformance. Unary RPC r
 
 ## Compiler pipeline
 
+> **Later update:** [Runtime support reporting](docs/runtime-lowering.md#planning-support-reporting-and-acceptance) extends planning with substrate/adapter choices and reachable crates/features. [Migration diagnostics](docs/migration-tooling.md#structured-diagnostics-and-shared-fix-registry) expose source locations, alternatives, and eligible fixes through the same compiler API.
+
 `check → derive → normalize → plan → verify → optimize → ownership → lower → emit → build`
 
 Check local invariants; derive dependencies, traits, requirements, and scope relationships; normalize composition; select implementations; verify required capabilities/laws; apply justified rewrites; assign ownership; lower and emit target code; build artifacts. Expose stages through the Effect API and record selected/rejected strategies and valid fallback reasons for `Compile.explain`.
@@ -95,6 +99,8 @@ Check local invariants; derive dependencies, traits, requirements, and scope rel
 Planning should distinguish operation, service, and semantic runtime requirements. Explain generated specializations, selected substrates/adapters, remaining semantic obligations, and reachable Cargo crates/features. Registry metadata can enter the kernel early; implement entries only as workloads require them. Compile-time batching, Schedule state machines, Ref specialization, and stream fusion remain subject to semantic/evidence checks.
 
 ## Validation strategy
+
+> **Later update:** See [migration acceptance](docs/migration-tooling.md#delivery-and-acceptance) for rewrite preconditions, repeat-run stability, and target boundaries. A native check establishes representability; conformance tests must also establish that a rewrite preserves behavior.
 
 - Compare operation/IR results through reference JS or official Effect and generated Rust, including numeric, null, string, and ordering edge cases.
 - Generate Schema-driven law property tests and track subject-indexed evidence separately from claims.

@@ -263,6 +263,8 @@ The current `Query.define` documentation says its body names domain fields rathe
 
 # `Query.define` is almost already our IR
 
+> **Later update:** The [revised first real target](implementation-milestones.md#15-milestone-1--foldkit-entity-exprquery-as-the-first-real-compiler-target) consumes existing Expr/Query IR and fixtures before general compiled functions; SQLx follows later at milestone 5.
+
 For example:
 
 ```ts
@@ -487,6 +489,8 @@ But I **wouldn't require that refactor for the first prototype**. Reading static
 
 # Some current Drizzle callbacks would not be portable
 
+> **Later update:** The [guided and architectural migration categories](migration-tooling.md#three-transformation-layers) apply here: an opaque callback may require a design choice, not an automatic AST rewrite. Native checking validates representability after that choice.
+
 This is the important boundary.
 
 Something like:
@@ -547,6 +551,8 @@ This might actually encourage Foldkit-Plus toward an even cleaner architecture: 
 ---
 
 # Authorization should probably move in the same direction
+
+> **Later update:** The revised plan makes [portable authorization](implementation-milestones.md#21-authorization-must-become-portable) an explicit requirement. Migration alternatives must preserve security behavior rather than silently substitute a weaker predicate.
 
 Current:
 
@@ -1024,6 +1030,8 @@ Schema/codegen can make serialization automatic.
 ---
 
 ## This might be a better early milestone than generic SQL
+
+> **Later update:** The later [milestone sequence](../PLAN.md#implementation-sequence) adopts this direction: Query evaluator conformance at 1, native RemoteServer at 4, and Query → SQLx at 5. Use that order rather than the tentative alternatives below.
 
 I'd now order the demo path roughly as:
 

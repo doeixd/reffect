@@ -174,6 +174,8 @@ Rust can render that straight to the HTTP response.
 
 ## We'd need a native-compatible Foldkit view profile initially
 
+> **Later update:** The [target-scoped migration design](migration-tooling.md#target-scoped-analysis-and-reports) analyzes the server-reachable graph; browser update/subscription/DOM code should not become unrelated native migration work.
+
 This is the one caveat.
 
 An existing Foldkit view is still arbitrary TypeScript:
@@ -562,6 +564,8 @@ before rendering Foldkit HTML.
 
 # Foldkit Remote is particularly relevant
 
+> **Later update:** The [SSR + Remote resume milestone](implementation-milestones.md#28-milestone-9--ssr--remote-datasatisfy--resume) specifies Data.satisfy/resume compatibility after [standalone SSR](implementation-milestones.md#26-milestone-8--native-foldkit-ssr).
+
 Current `foldkit-remote` already describes a server-rendering resume mechanism where only data actually read by active Surfaces crosses the page boundary; the browser resumes that state rather than redundantly fetching it. :chatgpt-content-reference{index="6"}
 
 That is almost tailor-made for a compiled server.
@@ -790,6 +794,8 @@ It's merely another Effect Native library producing the same Program IR.
 ---
 
 ## I actually think Foldkit exposes a broader opportunity
+
+> **Later update:** For delivery order, follow the [revised milestones](../PLAN.md#implementation-sequence): Query conformance first, then Remote/SQL/streaming/live before SSR and the combined showcase. The broader opportunity below does not change that order.
 
 Effect RPC demonstrates:
 

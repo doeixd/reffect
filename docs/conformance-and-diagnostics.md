@@ -112,6 +112,8 @@ between Effect and Rust.
 
 # 42. Diagnostics are first-class output
 
+> **Later update:** The [later diagnostic/fix registry](migration-tooling.md#structured-diagnostics-and-shared-fix-registry) specifies machine-readable source/target information, alternatives, fix eligibility, and shared editor/CLI/agent consumption.
+
 Compiler errors should be semantic:
 
 ```text
@@ -175,6 +177,8 @@ Each is unlocked by a real workload rather than implemented speculatively.
 ---
 
 # 44. Recommended implementation sequence
+
+> **Later update:** This condensed list uses different later numbering. Follow the [detailed milestones 0–15](implementation-milestones.md#14-milestone-0--bootstrap-the-semantic-kernel) and [roadmap](../PLAN.md#implementation-sequence) for scope and order; the list below is a summary, not a replacement.
 
 The condensed sequence is:
 

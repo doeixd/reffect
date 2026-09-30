@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-09-30 — Section-local design update links
+
+- Added 48 **Later update** notes beside affected sections in PLAN.md and 13 earlier design references. Notes link directly to revised kernel/passes, Query-first milestones, early RPC middleware, conservative ownership, optional Cruster, runtime registry/adapter guidance, migration diagnostics/validation, and the reffect/R naming decision.
+- Distinguished superseded sequencing from additive detail while preserving the historical discussion bodies and examples. The docs index explains how to read these notes; existing top-level precedence guidance remains in place.
+- Validation: all 62 breadcrumb file/heading links resolve; `vp check` and workspace builds pass (website cached, utils rebuilt). `vp test` reproduces the previously documented starter Vitest suite-detection failure. No feature code or dependencies changed.
+- Subagent review found no actionable issues and independently verified the update/index links, design precedence, milestone scope, and preserved historical bodies.
+
 ## 2026-09-30 — Migration design preparation
 
 - Reviewed prior compiler/API/milestone/conformance/runtime references and researched current Codemod, Effect-tsgo, upstream Effect migration material, and Grit/GritQL pages before integrating the supplied migration proposal.

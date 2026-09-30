@@ -676,6 +676,8 @@ That's substantially more useful than copying Effect internals.
 
 # 12. But some Effect algorithms may be worth porting
 
+> **Later update:** The [later runtime guidance](runtime-lowering.md#what-remains-in-the-semantic-runtime) asks whether generated code or a verified Rust substrate adapter suffices before porting an algorithm. Preserve exact observable semantics whichever approach is selected.
+
 For semantics that are unusually subtle:
 
 ```text
@@ -731,6 +733,8 @@ Only the server implementation changes.
 ---
 
 # I think there is a shared package hiding in all this
+
+> **Later update:** The [subsequent revised plan](compiler-design-revision.md#3-do-not-extract-a-shared-mega-kernel-yet) explicitly defers shared mega-kernel extraction. The package idea below is a future possibility, not a bootstrap dependency.
 
 After seeing the duplication between these projects, I'd seriously consider extracting something neutral.
 

@@ -132,6 +132,8 @@ That's much stronger than showing `add(1, 2)` compiling to Rust.
 
 # I would deliberately make v0 RPC very small
 
+> **Later update:** The later plan keeps unary JSON/HTTP small but explicitly brings [middleware into RPC early](implementation-milestones.md#19-middleware-belongs-in-rpc-early). Read that section before interpreting the exclusions below as current MVP scope.
+
 Don't initially implement all of Effect RPC.
 
 Effect's RPC machinery is richer than simple request/response: the current RPC test harness explicitly exercises request/response flow alongside stream chunks, acknowledgements, interrupts, headers, middleware metadata, etc. :chatgpt-content-reference{index="1"}
@@ -461,6 +463,8 @@ That would be a very strong second milestone.
 
 # Streaming RPC can come immediately after
 
+> **Later update:** The detailed roadmap now places RemoteServer and Query → SQLx before [streaming RPC at milestone 6](implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption). This immediate-next-step suggestion is historical.
+
 Once the unary protocol is solid:
 
 ```ts
@@ -500,6 +504,8 @@ That's exactly the sort of pressure we want.
 ---
 
 # I'd make RPC the driver for the whole roadmap
+
+> **Later update:** The [revised first workload](implementation-milestones.md#15-milestone-1--foldkit-entity-exprquery-as-the-first-real-compiler-target) is existing Entity Expr/Query conformance. RPC stays the first major public demo, after kernel and general Effect IR work.
 
 Something like:
 

@@ -34,6 +34,8 @@ These six documents preserve the original PLAN.md discussions. The seven extract
 
 Edit the individual documents directly as the design evolves. Keep the roadmap and this index aligned with document names and scope.
 
+Section-local **Later update** notes link earlier proposals to the specific revised decisions or extensions that affect them. Notes identify superseded sequencing where relevant; preserved examples still describe proposals, and a link does not establish implemented support. Use [AGENTS.md](../AGENTS.md#project-goal) for the current reffect/R naming decision.
+
 ## Runtime lowering reference
 
 [Lowering Effect onto the Rust ecosystem](runtime-lowering.md) covers the candidate crate/primitive catalogue, direct lowering versus adapters versus dedicated runtime, operation/service/semantic registry families, Layer wiring, Ref specialization, caches/pools, batching, schedules, streams, and support reporting. The duplicated pasted conversation is integrated as one edited reference. Candidate mappings and research leads require verification; coverage percentages are not measured support.

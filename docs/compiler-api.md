@@ -419,6 +419,8 @@ That will be extremely valuable while developing the compiler.
 
 # I'd expose individual compiler stages too
 
+> **Later update:** The later [pass design](compiler-design-revision.md#10-compilation-passes) expands the stage list below to check → derive → normalize → plan → verify → optimize → ownership → lower → emit → build.
+
 Not only:
 
 ```ts
@@ -480,6 +482,8 @@ cargo build
 ---
 
 # This also gives us a first-class `Compile.check`
+
+> **Later update:** The [migration validation boundary](migration-tooling.md#goal-and-boundaries) uses check to establish native representability. A passing check does not prove that a source rewrite preserved behavior; conformance tests remain necessary.
 
 Very useful:
 
@@ -652,6 +656,8 @@ Same API.
 
 # Diagnostics should be values too
 
+> **Later update:** The [structured diagnostic and fix registry](migration-tooling.md#structured-diagnostics-and-shared-fix-registry) extends these values with source ranges, target scope, reasons, alternatives, and eligible versioned codemods for CLI/editor/agent consumers.
+
 Something like:
 
 ```ts
@@ -693,6 +699,8 @@ Again, **one compiler API**.
 ---
 
 # Even the native support registry should be queryable
+
+> **Later update:** The [later support report](runtime-lowering.md#planning-support-reporting-and-acceptance) explains selected operation/service/semantic runtime implementations, rejected candidates, crates/features, and outstanding semantic obligations. [Migration reports](migration-tooling.md#target-scoped-analysis-and-reports) scope compatibility to the reachable target graph.
 
 Something like:
 

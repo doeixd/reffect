@@ -72,6 +72,8 @@ This document preserves a design discussion from the original PLAN.md. APIs and 
 
 ## Thesis
 
+> **Later update:** The project is now named **reffect**, with **R** as the DSL namespace; see the [naming decision](../AGENTS.md#project-goal). The C/Effect Native examples below retain their historical spellings.
+
 **Effect Native is an AOT compiler for a statically representable subset of Effect programs.**
 
 TypeScript is the authoring and metaprogramming language. The actual program being compiled is a typed intermediate representation constructed by a small Effect-shaped DSL.
@@ -474,6 +476,8 @@ It also gives the compiler control of every loop, which helps with fiber cancell
 
 # 7. Every compiled value has a compiled type
 
+> **Later update:** The [revised CType model](compiler-design-revision.md#5-core-semantic-model) separates semantic Schema, native representation, wire encoding, and storage mapping. Use those distinctions when extending the type catalogue below.
+
 This is the fundamental invariant:
 
 > **There is no value inside the IR whose native representation is unknown.**
@@ -809,6 +813,8 @@ The source language stays immutable and compositional while generated Rust uses 
 
 # 14. Ownership and borrowing are inferred
 
+> **Later update:** Start with the [conservative ownership rules](implementation-milestones.md#17-initial-ownership-implementation); the [structured concurrency ownership pass](implementation-milestones.md#33-structured-concurrency-ownership-pass) comes later. The full inference described here is not a prerequisite for the first evaluator.
+
 This is another central part of the design.
 
 Users should **not** normally write Rust-like:
@@ -986,6 +992,8 @@ SubscriptionRef<T>
 
 # 18. Ref specialization
 
+> **Later update:** The [later specialization guidance](runtime-lowering.md#ref-specialization) conditions atomic/lock/local-state selection on operations, escape analysis, and observable behavior; a type alone does not justify a representation.
+
 Because the compiler knows the exact type and all operations, `Ref` can be specialized.
 
 For example:
@@ -1053,6 +1061,8 @@ effectful mutation across await
 
 # 19. SubscriptionRef, Queue, PubSub and Deferred already have strong Rust substrates
 
+> **Later update:** The [candidate catalogue](runtime-lowering.md#candidate-mapping-catalogue) and [semantic runtime boundary](runtime-lowering.md#what-remains-in-the-semantic-runtime) qualify these mappings: shutdown, queue strategies, scoped subscriptions, and completion semantics still require verification/adapters.
+
 Tokio supplies most of the mechanical concurrency infrastructure.
 
 `watch` retains the current value and notifies consumers when it changes, making it a natural substrate for SubscriptionRef-like semantics.
@@ -1086,6 +1096,8 @@ Ref
 ---
 
 # 20. Services
+
+> **Later update:** Service selection is now part of [three implementation registry families](runtime-lowering.md#three-implementation-registries), alongside operations and semantic runtime entries. Crate/feature candidates are proposals, not established support.
 
 A compiled service must carry actual method representations.
 
@@ -1154,6 +1166,8 @@ users.find(id).await
 ---
 
 # 21. Layers
+
+> **Later update:** The [later wiring design](runtime-lowering.md#service-and-layer-wiring) explains static constructors/fields while retaining Layer identity, sharing/freshness, acquisition failure, and finalizer semantics.
 
 Layers require first-class compiler treatment.
 
@@ -1529,6 +1543,8 @@ rather than merely spawning arbitrary Tokio tasks.
 
 # 32. HTTP is an ideal first major platform backend
 
+> **Later update:** The [revised sequence](implementation-milestones.md#15-milestone-1--foldkit-entity-exprquery-as-the-first-real-compiler-target) puts Foldkit Query conformance first; [unary RPC](implementation-milestones.md#18-milestone-3--unary-effect-rpc) remains the first major public demo.
+
 Effect's current `HttpApi` is explicitly **data**: it describes groups, endpoints, inputs, outputs, middleware and route metadata, and the same description is used for server builders, generated clients and OpenAPI.
 
 That is exactly the sort of input an AOT compiler wants.
@@ -1820,6 +1836,8 @@ and avoids compiling unused parts of the module.
 
 # 42. Build pipeline
 
+> **Later update:** Use the expanded [compilation passes](compiler-design-revision.md#10-compilation-passes), including derive/plan/verify and evidence-gated optimization, in place of treating the shorter pipeline below as the complete stage list.
+
 The actual build might be:
 
 ```text
@@ -1918,6 +1936,8 @@ Even `as any` cannot invent a Rust operation that doesn't exist in the IR.
 
 # 44. Effect tooling integration
 
+> **Later update:** The [migration editor design](migration-tooling.md#editor-tooling) adds a shared diagnostic/fix workflow. Integration with upstream language tooling remains research, not an established plugin contract.
+
 Long term, integrating with Effect's own language tooling would be ideal.
 
 Useful editor information could include:
@@ -1942,6 +1962,8 @@ Oxlint is suitable for cheap syntax-level constraints; type-aware Effect/tsgo to
 ---
 
 # 45. Operation registry
+
+> **Later update:** The [revised operation model](compiler-design-revision.md#6-operations-become-first-class-semantic-definitions) adds typed laws and checked traits; [runtime registry families](runtime-lowering.md#three-implementation-registries) distinguish operation implementations from service and semantic runtime implementations.
 
 Supporting a large surface should be declarative.
 
@@ -1996,6 +2018,8 @@ This is how the supported Effect surface can eventually become large without bec
 ---
 
 # 46. JavaScript widening later
+
+> **Later update:** The [migration transformation layers](migration-tooling.md#three-transformation-layers) help users reach the supported IR subset. Migration tooling does not bring arbitrary TypeScript parsing forward from [milestone 15](implementation-milestones.md#39-milestone-15--source-syntax-widening).
 
 The initial language is intentionally narrow because that gives us a clean, provable backend.
 
@@ -2108,6 +2132,8 @@ The same CType source types remain visible to the programmer.
 ---
 
 # 49. What actually lives in the Rust runtime
+
+> **Later update:** The [later runtime boundary](runtime-lowering.md#what-remains-in-the-semantic-runtime) narrows custom machinery further: generate code first, reuse a substrate with semantic adapters next, and retain dedicated runtime only where observable behavior requires it.
 
 The native Effect runtime should remain deliberately small.
 
@@ -2282,6 +2308,8 @@ The Effect representation itself is gone.
 ---
 
 # 52. Implementation milestones
+
+> **Later update:** The ordering below is historical. Follow the [detailed milestones 0–15](implementation-milestones.md#14-milestone-0--bootstrap-the-semantic-kernel) and [current roadmap](../PLAN.md#implementation-sequence), which introduce the kernel and Query conformance before general functions/RPC.
 
 **Milestone 0 — IR kernel:** implement CType, Expr, Predicate, Match, Fn, Effect and stable IR serialization. Support integer/floating primitives, Bool, String, Bytes, Struct, Enum, Tuple, fixed Array, Vector, Option and Result.
 

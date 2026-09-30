@@ -412,6 +412,8 @@ the natural model.
 
 # Middleware
 
+> **Later update:** The [revised RPC scope](implementation-milestones.md#19-middleware-belongs-in-rpc-early) moves middleware into the unary RPC milestone rather than postponing it to advanced transports.
+
 There are actually **two middleware layers**, and we should keep them separate.
 
 Transport middleware is things like:
@@ -964,6 +966,8 @@ same native RPC engine
 ---
 
 # How I would sequence these features
+
+> **Later update:** The table below is an earlier proposal. The [current milestone order](../PLAN.md#implementation-sequence) places streaming at 6, SchemaBinary at 10, WebSocket/bidirectional RPC at 11, and custom serialization/additional targets at 14.
 
 | Stage     | Capability            | What it forces us to solve                                         |
 | --------- | --------------------- | ------------------------------------------------------------------ |

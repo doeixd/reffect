@@ -868,6 +868,8 @@ could give a genuinely useful explanation of what the compiler chose and why.
 
 # Laws become particularly interesting for ownership/concurrency
 
+> **Later update:** Register law witnesses/evidence early, but follow [initial conservative ownership](implementation-milestones.md#17-initial-ownership-implementation) and the [later law-driven optimizations](implementation-milestones.md#35-laws-start-enabling-real-optimization-here) rather than requiring advanced rewrites for the first workload.
+
 This is where Gen2 could make our Rust compiler smarter.
 
 Suppose:
@@ -943,6 +945,8 @@ That's highly relevant.
 ---
 
 # It also makes Effect Native's operation registry much better
+
+> **Later update:** The [later implementation registries](runtime-lowering.md#three-implementation-registries) extend this model with separate service and semantic runtime entries and reachable Cargo dependency selection.
 
 I would revise the registry we discussed into something like:
 

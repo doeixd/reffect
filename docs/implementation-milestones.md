@@ -466,6 +466,8 @@ This is the first point where serious Effect-specific native runtime semantics b
 
 # 24. Native Scope runtime
 
+> **Later update:** The later [runtime boundary](runtime-lowering.md#what-remains-in-the-semantic-runtime) keeps Scope/finalizer/interruption behavior in the semantic layer while delegating task/timer/channel machinery where verified adapters suffice.
+
 Implement the smallest real native Effect runtime component:
 
 ```text
@@ -846,6 +848,8 @@ and let generated Rust act as the final ownership validator.
 
 # 34. Ref specialization
 
+> **Later update:** Use the [later specialization conditions](runtime-lowering.md#ref-specialization) to choose atomics, locks, or local state from type, operation use, escape analysis, and observable semantics.
+
 Use type information to select:
 
 ```text
@@ -1015,6 +1019,8 @@ rather than arbitrary unverified code.
 ---
 
 # 39. Milestone 15 — source syntax widening
+
+> **Later update:** The [migration delivery track](migration-tooling.md#delivery-and-acceptance) can accompany stable native profiles earlier, using compiler diagnostics and external codemods. It does not enable the arbitrary-source frontend ahead of this milestone.
 
 Only after the IR/compiler is mature.
 

@@ -422,6 +422,8 @@ These representations must not be accidentally conflated.
 
 # 6. Operations become first-class semantic definitions
 
+> **Later update:** The later [registry design](runtime-lowering.md#three-implementation-registries) distinguishes operation, service, and semantic runtime implementations while keeping selection under the same semantic planner.
+
 Rather than hard-coded compiler switches:
 
 ```ts
@@ -777,6 +779,8 @@ Generate target-specific Rust IR.
 
 # 11. Compiler planning must be explainable
 
+> **Later update:** The [later support-report requirements](runtime-lowering.md#planning-support-reporting-and-acceptance) add selected substrates/adapters, reachable crates/features, and conformance obligations. [Migration analysis](migration-tooling.md#target-scoped-analysis-and-reports) consumes the same target-reachable graph.
+
 Every important decision should carry a reason.
 
 Example:
@@ -899,6 +903,8 @@ Diagnostics
 ---
 
 # 13. CLI
+
+> **Later update:** The [migration API/CLI design](migration-tooling.md#library-api-and-cli) adds proposed analyze/check JSON, migrate/report/apply, and diagnostic-linked fixes as library consumers. These are proposed commands, not implemented support.
 
 Built over the public API:
 

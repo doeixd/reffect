@@ -553,6 +553,8 @@ Tree shaking at the Cargo dependency level, essentially.
 
 # It also changes the roadmap
 
+> **Later update:** The final detailed plan assigns Cruster to [milestone 13](implementation-milestones.md#36-milestone-13--cruster-distributed-profile) and [keeps it optional](implementation-milestones.md#37-cruster-remains-optional). Local runtime and browser RPC do not depend on this backend.
+
 I would now envision:
 
 ```text

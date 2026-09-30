@@ -674,6 +674,8 @@ And all three can ultimately compose.
 
 # I would probably generalize the existing operation registry idea
 
+> **Later update:** The [revised semantic definitions](compiler-design-revision.md#6-operations-become-first-class-semantic-definitions) add laws/evidence and traits; [runtime lowering](runtime-lowering.md#three-implementation-registries) subsequently separates operation, service, and semantic runtime implementations.
+
 Today `Expr` has:
 
 ```ts
@@ -888,6 +890,8 @@ Again, **pretty representation belongs beside the IR, but isn't itself the IR** 
 ---
 
 # It also suggests Foldkit-Entity should perhaps become a dependency, not duplicated logic
+
+> **Later update:** The [later reuse decision](compiler-design-revision.md#3-do-not-extract-a-shared-mega-kernel-yet) defers a shared kernel until demonstrated commonality. Reuse existing contracts/IR deliberately without requiring that extraction for v0.
 
 For the Foldkit integration in particular, I would not invent:
 
