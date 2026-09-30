@@ -89,7 +89,10 @@ Keep the record proportional to the work: concise evidence and design decisions 
 
 ## IR and semantic kernel
 
-- Every compiled value needs a CType witness and known native representation. Keep semantic type, native memory, wire encoding, and storage mapping separate.
+- Use **IRType** for the public semantic type witness in new code (earlier documents call it CType). Prefer pipeable typed factories and focused immutable combinators over object spreading. Use typed semantic objects/references for types, operations, capabilities, effects, requirements, targets and law subjects; serialize IDs only at boundaries. End-user code, examples and tests must not require casts.
+- Use Effect Match with exhaustive tagged handlers for IR unions and built-in predicates for Effect data types; avoid manual `_tag` comparisons.
+
+- Every compiled value needs an IRType witness and known native representation. Keep semantic type, native memory, wire encoding, and storage mapping separate.
 - Builder callbacks receive symbolic inputs. Initially represent branching and iteration through Match, predicates, and structured combinators; ordinary build-time TypeScript remains unrestricted.
 - Keep pure expressions, effectful computations, and deterministic state-transition data distinct. Make nondeterministic inputs such as time, randomness, and generated IDs explicit effects/data.
 - Operations describe input/output types, effects, requirements, capabilities, law evidence, and implementations. Derive dependency/support information from reachable IR, using semantic identities rather than display names.
@@ -132,3 +135,50 @@ Keep the record proportional to the work: concise evidence and design decisions 
 - Prefix commits addressing review findings with `review(<scope>):`, for example `review(docs): fix milestone navigation`.
 - Update PROGRESS.md with completed work, validation, remaining questions, and review outcomes. Keep PLAN.md, AGENTS.md, and the docs index aligned when design direction changes.
 - Preserve original discussion content during document migrations. Extraction scripts are one-time tools; maintain split documents directly and verify links, contents anchors, and precedence notes.
+
+## Commit cadence
+
+- **Commit often.** Prefer small, coherent commits over one large one. Commit as
+  soon as a unit of work stands on its own (a module, a config, a test file).
+- **Push often.** Push reviewed, validated commits regularly to the current
+  branch's configured remote rather than accumulating unpublished work.
+- Stay in the current workspace and branch. Do not create worktrees or branches
+  unless the user explicitly requests them.
+- **After every commit, double check the code.** Re-read the diff that was just
+  committed, re-run the relevant checks (`pnpm typecheck`, `pnpm test`,
+  `pnpm build`), and fix what the check surfaces in a follow-up commit rather
+  than letting it accumulate.
+
+For this Vite+ workspace, use the corresponding checks: `vp check`, the relevant
+strict TypeScript check, `vp test`, and `vp run -r build`.
+
+## Reviewing a commit
+
+When re-reading a commit, check each of these deliberately:
+
+- **Logic and correctness.** Does it do what the message claims? Trace the real
+  control flow, not the intended one.
+- **Edge cases.** Empty, missing, duplicate, already-aborted, out-of-order,
+  called-twice, called-after-dispose.
+- **Synergy with existing features.** Does it compose with what is already here,
+  or does it bolt on a second way to do the same thing?
+- **Types and TypeScript DX.** No accidental `any` (especially from
+  `Parameters<>` on intersections or circular conditionals). Errors should land
+  at the mistake and read clearly. Inference should work at the call site
+  without annotation ceremony.
+- **Comments.** Explain why, not what. Delete any comment that restates the code.
+  Doc comments on public API, none on the obvious.
+- **Tests.** See below -- they must be able to fail.
+- **Security hardening.** Untrusted input crosses a validation boundary before
+  anything else; capability and authorization checks cannot be skipped; failures
+  do not leak internals.
+- **Performance.** Work done once at definition time rather than per call;
+  no accidental O(n) lookups or repeated derivation in a hot path.
+
+Fix what the review finds in a follow-up commit rather than letting it sit.
+
+Tests must assert observable behavior, meaningful failure cases, or type-level
+contracts, and fail when those obligations are violated. Prefer differential and
+conformance evidence over tests that merely repeat the implementation.
+
+**After every bout of work or commit, double check and review.**
