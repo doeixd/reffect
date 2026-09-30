@@ -53,4 +53,27 @@ vp run -r build
 
 Native tests require Cargo, rustc and the platform's linker/SDK (MSVC C++ tools and Windows SDK on Windows). On Windows use a Visual Studio developer shell; Coreutils also ships a `link.exe` and must not take precedence over the MSVC linker. The test suite deliberately fails if native compilation is unavailable. This workspace package currently exports TypeScript source for development; the package build emits a bundle/declarations, but publishing is deferred.
 
-Foldkit Query adaptation, additional native representations, general Effect computations, RPC, concurrency, and native runtime adapters follow the roadmap.
+## Foldkit Query compilation
+
+`Foldkit.compile({ Search: body })` (also `Compile.fromFoldkitQuery`) consumes published `foldkit-entity@0.4.0` Query values directly. Its immutable artifact includes generated Cargo files and per-query explanations of reachable fields, inputs, operation identities and selected implementations. `Foldkit.build(queries, output, profile)` writes to an exclusive new directory and builds offline. `Foldkit.run(artifact, directory, name, input, rows, profile)` executes a built evaluator and returns the original row objects in native result order. Supply NodeServices for filesystem/process operations; scope temporary directories with FileSystem as in [the Query example](../../examples/query/main.ts).
+
+```ts
+import { Entity, Expr, Order, Query } from "foldkit-entity";
+import { Schema } from "effect";
+import { Foldkit } from "reffect";
+
+const Post = Entity.define("Post", Schema.Struct({ id: Schema.String, title: Schema.String }));
+const body = Query.from(Post).pipe(
+  Query.where(Expr.contains(Post.fields.title, Expr.input("search", Schema.String))),
+  Query.orderBy(Order.asc(Post.fields.id)),
+);
+const artifact = await Effect.runPromise(Foldkit.compile({ Search: body }));
+```
+
+The `foldkit/encoded-primitives@1` profile supports string/number/boolean encoded schemas, primitive literals and nullable unions; equality, null tests, containment, conjunction and stable field ordering. Encoded timestamps compare as strings. SQL unknown propagates through nested predicate comparisons. Complete structured rows are preserved, while only reachable scalar fields cross the internal stdin bridge. UTF-16 strings and f64 bit patterns retain lone surrogates, negative zero and nonfinite equality behavior. No Cargo dependencies or native Effect runtime are needed.
+
+Containment accepts evaluated non-NUL ASCII operands until upstream Unicode/NUL discrepancies are resolved. With two or more retained rows, every ordering key must be present and numbers finite. UTF-16 string ordering matches the JS evaluator; arbitrary SQL collation equivalence is not claimed. Objects/arrays/bigint/opaque representations in reachable scalar computations, decoded Date values, non-field ordering, foreign Entity fields and conflicting input witnesses are refused. Primitive representation checks do not replace full application Schema validation or perform automatic domain encoding.
+
+All 27 upstream fixtures run against evaluate, the unchanged licensed upstream Drizzle compiler/SQLite, and fresh native debug/release crates. See [integration research](../../docs/research/foldkit-query.md) for the Drizzle RC.118 import limitation and [upstream issue reproductions](../../docs/research/foldkit-plus-issues.md). Normalization and optimization remain identity steps; the canonical predicate/order lists are retained, borrowed scalar inputs and copied row indices have conservative ownership, and shared expression nodes lower once.
+
+Run `vp exec node --experimental-transform-types examples/query/main.ts` for a native/reference search example. Additional general representations, compiled Effect computations, RPC, concurrency, and native runtime adapters follow the roadmap.

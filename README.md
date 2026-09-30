@@ -8,7 +8,9 @@ TypeScript builders construct typed IR. A reference interpreter runs that IR thr
 
 The milestone 0 kernel is implemented in [packages/reffect](packages/reffect/README.md): immutable symbolic function/expression IR, exact unsigned 64-bit arithmetic, Effect v4 reference execution, structured compiler diagnostics/stages, explainable Rust planning, and scoped Cargo build/validation. Generated dependency-free Rust agrees with the reference on boundary cases in debug and release builds.
 
-The workspace also contains the original starter website and utilities. Foldkit Query adaptation, general Effect IR, native runtime adapters, RPC and migration tooling remain roadmap targets.
+The milestone 1 Foldkit adapter consumes published Entity Expr/Query IR, generates a dependency-free Rust evaluator, and preserves ordered structured rows. All 27 published conformance cases agree across evaluate, upstream Drizzle/SQLite, and fresh Rust debug/release executables. The encoded primitive profile and explicit refusal boundaries are documented in the package README.
+
+The workspace also contains the original starter website and utilities. General Effect IR, native runtime adapters, RPC and migration tooling remain roadmap targets.
 
 The first meaningful target is Foldkit Entity Expr/Query conformance through generated Rust. The first major public demo is a stock Effect RPC client talking to a native server. The fullstack showcase aims to combine Foldkit SSR, Remote data/live updates, Effect RPC, and SQLx/Postgres in one Rust executable.
 
@@ -38,4 +40,4 @@ vp run -r build
 
 Tests include fresh Cargo compilation and native/reference conformance. Install Rust and the platform linker/SDK; on Windows run native checks from a Visual Studio developer shell so MSVC takes precedence over other `link.exe` programs. The previous starter suite-detection failure is fixed by aligning Vite+ versions.
 
-Run the expression example with `vp exec node --experimental-transform-types examples/expr/main.ts`. See [PROGRESS.md](PROGRESS.md) for exact validation results and implementation boundaries.
+Run the examples with `vp exec node --experimental-transform-types examples/expr/main.ts` or `vp exec node --experimental-transform-types examples/query/main.ts`. See [PROGRESS.md](PROGRESS.md) for exact validation results and implementation boundaries, and [the Foldkit-Plus issue record](docs/research/foldkit-plus-issues.md) for upstream findings.

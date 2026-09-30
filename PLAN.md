@@ -2,7 +2,7 @@
 
 reffect is an ahead-of-time semantic compiler for a statically representable subset of Effect v4 programs. TypeScript executes an Effect-shaped DSL to construct typed IR; a reference interpreter runs that IR through official Effect, and a native backend lowers it to Rust.
 
-This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md) tracks actual implementation status. The [documentation index](docs/README.md) covers the detailed designs; the [later operation/expression revision](docs/op-expr-revision-convo.md) explains changes to the initial plan. The [milestone 0 kernel](packages/reffect/README.md) implements the arithmetic smoke path; broader capabilities below remain intended, not shipped.
+This is the entry point for the vision and sequencing. [PROGRESS.md](PROGRESS.md) tracks actual implementation status. The [documentation index](docs/README.md) covers the detailed designs; the [later operation/expression revision](docs/op-expr-revision-convo.md) explains changes to the initial plan. The [compiler package](packages/reffect/README.md) implements the milestone 0 arithmetic path and milestone 1 Foldkit encoded-primitive Query profile with shared conformance; broader capabilities below remain intended, not shipped.
 
 ## How to use this plan
 

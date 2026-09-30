@@ -45,3 +45,6 @@ export type {
 } from "./compiler.ts";
 export { Cargo, CargoApi, CargoError } from "./cargo.ts";
 export type { ProcessResult } from "./cargo.ts";
+export type { GeneratedFiles } from "./cargo.ts";
+export { Foldkit } from "./foldkit.ts";
+export type { FoldkitArtifact, QueryAnalysis } from "./foldkit.ts";

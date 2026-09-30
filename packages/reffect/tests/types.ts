@@ -7,9 +7,11 @@ import {
   Operation,
   R,
   Reference,
+  Foldkit,
   SemanticRef,
 } from "../src/index.ts";
 import { Schema } from "effect";
+import { Entity, Expr as EntityExpr, Query } from "foldkit-entity";
 
 // Compiled by strict TypeScript checks; never executed.
 export const typeChecks = () => {
@@ -34,4 +36,11 @@ export const typeChecks = () => {
   Operation.make(customRef, [R.U64, R.U64], R.U64, (a, b) => a + b).pipe(
     Operation.withLaws([Law.associative(customRef, Evidence.claim("fixture"))]),
   );
+  const Item = Entity.define("Item", Schema.Struct({ id: Schema.String, rank: Schema.Number }));
+  const query = Query.from(Item).pipe(Query.where(EntityExpr.eq(Item.fields.rank, 1)));
+  Foldkit.compile({ Items: query });
+  // @ts-expect-error published Foldkit builders preserve field operand types
+  EntityExpr.eq(Item.fields.rank, "one");
+  // @ts-expect-error compilation consumes Query IR rather than an opaque callback
+  Foldkit.compile({ Items: () => query });
 };

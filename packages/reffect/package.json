@@ -12,9 +12,12 @@
   },
   "dependencies": {
     "@effect/platform-node": "4.0.0-rc.118",
-    "effect": "4.0.0-rc.118"
+    "effect": "4.0.0-rc.118",
+    "foldkit-entity": "0.4.0"
   },
   "devDependencies": {
+    "@types/node": "26.1.1",
+    "drizzle-orm": "1.0.0-rc.4",
     "vite-plus": "0.3.2"
   }
 }

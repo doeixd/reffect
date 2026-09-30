@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Match, Pipeable, Schema } from "effect";
 import { Cargo } from "./cargo.ts";
+import { Foldkit } from "./foldkit.ts";
 import {
   AddU64,
   Capabilities,
@@ -442,6 +443,7 @@ const run = Effect.fn("Compile.run")(function* (program: Program, target: Target
 });
 
 export const Compile = {
+  fromFoldkitQuery: Foldkit.compile,
   check,
   derive,
   normalize,

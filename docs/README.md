@@ -44,6 +44,10 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 [Semantic kernel bootstrap research](research/semantic-kernel.md) records the milestone 0 numeric semantics, pinned Effect v4 API checks, kernel/registry boundaries, and differential/native acceptance criteria.
 
+[Foldkit Query native bootstrap](research/foldkit-query.md) records pinned upstream IR/fixtures, encoded-value semantics, representation limits, the native evaluator bridge, and three-interpreter validation for milestone 1.
+
+[Foldkit-Plus issue record](research/foldkit-plus-issues.md) documents confirmed upstream discrepancies, traversal/mutability/reporting limitations, and package compatibility findings with reproductions.
+
 ## Migration tooling and research
 
 [Compiler-guided migration tooling](migration-tooling.md) integrates the migration conversation: an external codemod engine, compiler-owned compatibility reports, target reachability, mechanical/guided/architectural transformations, diagnostic-linked fixes, JSON/editor/agent workflows, and semantic validation. Commands, packages, and the future migration skill are proposals.
