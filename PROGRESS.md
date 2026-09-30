@@ -8,6 +8,9 @@
 - Added explicit knowledge of checked traits, evidence policies, separate capabilities/effects/requirements, explainable planning, conservative initial ownership, deferred shared-kernel extraction, and optional Cruster isolation.
 - Compiler implementation remains unstarted. Upstream APIs and licensing observations in the preserved conversation have not been re-verified.
 - Validation: `vp install` and `vp check` pass; `vp run -r build` passes using cached workspace results. `vp test` and `vp run -r test` reproduce the unchanged starter's “Vitest failed to find the current suite” failure. `vp env doctor` passes with the previously observed Volta PATH notices.
+- Subagent review verified formatted extraction parity for all seven bodies, local file links, extraction refusal behavior, and revised milestone sequencing. Fixed repeated Acceptance contents links and added duplicate-heading counters to the extraction script.
+- Expanded AGENTS.md at the user's request with the semantic compiler goal, concrete workload/showcase targets, design precedence, Effect v4 guidance, IR/evidence rules, compiler planning, scope/conformance guidance, and commit/review workflow.
+- Follow-up review confirmed the anchor fix and formatted extraction parity; clarified AGENTS.md to allow early claim-level law registration while gating tested evidence and rewrites appropriately.
 
 ## 2026-09-30 — Design documentation
 

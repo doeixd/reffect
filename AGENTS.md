@@ -74,7 +74,7 @@ Preserved discussions contain provisional API spellings, unresolved citation pla
 - Builder callbacks receive symbolic inputs. Initially represent branching and iteration through Match, predicates, and structured combinators; ordinary build-time TypeScript remains unrestricted.
 - Keep pure expressions, effectful computations, and deterministic state-transition data distinct. Make nondeterministic inputs such as time, randomness, and generated IDs explicit effects/data.
 - Operations describe input/output types, effects, requirements, capabilities, law evidence, and implementations. Derive dependency/support information from reachable IR, using semantic identities rather than display names.
-- Introduce subject-indexed law witnesses and checked traits early. A claim, tested evidence, proven evidence, and trusted builtins are different assurance levels. Test numeric overflow, floating-point, null, Unicode, and ordering semantics before attaching laws or performing rewrites that depend on them.
+- Introduce subject-indexed law witnesses and checked traits early. A claim, tested evidence, proven evidence, and trusted builtins are different assurance levels. Test numeric overflow, floating-point, null, Unicode, and ordering semantics before promoting law claims to tested evidence. Use laws for rewrites only when their assurance meets the configured evidence policy.
 - Reject unsupported operations when no valid implementation exists. Normalize composition without changing meaning; a backend must implement the IR's semantics rather than substitute its own defaults.
 
 ## Compiler planning and native execution

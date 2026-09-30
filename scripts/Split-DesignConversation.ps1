@@ -49,12 +49,21 @@ for ($index = 0; $index -lt $documents.Count; $index++) {
     $document = $documents[$index]
     $contents = $parts[$index]
     $links = @()
+    $titleAnchor = $document.Title.ToLowerInvariant() -replace '[^\p{L}\p{N}_\- ]', '' -replace ' ', '-'
+    $anchors = @{ $titleAnchor = 0; contents = 0 }
     $inFence = $false
     foreach ($line in ($contents -split '\r?\n')) {
         if ($line -match '^```') { $inFence = -not $inFence; continue }
         if (-not $inFence -and $line -match '^#{1,3} (.+)$') {
             $heading = $Matches[1]
             $anchor = $heading.ToLowerInvariant() -replace '[^\p{L}\p{N}_\- ]', '' -replace ' ', '-'
+            if ($anchors.ContainsKey($anchor)) {
+                $anchors[$anchor]++
+                $suffix = $anchors[$anchor]
+                $anchor = "$anchor-$suffix"
+            } else {
+                $anchors[$anchor] = 0
+            }
             $links += "- [$heading](#$anchor)"
         }
     }
