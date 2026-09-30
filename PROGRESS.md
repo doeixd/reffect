@@ -12,6 +12,7 @@
 
 - Recorded the user's canonical project name `reffect` and compiled DSL namespace `R` in AGENTS.md. Earlier Effect Native/effect-native and C examples remain historical context; naming does not imply existing exports.
 - Preparing the repository for the user's explicitly requested public GitHub publication, including a project README, the existing starter workspace, About description, and topics.
+- Subagent review confirmed migration design coverage, target/profile boundaries, semantic verification limits, naming guidance, links, and accurate publication status. Removed starter package author/repository/homepage/bugs placeholders identified during review before publication.
 
 ## 2026-09-30 — Preparation before features and plans
 
