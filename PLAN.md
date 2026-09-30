@@ -111,7 +111,7 @@ Planning should distinguish operation, service, and semantic runtime requirement
 - For substrate adapters, compare supported lifecycle/policy behavior with Effect: Queue/PubSub shutdown and strategy, shared completion, scoped cache/pool release, Layer sharing/freshness, timer interruption, and batching/schedule/stream semantics. Verify that generated dependencies include only reachable implementations.
 - For migrations, verify each eligible fix preserves behavior, refuses unmet preconditions, respects target reachability, leaves supported code unchanged, and is stable on repeat runs. Compiler checks, conformance tests, and native builds establish different parts of the result; report unresolved cases explicitly.
 
-Use [AGENTS.md](AGENTS.md) for tooling, commits, and required subagent review.
+Use [AGENTS.md](AGENTS.md) for tooling, commits, and guidance on when subagent review is useful.
 
 ## Decisions to settle during implementation
 

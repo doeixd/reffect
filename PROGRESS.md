@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-09-30 — Commit hooks and discretionary delegation
+
+- Removed the tracked pre-commit hook, staged-file configuration, and package prepare script that installed the Vite+ dispatcher. Disabled the local dispatcher, removing its generated pre/post-commit shims and hooksPath; installs no longer recreate it.
+- Updated AGENTS.md to use subagents only when needed, with direct self-review for routine work, and to keep commit hooks disabled unless requested. Aligned PLAN.md with the discretionary review guidance.
+- Self-reviewed this routine configuration/documentation change. `vp install` and `vp check` pass; hook status after installation confirms disabled preference, unset hooksPath, missing dispatcher, and no project hooks. `vp test` reproduces the known starter suite-detection failure.
+
 ## 2026-09-30 — Section-local design update links
 
 - Added 48 **Later update** notes beside affected sections in PLAN.md and 13 earlier design references. Notes link directly to revised kernel/passes, Query-first milestones, early RPC middleware, conservative ownership, optional Cruster, runtime registry/adapter guidance, migration diagnostics/validation, and the reffect/R naming decision.

@@ -10,8 +10,7 @@
   "type": "module",
   "scripts": {
     "ready": "vp check && vp run -r test && vp run -r build",
-    "dev": "vp run website#dev",
-    "prepare": "vp config"
+    "dev": "vp run website#dev"
   },
   "devDependencies": {
     "vite-plus": "0.3.2"

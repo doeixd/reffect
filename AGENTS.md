@@ -127,7 +127,8 @@ Keep the record proportional to the work: concise evidence and design decisions 
 # Work, commits, and review
 
 - Commit early and often in focused conventional commits. Stage only files belonging to the task; preserve unrelated user work.
-- After every bout of work or commit, have a subagent review the change. Apply relevant findings and have the resulting committed state reviewed. This requirement includes scripts and documentation changes.
+- Use subagents only when needed. Apply common sense: handle routine edits and self-review directly; delegate when complexity, uncertainty, or an independent review materially helps. Do not automatically spawn a subagent after every bout of work or commit.
+- Git commit hooks are intentionally disabled. Keep checks explicit; do not add pre/post-commit hooks or reinstall a hook dispatcher without a user request.
 - Prefix commits addressing review findings with `review(<scope>):`, for example `review(docs): fix milestone navigation`.
 - Update PROGRESS.md with completed work, validation, remaining questions, and review outcomes. Keep PLAN.md, AGENTS.md, and the docs index aligned when design direction changes.
 - Preserve original discussion content during document migrations. Extraction scripts are one-time tools; maintain split documents directly and verify links, contents anchors, and precedence notes.
