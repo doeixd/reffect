@@ -7,6 +7,7 @@
 - Made semantic parity and reachable Cargo dependency selection explicit acceptance obligations. Clarified that timer/semaphore mappings may need interruption handling, similarly named Sink/collection primitives require semantic comparison, percentages are unmeasured, and ordinary Effect.gen authoring belongs to later syntax support.
 - No crate dependencies or compiler features were added; the revised milestone order remains unchanged. External API/crate claims and original unresolved citation placeholders are not newly verified.
 - Validation: `vp install` and `vp check` pass; `vp run -r build` passes using cached workspace results. `vp test` and `vp run -r test` reproduce the existing starter's “Vitest failed to find the current suite” failure. `vp env doctor` passes with the existing Volta PATH notices.
+- Subagent review found no blocking issues: major conversation topics are retained, registry families and semantic obligations are clear, candidate mappings remain provisional, builder-only scope/milestones are unchanged, and local Markdown links resolve.
 
 ## 2026-09-30 — Operation/expression design revision
 
