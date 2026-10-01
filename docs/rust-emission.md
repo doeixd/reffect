@@ -4,6 +4,8 @@
 
 Grow small typed Rust emission helpers as supported lowering needs them. They are build-time TypeScript tools; they do not wrap native values or add runtime dependencies. Preserve verified semantic/Rust IR as the authority and route all final fragments through one UTF-8-counting source writer. No general Rust syntax library or new helper API is introduced by this document.
 
+**Implementation update:** The internal [`Rs` source-builder](research/rust-emit.md) now includes typed paths/visibility, nested imports/re-exports, inline and external modules, module-file assembly, and declarative macro token trees. It remains a deliberately partial syntax builder: rustc checks macro follow sets, name resolution, expansion/hygiene, and generated Rust semantics.
+
 ## Current foundation
 
 `lower.ts` already produces tagged `RustExpr`/blocks/helpers/functions and dispatches exhaustively over them. `SourceWriter` composes writes and scoped mappings, recording final byte ranges while leaving gaps unmapped. Some methods/signatures/CLI fragments still use local string templates. That is sufficient for the current small Boolean/u64 profile, but source writer strings alone cannot distinguish a type, expression, identifier or item.

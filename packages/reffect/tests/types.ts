@@ -14,9 +14,43 @@ import {
 } from "../src/index.ts";
 import { Effect, Schema } from "effect";
 import { Entity, Expr as EntityExpr, Query } from "foldkit-entity";
+import { Rs } from "../src/rust-emit.ts";
+import type { RsExpr, RsItem, RsMacroGroup, RsMacroRule, RsType } from "../src/rust-emit.ts";
 
 // Compiled by strict TypeScript checks; never executed.
 export const typeChecks = () => {
+  const addOne = Rs.defineFn(
+    Rs.ident("add_one"),
+    [{ name: Rs.ident("value"), type: Rs.u64Type() }],
+    Rs.u64Type(),
+    (arg) => Rs.exprTemplate`(${arg(Rs.ident("value"))}).wrapping_add(1u64)`,
+  );
+  addOne.call(Rs.litU64(1n));
+  // @ts-expect-error generated helper call arity follows its declared parameter tuple
+  addOne.call();
+  // @ts-expect-error a Rust type fragment cannot be interpolated as a Rust expression
+  const wrongExpressionRole: RsExpr = Rs.exprTemplate`consume(${Rs.u64Type()})`;
+  void wrongExpressionRole;
+  // @ts-expect-error a Rust expression fragment cannot be interpolated as a Rust type
+  const wrongTypeRole: RsType = Rs.typeTemplate`Option<${Rs.litU64(1n)}>`;
+  void wrongTypeRole;
+  const matcher = Rs.macroGroup("matcher", "()", [Rs.macroFragment(Rs.ident("value"), "expr")]);
+  const transcriber = Rs.macroGroup("transcriber", "{}", [Rs.macroRef(Rs.ident("value"))]);
+  Rs.macroRule(matcher, transcriber);
+  // @ts-expect-error matcher and transcriber token trees have distinct roles
+  const wrongMacroRoles: RsMacroRule = Rs.macroRule(transcriber, matcher);
+  void wrongMacroRoles;
+  // @ts-expect-error visibility is a structured Rust value, not source text
+  const wrongVisibility: RsItem = Rs.useItem(Rs.useTree(Rs.path([Rs.ident("Thing")])), "pub");
+  void wrongVisibility;
+  // @ts-expect-error a matcher node only accepts matcher-role tokens
+  const wrongMatcher: RsMacroGroup<"matcher"> = Rs.macroGroup("matcher", "()", [
+    Rs.macroRef(Rs.ident("value")),
+  ]);
+  void wrongMatcher;
+  // @ts-expect-error module bodies contain items, not expression fragments
+  const wrongModuleBody: RsItem = Rs.moduleItem(Rs.ident("broken"), [Rs.litU64(1n)]);
+  void wrongModuleBody;
   const source = R.Source.file("src/types.ts", "sum(value)");
   const site = R.Source.site(source, 0, 10);
   const annotated = R.fn([R.U64], R.U64, (value) => value.pipe(R.Source.at(site))).pipe(

@@ -35,6 +35,8 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 [Typed Rust emission](rust-emission.md) guides composable internal identifier/type/expression/item helpers around the existing IR/source writer as new lowering needs them.
 
+[Rust emission research](research/rust-emit.md) records the helper roles, escaping/format contracts, alternatives and byte-identical migration acceptance for the internal `Rs` module.
+
 [Facet evaluation](research/facet.md) checks static Rust type reflection against metadata ownership and future Schema/codec consumers. Facet remains an optional candidate; source occurrences/Effect semantics and protocol conformance stay compiler-owned.
 
 ## Original detailed references

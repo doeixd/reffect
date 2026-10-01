@@ -9,6 +9,8 @@ import { EffectFn } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
+import { Rs, escapeJsonContent, escapeRustContent } from "./rust-emit.ts";
+import type { RsType } from "./rust-emit.ts";
 import { SourceArtifacts, checkArtifactPolicy } from "./artifact-policy.ts";
 import type {
   ArtifactPolicy,
@@ -393,20 +395,9 @@ pub fn take_last_frames() -> (Vec<&'static str>, usize) {
     (LAST_FRAMES.with(|cell| std::mem::take(&mut *cell.borrow_mut())), LAST_OMITTED.get())
 }
 `;
-const escapeRustString = (text: string): string =>
-  text.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-const jsonEscapeContent = (text: string): string =>
-  Array.from(text, (c) => {
-    if (c === '"') return '\\"';
-    if (c === "\\") return "\\\\";
-    const code = c.codePointAt(0) ?? 0;
-    if (code < 32 || (code >= 0xd800 && code <= 0xdfff))
-      return `\\u${code.toString(16).padStart(4, "0")}`;
-    return c;
-  }).join("");
 /** JSON string literal; lone surrogates become \u escapes, keeping Rust sources valid UTF-8. */
-const jsonString = (text: string): string => `"${jsonEscapeContent(text)}"`;
-const rustString = (text: string): string => `"${escapeRustString(text)}"`;
+const jsonString = (text: string): string => `"${escapeJsonContent(text)}"`;
+const rustString = (text: string): string => `"${escapeRustContent(text)}"`;
 const attrVariant = (type: IRType<unknown>): string => {
   if (IRType.same(type, BoolType)) return "Bool";
   if (IRType.same(type, U64Type)) return "U64";
@@ -456,7 +447,7 @@ const frameLiteral = (
     '"' +
     (origin === undefined ? "" : ',"origin":"' + origin + '"') +
     "}";
-  return '"' + escapeRustString(json) + '"';
+  return '"' + escapeRustContent(json) + '"';
 };
 
 export const emitFunctions = (
@@ -467,7 +458,20 @@ export const emitFunctions = (
     : undefined;
   const useAt = (path: string) => uses?.get(path);
   const writer = new SourceWriter("src/lib.rs", !SourceArtifacts.isNone(module.sourceArtifacts));
-  const typeName = (type: IRType<unknown>) => type.native.type;
+  const rsTypeOf = (type: IRType<unknown>): RsType => {
+    if (IRType.same(type, U64Type)) return Rs.namedType("u64");
+    if (IRType.same(type, BoolType)) return Rs.namedType("bool");
+    if (IRType.same(type, UnitType)) return Rs.unitType();
+    if (IRType.same(type, NeverType))
+      return Rs.pathType([Rs.ident("std"), Rs.ident("convert"), Rs.ident("Infallible")]);
+    throw fail(
+      "UNSUPPORTED_REPRESENTATION",
+      "lower",
+      "type",
+      "Only canonical witnesses have native types",
+    );
+  };
+  const typeName = (type: IRType<unknown>) => rsTypeOf(type).text;
   const write = (text: string) => writer.write(text);
   const mapped = (origin: string | undefined, use: string | undefined, text: string) =>
     writer.mapped(origin, use, () => write(text));
@@ -480,13 +484,16 @@ export const emitFunctions = (
   );
   if (hasLogScopes) write(logPrelude);
   for (const f of module.functions) {
+    const callText = (index: number): string => {
+      const helper = f.helpers[index];
+      return Rs.call(
+        Rs.identExpr(Rs.ident(`h_${f.name}_${helper.index}`)),
+        helper.input.map((p) => Rs.identExpr(Rs.ident(p.name))),
+      ).text;
+    };
     const call = (index: number, occurrence?: string) => {
       const helper = f.helpers[index];
-      mapped(
-        helper.origin,
-        occurrence,
-        `h_${f.name}_${index}(${helper.input.map((p) => p.name).join(", ")})`,
-      );
+      mapped(helper.origin, occurrence, callText(index));
     };
     const adapt = (index: number, output: IRType<unknown>, occurrence?: string) => {
       if (IRType.same(f.helpers[index].output, NeverType) && !IRType.same(output, NeverType)) {
@@ -499,17 +506,20 @@ export const emitFunctions = (
       const body = () =>
         Match.value(e).pipe(
           Match.tagsExhaustive({
-            Parameter: (n) => write(`p${n.index}`),
-            Bound: (n) => write(n.name),
-            Local: (n) => write(`v${n.index}`),
-            Literal: (n) =>
-              write(
-                Predicate.isUndefined(n.value)
-                  ? "()"
-                  : Predicate.isBigInt(n.value)
-                    ? `${n.value}u64`
-                    : String(n.value),
-              ),
+            Parameter: (n) => write(Rs.ident(`p${n.index}`).text),
+            Bound: (n) => write(Rs.ident(n.name).text),
+            Local: (n) => write(Rs.ident(`v${n.index}`).text),
+            Literal: (n) => {
+              if (Predicate.isUndefined(n.value)) return write(Rs.litUnit().text);
+              if (Predicate.isBigInt(n.value)) return write(Rs.litU64(n.value).text);
+              if (Predicate.isBoolean(n.value)) return write(Rs.litBool(n.value).text);
+              throw fail(
+                "UNSUPPORTED_REPRESENTATION",
+                "lower",
+                "literal",
+                "Literals require Boolean, u64 or Unit witnesses",
+              );
+            },
             Call: (n) => {
               if (n.method === "not") {
                 write("!(");
@@ -546,7 +556,7 @@ export const emitFunctions = (
     const renderBlock = (block: RustBlock) => {
       write("{\n");
       for (const binding of block.bindings) {
-        write(`    let v${binding.index}: `);
+        write(`    let ${Rs.ident(`v${binding.index}`).text}: `);
         if (binding.value.origin)
           writer.mapped(
             binding.value.origin,
@@ -564,11 +574,12 @@ export const emitFunctions = (
       write("\n}");
     };
     const resultType = (output: IRType<unknown>, error?: IRType<unknown>) =>
-      error ? `Result<${typeName(output)}, ${typeName(error)}>` : typeName(output);
+      error ? Rs.resultType(rsTypeOf(output), rsTypeOf(error)).text : rsTypeOf(output).text;
     // Internal Effect helpers carry failure frames alongside the payload; the public
     // function strips them back to Result<T, E> and stashes the frames for the binary.
     const tracedType = (output: IRType<unknown>, error: IRType<unknown>) =>
-      `Result<${typeName(output)}, (${typeName(error)}, Vec<&'static str>)>`;
+      Rs.resultType(rsTypeOf(output), Rs.tupleType([rsTypeOf(error), Rs.vecType(Rs.strRefType())]))
+        .text;
     const frameOf = (helper: Helper, kind: string): string =>
       frameLiteral(f.name, helper.path, kind, helper.origin);
     for (const helper of f.helpers) {
@@ -577,10 +588,12 @@ export const emitFunctions = (
       writer.mapped(
         helper.origin,
         useAt(helper.path),
-        () => write(`h_${f.name}_${helper.index}`),
+        () => write(Rs.ident(`h_${f.name}_${helper.index}`).text),
         "definition",
       );
-      write(`(${helper.input.map((p) => `${p.name}: ${typeName(p.type)}`).join(", ")}) -> `);
+      write(
+        `(${helper.input.map((p) => `${Rs.ident(p.name).text}: ${typeName(p.type)}`).join(", ")}) -> `,
+      );
       const signature =
         helper.body._tag === "Pure"
           ? resultType(helper.output, helper.error)
@@ -743,7 +756,7 @@ export const emitFunctions = (
     write("\n\n");
   }
   const print = (type: IRType<unknown>, value: string, channel?: "ok" | "err") => {
-    if (IRType.same(type, NeverType)) return `match ${value} {}`;
+    if (IRType.same(type, NeverType)) return Rs.unreachableMatch(Rs.verbatimExpr(value)).text;
     if (IRType.same(type, UnitType))
       return `{ let _: () = ${value}; println!("${channel ? `${channel}:` : ""}unit"); }`;
     const prefix = channel

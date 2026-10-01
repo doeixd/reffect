@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-01 — Internal Rust emission helpers
+
+- Recorded scope, alternatives, byte-identity obligations and validation in [Rust emission research](docs/research/rust-emit.md). Added an internal `Rs` module with role-branded fragments, checked identifiers/types/literals, syntax and standard-library helpers, typed fragment templates, and `defineFn` for custom generated helpers. The custom helper's symbolic declared parameters produce an inferred argument tuple and runtime arity check; negative type contracts verify wrong-role interpolation and wrong call arity without casts. `Rs` remains off the package barrel.
+- Migrated selected `lower.ts` constructs—escaping, supported types, literals/identifiers/calls, function signatures and unreachable matches—to `Rs`. Mapped writes stay imperative to preserve source occurrence ranges; Foldkit's separate emitter remains untouched.
+- Validation: after the module/macro extension, all 65 workspace tests pass, including fresh native debug/release builds and exact source-map checks. `vp check --no-fmt`, strict package TypeScript, `vp run -r build`, changed-file Oxfmt and `git diff --check` pass. Full `vp check` remains blocked only by formatting in four unrelated preserved, untracked Effect reference docs; none were modified.
+- Review confirmed role and call-arity checks, unchanged mapped-write boundaries, and that Rustc remains authoritative for generated Rust semantics. This is a guarded early migration, not a wholesale rewrite of every emitter template.
+- Continued from the gap review: added typed Rust paths/visibility, recursive nested `use` trees and re-exports, inline/external modules, module-file assembly, attributes, and role-indexed `macro_rules!` token trees with metavariables/literals/repetition and `#[macro_export]`. Type contracts reject matcher/transcriber swaps, invalid module bodies, and unstructured visibility strings. Exact-output tests cover nesting and formatting; a Rust 2021 fixture compiles under rustc 1.90.0 with `--deny=warnings`.
+
 ## 2026-10-01 — Bounded logical failure frames
 
 - Added reference `runWithFrames` with memoized canonical first-seen adaptation and native traced helpers plus a failure-only thread-local stash. The CLI keeps its stdout payload protocol and prints a versioned frames envelope to stderr on failure; `runWithFrames` relays and validates it while `run` stays unchanged.
