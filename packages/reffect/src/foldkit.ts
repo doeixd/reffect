@@ -264,6 +264,7 @@ const token = (value: Scalar): string => {
   }
   return `s${Array.from({ length: value.length }, (_, i) => value.charCodeAt(i).toString(16).padStart(4, "0")).join("")}`;
 };
+/** Compiler-created ASCII token, string-escaped on the way into Rust source. */
 const literalRust = (value: Scalar): RsExpr =>
   Rs.try_(Rs.call(Rs.identExpr(Rs.ident("parse_value")), [Rs.stringLiteral(token(value))]));
 const emitQuery = (query: CheckedQuery): string => {

@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
-import { Compile, R } from "../src/index.ts";
-import { Effect } from "effect";
+import { Compile, Foldkit, R } from "../src/index.ts";
+import { Effect, Schema } from "effect";
+import { Entity, Expr, Order, Query } from "foldkit-entity";
 
 /**
  * Locks the exact Rust scaffolding built by the typed `Rs` helpers: the two
@@ -74,4 +75,52 @@ test("Rs-built preludes and CLI keep their exact generated shape", async () => {
   expect(main).toContain('"logged" if args.len() == 2 => match reffect_generated::r_logged(');
   expect(main).toContain('"pure" if args.len() == 3 => { let value = reffect_generated::r_pure(');
   expect(main).toContain('println!("bool:{}", value);');
+}, 60000);
+
+test("Foldkit's Rs-built query bodies keep their exact generated shape", async () => {
+  const Item = Entity.define(
+    "Item",
+    Schema.Struct({
+      id: Schema.String,
+      text: Schema.String,
+      rank: Schema.Number,
+      active: Schema.Boolean,
+    }),
+  );
+  const from = Query.from(Item);
+  const artifact = await Effect.runPromise(
+    Foldkit.compile({
+      absent: from.pipe(Query.where(Expr.isNull(Item.fields.text))),
+      ordered: from.pipe(Query.orderBy(Order.desc(Item.fields.rank))),
+    }),
+  );
+  const lib = artifact.files["src/lib.rs"];
+  expect(lib).toContain(
+    [
+      "fn matches_absent(input: &[Value], row: &[Value]) -> Result<bool, &'static str> {",
+      "    let v0 = &row[0];",
+      "    let l1 = null(v0, false); let v1 = &l1;",
+      "    if !matches!(v1, Value::Bool(true)) { return Ok(false); }",
+      "    Ok(true)",
+      "}",
+    ].join("\n"),
+  );
+  expect(lib).toContain(
+    [
+      "    let compare_rows = |a: &usize, b: &usize| -> Result<Ordering, &'static str> {",
+      "        let order = compare(&rows[*a][0], &rows[*b][0])?;",
+      "        if order != Ordering::Equal { return Ok(order.reverse()); }",
+      "        Ok(Ordering::Equal)",
+      "    };",
+    ].join("\n"),
+  );
+  // Empty statement lists are empty blocks, not blank-line padding.
+  expect(lib).not.toMatch(/{\n\n/);
+  expect(lib).not.toMatch(/\n\n {4}}/);
+  expect(artifact.files["src/main.rs"]).toContain(
+    '        "absent" => (1, 0, reffect_generated::r_absent),',
+  );
+  expect(artifact.files["src/main.rs"]).toContain(
+    '        "ordered" => (1, 0, reffect_generated::r_ordered),',
+  );
 }, 60000);
