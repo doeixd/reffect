@@ -46,6 +46,9 @@ export class SemanticRef<Kind extends string, Id extends string = string> extend
   static runtime<const Id extends string>(id: Id) {
     return new SemanticRef("runtime", id);
   }
+  static policy<const Id extends string>(id: Id) {
+    return new SemanticRef("policy", id);
+  }
   static requirement<const Id extends string>(id: Id) {
     return new SemanticRef("requirement", id);
   }

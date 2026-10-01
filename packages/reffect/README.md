@@ -35,6 +35,21 @@ pub fn r_Add(p0: u64, p1: u64) -> u64 {
 
 `Compile.check`, `derive`, `normalize`, `plan`, `verify`, `optimize`, `analyzeOwnership`, `lower`, `emit`, `run`, `explain`, and `build` are public Effects. `Compiler.layer` exposes the same API as a service. Diagnostics include a stable code, stage, IR path and message in a typed `CompileError`.
 
+### Source-artifact policy
+
+Mapped source artifacts remain the default. Select a typed per-request policy through the immutable compile specification:
+
+```ts
+import { Compile, SourceArtifacts } from "reffect";
+
+const request = Compile.make(program).pipe(Compile.withSourceArtifacts(SourceArtifacts.None));
+const artifact = await Effect.runPromise(request.pipe(Compile.run));
+```
+
+`SourceArtifacts.None` omits `sources` and `auxiliaryFiles` and skips provenance collection, mapped UTF-8 byte tracking, source/generated hashing and map JSON serialization. It produces identical Rust/Cargo files and native results. Full/None specifications compose with `Compile.withTarget`; `Compile.build(request, output)` respects the same policy. Public `Compile.lower(ownership, policy)` and `Compile.emit(plan, policy)` also expose the choice.
+
+Default calls infer `MappedArtifact`; None requests infer `UnmappedArtifact` without casts. None compile diagnostics retain semantic codes/stages/IR paths without authored enrichment, and Cargo preserves raw errors with missing-map fallback. Manually constructed Source annotations and the semantic Plan remain retained by the authored program/explanation; artifact-off is independent of capture and future runtime instrumentation. Releasing programs/artifacts remains the caller's ownership responsibility.
+
 `Reference.run` preserves tuple types. `Reference.runUnknown` is the explicit boundary for runtime inputs requiring schema/arity validation. Examples and tests require no casts or semantic-object spreading. IR traversal uses Effect's exhaustive Match handlers.
 
 Normalization and optimization are identity stages for this subset. Ownership uses primitive copies. Lowering produces structured Rust expressions; emission produces files as data. Planning records chosen implementations, rejected candidates, rationales and reachable crates. `Compile.run` completes through emission, while `Compile.build(program, output)` continues through Cargo with `Cargo.layer` and platform services supplied.

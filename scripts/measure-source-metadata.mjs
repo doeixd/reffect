@@ -2,13 +2,14 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
-import { Compile, R, Source } from "../packages/reffect/src/index.ts";
+import { Compile, R, Source, SourceArtifacts } from "../packages/reffect/src/index.ts";
 
 // Run with: vp exec node --experimental-transform-types --expose-gc scripts/measure-source-metadata.mjs
 // Separate processes keep one profile's retained objects/JIT caches out of the next.
 const functionCount = 128;
 const operationsPerFunction = 16;
 const repetitions = 5;
+const profiles = ["unannotated", "annotated", "unannotated-none", "annotated-none"];
 const script = fileURLToPath(import.meta.url);
 const heap = () => {
   if (!globalThis.gc) throw new Error("This probe requires --expose-gc");
@@ -51,17 +52,23 @@ function build(annotated) {
 }
 
 async function sample(profile) {
+  const policy = profile.endsWith("-none") ? SourceArtifacts.None : SourceArtifacts.Full;
   // Warm the authoring and compilation APIs with a separate small program.
   await Effect.runPromise(
-    Compile.run(R.program({ warm: R.fn([], R.U64, () => R.U64.literal(1n)) })),
+    Compile.make(R.program({ warm: R.fn([], R.U64, () => R.U64.literal(1n)) })).pipe(
+      Compile.withSourceArtifacts(policy),
+      Compile.run,
+    ),
   );
   const before = heap();
   const started = performance.now();
-  const program = build(profile === "annotated");
+  const program = build(profile.startsWith("annotated"));
   const builderMs = performance.now() - started;
   const programHeap = heap();
   const compileStarted = performance.now();
-  const artifact = await Effect.runPromise(Compile.run(program));
+  const artifact = await Effect.runPromise(
+    Compile.make(program).pipe(Compile.withSourceArtifacts(policy), Compile.run),
+  );
   const compileMs = performance.now() - compileStarted;
   const artifactHeap = heap();
   // Reads after GC keep the program and artifact reachable during each sample.
@@ -73,22 +80,22 @@ async function sample(profile) {
     retainedProgramBytes: programHeap - before,
     retainedProgramAndArtifactBytes: artifactHeap - before,
     generatedBytes: bytes(artifact.files),
-    auxiliaryBytes: bytes(artifact.auxiliaryFiles),
-    sourceSites: artifact.sources.sites.length,
-    origins: artifact.sources.origins.length,
-    occurrences: artifact.sources.occurrences.length,
+    auxiliaryBytes: bytes(artifact.auxiliaryFiles ?? {}),
+    sourceSites: artifact.sources?.sites.length ?? 0,
+    origins: artifact.sources?.origins.length ?? 0,
+    occurrences: artifact.sources?.occurrences.length ?? 0,
     generatedSha256: sha(JSON.stringify(artifact.files)),
   };
 }
 
 if (process.argv[2] === "--child") {
   const profile = process.argv[3];
-  if (profile !== "annotated" && profile !== "unannotated") throw new Error("Unknown profile");
+  if (!profiles.includes(profile)) throw new Error("Unknown profile");
   console.log(JSON.stringify(await sample(profile)));
 } else {
   const samples = [];
   for (let i = 0; i < repetitions; i++) {
-    for (const profile of i % 2 ? ["annotated", "unannotated"] : ["unannotated", "annotated"]) {
+    for (const profile of i % 2 ? Array.from(profiles).reverse() : profiles) {
       const output = execFileSync(
         process.execPath,
         ["--experimental-transform-types", "--expose-gc", script, "--child", profile],
@@ -98,9 +105,9 @@ if (process.argv[2] === "--child") {
     }
   }
   if (new Set(samples.map((s) => s.generatedSha256)).size !== 1)
-    throw new Error("Source annotations changed generated Rust/Cargo sources");
+    throw new Error("Source annotations/artifact policies changed generated Rust/Cargo sources");
   const medians = {};
-  for (const profile of ["unannotated", "annotated"]) {
+  for (const profile of profiles) {
     const selected = samples.filter((s) => s.profile === profile);
     medians[profile] = {};
     for (const key of Object.keys(selected[0])) {

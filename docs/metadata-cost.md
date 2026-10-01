@@ -2,7 +2,7 @@
 
 [Research and measurements](research/metadata-and-editor-tooling.md) · [Source maps](source-maps.md) · [Observability](observability.md)
 
-Source annotations currently cost TypeScript authoring/compiler memory and build work. They do not add fields, pointers, allocations, map lookups or instrumentation to generated Rust numbers. Keep that separation as logging and logical failure frames arrive. This document fixes the design direction; the profile controls and storage changes below are proposed, not new implemented APIs.
+Source annotations cost TypeScript authoring/compiler memory and build work. They do not add fields, pointers, allocations, map lookups or instrumentation to generated Rust numbers. Keep that separation as logging and logical failure frames arrive. Full/None compiler artifact policy is now implemented; the broader capture/instrumentation/storage controls below remain design guidance.
 
 ## What the current implementation carries
 
@@ -20,13 +20,13 @@ An IR `Expr<u64>` describes code to compile; it is not the native `u64` produced
 
 Unannotated wrappers share the empty metadata object. An annotation retains the existing semantic node/binder/body and replaces the wrapper; it does not clone the expression DAG or execute callbacks again. Currently the combinator and `withSource` both snapshot metadata, creating a redundant short-lived snapshot. That is a small candidate cleanup, not evidence for replacing the entire architecture.
 
-There is no metadata-off option for the Boolean/u64 builder compiler today. Users can omit `Source.at/use/named`, avoiding their allocations and source capture. Compilation still collects origins/ranges and emits auxiliary artifacts. Deleting output JSON afterward saves deployment bytes but cannot recover compilation work already performed. Returned explanation objects also retain input graphs; callers must release artifacts/programs to make those graphs collectible.
+The Boolean/u64 builder compiler supports `Compile.make(program).pipe(Compile.withSourceArtifacts(SourceArtifacts.None), Compile.run)`. None skips provenance/origin/use collection, UTF-8 range encoding, hashing and JSON; it honestly omits maps/auxiliary files rather than fabricating an empty map. Users can separately omit `Source.at/use/named`, avoiding their allocations and source capture. Returned semantic explanations still retain input graphs and their explicit annotations; callers must release artifacts/programs to make those graphs collectible. Default direct `Compile.run(program)` remains mapped.
 
 ## Measured current costs
 
-Run `vp exec node --experimental-transform-types --expose-gc scripts/measure-source-metadata.mjs`. The probe alternates five isolated processes per variant, warms a tiny compilation, creates 128 functions with 16 additions each, then times construction and `Compile.run`. Annotated functions label their boundary and annotate every addition with one of 16 shared sites in one Unicode/CRLF snapshot. Literal values themselves are unannotated. Each child forces GC for retained-heap readings; the parent checks generated-source SHA-256 equality across both variants. This is a synthetic compiler probe, not a native execution benchmark or peak-memory measurement.
+Run `vp exec node --experimental-transform-types --expose-gc scripts/measure-source-metadata.mjs`. The probe alternates five isolated processes per variant, warms a tiny compilation, creates 128 functions with 16 additions each, then times construction and compilation. It now compares annotated/unannotated × Full/None policies. Annotated functions label their boundary and annotate every addition with one of 16 shared sites in one Unicode/CRLF snapshot. Literal values themselves are unannotated. Each child forces GC for retained-heap readings; the parent checks generated-source SHA-256 equality across all variants. This is a synthetic compiler probe, not a native execution benchmark or peak-memory measurement.
 
-Observed on Node 24.19.0, linux/x64, reffect's current source implementation:
+Historical mapped baseline on Node 24.19.0, linux/x64, before artifact-off implementation:
 
 | Median                                        |   Unannotated |     Annotated |
 | --------------------------------------------- | ------------: | ------------: |
@@ -39,6 +39,20 @@ Observed on Node 24.19.0, linux/x64, reffect's current source implementation:
 | Origins / occurrences                         | 4,352 / 4,352 | 4,352 / 4,352 |
 
 The generated sources were identical. Compiler timing differences are within this small noisy sample; they do not prove annotations improve compilation. Heap readings include runtime caches and exclude transient peak buffers, and this workload shares source sites heavily. No universal overhead percentage follows. The clearest finding is that baseline provenance serialization/retention is substantial relative to the small generated program, including when there are no authored sites. Prioritize skipping unrequested artifacts and compact build-local indexes before micro-optimizing the source reference.
+
+### Full/None implementation measurement
+
+Observed on Node 24.21.0, win32/x64, five isolated samples per variant (same workload; native checks were running concurrently, so timing remains noisy):
+
+| Median                            | Full, unannotated | Full, annotated | None, unannotated | None, annotated |
+| --------------------------------- | ----------------: | --------------: | ----------------: | --------------: |
+| Compiler time                     |            341 ms |          360 ms |             78 ms |           83 ms |
+| Retained program + artifact bytes |         6,130,320 |       6,529,112 |           973,896 |       1,096,200 |
+| Auxiliary JSON bytes              |         2,462,421 |       2,569,876 |                 0 |               0 |
+| Origins / occurrences             |     4,352 / 4,352 |   4,352 / 4,352 |             0 / 0 |           0 / 0 |
+| Generated Cargo/Rust bytes        |           115,086 |         115,086 |           115,086 |         115,086 |
+
+All twenty generated snapshots had identical SHA-256. The clear observed reduction is retained compiler/artifact storage and omitted serialization. This does not measure peak heap, native allocations/layout/throughput, or a universal latency ratio. Source-bearing programs remain retained through the semantic explanation in either policy; the current improvement removes artifact bookkeeping, not authoring ownership.
 
 ## Separate four ownership domains
 
@@ -83,7 +97,7 @@ Filter before expensive formatting, optional backtrace capture and ownership con
 
 ## Opt-out controls and defaults
 
-Use independent policy axes in a future declarative compile/build specification; names below are descriptive, not API exports:
+Keep independent policy axes. The implemented CompileSpec exposes Full/None artifact collection; the broader names below remain descriptive design choices:
 
 | Policy                             | Proposed choices                                                 | What turning it off means                                                                                                              |
 | ---------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -95,7 +109,7 @@ Use independent policy axes in a future declarative compile/build specification;
 
 Keep the current default experience: explicit annotations, external ranges, source contents omitted and no native runtime instrumentation. Add opt-outs without changing outcomes, wire schemas or plugin-free authoring. Artifact types must honestly represent absence/precision instead of fabricating an empty full-quality map. Diagnose incompatibilities if a requested observer requires stripped information. Include policy/schema/version and selected runtime representation in cache keys/manifest/explain output.
 
-Before the next frame/logging implementation, settle these policy contracts and verify that no-instrumentation native sources stay identical with annotations on/off. Implement at least the real compiler artifact-off path with tests for omitted work and reduced diagnostics. Names-only projection, source-bundle formats and metadata-storage replacement can follow consumers and measurements rather than blocking basic logging.
+Before the next frame/logging implementation, preserve these policy contracts and verify that no-instrumentation native sources stay identical with annotations on/off. The artifact-off path now has fault-injection tests for omitted work, reduced diagnostics, native parity and missing-map fallback. Names-only projection, source-bundle formats and metadata-storage replacement can follow consumers and measurements rather than blocking basic logging.
 
 ## Performance acceptance
 

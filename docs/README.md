@@ -62,6 +62,8 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 [Upstream reconciliation](research/upstream-reconciliation.md) records the retained dynamic Query/Effect/source paths, local prototype preservation, dependency choices, reachable-data validation and Windows failure-test budgets.
 
+[Source-artifact policy preparation](research/source-artifact-policy.md) records the independent Full/None request policy, honest artifact types, skipped provenance/writer/hash work and validation before implementation.
+
 [Basic Effect IR research](research/basic-effect-ir.md) records the synchronous Boolean/u64 success/failure profile, lexical continuation scopes, Result lowering and milestone 2 conformance obligations.
 
 [Semantic kernel bootstrap research](research/semantic-kernel.md) records the milestone 0 numeric semantics, pinned Effect v4 API checks, kernel/registry boundaries, and differential/native acceptance criteria.

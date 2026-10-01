@@ -8,7 +8,13 @@ import { Foldkit } from "./foldkit.ts";
 import { EffectFn, SyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
-import type { RustModule } from "./lower.ts";
+import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
+import { SourceArtifacts, checkArtifactPolicy } from "./artifact-policy.ts";
+import type {
+  ArtifactPolicy,
+  FullSourceArtifacts,
+  NoneSourceArtifacts,
+} from "./artifact-policy.ts";
 export { RustExpr } from "./lower.ts";
 export type { RustBinding, RustModule } from "./lower.ts";
 import {
@@ -20,6 +26,7 @@ import {
   SubU64,
   Targets,
   SemanticRef,
+  Program,
   U64Type,
   BoolType,
   NeverType,
@@ -37,7 +44,6 @@ import type {
   Expr,
   Fn,
   OperationRef,
-  Program,
   Requirement,
 } from "./kernel.ts";
 
@@ -158,11 +164,47 @@ export interface Ownership {
   readonly mode: "primitive-copy";
   readonly rationale: string;
 }
-export interface Artifact extends GeneratedFiles {
-  readonly auxiliaryFiles: Readonly<Record<"reffect.sources.json" | "reffect.build.json", string>>;
-  readonly sources: SourceMap;
+interface ArtifactBase extends GeneratedFiles {
+  readonly sourceArtifacts: ArtifactPolicy;
   readonly explanation: Plan;
   readonly stages: readonly string[];
+}
+export interface MappedArtifact extends ArtifactBase {
+  readonly sourceArtifacts: FullSourceArtifacts;
+  readonly auxiliaryFiles: Readonly<Record<"reffect.sources.json" | "reffect.build.json", string>>;
+  readonly sources: SourceMap;
+}
+export interface UnmappedArtifact extends ArtifactBase {
+  readonly sourceArtifacts: NoneSourceArtifacts;
+  readonly auxiliaryFiles?: never;
+  readonly sources?: never;
+}
+export type Artifact = MappedArtifact | UnmappedArtifact;
+export type ArtifactFor<P extends ArtifactPolicy> = P extends NoneSourceArtifacts
+  ? UnmappedArtifact
+  : MappedArtifact;
+
+/** Complete compile requests compose without changing their authored program or target. */
+export class CompileSpec<P extends ArtifactPolicy = FullSourceArtifacts> extends Pipeable.Class {
+  private constructor(
+    readonly program: Program,
+    readonly target: Target,
+    readonly sourceArtifacts: P,
+  ) {
+    super();
+    Object.freeze(this);
+  }
+  static make(this: void, program: Program): CompileSpec {
+    return new CompileSpec(program, Rust.std, SourceArtifacts.Full);
+  }
+  static withSourceArtifacts<P extends ArtifactPolicy>(this: void, policy: P) {
+    return <Previous extends ArtifactPolicy>(self: CompileSpec<Previous>): CompileSpec<P> =>
+      new CompileSpec(self.program, self.target, policy);
+  }
+  static withTarget(this: void, target: Target) {
+    return <P extends ArtifactPolicy>(self: CompileSpec<P>): CompileSpec<P> =>
+      new CompileSpec(self.program, target, self.sourceArtifacts);
+  }
 }
 export const stages = Object.freeze([
   "check",
@@ -441,7 +483,8 @@ const analyzeOwnership = Effect.fn("Compile.ownership")(function* (
 });
 const lower = Effect.fn("Compile.lower")(function* (
   ownership: Ownership,
-): Effect.fn.Return<RustModule, CompileError> {
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+): Effect.fn.Return<LoweredModule, CompileError> {
   const p = yield* verify(ownership.plan);
   if (ownership.mode !== "primitive-copy")
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
@@ -450,6 +493,7 @@ const lower = Effect.fn("Compile.lower")(function* (
       lowerFunctions(
         p.analysis.program,
         new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
+        policy,
       ),
     catch: (cause) =>
       cause instanceof CompileError
@@ -459,14 +503,25 @@ const lower = Effect.fn("Compile.lower")(function* (
 });
 const emit = Effect.fn("Compile.emit")(function* (
   p: Plan,
-): Effect.fn.Return<Artifact, CompileError> {
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+): Effect.fn.Return<MappedArtifact | UnmappedArtifact, CompileError> {
   const verified = yield* verify(p);
-  const module = yield* lower(yield* analyzeOwnership(verified));
+  const module = yield* lower(yield* analyzeOwnership(verified), policy);
   const emitted = emitFunctions(module);
+  if (SourceArtifacts.isNone(policy))
+    return Object.freeze({
+      sourceArtifacts: SourceArtifacts.None,
+      explanation: verified,
+      stages,
+      files: emitted.files,
+    });
+  if (!module.provenance)
+    return yield* fail("SOURCE_ARTIFACT", "emit", "sources", "Mapped emission requires provenance");
   const sources = yield* SourceMaps.create(module.provenance, emitted.files, emitted.ranges).pipe(
     Effect.mapError((error) => fail("SOURCE_ARTIFACT", "emit", "sources", error.message)),
   );
   return Object.freeze({
+    sourceArtifacts: SourceArtifacts.Full,
     explanation: verified,
     stages,
     files: emitted.files,
@@ -474,20 +529,145 @@ const emit = Effect.fn("Compile.emit")(function* (
     auxiliaryFiles: sources.auxiliaryFiles,
   });
 });
-const run = Effect.fn("Compile.run")(function* (program: Program, target: Target = Rust.std) {
+const run = Effect.fn("Compile.run")(function* (
+  program: Program,
+  target: Target = Rust.std,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+) {
+  yield* Effect.try({
+    try: () => checkArtifactPolicy(policy),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("UNSUPPORTED_SOURCE_POLICY", "check", "sourceArtifacts", String(cause)),
+  });
   const checked = yield* check(program);
   const derived = yield* derive(checked);
   const normalized = yield* normalize(derived);
   const planned = yield* plan(normalized, target);
   const verified = yield* verify(planned);
   const optimized = yield* optimize(verified);
-  return yield* emit(optimized);
+  return yield* emit(optimized, policy);
 });
 
 const located = <A, R>(program: Program, effect: Effect.Effect<A, CompileError, R>) =>
   effect.pipe(Effect.mapError((error) => locateCompileError(program, error)));
 
+const withLocations = <A, R>(
+  program: Program,
+  policy: ArtifactPolicy,
+  effect: Effect.Effect<A, CompileError, R>,
+) => (SourceArtifacts.isNone(policy) ? effect : located(program, effect));
+
+const runRequest = <Value extends Program | CompileSpec<ArtifactPolicy>>(
+  value: Value,
+  target?: Target,
+): Effect.Effect<
+  Value extends CompileSpec<infer P> ? ArtifactFor<P> : MappedArtifact,
+  CompileError
+> => {
+  const program =
+    value instanceof CompileSpec ? value.program : value instanceof Program ? value : undefined;
+  if (!program)
+    return Effect.fail(fail("INVALID_REQUEST", "check", "program", "Use Program or Compile.make"));
+  const policy = value instanceof CompileSpec ? value.sourceArtifacts : SourceArtifacts.Full;
+  const selectedTarget = target ?? (value instanceof CompileSpec ? value.target : Rust.std);
+  // Canonical policy selection determines the artifact branch; the generic signature preserves pipe inference.
+  return withLocations(program, policy, run(program, selectedTarget, policy)) as Effect.Effect<
+    Value extends CompileSpec<infer P> ? ArtifactFor<P> : MappedArtifact,
+    CompileError
+  >;
+};
+function lowerRequest(ownership: Ownership): Effect.Effect<RustModule, CompileError>;
+function lowerRequest(
+  ownership: Ownership,
+  policy: FullSourceArtifacts,
+): Effect.Effect<RustModule, CompileError>;
+function lowerRequest(
+  ownership: Ownership,
+  policy: NoneSourceArtifacts,
+): Effect.Effect<UnmappedRustModule, CompileError>;
+function lowerRequest(
+  ownership: Ownership,
+  policy: ArtifactPolicy,
+): Effect.Effect<LoweredModule, CompileError>;
+function lowerRequest(
+  ownership: Ownership,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+): Effect.Effect<LoweredModule, CompileError> {
+  return withLocations(ownership.plan.analysis.program, policy, lower(ownership, policy));
+}
+function emitRequest(p: Plan): Effect.Effect<MappedArtifact, CompileError>;
+function emitRequest(
+  p: Plan,
+  policy: FullSourceArtifacts,
+): Effect.Effect<MappedArtifact, CompileError>;
+function emitRequest(
+  p: Plan,
+  policy: NoneSourceArtifacts,
+): Effect.Effect<UnmappedArtifact, CompileError>;
+function emitRequest(
+  p: Plan,
+  policy: ArtifactPolicy,
+): Effect.Effect<MappedArtifact | UnmappedArtifact, CompileError>;
+function emitRequest(
+  p: Plan,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+): Effect.Effect<MappedArtifact | UnmappedArtifact, CompileError> {
+  return withLocations(p.analysis.program, policy, emit(p, policy));
+}
+
+const build = Effect.fn("Compile.build")(function* (
+  value: Program | CompileSpec<ArtifactPolicy>,
+  output: string,
+  profile: "debug" | "release" = "release",
+  target: Target = Rust.std,
+) {
+  const cargo = yield* Cargo;
+  const program = value instanceof CompileSpec ? value.program : value;
+  const policy = value instanceof CompileSpec ? value.sourceArtifacts : SourceArtifacts.Full;
+  const selectedTarget = value instanceof CompileSpec ? value.target : target;
+  const artifact = yield* withLocations(program, policy, run(program, selectedTarget, policy));
+  const directory = yield* cargo.write(artifact, output);
+  const process = yield* cargo.build(directory, profile);
+  return { artifact, directory, process, stages: stages.concat("build") };
+});
+type BuildResult<A extends Artifact> = Omit<
+  Effect.Success<ReturnType<typeof build>>,
+  "artifact"
+> & { readonly artifact: A };
+function buildRequest(
+  program: Program,
+  output: string,
+  profile?: "debug" | "release",
+  target?: Target,
+): Effect.Effect<
+  BuildResult<MappedArtifact>,
+  Effect.Error<ReturnType<typeof build>>,
+  Effect.Services<ReturnType<typeof build>>
+>;
+function buildRequest<P extends ArtifactPolicy>(
+  spec: CompileSpec<P>,
+  output: string,
+  profile?: "debug" | "release",
+): Effect.Effect<
+  BuildResult<ArtifactFor<P>>,
+  Effect.Error<ReturnType<typeof build>>,
+  Effect.Services<ReturnType<typeof build>>
+>;
+function buildRequest(
+  value: Program | CompileSpec<ArtifactPolicy>,
+  output: string,
+  profile: "debug" | "release" = "release",
+  target: Target = Rust.std,
+): ReturnType<typeof build> {
+  return build(value, output, profile, target);
+}
+
 export const Compile = {
+  make: CompileSpec.make,
+  withTarget: CompileSpec.withTarget,
+  withSourceArtifacts: CompileSpec.withSourceArtifacts,
   fromFoldkitQuery: Foldkit.compile,
   check: (program: Program) => located(program, check(program)),
   derive: (program: Program) => located(program, derive(program)),
@@ -497,21 +677,10 @@ export const Compile = {
   verify: (p: Plan) => located(p.analysis.program, verify(p)),
   optimize: (p: Plan) => located(p.analysis.program, optimize(p)),
   analyzeOwnership: (p: Plan) => located(p.analysis.program, analyzeOwnership(p)),
-  lower: (ownership: Ownership) => located(ownership.plan.analysis.program, lower(ownership)),
-  emit: (p: Plan) => located(p.analysis.program, emit(p)),
-  run: (program: Program, target: Target = Rust.std) => located(program, run(program, target)),
-  build: Effect.fn("Compile.build")(function* (
-    program: Program,
-    output: string,
-    profile: "debug" | "release" = "release",
-    target: Target = Rust.std,
-  ) {
-    const cargo = yield* Cargo;
-    const artifact = yield* located(program, run(program, target));
-    const directory = yield* cargo.write(artifact, output);
-    const process = yield* cargo.build(directory, profile);
-    return { artifact, directory, process, stages: stages.concat("build") };
-  }),
+  lower: lowerRequest,
+  emit: emitRequest,
+  run: runRequest,
+  build: buildRequest,
   explain: Effect.fn("Compile.explain")(function* (program: Program, target: Target = Rust.std) {
     return yield* located(
       program,

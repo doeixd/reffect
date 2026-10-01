@@ -138,6 +138,8 @@ Map the library and runner separately. Preserve a small coherent authoritative s
 
 GeneratedFiles retains Cargo.toml, lib.rs and main.rs in `files` and now accepts an optional `auxiliaryFiles` dictionary. The compiler/Cargo writer validates paths and uses the same exclusive output policy for both groups. Future packaging extensions must continue through this contract rather than adding side writes outside compiler services. Mapping/profile/content policy affects cache keys and manifest identity. Separate “build generated Rust with symbols” from “embed original TS”; debug symbols do not require public source contents. Avoid timestamps, absolute workspace paths or credentials in reproducible map identities.
 
+`CompileSpec` now selects typed `SourceArtifacts.Full` (default) or `None`. None omits the source map/manifest and skips provenance/range/hash/JSON work; it leaves generated code and semantic Plans unchanged. It retains semantic compiler diagnostic codes/IR paths and raw native error fallback with missing maps. This artifact policy does not suppress manual authoring capture or introduce runtime instrumentation; see [the policy preparation](research/source-artifact-policy.md).
+
 ## Diagnostics and runtime resolution
 
 Compiler diagnostics resolve their IR path/node/use occurrence directly to source sites. Expose authored primary locations, related definition/use/transform locations, precision and the existing semantic diagnostic ID. Unknown positions preserve a useful function/entity name and IR path.

@@ -37,7 +37,7 @@ export type {
   Symbols,
   AnyOperation,
 } from "./kernel.ts";
-export { Compile, Compiler, Rust, Target, Plan, RustExpr } from "./compiler.ts";
+export { Compile, Compiler, CompileSpec, Rust, Target, Plan, RustExpr } from "./compiler.ts";
 export type {
   Implementation,
   Analysis,
@@ -45,7 +45,17 @@ export type {
   RustBinding,
   RustModule,
   Artifact,
+  MappedArtifact,
+  UnmappedArtifact,
+  ArtifactFor,
 } from "./compiler.ts";
+export { SourceArtifacts, SourceArtifactPolicy } from "./artifact-policy.ts";
+export type {
+  ArtifactPolicy,
+  FullSourceArtifacts,
+  NoneSourceArtifacts,
+} from "./artifact-policy.ts";
+export type { UnmappedRustModule, LoweredModule } from "./lower.ts";
 export { Cargo, CargoApi, CargoError } from "./cargo.ts";
 export type { ProcessResult } from "./cargo.ts";
 export type { GeneratedFiles } from "./cargo.ts";

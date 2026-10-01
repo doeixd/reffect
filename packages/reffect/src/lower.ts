@@ -9,6 +9,12 @@ import { EffectFn } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
+import { SourceArtifacts, checkArtifactPolicy } from "./artifact-policy.ts";
+import type {
+  ArtifactPolicy,
+  FullSourceArtifacts,
+  NoneSourceArtifacts,
+} from "./artifact-policy.ts";
 
 export type RustExpr = (
   | { readonly _tag: "Parameter"; readonly index: number }
@@ -73,7 +79,7 @@ type HelperBody =
       readonly onFalse: number;
     };
 interface Helper {
-  readonly origin: string;
+  readonly origin?: string;
   readonly path: string;
   readonly index: number;
   readonly input: readonly Parameter[];
@@ -82,7 +88,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
-  readonly origin: string;
+  readonly origin?: string;
   readonly path: string;
   readonly name: string;
   readonly input: readonly IRType<unknown>[];
@@ -93,19 +99,47 @@ interface RustFunction {
     | { readonly _tag: "Effect"; readonly root: number; readonly error: IRType<unknown> };
 }
 export interface RustModule {
+  readonly sourceArtifacts: FullSourceArtifacts;
   readonly provenance: ProvenanceSnapshot;
   readonly functions: readonly RustFunction[];
 }
+export interface UnmappedRustModule {
+  readonly sourceArtifacts: NoneSourceArtifacts;
+  readonly provenance?: never;
+  readonly functions: readonly RustFunction[];
+}
+export type LoweredModule = RustModule | UnmappedRustModule;
 interface Scope {
   readonly bindings: ReadonlyMap<symbol, readonly Parameter[]>;
   readonly input: readonly Parameter[];
 }
 
-export const lowerFunctions = (
+export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
-): RustModule => {
-  const provenance = new Provenance(program);
+): RustModule;
+export function lowerFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: FullSourceArtifacts,
+): RustModule;
+export function lowerFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: NoneSourceArtifacts,
+): UnmappedRustModule;
+export function lowerFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy,
+): LoweredModule;
+export function lowerFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+): LoweredModule {
+  checkArtifactPolicy(policy);
+  const provenance = SourceArtifacts.isNone(policy) ? undefined : new Provenance(program);
   const functions = Object.freeze(
     Object.entries(program.functions).map(([name, f]): RustFunction => {
       const path = `functions.${name}`;
@@ -141,7 +175,7 @@ export const lowerFunctions = (
             input: scope.input,
             output: e.type,
             body,
-            origin: provenance.origin(e),
+            origin: provenance?.origin(e),
             path,
           }),
         );
@@ -151,9 +185,11 @@ export const lowerFunctions = (
         const bindings: RustBinding[] = [];
         const memo = new Map<Expr<unknown>["node"], RustExpr>();
         const expression = (e: Expr<unknown>, path: string): RustExpr => {
-          const source = { origin: provenance.origin(e), occurrence: provenance.use(path) };
+          const source = provenance
+            ? { origin: provenance.origin(e), occurrence: provenance.use(path) }
+            : undefined;
           const cached = memo.get(e.node);
-          if (cached) return Object.freeze({ ...cached, ...source });
+          if (cached) return provenance ? Object.freeze({ ...cached, ...source }) : cached;
           const value = Match.value(e.node).pipe(
             Match.tagsExhaustive({
               Parameter: (n) => {
@@ -174,9 +210,9 @@ export const lowerFunctions = (
                   _tag: "Match",
                   condition: expression(n.condition, `${path}.condition`),
                   onTrue: pureHelper(n.onTrue, scope, `${path}.onTrue`),
-                  onTrueUse: provenance.use(`${path}.onTrue`),
+                  onTrueUse: provenance?.use(`${path}.onTrue`),
                   onFalse: pureHelper(n.onFalse, scope, `${path}.onFalse`),
-                  onFalseUse: provenance.use(`${path}.onFalse`),
+                  onFalseUse: provenance?.use(`${path}.onFalse`),
                 }),
             }),
           );
@@ -184,20 +220,14 @@ export const lowerFunctions = (
             Match.tags({ Apply: () => true, Match: () => true }),
             Match.orElse(() => false),
           );
-          const result = Object.freeze({
-            ...(local ? RustExpr.local(bindings.length) : value),
-            ...source,
-          });
+          const reference = local ? RustExpr.local(bindings.length) : value;
+          const result = provenance ? Object.freeze({ ...reference, ...source }) : reference;
           if (local)
             bindings.push(
               Object.freeze({
                 index: bindings.length,
                 type: e.type,
-                value: Object.freeze({
-                  ...value,
-                  origin: source.origin,
-                  occurrence: source.occurrence,
-                }),
+                value: provenance ? Object.freeze({ ...value, ...source }) : value,
               }),
             );
           memo.set(e.node, result);
@@ -261,7 +291,7 @@ export const lowerFunctions = (
           index,
           Object.freeze({
             index,
-            origin: provenance.origin(c),
+            origin: provenance?.origin(c),
             path,
             input: scope.input,
             output: c.output,
@@ -282,7 +312,7 @@ export const lowerFunctions = (
       return Object.freeze({
         name,
         path,
-        origin: provenance.origin(f),
+        origin: provenance?.origin(f),
         input: f.input,
         output: f.output,
         helpers: Object.freeze(Array.from(helpers.values()).sort((a, b) => a.index - b.index)),
@@ -290,18 +320,26 @@ export const lowerFunctions = (
       });
     }),
   );
-  return Object.freeze({ provenance: provenance.snapshot(), functions });
-};
+  return provenance
+    ? Object.freeze({
+        sourceArtifacts: SourceArtifacts.Full,
+        provenance: provenance.snapshot(),
+        functions,
+      })
+    : Object.freeze({ sourceArtifacts: SourceArtifacts.None, functions });
+}
 
 export const emitFunctions = (
-  module: RustModule,
+  module: LoweredModule,
 ): { readonly files: GeneratedFiles["files"]; readonly ranges: readonly GeneratedRange[] } => {
-  const uses = new Map(module.provenance.occurrences.map((use) => [use.path, use.id]));
-  const useAt = (path: string) => uses.get(path);
-  const writer = new SourceWriter("src/lib.rs");
+  const uses = module.provenance
+    ? new Map(module.provenance.occurrences.map((use) => [use.path, use.id]))
+    : undefined;
+  const useAt = (path: string) => uses?.get(path);
+  const writer = new SourceWriter("src/lib.rs", !SourceArtifacts.isNone(module.sourceArtifacts));
   const typeName = (type: IRType<unknown>) => type.native.type;
   const write = (text: string) => writer.write(text);
-  const mapped = (origin: string, use: string | undefined, text: string) =>
+  const mapped = (origin: string | undefined, use: string | undefined, text: string) =>
     writer.mapped(origin, use, () => write(text));
   for (const f of module.functions) {
     const call = (index: number, occurrence?: string) => {

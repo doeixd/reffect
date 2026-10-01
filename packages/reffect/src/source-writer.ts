@@ -5,21 +5,31 @@ export class SourceWriter {
   private readonly chunks: string[] = [];
   private offset = 0;
   private readonly mappings: GeneratedRange[] = [];
-  constructor(readonly file: string) {}
+  private readonly encoder: TextEncoder | undefined;
+  constructor(
+    readonly file: string,
+    readonly trackRanges = true,
+  ) {
+    this.encoder = trackRanges ? new TextEncoder() : undefined;
+  }
   write(text: string): void {
     const first = text.charCodeAt(0),
       last = text.charCodeAt(text.length - 1);
     if ((first >= 0xdc00 && first <= 0xdfff) || (last >= 0xd800 && last <= 0xdbff))
       throw new TypeError("Source writer chunks must not split surrogate pairs");
     this.chunks.push(text);
-    this.offset += new TextEncoder().encode(text).length;
+    if (this.encoder) this.offset += this.encoder.encode(text).length;
   }
   mapped(
-    origin: string,
+    origin: string | undefined,
     occurrence: string | undefined,
     write: () => void,
     role?: GeneratedRange["role"],
   ): void {
+    if (!this.trackRanges || origin === undefined) {
+      write();
+      return;
+    }
     const start = this.offset;
     write();
     if (start < this.offset)

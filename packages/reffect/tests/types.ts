@@ -8,9 +8,11 @@ import {
   R,
   Reference,
   Foldkit,
+  Compile,
+  SourceArtifacts,
   SemanticRef,
 } from "../src/index.ts";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { Entity, Expr as EntityExpr, Query } from "foldkit-entity";
 
 // Compiled by strict TypeScript checks; never executed.
@@ -31,6 +33,30 @@ export const typeChecks = () => {
   // @ts-expect-error annotated effects preserve the input representation
   Reference.run(annotatedEffect, [1n]);
   const add = R.fn([R.U64, R.U64], R.U64, (a, b) => R.U64.add(a, b));
+  const compiled = R.program({ add });
+  Compile.run(compiled).pipe(Effect.map((artifact) => artifact.sources.ranges));
+  const fullSpec = Compile.make(compiled);
+  fullSpec.pipe(
+    Compile.run,
+    Effect.map((artifact) => artifact.sources.ranges),
+  );
+  const noneSpec = fullSpec.pipe(Compile.withSourceArtifacts(SourceArtifacts.None));
+  noneSpec.pipe(
+    Compile.run,
+    Effect.map((artifact) => {
+      const absent: undefined = artifact.sources;
+      return absent;
+    }),
+  );
+  Compile.build(fullSpec, "unused").pipe(Effect.map((result) => result.artifact.sources.ranges));
+  Compile.build(noneSpec, "unused").pipe(
+    Effect.map((result) => {
+      const absent: undefined = result.artifact.sources;
+      return absent;
+    }),
+  );
+  // @ts-expect-error artifact policies are typed registered objects, not strings
+  fullSpec.pipe(Compile.withSourceArtifacts("none"));
   Reference.run(add, [1n, 2n]);
   // @ts-expect-error exact bigint input, not a lossy number
   Reference.run(add, [1, 2]);
