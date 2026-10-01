@@ -54,7 +54,12 @@ test("Full and None specs preserve generated code, semantic identity and indepen
     ),
   );
   expect(mapped.sources.ranges.length).toBeGreaterThan(0);
-  expect(off.files).toEqual(mapped.files);
+  // None omits origins from failure-frame literals; value-level code is identical.
+  expect(off.files["src/lib.rs"].replaceAll(/,\\"origin\\":\\"[^\\"]*\\"/g, "")).toBe(
+    mapped.files["src/lib.rs"].replaceAll(/,\\"origin\\":\\"[^\\"]*\\"/g, ""),
+  );
+  expect(off.files["src/main.rs"]).toBe(mapped.files["src/main.rs"]);
+  expect(off.files["Cargo.toml"]).toBe(mapped.files["Cargo.toml"]);
   expect(Object.hasOwn(off, "sources")).toBe(false);
   expect(Object.hasOwn(off, "auxiliaryFiles")).toBe(false);
   expect(off.explanation.analysis.program).toBe(program);

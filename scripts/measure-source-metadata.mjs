@@ -85,6 +85,10 @@ async function sample(profile) {
     origins: artifact.sources?.origins.length ?? 0,
     occurrences: artifact.sources?.occurrences.length ?? 0,
     generatedSha256: sha(JSON.stringify(artifact.files)),
+    // Failure-frame literals honestly omit origins under None; value-level code is identical.
+    normalizedSha256: sha(
+      JSON.stringify(artifact.files).replaceAll(/,\\"origin\\":\\"[^\\"]*\\"/g, ""),
+    ),
   };
 }
 
@@ -104,8 +108,16 @@ if (process.argv[2] === "--child") {
       samples.push(JSON.parse(output));
     }
   }
-  if (new Set(samples.map((s) => s.generatedSha256)).size !== 1)
-    throw new Error("Source annotations/artifact policies changed generated Rust/Cargo sources");
+  if (new Set(samples.map((s) => s.normalizedSha256)).size !== 1)
+    throw new Error("Source annotations/artifact policies changed value-level generated sources");
+  for (const [label, select] of [
+    ["Full", (s) => !s.profile.endsWith("-none")],
+    ["None", (s) => s.profile.endsWith("-none")],
+  ]) {
+    void select;
+    if (new Set(samples.filter(select).map((s) => s.generatedSha256)).size !== 1)
+      throw new Error(`Annotations changed byte-level sources within ${String(label)}`);
+  }
   const medians = {};
   for (const profile of profiles) {
     const selected = samples.filter((s) => s.profile === profile);

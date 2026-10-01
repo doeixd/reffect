@@ -230,13 +230,28 @@ test("builders run once and reference branches and failures skip unused work", a
 });
 
 test("shared branch graphs lower linearly and literal types still require capabilities", async () => {
-  const shared = R.fn([R.Bool], R.U64, R.Never, (condition) => {
-    let value = R.Effect.succeed(R.U64.literal(2n));
-    for (let i = 0; i < 128; i++) value = R.Match.bool(condition, value, value);
-    return value;
-  });
-  const artifact = await Effect.runPromise(Compile.run(R.program({ shared })));
-  expect(artifact.files["src/lib.rs"].length).toBeLessThan(40_000);
+  const sharedAt = (depth: number) =>
+    R.fn([R.Bool], R.U64, R.Never, (condition) => {
+      let value = R.Effect.succeed(R.U64.literal(2n));
+      for (let i = 0; i < depth; i++) value = R.Match.bool(condition, value, value);
+      return value;
+    });
+  // Frame literals embed paths that grow with nesting depth, so byte growth on
+  // pathological nesting is roughly quadratic; node sharing itself stays linear.
+  const lowerAt = (depth: number) =>
+    Effect.runPromise(
+      Compile.explain(R.program({ shared: sharedAt(depth) })).pipe(
+        Effect.flatMap(Compile.analyzeOwnership),
+        Effect.flatMap((ownership) => Compile.lower(ownership)),
+      ),
+    );
+  const [smallModule, bigModule] = await Promise.all([lowerAt(16), lowerAt(128)]);
+  expect(bigModule.functions[0].helpers.length).toBeLessThan(
+    smallModule.functions[0].helpers.length * 10,
+  );
+  const small = await Effect.runPromise(Compile.run(R.program({ shared: sharedAt(16) })));
+  const big = await Effect.runPromise(Compile.run(R.program({ shared: sharedAt(128) })));
+  expect(big.files["src/lib.rs"].length).toBeLessThan(small.files["src/lib.rs"].length * 32);
   const target = Target.make(Rust.std.ref, Rust.std.implementations).pipe(
     Target.withCapabilities([Capabilities.U64]),
   );

@@ -108,6 +108,12 @@ const Discard = R.Effect.fn([R.U64], R.Unit, R.Never, (value) =>
 
 Use `R.Unit.literal()` for the one pure value. Unit supports function inputs/results, Match and map/flatMap success/error channels. `R.Effect.asVoid` evaluates its source and preserves failures before discarding a successful result. Unit input slots retain tuple arity; NativeRunner's internal bridge uses `unit`, `ok:unit` and `err:unit` tokens and rejects malformed/wrong-channel values. No native allocation, metadata wrapper or Cargo dependency is introduced.
 
+### Bounded logical failure frames
+
+Failures carry executed-boundary context separately from domain payloads. `Reference.runWithFrames(fn, args, "functions.name.body")` returns the official `Exit` plus innermost-first `LogicalFrame` records (`path`, `kind`) and an `omitted` count; `NativeRunner.runWithFrames(artifact, directory, name, fn, args, profile)` relays the same chains from generated Rust. Frame sources are explicit boundaries only: the failing `Fail` site, enclosing `Map`/`FlatMap`/`Match` helpers and the function entry. Successes carry no frames. Chains are bounded at 32 entries with honest truncation counts; shared nodes report their canonical first-seen path on both sides.
+
+The native binary keeps its stdout payload protocol byte-identical and prints one versioned `reffect.frames@1` JSON object to stderr per failure. The existing payload-only `NativeRunner.run` ignores stderr and is unchanged. Mapped artifacts embed provenance origins in frame literals; `SourceArtifacts.None` omits them while keeping paths identical. Malformed, missing or duplicated envelopes and success-time envelopes are refused as `INVALID_NATIVE_FRAMES`. No new Cargo dependencies; frames allocate only on the failure path.
+
 ```ts
 const Difference = R.fn([R.U64, R.U64], R.U64, R.U64, (a, b) =>
   R.Match.bool(R.U64.lt(a, b), R.Effect.succeed(R.U64.sub(b, a)), R.Effect.fail(a)).pipe(

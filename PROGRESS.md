@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-01 — Bounded logical failure frames
+
+- Added reference `runWithFrames` with memoized canonical first-seen adaptation and native traced helpers plus a failure-only thread-local stash. The CLI keeps its stdout payload protocol and prints a versioned frames envelope to stderr on failure; `runWithFrames` relays and validates it while `run` stays unchanged.
+- Frame agreement passes in fresh debug/release crates across branch, nested FlatMap/Match, short-circuit, shared-helper, depth-40 truncation and mapped/None origin cases, plus seven malformed envelope refusals. Strict type contracts require no casts.
+- Scoped vp check, strict TypeScript and workspace builds pass. Full suite passes 51 tests with fresh native crates; probe confirms normalized value-level identity across Full/None.
+- Published after re-reading the implementation diff and repeating checks, full tests, probe and workspace build. Review fixed two real issues found by the new tests: shared-node path aliasing (canonical first-seen adaptation on both sides) and three Rust brace/type codegen errors. Pre-existing size assertions were updated honestly for frame-literal bytes (linear helper sharing plus sub-exponential path-string bound). Next: scoped logging research.
+
+## 2026-10-01 — Bounded failure-frame preparation
+
+- Verified the Effect oracle: span-less failures carry no StackTrace; `withSpan('inner')` inside `withSpan('outer')` annotates `{name:"inner",parent:{name:"outer"}}`. Only explicit boundaries create observable context.
+- Recorded the frame design in [failure-frames research](docs/research/failure-frames.md): explicit Fn/Fail/Map/FlatMap/Match boundaries, logical IR paths innermost-first, 32-frame bound with omitted count, unchanged domain payloads, stderr companion envelope, reference `runWithFrames` oracle.
+
 ## 2026-10-01 — Unit implementation
 
 - Added canonical R.Unit/UnitType as IRType<void> with owned frozen Schema.Undefined, typed capability and Rust `()` representation. Unit supports parameters, pure results and success/error channels; it remains distinct from Never and discarding Schema.Void.

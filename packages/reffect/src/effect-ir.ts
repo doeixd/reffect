@@ -1,4 +1,4 @@
-import { Effect, Match, Pipeable, Schema } from "effect";
+import { Effect, Exit, Match, Pipeable, Schema } from "effect";
 import { emptySource, snapshotSource } from "./source.ts";
 import type { SourceMetadata } from "./source.ts";
 import { dual } from "effect/Function";
@@ -311,10 +311,204 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
     E | CompileError
   >;
 });
+export interface LogicalFrame {
+  readonly path: string;
+  readonly kind: "function" | "succeed" | "fail" | "map" | "flatMap" | "match";
+}
+export const maxLogicalFrames = 32;
+export interface FramedExit<A, E> {
+  readonly exit: Exit.Exit<A, E>;
+  readonly frames: readonly LogicalFrame[];
+  readonly omitted: number;
+}
+type FramedFailure =
+  | { readonly _tag: "Domain"; readonly error: unknown; readonly frames: readonly LogicalFrame[] }
+  | { readonly _tag: "Internal"; readonly cause: CompileError };
+const frame = (path: string, kind: LogicalFrame["kind"]): LogicalFrame =>
+  Object.freeze({ path, kind });
+const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(function* <
+  I extends readonly IRType<unknown>[],
+  A,
+  E,
+>(
+  f: EffectFn<I, A, E>,
+  args: readonly unknown[],
+  basePath = "functions.body",
+): Effect.fn.Return<FramedExit<A, E>, CompileError> {
+  const issues = checkEffectFunction(f, "function");
+  if (issues.length)
+    return yield* new CompileError({ message: "Invalid effect function", diagnostics: issues });
+  if (args.length !== f.input.length)
+    return yield* fail("ARITY_MISMATCH", "reference", "args", "Incorrect input count");
+  const values: unknown[] = [];
+  for (let i = 0; i < args.length; i++)
+    values.push(
+      yield* Schema.decodeUnknownEffect(f.input[i].schema)(args[i]).pipe(
+        Effect.mapError((e) => fail("INVALID_INPUT", "reference", `args[${i}]`, e.message)),
+      ),
+    );
+  // Canonical first-seen paths, mirroring lowering traversal order (Match visits
+  // onTrue before onFalse; FlatMap visits source before body). Shared nodes keep
+  // their first-seen path on both sides, so identical computations report identical
+  // frames. Scope-divergent sharing is not yet path-resolved; see research.
+  const adapted = new Map<Computation<unknown, unknown>, string>();
+  const adapting = new Set<Computation<unknown, unknown>>();
+  const adaptNode = (c: Computation<unknown, unknown>, path: string): void => {
+    if (adapted.has(c)) return;
+    if (adapting.has(c))
+      throw fail("IR_CYCLE", "reference", path, "Computation graph contains a cycle");
+    adapting.add(c);
+    adapted.set(c, path);
+    Match.value(c.node).pipe(
+      Match.tagsExhaustive({
+        Succeed: () => {},
+        Fail: () => {},
+        Map: (n) => {
+          adaptNode(n.source, `${path}.source`);
+        },
+        FlatMap: (n) => {
+          adaptNode(n.source, `${path}.source`);
+          adaptNode(n.body, `${path}.body`);
+        },
+        Match: (n) => {
+          adaptNode(n.onTrue, `${path}.onTrue`);
+          adaptNode(n.onFalse, `${path}.onFalse`);
+        },
+      }),
+    );
+    adapting.delete(c);
+  };
+  try {
+    adaptNode(f.body, basePath);
+  } catch (cause) {
+    return yield* cause instanceof CompileError
+      ? cause
+      : fail("INVALID_IR", "reference", basePath, String(cause));
+  }
+  type Bindings = ReadonlyMap<symbol, readonly unknown[]>;
+  const evaluate = (
+    c: Computation<unknown, unknown>,
+    bindings: Bindings,
+  ): Effect.Effect<unknown, FramedFailure> =>
+    Effect.suspend(() => {
+      const path = adapted.get(c) ?? basePath;
+      const expression = (e: Expr<unknown>, step: string) =>
+        Effect.try({
+          try: () => evaluateExpression(e, bindings),
+          catch: (): FramedFailure => ({
+            _tag: "Internal",
+            cause: fail("REFERENCE_FAILURE", "reference", step, "Expression failed"),
+          }),
+        });
+      const outward = (failure: FramedFailure, kind: LogicalFrame["kind"]): FramedFailure =>
+        failure._tag === "Internal"
+          ? failure
+          : {
+              _tag: "Domain",
+              error: failure.error,
+              frames: failure.frames.concat([frame(path, kind)]),
+            };
+      return Match.value(c.node).pipe(
+        Match.tagsExhaustive({
+          Succeed: (n) =>
+            expression(n.value, `${path}.value`).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+            ),
+          Fail: (n) =>
+            expression(n.error, `${path}.error`).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap((payload): Effect.Effect<unknown, FramedFailure> =>
+                Effect.fail({
+                  _tag: "Domain",
+                  error: payload,
+                  frames: [frame(path, "fail")],
+                } as const),
+              ),
+            ),
+          Map: (n) =>
+            evaluate(n.source, bindings).pipe(
+              Effect.mapError((failure) => outward(failure, "map")),
+              Effect.flatMap((value) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [value]);
+                return expression(n.body, `${path}.body`).pipe(
+                  Effect.mapError((cause): FramedFailure =>
+                    cause instanceof CompileError
+                      ? { _tag: "Internal", cause }
+                      : (cause as FramedFailure),
+                  ),
+                );
+              }),
+            ),
+          FlatMap: (n) =>
+            evaluate(n.source, bindings).pipe(
+              Effect.mapError((failure) => outward(failure, "flatMap")),
+              Effect.flatMap((value) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [value]);
+                return evaluate(n.body, nested).pipe(
+                  Effect.mapError((failure) => outward(failure, "flatMap")),
+                );
+              }),
+            ),
+          Match: (n) =>
+            expression(n.condition, `${path}.condition`).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap((value) =>
+                (value ? evaluate(n.onTrue, bindings) : evaluate(n.onFalse, bindings)).pipe(
+                  Effect.mapError((failure) => outward(failure, "match")),
+                ),
+              ),
+            ),
+        }),
+      );
+    });
+  const outcome = yield* evaluate(f.body, new Map([[f.binder, values]])).pipe(
+    Effect.map((value) => ({ _tag: "Ok", value }) as const),
+    Effect.catch((failure: FramedFailure) =>
+      failure._tag === "Internal"
+        ? Effect.fail(failure.cause)
+        : Effect.succeed({ _tag: "Err", failure } as const),
+    ),
+  );
+  if (outcome._tag === "Ok")
+    return {
+      exit: Exit.succeed(outcome.value as A),
+      frames: Object.freeze([]),
+      omitted: 0,
+    };
+  const withFunction = outcome.failure.frames.concat([
+    frame(basePath.split(".").slice(0, -1).join(".") || basePath, "function"),
+  ]);
+  const kept = withFunction.slice(0, maxLogicalFrames);
+  return {
+    exit: Exit.fail(outcome.failure.error as E),
+    frames: Object.freeze(kept),
+    omitted: withFunction.length - kept.length,
+  };
+});
 export const EffectReference = Object.freeze({
   runUnknown,
   run: <I extends readonly IRType<unknown>[], A, E>(f: EffectFn<I, A, E>, args: Inputs<I>) =>
     runUnknown(f, args),
+  runWithFramesUnknown,
+  runWithFrames: <I extends readonly IRType<unknown>[], A, E>(
+    f: EffectFn<I, A, E>,
+    args: Inputs<I>,
+    basePath?: string,
+  ) => runWithFramesUnknown(f, args, basePath),
 });
 export const EffectIR = Object.freeze({
   void: succeed(UnitType.literal()),

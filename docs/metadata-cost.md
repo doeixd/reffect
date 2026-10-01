@@ -52,7 +52,7 @@ Observed on Node 24.21.0, win32/x64, five isolated samples per variant (same wor
 | Origins / occurrences             |     4,352 / 4,352 |   4,352 / 4,352 |             0 / 0 |           0 / 0 |
 | Generated Cargo/Rust bytes        |           115,086 |         115,086 |           115,086 |         115,086 |
 
-All twenty generated snapshots had identical SHA-256. The clear observed reduction is retained compiler/artifact storage and omitted serialization. This does not measure peak heap, native allocations/layout/throughput, or a universal latency ratio. Source-bearing programs remain retained through the semantic explanation in either policy; the current improvement removes artifact bookkeeping, not authoring ownership.
+All twenty snapshots share identical origin-stripped SHA-256, and both Full snapshots (likewise both None snapshots per variant) are byte-identical. Failure-frame literals honestly embed origins under Full and omit them under None; value-level code is unchanged. The clear observed reduction is retained compiler/artifact storage and omitted serialization. This does not measure peak heap, native allocations/layout/throughput, or a universal latency ratio. Source-bearing programs remain retained through the semantic explanation in either policy; the current improvement removes artifact bookkeeping, not authoring ownership.
 
 ## Separate four ownership domains
 

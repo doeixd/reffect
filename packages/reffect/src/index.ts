@@ -25,7 +25,8 @@ export {
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
 export { Reference } from "./reference.ts";
-export { Computation, EffectFn, SyncEffects } from "./effect-ir.ts";
+export { Computation, EffectFn, SyncEffects, maxLogicalFrames } from "./effect-ir.ts";
+export type { LogicalFrame, FramedExit } from "./effect-ir.ts";
 export type {
   OperationRef,
   Capability,
@@ -64,6 +65,7 @@ export { Foldkit } from "./foldkit.ts";
 export type { FoldkitArtifact, QueryAnalysis } from "./foldkit.ts";
 
 export { NativeRunner } from "./native-runner.ts";
+export type { NativeFrame, FramedNativeExit } from "./native-runner.ts";
 
 export { Source, SourceFile, SourceSite, SourceLocation } from "./source.ts";
 export type { SourceMetadata } from "./source.ts";

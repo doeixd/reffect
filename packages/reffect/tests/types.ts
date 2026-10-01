@@ -48,6 +48,21 @@ export const typeChecks = () => {
     R.Effect.succeed(value).pipe(R.Effect.asVoid),
   );
   Reference.run(discard, [1n]);
+  const framed = R.fn([R.Bool], R.U64, R.Unit, (c) =>
+    R.Match.bool(c, R.Effect.succeed(R.U64.literal(1n)), R.Effect.fail(R.Unit.literal())),
+  );
+  Reference.runWithFrames(framed, [true], "functions.framed.body").pipe(
+    Effect.map((result) => {
+      const paths: readonly (readonly [string, string])[] = result.frames.map(
+        (f) => [f.path, f.kind] as const,
+      );
+      const missed: number = result.omitted;
+      return { paths, missed };
+    }),
+  );
+  Reference.runWithFramesUnknown(framed, [true], "functions.framed.body");
+  // @ts-expect-error frame base paths are strings, not numbers
+  Reference.runWithFrames(framed, [true], 42);
   // @ts-expect-error a Unit success channel cannot return a Boolean payload
   R.fn([], R.Unit, R.Never, () => R.Effect.succeed(R.Bool.literal(true)));
   const compiled = R.program({ add });

@@ -329,6 +329,43 @@ export function lowerFunctions(
     : Object.freeze({ sourceArtifacts: SourceArtifacts.None, functions });
 }
 
+/** Failure-only frame stash; success paths never touch it. No dependencies. */
+const framePrelude = `thread_local! {
+    static LAST_FRAMES: std::cell::RefCell<Vec<&'static str>> = std::cell::RefCell::new(Vec::new());
+    static LAST_OMITTED: std::cell::Cell<usize> = std::cell::Cell::new(0);
+}
+fn store_frames(frames: Vec<&'static str>) {
+    let omitted = frames.len().saturating_sub(32);
+    let mut kept = frames;
+    kept.truncate(32);
+    LAST_OMITTED.set(omitted);
+    LAST_FRAMES.with(|cell| *cell.borrow_mut() = kept);
+}
+pub fn take_last_frames() -> (Vec<&'static str>, usize) {
+    (LAST_FRAMES.with(|cell| std::mem::take(&mut *cell.borrow_mut())), LAST_OMITTED.get())
+}
+`;
+const escapeRustString = (text: string): string =>
+  text.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+const frameLiteral = (
+  functionName: string,
+  path: string,
+  kind: string,
+  origin: string | undefined,
+): string => {
+  const json =
+    '{"function":"' +
+    functionName +
+    '","path":"' +
+    path +
+    '","kind":"' +
+    kind +
+    '"' +
+    (origin === undefined ? "" : ',"origin":"' + origin + '"') +
+    "}";
+  return '"' + escapeRustString(json) + '"';
+};
+
 export const emitFunctions = (
   module: LoweredModule,
 ): { readonly files: GeneratedFiles["files"]; readonly ranges: readonly GeneratedRange[] } => {
@@ -341,6 +378,8 @@ export const emitFunctions = (
   const write = (text: string) => writer.write(text);
   const mapped = (origin: string | undefined, use: string | undefined, text: string) =>
     writer.mapped(origin, use, () => write(text));
+  const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
+  if (hasEffect) write(framePrelude);
   for (const f of module.functions) {
     const call = (index: number, occurrence?: string) => {
       const helper = f.helpers[index];
@@ -354,7 +393,7 @@ export const emitFunctions = (
       if (IRType.same(f.helpers[index].output, NeverType) && !IRType.same(output, NeverType)) {
         write("match ");
         call(index, occurrence);
-        write(" { Ok(value) => match value {}, Err(error) => Err(error) }");
+        write(" { Ok(value) => match value {}, Err((error, frames)) => Err((error, frames)) }");
       } else call(index, occurrence);
     };
     const render = (e: RustExpr, role?: GeneratedRange["role"]): void => {
@@ -427,6 +466,12 @@ export const emitFunctions = (
     };
     const resultType = (output: IRType<unknown>, error?: IRType<unknown>) =>
       error ? `Result<${typeName(output)}, ${typeName(error)}>` : typeName(output);
+    // Internal Effect helpers carry failure frames alongside the payload; the public
+    // function strips them back to Result<T, E> and stashes the frames for the binary.
+    const tracedType = (output: IRType<unknown>, error: IRType<unknown>) =>
+      `Result<${typeName(output)}, (${typeName(error)}, Vec<&'static str>)>`;
+    const frameOf = (helper: Helper, kind: string): string =>
+      frameLiteral(f.name, helper.path, kind, helper.origin);
     for (const helper of f.helpers) {
       // Inlining shared control flow can recreate exponential trees; preserve existing optimization boundary.
       write("#[inline(never)]\nfn ");
@@ -437,12 +482,13 @@ export const emitFunctions = (
         "definition",
       );
       write(`(${helper.input.map((p) => `${p.name}: ${typeName(p.type)}`).join(", ")}) -> `);
-      writer.mapped(
-        helper.origin,
-        useAt(helper.path),
-        () => write(resultType(helper.output, helper.error)),
-        "definition",
-      );
+      const signature =
+        helper.body._tag === "Pure"
+          ? resultType(helper.output, helper.error)
+          : helper.error
+            ? tracedType(helper.output, helper.error)
+            : resultType(helper.output, helper.error);
+      writer.mapped(helper.origin, useAt(helper.path), () => write(signature), "definition");
       write(" ");
       const use = (edge: string) => useAt(`${helper.path}.${edge}`);
       Match.value(helper.body).pipe(
@@ -458,32 +504,44 @@ export const emitFunctions = (
           Fail: (n) => {
             write("{ ");
             mapped(helper.origin, undefined, "Err");
-            write("(");
+            write("((");
             renderBlock(n.block);
-            write(") }");
+            write(`, vec![${frameOf(helper, "fail")}])) }`);
           },
           Map: (n) => {
             write("{ match ");
             call(n.source, use("source"));
             write(` { Ok(${n.binder}) => Ok(`);
             renderBlock(n.block);
-            write("), Err(error) => Err(error) } }");
+            write(
+              `), Err((error, mut frames)) => { frames.push(${frameOf(helper, "map")}); Err((error, frames)) } } }`,
+            );
           },
           FlatMap: (n) => {
             write("{ match ");
             call(n.source, use("source"));
-            write(` { Ok(${n.binder}) => `);
+            write(` { Ok(${n.binder}) => match `);
             adapt(n.body, helper.output, use("body"));
-            write(", Err(error) => Err(error) } }");
+            write(
+              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap")}); Err((error, frames)) } }`,
+            );
+            write(
+              `, Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap")}); Err((error, frames)) } } }`,
+            );
           },
           Match: (n) => {
             write("{ if ");
             renderBlock(n.condition);
-            write(" { ");
+            write(" { match ");
             adapt(n.onTrue, helper.output, use("onTrue"));
-            write(" } else { ");
+            write(
+              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match")}); Err((error, frames)) } }`,
+            );
+            write(" } else { match ");
             adapt(n.onFalse, helper.output, use("onFalse"));
-            write(" } }");
+            write(
+              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match")}); Err((error, frames)) } } } }`,
+            );
           },
         }),
       );
@@ -511,9 +569,12 @@ export const emitFunctions = (
       Match.tagsExhaustive({
         Pure: (n) => renderBlock(n.block),
         Effect: (n) => {
-          write("{ ");
+          // Public functions keep Result<T, E>; frames go to the thread-local stash for the binary.
+          write("{ match ");
           adapt(n.root, f.output, useAt(`${f.path}.body`));
-          write(" }");
+          write(
+            ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin)}); store_frames(frames); Err(error) } } }`,
+          );
         },
       }),
     );
@@ -537,7 +598,7 @@ export const emitFunctions = (
         Match.tagsExhaustive({
           Pure: () => `{ let value = ${call}; ${print(f.output, "value")}; }`,
           Effect: (n) =>
-            `match ${call} { Ok(value) => ${print(f.output, "value", "ok")}, Err(error) => ${print(n.error, "error", "err")} }`,
+            `match ${call} { Ok(value) => ${print(f.output, "value", "ok")}, Err(error) => { ${print(n.error, "error", "err")}; { let (frames, omitted) = reffect_generated::take_last_frames(); let mut body = String::from("["); for (i, frame) in frames.iter().enumerate() { if i > 0 { body.push(','); } body.push_str(frame); } body.push(']'); eprintln!("{{\\"schema\\":\\"reffect.frames@1\\",\\"frames\\":{},\\"omitted\\":{}}}", body, omitted); } } }`,
         }),
       );
       return `        "${f.name}" if args.len() == ${f.input.length + 1} => ${output},`;

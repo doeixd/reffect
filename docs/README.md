@@ -62,6 +62,8 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 [Unit semantics and representation](research/unit.md) records exact undefined admission versus Effect's discarding Void schema, Rust unit lowering, internal bridge tokens and composition conformance.
 
+[Bounded logical failure frames](research/failure-frames.md) records explicit-boundary frame semantics, the Effect span-chain oracle, the stderr companion envelope and reference/native path agreement.
+
 [Upstream reconciliation](research/upstream-reconciliation.md) records the retained dynamic Query/Effect/source paths, local prototype preservation, dependency choices, reachable-data validation and Windows failure-test budgets.
 
 [Source-artifact policy preparation](research/source-artifact-policy.md) records the independent Full/None request policy, honest artifact types, skipped provenance/writer/hash work and validation before implementation.
