@@ -9,8 +9,8 @@ import { EffectFn } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
-import { Rs, escapeJsonContent, escapeRustContent } from "./rust-emit.ts";
-import type { RsType } from "./rust-emit.ts";
+import { Rs, escapeJsonContent } from "./rust-emit.ts";
+import type { RsExpr, RsType } from "./rust-emit.ts";
 import { SourceArtifacts, checkArtifactPolicy } from "./artifact-policy.ts";
 import type {
   ArtifactPolicy,
@@ -379,28 +379,94 @@ export function lowerFunctions(
     : Object.freeze({ sourceArtifacts: SourceArtifacts.None, functions });
 }
 
+const rsSegments = (...names: string[]) => names.map((name) => Rs.ident(name));
+const identExpr = (name: string) => Rs.identExpr(Rs.ident(name));
+const stdCellPath = rsSegments("std", "cell");
+const refCellPath = [...stdCellPath, Rs.ident("RefCell")];
+const cellPath = [...stdCellPath, Rs.ident("Cell")];
+const framesType = Rs.vecType(Rs.strRefType());
+const refCellOf = (inner: RsType) => Rs.genericType(Rs.pathType(refCellPath), [inner]);
+const cellOf = (inner: RsType) => Rs.genericType(Rs.pathType(cellPath), [inner]);
+const newCall = (path: ReturnType<typeof rsSegments>, args: readonly RsExpr[]) =>
+  Rs.pathCall(path, Rs.ident("new"), args);
+
 /** Failure-only frame stash; success paths never touch it. No dependencies. */
-const framePrelude = `thread_local! {
-    static LAST_FRAMES: std::cell::RefCell<Vec<&'static str>> = std::cell::RefCell::new(Vec::new());
-    static LAST_OMITTED: std::cell::Cell<usize> = std::cell::Cell::new(0);
-}
-fn store_frames(frames: Vec<&'static str>) {
-    let omitted = frames.len().saturating_sub(32);
-    let mut kept = frames;
-    kept.truncate(32);
-    LAST_OMITTED.set(omitted);
-    LAST_FRAMES.with(|cell| *cell.borrow_mut() = kept);
-}
-pub fn take_last_frames() -> (Vec<&'static str>, usize) {
-    (LAST_FRAMES.with(|cell| std::mem::take(&mut *cell.borrow_mut())), LAST_OMITTED.get())
-}
-`;
+const framePrelude = Rs.itemsText(
+  [
+    Rs.threadLocalItem([
+      {
+        name: Rs.ident("LAST_FRAMES"),
+        type: refCellOf(framesType),
+        value: newCall(refCellPath, [newCall(rsSegments("Vec"), [])]),
+      },
+      {
+        name: Rs.ident("LAST_OMITTED"),
+        type: cellOf(Rs.usizeType()),
+        value: newCall(cellPath, [Rs.litInt(0)]),
+      },
+    ]),
+    Rs.fnItem(
+      Rs.ident("store_frames"),
+      [{ name: Rs.ident("frames"), type: framesType }],
+      Rs.unitType(),
+      Rs.block([
+        Rs.let_(
+          Rs.ident("omitted"),
+          undefined,
+          Rs.dotChain(identExpr("frames"), [
+            { method: Rs.ident("len"), args: [] },
+            { method: Rs.ident("saturating_sub"), args: [Rs.litInt(32)] },
+          ]),
+        ),
+        Rs.letMut(Rs.ident("kept"), undefined, identExpr("frames")),
+        Rs.stmt(Rs.dotCall(identExpr("kept"), Rs.ident("truncate"), [Rs.litInt(32)])),
+        Rs.stmt(Rs.dotCall(identExpr("LAST_OMITTED"), Rs.ident("set"), [identExpr("omitted")])),
+        Rs.stmt(
+          Rs.dotCall(identExpr("LAST_FRAMES"), Rs.ident("with"), [
+            Rs.closure(
+              Rs.pat("cell"),
+              Rs.assignExpr(
+                Rs.prefix("*", Rs.dotCall(identExpr("cell"), Rs.ident("borrow_mut"), [])),
+                identExpr("kept"),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    ),
+    Rs.withVisibility(
+      Rs.visibility.public,
+      Rs.fnItem(
+        Rs.ident("take_last_frames"),
+        [],
+        Rs.tupleType([framesType, Rs.usizeType()]),
+        Rs.block(
+          [],
+          Rs.tuple(
+            Rs.dotCall(identExpr("LAST_FRAMES"), Rs.ident("with"), [
+              Rs.closure(
+                Rs.pat("cell"),
+                Rs.pathCall(rsSegments("std", "mem"), Rs.ident("take"), [
+                  Rs.mutRefExpr(
+                    Rs.prefix("*", Rs.dotCall(identExpr("cell"), Rs.ident("borrow_mut"), [])),
+                  ),
+                ]),
+              ),
+            ]),
+            Rs.dotCall(identExpr("LAST_OMITTED"), Rs.ident("get"), []),
+          ),
+        ),
+      ),
+    ),
+  ],
+  "\n",
+);
 /** JSON string literal; lone surrogates become \u escapes, keeping Rust sources valid UTF-8. */
-const jsonString = (text: string): string => `"${escapeJsonContent(text)}"`;
-const rustString = (text: string): string => `"${escapeRustContent(text)}"`;
-const attrVariant = (type: IRType<unknown>): string => {
-  if (IRType.same(type, BoolType)) return "Bool";
-  if (IRType.same(type, U64Type)) return "U64";
+const jsonString = (text: string): RsExpr => Rs.verbatimExpr(`"${escapeJsonContent(text)}"`);
+const rustString = (text: string): RsExpr => Rs.stringLiteral(text);
+const attrVariant = (type: IRType<unknown>): ReturnType<typeof Rs.ident> => {
+  if (IRType.same(type, BoolType)) return Rs.ident("Bool");
+  if (IRType.same(type, U64Type)) return Rs.ident("U64");
   throw fail(
     "UNSUPPORTED_REPRESENTATION",
     "lower",
@@ -409,20 +475,74 @@ const attrVariant = (type: IRType<unknown>): string => {
   );
 };
 /** Logging scopes and records; success paths never emit. No dependencies. */
-const logPrelude = `#[derive(Clone, Copy)]
-enum LogAttr { Bool(bool), U64(u64) }
-const MIN_LOG_LEVEL: u8 = 2;
-fn log_attr_json(value: LogAttr, out: &mut String) {
-    match value {
-        LogAttr::Bool(b) => out.push_str(if b { "true" } else { "false" }),
-        LogAttr::U64(n) => { out.push('"'); out.push_str(&n.to_string()); out.push('"'); }
-    }
-}
-thread_local! {
-    static LOG_ANNOS: std::cell::RefCell<Vec<(&'static str, LogAttr)>> = std::cell::RefCell::new(Vec::new());
-    static LOG_SPANS: std::cell::RefCell<Vec<(&'static str, std::time::Instant)>> = std::cell::RefCell::new(Vec::new());
-}
-`;
+const logPrelude = Rs.itemsText(
+  [
+    Rs.withAttributes(
+      [Rs.deriveAttribute(Rs.ident("Clone"), Rs.ident("Copy"))],
+      Rs.enumItem(Rs.ident("LogAttr"), [
+        { name: Rs.ident("Bool"), fields: [Rs.boolType()] },
+        { name: Rs.ident("U64"), fields: [Rs.u64Type()] },
+      ]),
+    ),
+    Rs.constItem(Rs.ident("MIN_LOG_LEVEL"), Rs.u8Type(), Rs.litInt(2)),
+    Rs.fnItem(
+      Rs.ident("log_attr_json"),
+      [
+        { name: Rs.ident("value"), type: Rs.namedType("LogAttr") },
+        { name: Rs.ident("out"), type: Rs.mutRefType(Rs.stringType()) },
+      ],
+      Rs.unitType(),
+      Rs.block(
+        [],
+        Rs.matchBlock(
+          identExpr("value"),
+          [
+            {
+              pat: Rs.variantPat(rsSegments("LogAttr", "Bool"), [Rs.identPat(Rs.ident("b"))]),
+              body: Rs.dotCall(identExpr("out"), Rs.ident("push_str"), [
+                Rs.if_(
+                  identExpr("b"),
+                  Rs.inlineBlock(Rs.stringLiteral("true")),
+                  Rs.inlineBlock(Rs.stringLiteral("false")),
+                ),
+              ]),
+            },
+            {
+              pat: Rs.variantPat(rsSegments("LogAttr", "U64"), [Rs.identPat(Rs.ident("n"))]),
+              body: Rs.inlineStmtBlock(
+                Rs.stmt(Rs.dotCall(identExpr("out"), Rs.ident("push"), [Rs.litChar('"')])),
+                Rs.stmt(
+                  Rs.dotCall(identExpr("out"), Rs.ident("push_str"), [
+                    Rs.prefix("&", Rs.dotCall(identExpr("n"), Rs.ident("to_string"), [])),
+                  ]),
+                ),
+                Rs.stmt(Rs.dotCall(identExpr("out"), Rs.ident("push"), [Rs.litChar('"')])),
+              ),
+            },
+          ],
+          { indent: 4 },
+        ),
+      ),
+    ),
+    Rs.threadLocalItem([
+      {
+        name: Rs.ident("LOG_ANNOS"),
+        type: refCellOf(Rs.vecType(Rs.tupleType([Rs.strRefType(), Rs.namedType("LogAttr")]))),
+        value: newCall(refCellPath, [newCall(rsSegments("Vec"), [])]),
+      },
+      {
+        name: Rs.ident("LOG_SPANS"),
+        type: refCellOf(
+          Rs.vecType(
+            Rs.tupleType([Rs.strRefType(), Rs.pathType(rsSegments("std", "time", "Instant"))]),
+          ),
+        ),
+        value: newCall(refCellPath, [newCall(rsSegments("Vec"), [])]),
+      },
+    ]),
+  ],
+  "\n",
+);
 const logLevelOrdinal: Readonly<Record<string, number>> = Object.freeze({
   Trace: 0,
   Debug: 1,
@@ -436,18 +556,18 @@ const frameLiteral = (
   path: string,
   kind: string,
   origin: string | undefined,
-): string => {
+): RsExpr => {
   const json =
     '{"function":"' +
-    functionName +
+    escapeJsonContent(functionName) +
     '","path":"' +
-    path +
+    escapeJsonContent(path) +
     '","kind":"' +
-    kind +
+    escapeJsonContent(kind) +
     '"' +
-    (origin === undefined ? "" : ',"origin":"' + origin + '"') +
+    (origin === undefined ? "" : ',"origin":"' + escapeJsonContent(origin) + '"') +
     "}";
-  return '"' + escapeRustContent(json) + '"';
+  return Rs.stringLiteral(json);
 };
 
 export const emitFunctions = (
@@ -472,9 +592,13 @@ export const emitFunctions = (
     );
   };
   const typeName = (type: IRType<unknown>) => rsTypeOf(type).text;
-  const write = (text: string) => writer.write(text);
-  const mapped = (origin: string | undefined, use: string | undefined, text: string) =>
-    writer.mapped(origin, use, () => write(text));
+  const write = (text: string | { readonly text: string }) =>
+    writer.write(typeof text === "string" ? text : text.text);
+  const mapped = (
+    origin: string | undefined,
+    use: string | undefined,
+    text: string | { readonly text: string },
+  ) => writer.mapped(origin, use, () => write(text));
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   if (hasEffect) write(framePrelude);
   const hasLogScopes = module.functions.some((f) =>
@@ -534,7 +658,7 @@ export const emitFunctions = (
               } else {
                 write("(");
                 render(n.args[0]);
-                write(`).${n.method}(`);
+                write(`).${Rs.ident(n.method).text}(`);
                 render(n.args[1]);
                 write(")");
               }
@@ -580,7 +704,7 @@ export const emitFunctions = (
     const tracedType = (output: IRType<unknown>, error: IRType<unknown>) =>
       Rs.resultType(rsTypeOf(output), Rs.tupleType([rsTypeOf(error), Rs.vecType(Rs.strRefType())]))
         .text;
-    const frameOf = (helper: Helper, kind: string): string =>
+    const frameOf = (helper: Helper, kind: string): RsExpr =>
       frameLiteral(f.name, helper.path, kind, helper.origin);
     for (const helper of f.helpers) {
       // Inlining shared control flow can recreate exponential trees; preserve existing optimization boundary.
@@ -592,7 +716,7 @@ export const emitFunctions = (
         "definition",
       );
       write(
-        `(${helper.input.map((p) => `${Rs.ident(p.name).text}: ${typeName(p.type)}`).join(", ")}) -> `,
+        `(${helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`).join(", ")}) -> `,
       );
       const signature =
         helper.body._tag === "Pure"
@@ -618,27 +742,27 @@ export const emitFunctions = (
             mapped(helper.origin, undefined, "Err");
             write("((");
             renderBlock(n.block);
-            write(`, vec![${frameOf(helper, "fail")}])) }`);
+            write(`, vec![${frameOf(helper, "fail").text}])) }`);
           },
           Map: (n) => {
             write("{ match ");
             call(n.source, use("source"));
-            write(` { Ok(${n.binder}) => Ok(`);
+            write(` { Ok(${Rs.ident(n.binder).text}) => Ok(`);
             renderBlock(n.block);
             write(
-              `), Err((error, mut frames)) => { frames.push(${frameOf(helper, "map")}); Err((error, frames)) } } }`,
+              `), Err((error, mut frames)) => { frames.push(${frameOf(helper, "map").text}); Err((error, frames)) } } }`,
             );
           },
           FlatMap: (n) => {
             write("{ match ");
             call(n.source, use("source"));
-            write(` { Ok(${n.binder}) => match `);
+            write(` { Ok(${Rs.ident(n.binder).text}) => match `);
             adapt(n.body, helper.output, use("body"));
             write(
-              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap")}); Err((error, frames)) } }`,
+              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap").text}); Err((error, frames)) } }`,
             );
             write(
-              `, Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap")}); Err((error, frames)) } } }`,
+              `, Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap").text}); Err((error, frames)) } } }`,
             );
           },
           Match: (n) => {
@@ -647,12 +771,12 @@ export const emitFunctions = (
             write(" { match ");
             adapt(n.onTrue, helper.output, use("onTrue"));
             write(
-              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match")}); Err((error, frames)) } }`,
+              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match").text}); Err((error, frames)) } }`,
             );
             write(" } else { match ");
             adapt(n.onFalse, helper.output, use("onFalse"));
             write(
-              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match")}); Err((error, frames)) } } } }`,
+              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match").text}); Err((error, frames)) } } } }`,
             );
           },
           Log: (n) => {
@@ -661,14 +785,16 @@ export const emitFunctions = (
               '{"schema":"reffect.log@1","level":"' +
               n.level +
               '","message":' +
-              jsonString(n.message);
-            write(`{ if ${ordinal}u8 >= MIN_LOG_LEVEL { { let mut log_record = String::from(`);
+              jsonString(n.message).text;
+            write(
+              `{ if ${Rs.litU8(ordinal).text} >= MIN_LOG_LEVEL { { let mut log_record = String::from(`,
+            );
             write(rustString(head));
             write(`);`);
             write(` log_record.push_str(",\\"annotations\\":{");`);
             write(` { let mut log_attr_first = true;`);
             for (const attr of n.attributes) {
-              write(` { let log_attr_value = LogAttr::${attrVariant(attr.type)}(`);
+              write(` { let log_attr_value = LogAttr::${attrVariant(attr.type).text}(`);
               renderBlock(attr.block);
               write(
                 `); if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str(`,
@@ -679,7 +805,7 @@ export const emitFunctions = (
             const shadowed =
               n.attributes.length === 0
                 ? ``
-                : ` if ${n.attributes.map((attr) => `*name == ${rustString(attr.key)}`).join(" || ")} { continue; }`;
+                : ` if ${n.attributes.map((attr) => `*name == ${rustString(attr.key).text}`).join(" || ")} { continue; }`;
             write(
               ` LOG_ANNOS.with(|scope| { for (name, value) in scope.borrow().iter() {${shadowed} if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str("\\""); log_record.push_str(name); log_record.push_str("\\":"); log_attr_json(*value, &mut log_record); } });`,
             );
@@ -691,7 +817,7 @@ export const emitFunctions = (
           },
           Annotate: (n) => {
             write(`{ let saved_log_annos = LOG_ANNOS.with(|scope| scope.borrow().clone());`);
-            write(` LOG_ANNOS.with(|scope| { let value = LogAttr::${attrVariant(n.type)}(`);
+            write(` LOG_ANNOS.with(|scope| { let value = LogAttr::${attrVariant(n.type).text}(`);
             renderBlock(n.value);
             write(
               `); let mut scope = scope.borrow_mut(); if let Some(slot) = scope.iter_mut().find(|(name, _)| *name == `,
@@ -705,7 +831,7 @@ export const emitFunctions = (
             write(` match `);
             adapt(n.body, helper.output, use("body"));
             write(
-              ` { Ok(value) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); Ok(value) } Err((error, mut frames)) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); frames.push(${frameOf(helper, "annotate")}); Err((error, frames)) } } }`,
+              ` { Ok(value) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); Ok(value) } Err((error, mut frames)) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); frames.push(${frameOf(helper, "annotate").text}); Err((error, frames)) } } }`,
             );
           },
           Span: (n) => {
@@ -715,7 +841,7 @@ export const emitFunctions = (
             write(` match `);
             adapt(n.body, helper.output, use("body"));
             write(
-              ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } Err((error, mut frames)) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); frames.push(${frameOf(helper, "span")}); Err((error, frames)) } } }`,
+              ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } Err((error, mut frames)) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); frames.push(${frameOf(helper, "span").text}); Err((error, frames)) } } }`,
             );
           },
         }),
@@ -724,7 +850,7 @@ export const emitFunctions = (
     }
     write("\npub fn ");
     writer.mapped(f.origin, useAt(f.path), () => write(`r_${f.name}`), "definition");
-    write(`(${f.input.map((type, i) => `p${i}: ${typeName(type)}`).join(", ")}) -> `);
+    write(`(${f.input.map((type, i) => `p${i}: ${rsTypeOf(type).text}`).join(", ")}) -> `);
     writer.mapped(
       f.origin,
       useAt(f.path),
@@ -748,42 +874,157 @@ export const emitFunctions = (
           write("{ match ");
           adapt(n.root, f.output, useAt(`${f.path}.body`));
           write(
-            ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin)}); store_frames(frames); Err(error) } } }`,
+            ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); store_frames(frames); Err(error) } } }`,
           );
         },
       }),
     );
     write("\n\n");
   }
-  const print = (type: IRType<unknown>, value: string, channel?: "ok" | "err") => {
-    if (IRType.same(type, NeverType)) return Rs.unreachableMatch(Rs.verbatimExpr(value)).text;
+  const print = (type: IRType<unknown>, value: RsExpr, channel?: "ok" | "err"): RsExpr => {
+    if (IRType.same(type, NeverType)) return Rs.unreachableMatch(value);
     if (IRType.same(type, UnitType))
-      return `{ let _: () = ${value}; println!("${channel ? `${channel}:` : ""}unit"); }`;
+      return Rs.inlineStmtBlock(
+        Rs.letDiscard(Rs.unitType(), value),
+        Rs.println(`${channel ? `${channel}:` : ""}unit`),
+      );
     const prefix = channel
       ? `${channel}:${IRType.same(type, U64Type) ? "u64" : "bool"}:`
       : IRType.same(type, BoolType)
         ? "bool:"
         : "";
-    return `println!("${prefix}{}", ${value})`;
+    return Rs.printlnExpr(prefix, value);
   };
-  const arms = module.functions
-    .map((f) => {
-      const call = `reffect_generated::r_${f.name}(${f.input.map((type, i) => (IRType.same(type, UnitType) ? `{ if args[${i + 1}] != "unit" { return Err("invalid unit"); } () }` : `args[${i + 1}].parse::<${typeName(type)}>().map_err(|_| "invalid ${typeName(type)}")?`)).join(", ")})`;
-      const output = Match.value(f.node).pipe(
-        Match.tagsExhaustive({
-          Pure: () => `{ let value = ${call}; ${print(f.output, "value")}; }`,
-          Effect: (n) =>
-            `match ${call} { Ok(value) => ${print(f.output, "value", "ok")}, Err(error) => { ${print(n.error, "error", "err")}; { let (frames, omitted) = reffect_generated::take_last_frames(); let mut body = String::from("["); for (i, frame) in frames.iter().enumerate() { if i > 0 { body.push(','); } body.push_str(frame); } body.push(']'); eprintln!("{{\\"schema\\":\\"reffect.frames@1\\",\\"frames\\":{},\\"omitted\\":{}}}", body, omitted); } } }`,
-        }),
-      );
-      return `        "${f.name}" if args.len() == ${f.input.length + 1} => ${output},`;
-    })
-    .join("\n");
+  const parseArg = (type: IRType<unknown>, index: number): RsExpr =>
+    IRType.same(type, UnitType)
+      ? Rs.inlineBlock(
+          Rs.if_(
+            Rs.cmp(Rs.index(identExpr("args"), index), "!=", Rs.stringLiteral("unit")),
+            Rs.inlineStmtBlock(Rs.stmt(Rs.return_(Rs.err(Rs.stringLiteral("invalid unit"))))),
+          ),
+          Rs.litUnit(),
+        )
+      : Rs.try_(
+          Rs.dotChain(Rs.index(identExpr("args"), index), [
+            { method: Rs.ident("parse"), args: [], turboTypes: [rsTypeOf(type)] },
+            {
+              method: Rs.ident("map_err"),
+              args: [Rs.closure(Rs.pat("_"), Rs.stringLiteral(`invalid ${rsTypeOf(type).text}`))],
+            },
+          ]),
+        );
+  const callExpr = (f: LoweredModule["functions"][number]): RsExpr =>
+    Rs.pathCall(
+      rsSegments("reffect_generated"),
+      Rs.ident(`r_${f.name}`),
+      f.input.map((type, i) => parseArg(type, i + 1)),
+    );
+  const framesBlock = Rs.inlineStmtBlock(
+    Rs.letPat(
+      Rs.tuplePat(Rs.identPat(Rs.ident("frames")), Rs.identPat(Rs.ident("omitted"))),
+      undefined,
+      Rs.pathCall(rsSegments("reffect_generated"), Rs.ident("take_last_frames"), []),
+    ),
+    Rs.letMut(Rs.ident("body"), undefined, Rs.stringFrom(Rs.stringLiteral("["))),
+    Rs.blockStmt(
+      Rs.forLoop(
+        Rs.pat("(i, frame)"),
+        Rs.dotChain(identExpr("frames"), [
+          { method: Rs.ident("iter"), args: [] },
+          { method: Rs.ident("enumerate"), args: [] },
+        ]),
+        Rs.inlineStmtBlock(
+          Rs.blockStmt(
+            Rs.if_(
+              Rs.cmp(identExpr("i"), ">", Rs.litInt(0)),
+              Rs.inlineStmtBlock(
+                Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push"), [Rs.litChar(",")])),
+              ),
+            ),
+          ),
+          Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push_str"), [identExpr("frame")])),
+        ),
+      ),
+    ),
+    Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push"), [Rs.litChar("]")])),
+    Rs.eprintln(
+      '{"schema":"reffect.frames@1","frames":',
+      identExpr("body"),
+      ',"omitted":',
+      identExpr("omitted"),
+      "}",
+    ),
+  );
+  const arms = module.functions.map((f) => ({
+    pat: Rs.stringPat(f.name),
+    guard: Rs.cmp(
+      Rs.dotCall(identExpr("args"), Rs.ident("len"), []),
+      "==",
+      Rs.litInt(f.input.length + 1),
+    ),
+    body: Match.value(f.node).pipe(
+      Match.tagsExhaustive({
+        Pure: () =>
+          Rs.inlineStmtBlock(
+            Rs.let_(Rs.ident("value"), undefined, callExpr(f)),
+            Rs.stmt(print(f.output, identExpr("value"))),
+          ),
+        Effect: (n) =>
+          Rs.match_(callExpr(f), [
+            { pat: Rs.pat("Ok(value)"), body: print(f.output, identExpr("value"), "ok") },
+            {
+              pat: Rs.pat("Err(error)"),
+              body: Rs.inlineStmtBlock(
+                Rs.stmt(print(n.error, identExpr("error"), "err")),
+                Rs.blockStmt(framesBlock),
+              ),
+            },
+          ]),
+      }),
+    ),
+  }));
+  const mainBody = Rs.block(
+    [
+      Rs.let_(
+        Rs.ident("args"),
+        Rs.vecType(Rs.stringType()),
+        Rs.dotChain(Rs.pathCall(rsSegments("std", "env"), Rs.ident("args"), []), [
+          { method: Rs.ident("skip"), args: [Rs.litInt(1)] },
+          { method: Rs.ident("collect"), args: [] },
+        ]),
+      ),
+      Rs.blockStmt(
+        Rs.matchBlock(
+          Rs.try_(
+            Rs.dotChain(identExpr("args"), [
+              { method: Rs.ident("first"), args: [] },
+              {
+                method: Rs.ident("map"),
+                args: [Rs.pathExpr(Rs.path(rsSegments("String", "as_str")))],
+              },
+              { method: Rs.ident("ok_or"), args: [Rs.stringLiteral("missing function")] },
+            ]),
+          ),
+          [
+            ...arms,
+            {
+              pat: Rs.wildcardPat(),
+              body: Rs.return_(Rs.err(Rs.stringLiteral("unknown function or incorrect arity"))),
+            },
+          ],
+          { indent: 4, trailingComma: true },
+        ),
+      ),
+    ],
+    Rs.ok(Rs.litUnit()),
+  );
   const files = Object.freeze({
     "Cargo.toml":
       '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n',
     "src/lib.rs": writer.text,
-    "src/main.rs": `fn main() -> Result<(), &'static str> {\n    let args: Vec<String> = std::env::args().skip(1).collect();\n    match args.first().map(String::as_str).ok_or("missing function")? {\n${arms}\n        _ => return Err("unknown function or incorrect arity"),\n    }\n    Ok(())\n}\n`,
+    "src/main.rs": `${
+      Rs.fnItem(Rs.ident("main"), [], Rs.resultType(Rs.unitType(), Rs.strRefType()), mainBody).text
+    }\n`,
   });
   return Object.freeze({ files, ranges: writer.ranges });
 };

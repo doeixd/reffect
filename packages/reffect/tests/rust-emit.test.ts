@@ -87,6 +87,24 @@ test("structural builders own their delimiters", () => {
       Rs.litU64(0n),
     ).text,
   ).toBe("fn r_add(p0: u64) -> u64 0u64");
+  expect(Rs.fnItem(Rs.ident("store"), [], Rs.unitType(), Rs.block([], Rs.litUnit())).text).toBe(
+    "fn store() {\n    ()\n}",
+  );
+  expect(
+    Rs.matchBlock(Rs.identExpr(Rs.ident("v")), [{ pat: Rs.pat("A"), body: Rs.litU64(1n) }], {
+      indent: 4,
+    }).text,
+  ).toBe("match v {\n        A => 1u64\n    }");
+  expect(
+    Rs.matchBlock(
+      Rs.identExpr(Rs.ident("v")),
+      [
+        { pat: Rs.pat("A"), body: Rs.litU64(1n) },
+        { pat: Rs.pat("B"), body: Rs.litU64(2n) },
+      ],
+      { indent: 4, trailingComma: true },
+    ).text,
+  ).toBe("match v {\n        A => 1u64,\n        B => 2u64,\n    }");
   expect(Rs.call(Rs.identExpr(Rs.ident("f")), [Rs.litU64(1n)]).text).toBe("f(1u64)");
   expect(() => Rs.pathCall([], Rs.ident("new"), [])).toThrow();
   expect(

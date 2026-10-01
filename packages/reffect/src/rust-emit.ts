@@ -184,6 +184,19 @@ export const escapeRustContent = (text: string): string =>
       return `\\u{${code.toString(16)}}`;
     return c;
   }).join("");
+/** Rust char-literal content escaping (`"` stays literal; `'` and controls are escaped). */
+export const escapeRustChar = (text: string): string =>
+  Array.from(text, (c) => {
+    if (c === "'") return "\\'";
+    if (c === "\\") return "\\\\";
+    if (c === "\n") return "\\n";
+    if (c === "\r") return "\\r";
+    if (c === "\t") return "\\t";
+    const code = c.codePointAt(0) ?? 0;
+    if (code < 32 || code === 127 || (code >= 0xd800 && code <= 0xdfff))
+      return `\\u{${code.toString(16)}}`;
+    return c;
+  }).join("");
 /** JSON content escaping (braceless `\uXXXX`); for wire text, not Rust literals. */
 export const escapeJsonContent = (text: string): string =>
   Array.from(text, (c) => {
@@ -253,6 +266,15 @@ const methodCall = (
   expr(
     `(${receiver.text}).${name.text}${turboTypes.length ? `::<${turboTypes.map((t) => t.text).join(", ")}>` : ""}(${joinArgs(args)})`,
   );
+const dotCall = (
+  receiver: RsExpr,
+  name: RustIdent,
+  args: ReadonlyArray<RsExpr>,
+  turboTypes: ReadonlyArray<RsType> = [],
+): RsExpr =>
+  expr(
+    `${receiver.text}.${name.text}${turboTypes.length ? `::<${turboTypes.map((t) => t.text).join(", ")}>` : ""}(${joinArgs(args)})`,
+  );
 
 export const Rs = Object.freeze({
   ident: RustIdent.make,
@@ -297,7 +319,11 @@ export const Rs = Object.freeze({
     if (segments.length === 0) throw new TypeError("Type paths need at least one segment");
     return type_(segments.map((s) => s.text).join("::"));
   },
-  typeAt: (value: RsPath): RsType => type_(value.text),
+  genericType: (path: RsPath | RsType, args: ReadonlyArray<RsType>): RsType => {
+    if (args.length === 0) throw new TypeError("Generic types need at least one argument");
+    return type_(`${path.text}<${args.map((arg) => arg.text).join(", ")}>`);
+  },
+  pathExpr: (path: RsPath): RsExpr => expr(path.text),
   attribute: (name: RustIdent): RsAttribute => attribute(`#[${name.text}]`),
   deriveAttribute: (...traits: ReadonlyArray<RustIdent>): RsAttribute => {
     if (traits.length === 0) throw new TypeError("derive attributes need at least one trait");
@@ -339,6 +365,14 @@ export const Rs = Object.freeze({
   },
   litBool: (value: boolean): RsExpr => expr(value ? "true" : "false"),
   litUnit: (): RsExpr => expr("()"),
+  litChar: (value: string): RsExpr => {
+    const scalars = Array.from(value);
+    if (scalars.length !== 1)
+      throw new TypeError(
+        `Rust character literals need exactly one Unicode scalar: ${JSON.stringify(value)}`,
+      );
+    return expr(`'${escapeRustChar(value)}'`);
+  },
   identExpr: (name: RustIdent): RsExpr => expr(name.text),
   stringLiteral: (text: string): RsExpr => expr(`"${escapeRustContent(text)}"`),
   tuple: (...members: ReadonlyArray<RsExpr>): RsExpr =>
@@ -356,6 +390,21 @@ export const Rs = Object.freeze({
     return expr(`${segments.map((s) => s.text).join("::")}::${method.text}(${joinArgs(args)})`);
   },
   method: methodCall,
+  /** `receiver.name(args)` without precedence parentheses; the receiver must already be atomic. */
+  dotCall,
+  /** Fluent `a.b(x).c(y)` chain; each receiver is the previous call's result. */
+  dotChain: (
+    receiver: RsExpr,
+    steps: ReadonlyArray<{
+      readonly method: RustIdent;
+      readonly args: ReadonlyArray<RsExpr>;
+      readonly turboTypes?: ReadonlyArray<RsType>;
+    }>,
+  ): RsExpr =>
+    steps.reduce(
+      (current, step) => dotCall(current, step.method, step.args, step.turboTypes),
+      receiver,
+    ),
   chain: (
     receiver: RsExpr,
     steps: ReadonlyArray<{
@@ -399,6 +448,9 @@ export const Rs = Object.freeze({
     operator: "==" | "!=" | "<" | ">" | "+" | "-" | "&&" | "||",
     right: RsExpr,
   ): RsExpr => expr(`(${left.text}) ${operator} (${right.text})`),
+  /** `left op right` without precedence parentheses; operands must already be atomic. */
+  cmp: (left: RsExpr, operator: "==" | "!=" | "<" | ">" | "<=" | ">=", right: RsExpr): RsExpr =>
+    expr(`${left.text} ${operator} ${right.text}`),
   cast: (value: RsExpr, target: RsType): RsExpr => expr(`(${value.text}) as ${target.text}`),
   await: (value: RsExpr): RsExpr => expr(`${value.text}.await`),
   awaitTry: (value: RsExpr): RsExpr => expr(`${value.text}.await?`),
@@ -430,6 +482,8 @@ export const Rs = Object.freeze({
     return expr(`${value.text}[${String(index)}]`);
   },
   prefix: (operator: "!" | "*" | "&", value: RsExpr): RsExpr => expr(`${operator}${value.text}`),
+  refExpr: (value: RsExpr): RsExpr => expr(`&${value.text}`),
+  mutRefExpr: (value: RsExpr): RsExpr => expr(`&mut ${value.text}`),
   eq: (left: RsExpr, right: RsExpr): RsExpr => expr(`(${left.text}) == (${right.text})`),
   ne: (left: RsExpr, right: RsExpr): RsExpr => expr(`(${left.text}) != (${right.text})`),
   lt: (left: RsExpr, right: RsExpr): RsExpr => expr(`(${left.text}) < (${right.text})`),
@@ -456,12 +510,21 @@ export const Rs = Object.freeze({
     ),
   inlineBlock: (...parts: ReadonlyArray<RsExpr>): RsExpr =>
     expr(`{ ${parts.map((p) => p.text).join(" ")} }`),
+  inlineStmtBlock: (...parts: ReadonlyArray<RsStmt>): RsExpr =>
+    expr(`{ ${parts.map((p) => p.text).join(" ")} }`),
   stmt: (value: RsExpr): RsStmt => stmt(`${value.text};`),
+  blockStmt: (value: RsExpr): RsStmt => stmt(value.text),
   exprStmt: (value: RsExpr): RsStmt => stmt(`${value.text};`),
   itemStmt: (value: RsItem): RsStmt => stmt(value.text),
   let_: (name: RustIdent, type: RsType | undefined, init: RsExpr): RsStmt =>
     stmt(
       type ? `let ${name.text}: ${type.text} = ${init.text};` : `let ${name.text} = ${init.text};`,
+    ),
+  letPat: (pattern: RsPat, type: RsType | undefined, init: RsExpr): RsStmt =>
+    stmt(
+      type
+        ? `let ${pattern.text}: ${type.text} = ${init.text};`
+        : `let ${pattern.text} = ${init.text};`,
     ),
   letMut: (name: RustIdent, type: RsType | undefined, init: RsExpr): RsStmt =>
     stmt(
@@ -469,6 +532,7 @@ export const Rs = Object.freeze({
         ? `let mut ${name.text}: ${type.text} = ${init.text};`
         : `let mut ${name.text} = ${init.text};`,
     ),
+  letDiscard: (type: RsType, init: RsExpr): RsStmt => stmt(`let _: ${type.text} = ${init.text};`),
   pat: (text: string): RsPat => {
     if (!text.length || /[{;}]/.test(text))
       throw new TypeError(`Invalid Rust pattern: ${JSON.stringify(text)}`);
@@ -476,6 +540,7 @@ export const Rs = Object.freeze({
   },
   wildcardPat: (): RsPat => pat("_"),
   identPat: (name: RustIdent): RsPat => pat(name.text),
+  stringPat: (text: string): RsPat => pat(`"${escapeRustContent(text)}"`),
   tuplePat: (...members: ReadonlyArray<RsPat>): RsPat =>
     pat(`(${members.map((member) => member.text).join(", ")})`),
   variantPat: (path: ReadonlyArray<RustIdent>, members: ReadonlyArray<RsPat> = []): RsPat => {
@@ -486,8 +551,59 @@ export const Rs = Object.freeze({
   },
   fnItem: (name: RustIdent, params: ReadonlyArray<RsParam>, ret: RsType, body: RsExpr): RsItem =>
     item(
-      `fn ${name.text}(${params.map((p) => `${p.name.text}: ${p.type.text}`).join(", ")}) -> ${ret.text} ${body.text}`,
+      `fn ${name.text}(${params.map((p) => `${p.name.text}: ${p.type.text}`).join(", ")})${ret.text === "()" ? "" : ` -> ${ret.text}`} ${body.text}`,
     ),
+  enumItem: (
+    name: RustIdent,
+    variants: ReadonlyArray<{ readonly name: RustIdent; readonly fields?: readonly RsType[] }>,
+  ): RsItem => {
+    if (variants.length === 0) throw new TypeError("Rust enums need at least one variant");
+    const seen = new Set<string>();
+    const body = variants
+      .map((variant) => {
+        if (seen.has(variant.name.text))
+          throw new TypeError(`Duplicate Rust enum variant: ${variant.name.text}`);
+        seen.add(variant.name.text);
+        return variant.fields
+          ? `${variant.name.text}(${variant.fields.map((field) => field.text).join(", ")})`
+          : variant.name.text;
+      })
+      .join(", ");
+    return item(`enum ${name.text} { ${body} }`);
+  },
+  constItem: (name: RustIdent, type: RsType, value: RsExpr): RsItem =>
+    item(`const ${name.text}: ${type.text} = ${value.text};`),
+  staticItem: (
+    name: RustIdent,
+    type: RsType,
+    value: RsExpr,
+    mutable = false,
+    access: RsVisibility = privateVisibility,
+  ): RsItem =>
+    item(
+      `${renderUseVisibility(access)}static ${mutable ? "mut " : ""}${name.text}: ${type.text} = ${value.text};`,
+    ),
+  threadLocalItem: (
+    entries: ReadonlyArray<{
+      readonly name: RustIdent;
+      readonly type: RsType;
+      readonly value: RsExpr;
+      readonly mutable?: boolean;
+    }>,
+  ): RsItem => {
+    if (entries.length === 0) throw new TypeError("thread_local! needs at least one binding");
+    const body = entries
+      .map(
+        (entry) =>
+          `    static ${entry.mutable ? "mut " : ""}${entry.name.text}: ${entry.type.text} = ${entry.value.text};`,
+      )
+      .join("\n");
+    return item(`thread_local! {\n${body}\n}`);
+  },
+  whileLoop: (condition: RsExpr, body: RsExpr): RsExpr =>
+    expr(`while ${condition.text} ${body.text}`),
+  letElse: (pattern: RsPat, init: RsExpr, fallback: RsExpr): RsExpr =>
+    expr(`let ${pattern.text} = ${init.text} else ${fallback.text}`),
   withVisibility: applyVisibility,
   withAttributes: (attributes: ReadonlyArray<RsAttribute>, target: RsItem): RsItem =>
     item(
@@ -523,6 +639,9 @@ export const Rs = Object.freeze({
     item(`${renderUseVisibility(access)}mod ${name.text};`),
   moduleFile: (members: ReadonlyArray<RsItem>): RsModuleFile =>
     moduleFile(members.map((member) => member.text).join("\n\n") + (members.length ? "\n" : "")),
+  /** Joins items with an explicit separator; `moduleFile` is the double-newline default. */
+  itemsText: (members: ReadonlyArray<RsItem>, separator = "\n\n"): RsModuleFile =>
+    moduleFile(members.map((member) => member.text).join(separator) + (members.length ? "\n" : "")),
   macroIdent: <Role extends RsMacroRole>(role: Role, name: RustIdent): RsMacroToken<Role> =>
     macroToken(role, name.text),
   macroLiteral: <Role extends RsMacroRole>(
@@ -634,6 +753,7 @@ export const Rs = Object.freeze({
   try_: (value: RsExpr): RsExpr => expr(`${value.text}?`),
   unreachableMatch: (value: RsExpr): RsExpr => expr(`match ${value.text} {}`),
   assign: (target: RsExpr, value: RsExpr): RsStmt => stmt(`${target.text} = ${value.text};`),
+  assignExpr: (target: RsExpr, value: RsExpr): RsExpr => expr(`${target.text} = ${value.text}`),
   pushStmt: (target: RsExpr, value: RsExpr): RsStmt => stmt(`${target.text}.push(${value.text});`),
   debugPrint: (value: RsExpr): RsStmt => stmt(`println!("{:?}", ${value.text});`),
   displayPrint: (value: RsExpr, prefix = ""): RsStmt => {
@@ -657,6 +777,27 @@ export const Rs = Object.freeze({
   stringFrom: (value: RsExpr): RsExpr => expr(`String::from(${value.text})`),
   boxNew: (value: RsExpr): RsExpr => expr(`Box::new(${value.text})`),
   vecWithCapacity: (capacity: RsExpr): RsExpr => expr(`Vec::with_capacity(${capacity.text})`),
+  printlnExpr: (...parts: ReadonlyArray<string | RsExpr>): RsExpr => formatMacro("println", parts),
+  eprintlnExpr: (...parts: ReadonlyArray<string | RsExpr>): RsExpr =>
+    formatMacro("eprintln", parts),
+  matchBlock: (
+    scrutinee: RsExpr,
+    arms: ReadonlyArray<{ readonly pat: RsPat; readonly guard?: RsExpr; readonly body: RsExpr }>,
+    options: { readonly indent?: number; readonly trailingComma?: boolean } = {},
+  ): RsExpr => {
+    const indent = options.indent ?? 0;
+    const pad = " ".repeat(indent);
+    const inner = " ".repeat(indent + 4);
+    const comma = options.trailingComma ?? false;
+    return expr(
+      `match ${scrutinee.text} {\n${arms
+        .map(
+          (arm, index) =>
+            `${inner}${arm.pat.text}${arm.guard ? ` if ${arm.guard.text}` : ""} => ${arm.body.text}${comma || index < arms.length - 1 ? "," : ""}`,
+        )
+        .join("\n")}\n${pad}}`,
+    );
+  },
   println: (...parts: ReadonlyArray<string | RsExpr>): RsStmt => {
     return stmt(`${formatMacro("println", parts).text};`);
   },

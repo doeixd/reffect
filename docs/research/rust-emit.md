@@ -79,6 +79,18 @@
   is a closed value set (`private`, `pub`, `pub(crate)`, `pub(super)`,
   `pub(in crate/self/super path)`). `#[macro_export]` is modeled on declarative
   macro definitions; macro re-exports use ordinary structured `use` items.
+- Core emitter migration: `lower.ts` now builds both preludes, every
+  result/signature type, frame/log JSON string literals, `print` output
+  expressions, the CLI match arms and `src/main.rs` through `Rs`. Identifiers,
+  literals and strings interpolated into the remaining interleaved mapped-write
+  glue are validated through `Rs.ident`/`Rs.litU8`/`Rs.stringLiteral`. Mapped
+  writes stay sequential because nested definition/use ranges are asserted
+  byte-exactly; full fragment composition would need relative-span writes in
+  `SourceWriter` and is deliberately not attempted here.
+- Byte identity was verified by generating `src/lib.rs`/`src/main.rs` from the
+  pre-migration emitter and the migrated one across a matrix covering pure
+  Boolean/Unit functions, effect U64/Boolean/Unit/Never channels and scoped
+  logging: both files matched character-for-character.
 
 ## Alternatives
 
