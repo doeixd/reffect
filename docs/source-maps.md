@@ -46,11 +46,11 @@ When multiple inputs contribute to generated code, preserve all origins and desi
 
 ### Coordinate units
 
-Use typed position conversions at adapter boundaries. Never accept an ambiguous `column` or `offset` internally.
+Use typed position conversions at adapter boundaries. Never accept an ambiguous `column` or `offset` internally. Verify each parser's native span units and normalize them; an AST library may report UTF-8 bytes rather than JavaScript string offsets.
 
 | Boundary                                        | Coordinates                                                                          |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
-| AST/MagicString string offsets                  | Zero-based UTF-16 code units into the exact original JS/TS string                    |
+| Normalized JS/TS and MagicString offsets        | Zero-based UTF-16 code units into the exact original JS/TS string                    |
 | Raw v3 JavaScript mappings                      | Zero-based lines and UTF-16 columns                                                  |
 | jridgewell `originalPositionFor` / `addMapping` | One-based lines, zero-based columns                                                  |
 | Node `SourceMap.findOrigin`                     | One-based lines and columns; normalize the returned origin through an adapter        |
