@@ -25,8 +25,15 @@ export {
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
 export { Reference } from "./reference.ts";
-export { Computation, EffectFn, SyncEffects, maxLogicalFrames } from "./effect-ir.ts";
-export type { LogicalFrame, FramedExit } from "./effect-ir.ts";
+export {
+  Computation,
+  EffectFn,
+  SyncEffects,
+  maxLogicalFrames,
+  LogIR,
+  logLevels,
+} from "./effect-ir.ts";
+export type { LogicalFrame, FramedExit, LogLevel, LogAttribute } from "./effect-ir.ts";
 export type {
   OperationRef,
   Capability,

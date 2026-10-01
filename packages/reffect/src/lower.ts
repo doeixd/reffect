@@ -3,7 +3,7 @@ import { Provenance } from "./provenance.ts";
 import { SourceWriter } from "./source-writer.ts";
 import type { GeneratedRange } from "./source-artifact.ts";
 import { Match, Predicate } from "effect";
-import { BoolType, IRType, NeverType, U64Type, UnitType } from "./kernel.ts";
+import { BoolType, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Expr, OperationRef, Program } from "./kernel.ts";
 import { EffectFn } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
@@ -77,6 +77,28 @@ type HelperBody =
       readonly condition: RustBlock;
       readonly onTrue: number;
       readonly onFalse: number;
+    }
+  | {
+      readonly _tag: "Log";
+      readonly level: string;
+      readonly message: string;
+      readonly attributes: readonly {
+        readonly key: string;
+        readonly type: IRType<unknown>;
+        readonly block: RustBlock;
+      }[];
+    }
+  | {
+      readonly _tag: "Annotate";
+      readonly key: string;
+      readonly type: IRType<unknown>;
+      readonly value: RustBlock;
+      readonly body: number;
+    }
+  | {
+      readonly _tag: "Span";
+      readonly label: string;
+      readonly body: number;
     };
 interface Helper {
   readonly origin?: string;
@@ -285,6 +307,32 @@ export function lowerFunctions(
               onTrue: effectHelper(n.onTrue, scope, error, `${path}.onTrue`),
               onFalse: effectHelper(n.onFalse, scope, error, `${path}.onFalse`),
             }),
+            Log: (n): HelperBody => ({
+              _tag: "Log",
+              level: n.level,
+              message: n.message,
+              attributes: Object.freeze(
+                n.attributes.map(([key, value]) =>
+                  Object.freeze({
+                    key,
+                    type: value.type,
+                    block: block(value, scope, `${path}.attributes.${key}`),
+                  }),
+                ),
+              ),
+            }),
+            Annotate: (n): HelperBody => ({
+              _tag: "Annotate",
+              key: n.key,
+              type: n.value.type,
+              value: block(n.value, scope, `${path}.value`),
+              body: effectHelper(n.body, scope, error, `${path}.body`),
+            }),
+            Span: (n): HelperBody => ({
+              _tag: "Span",
+              label: n.label,
+              body: effectHelper(n.body, scope, error, `${path}.body`),
+            }),
           }),
         );
         helpers.set(
@@ -347,6 +395,51 @@ pub fn take_last_frames() -> (Vec<&'static str>, usize) {
 `;
 const escapeRustString = (text: string): string =>
   text.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+const jsonEscapeContent = (text: string): string =>
+  Array.from(text, (c) => {
+    if (c === '"') return '\\"';
+    if (c === "\\") return "\\\\";
+    const code = c.codePointAt(0) ?? 0;
+    if (code < 32 || (code >= 0xd800 && code <= 0xdfff))
+      return `\\u${code.toString(16).padStart(4, "0")}`;
+    return c;
+  }).join("");
+/** JSON string literal; lone surrogates become \u escapes, keeping Rust sources valid UTF-8. */
+const jsonString = (text: string): string => `"${jsonEscapeContent(text)}"`;
+const rustString = (text: string): string => `"${escapeRustString(text)}"`;
+const attrVariant = (type: IRType<unknown>): string => {
+  if (IRType.same(type, BoolType)) return "Bool";
+  if (IRType.same(type, U64Type)) return "U64";
+  throw fail(
+    "UNSUPPORTED_REPRESENTATION",
+    "lower",
+    "log-attribute",
+    "Log attributes require Boolean or u64 witnesses",
+  );
+};
+/** Logging scopes and records; success paths never emit. No dependencies. */
+const logPrelude = `#[derive(Clone, Copy)]
+enum LogAttr { Bool(bool), U64(u64) }
+const MIN_LOG_LEVEL: u8 = 2;
+fn log_attr_json(value: LogAttr, out: &mut String) {
+    match value {
+        LogAttr::Bool(b) => out.push_str(if b { "true" } else { "false" }),
+        LogAttr::U64(n) => { out.push('"'); out.push_str(&n.to_string()); out.push('"'); }
+    }
+}
+thread_local! {
+    static LOG_ANNOS: std::cell::RefCell<Vec<(&'static str, LogAttr)>> = std::cell::RefCell::new(Vec::new());
+    static LOG_SPANS: std::cell::RefCell<Vec<(&'static str, std::time::Instant)>> = std::cell::RefCell::new(Vec::new());
+}
+`;
+const logLevelOrdinal: Readonly<Record<string, number>> = Object.freeze({
+  Trace: 0,
+  Debug: 1,
+  Info: 2,
+  Warn: 3,
+  Error: 4,
+  Fatal: 5,
+});
 const frameLiteral = (
   functionName: string,
   path: string,
@@ -380,6 +473,12 @@ export const emitFunctions = (
     writer.mapped(origin, use, () => write(text));
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   if (hasEffect) write(framePrelude);
+  const hasLogScopes = module.functions.some((f) =>
+    f.helpers.some(
+      (h) => h.body._tag === "Log" || h.body._tag === "Annotate" || h.body._tag === "Span",
+    ),
+  );
+  if (hasLogScopes) write(logPrelude);
   for (const f of module.functions) {
     const call = (index: number, occurrence?: string) => {
       const helper = f.helpers[index];
@@ -541,6 +640,69 @@ export const emitFunctions = (
             adapt(n.onFalse, helper.output, use("onFalse"));
             write(
               ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match")}); Err((error, frames)) } } } }`,
+            );
+          },
+          Log: (n) => {
+            const ordinal = logLevelOrdinal[n.level] ?? 99;
+            const head =
+              '{"schema":"reffect.log@1","level":"' +
+              n.level +
+              '","message":' +
+              jsonString(n.message);
+            write(`{ if ${ordinal}u8 >= MIN_LOG_LEVEL { { let mut log_record = String::from(`);
+            write(rustString(head));
+            write(`);`);
+            write(` log_record.push_str(",\\"annotations\\":{");`);
+            write(` { let mut log_attr_first = true;`);
+            for (const attr of n.attributes) {
+              write(` { let log_attr_value = LogAttr::${attrVariant(attr.type)}(`);
+              renderBlock(attr.block);
+              write(
+                `); if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str(`,
+              );
+              write(rustString(`"${attr.key}":`));
+              write(`); log_attr_json(log_attr_value, &mut log_record); }`);
+            }
+            const shadowed =
+              n.attributes.length === 0
+                ? ``
+                : ` if ${n.attributes.map((attr) => `*name == ${rustString(attr.key)}`).join(" || ")} { continue; }`;
+            write(
+              ` LOG_ANNOS.with(|scope| { for (name, value) in scope.borrow().iter() {${shadowed} if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str("\\""); log_record.push_str(name); log_record.push_str("\\":"); log_attr_json(*value, &mut log_record); } });`,
+            );
+            write(` } log_record.push('}');`);
+            write(
+              ` LOG_SPANS.with(|scope| { log_record.push_str(",\\"spans\\":["); for (index, entry) in scope.borrow().iter().rev().enumerate() { if index > 0 { log_record.push(','); } log_record.push_str("{\\"label\\":\\""); log_record.push_str(entry.0); log_record.push_str("\\",\\"elapsed_ms\\":"); log_record.push_str(&entry.1.elapsed().as_millis().to_string()); log_record.push('}'); } log_record.push(']'); });`,
+            );
+            write(` log_record.push('}'); eprintln!("{}", log_record); } } Ok(()) }`);
+          },
+          Annotate: (n) => {
+            write(`{ let saved_log_annos = LOG_ANNOS.with(|scope| scope.borrow().clone());`);
+            write(` LOG_ANNOS.with(|scope| { let value = LogAttr::${attrVariant(n.type)}(`);
+            renderBlock(n.value);
+            write(
+              `); let mut scope = scope.borrow_mut(); if let Some(slot) = scope.iter_mut().find(|(name, _)| *name == `,
+            );
+            write(rustString(n.key));
+            write(`) { *slot = (`);
+            write(rustString(n.key));
+            write(`, value); } else { scope.push((`);
+            write(rustString(n.key));
+            write(`, value)); } });`);
+            write(` match `);
+            adapt(n.body, helper.output, use("body"));
+            write(
+              ` { Ok(value) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); Ok(value) } Err((error, mut frames)) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); frames.push(${frameOf(helper, "annotate")}); Err((error, frames)) } } }`,
+            );
+          },
+          Span: (n) => {
+            write(`{ LOG_SPANS.with(|scope| scope.borrow_mut().push((`);
+            write(rustString(n.label));
+            write(`, std::time::Instant::now())));`);
+            write(` match `);
+            adapt(n.body, helper.output, use("body"));
+            write(
+              ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } Err((error, mut frames)) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); frames.push(${frameOf(helper, "span")}); Err((error, frames)) } } }`,
             );
           },
         }),

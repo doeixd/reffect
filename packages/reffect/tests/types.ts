@@ -63,6 +63,28 @@ export const typeChecks = () => {
   Reference.runWithFramesUnknown(framed, [true], "functions.framed.body");
   // @ts-expect-error frame base paths are strings, not numbers
   Reference.runWithFrames(framed, [true], 42);
+  const logged = R.fn([], R.Unit, R.Never, () =>
+    R.Log.info("started", [["count", R.U64.literal(1n)]]).pipe(
+      R.Effect.flatMap(() => R.Effect.void),
+    ),
+  );
+  Reference.run(logged, []);
+  // @ts-expect-error log levels are a fixed six-severity witness
+  R.Log.log("Verbose", "nope");
+  // @ts-expect-error log attributes require Boolean or u64 expressions
+  R.Log.info("bad", [["unit", R.Unit.literal()]]);
+  const scopedComputation = R.Log.info("scoped").pipe(
+    R.Log.annotate("req", R.U64.literal(7n)),
+    R.Log.span("work"),
+  );
+  Reference.run(
+    R.fn([], R.Unit, R.Never, () =>
+      scopedComputation.pipe(R.Effect.flatMap(() => R.Effect.succeed(R.Unit.literal()))),
+    ),
+    [],
+  );
+  // @ts-expect-error annotation keys are strings, not numbers
+  R.Log.info("x").pipe(R.Log.annotate(7, R.Bool.literal(true)));
   // @ts-expect-error a Unit success channel cannot return a Boolean payload
   R.fn([], R.Unit, R.Never, () => R.Effect.succeed(R.Bool.literal(true)));
   const compiled = R.program({ add });

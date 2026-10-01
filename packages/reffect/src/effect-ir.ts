@@ -8,6 +8,7 @@ import {
   Expr,
   IRType,
   NeverType,
+  U64Type,
   UnitType,
   SemanticRef,
   checkExpression,
@@ -22,7 +23,37 @@ export const SyncEffects = Object.freeze({
   Map: SemanticRef.effect("reffect/effect/map@1"),
   FlatMap: SemanticRef.effect("reffect/effect/flatMap@1"),
   Match: SemanticRef.effect("reffect/effect/match-bool@1"),
+  Log: SemanticRef.effect("reffect/effect/log@1"),
+  Annotate: SemanticRef.effect("reffect/effect/annotate@1"),
+  Span: SemanticRef.effect("reffect/effect/span@1"),
 });
+export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error" | "Fatal";
+export const logLevels = Object.freeze([
+  "Trace",
+  "Debug",
+  "Info",
+  "Warn",
+  "Error",
+  "Fatal",
+] as const);
+export type LogAttribute = readonly [key: string, value: Expr<boolean> | Expr<bigint>];
+/** Static annotation keys/labels: nonempty ASCII without quotes, backslashes or controls. */
+const validLogName = (value: string): boolean =>
+  value.length > 0 &&
+  value.length <= 128 &&
+  Array.from(value).every((c) => {
+    const code = c.charCodeAt(0);
+    return code > 31 && code < 127 && c !== '"' && c !== "\\";
+  });
+const checkLogName = (kind: string, value: string): void => {
+  if (!validLogName(value))
+    throw fail(
+      "INVALID_LOG_METADATA",
+      "authoring",
+      kind,
+      "Log keys and span labels must be nonempty ASCII without quotes, backslashes or controls",
+    );
+};
 export type ComputationNode =
   | { readonly _tag: "Succeed"; readonly value: Expr<unknown> }
   | { readonly _tag: "Fail"; readonly error: Expr<unknown> }
@@ -43,6 +74,23 @@ export type ComputationNode =
       readonly condition: Expr<boolean>;
       readonly onTrue: Computation<unknown, unknown>;
       readonly onFalse: Computation<unknown, unknown>;
+    }
+  | {
+      readonly _tag: "Log";
+      readonly level: LogLevel;
+      readonly message: string;
+      readonly attributes: readonly LogAttribute[];
+    }
+  | {
+      readonly _tag: "Annotate";
+      readonly key: string;
+      readonly value: Expr<boolean> | Expr<bigint>;
+      readonly body: Computation<unknown, unknown>;
+    }
+  | {
+      readonly _tag: "Span";
+      readonly label: string;
+      readonly body: Computation<unknown, unknown>;
     };
 
 export class Computation<A, E = never> extends Pipeable.Class {
@@ -232,6 +280,37 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           walk(n.onTrue, bindings, `${at}.onTrue`);
           walk(n.onFalse, bindings, `${at}.onFalse`);
         },
+        Log: (n) => {
+          if (!IRType.same(c.output, UnitType) || !IRType.same(c.error, NeverType))
+            add(at, "Log channel witnesses are inconsistent");
+          if (!logLevels.includes(n.level)) add(at, "Log level is not a supported severity");
+          for (const [key, value] of n.attributes) {
+            if (!validLogName(key)) add(at, "Log attribute keys are invalid");
+            if (!IRType.same(value.type, BoolType) && !IRType.same(value.type, U64Type))
+              issues.push({
+                code: "TYPE_MISMATCH",
+                stage: "check",
+                path: `${at}.attributes`,
+                message: "Log attributes require Boolean or u64 witnesses",
+              });
+            expression(value, "attributes");
+          }
+        },
+        Annotate: (n) => {
+          if (!IRType.same(c.output, n.body.output) || !IRType.same(c.error, n.body.error))
+            add(at, "Annotate channel witnesses are inconsistent");
+          if (!validLogName(n.key)) add(at, "Annotation key is invalid");
+          if (!IRType.same(n.value.type, BoolType) && !IRType.same(n.value.type, U64Type))
+            add(at, "Annotation values require Boolean or u64 witnesses");
+          expression(n.value, "value");
+          walk(n.body, bindings, `${at}.body`);
+        },
+        Span: (n) => {
+          if (!IRType.same(c.output, n.body.output) || !IRType.same(c.error, n.body.error))
+            add(at, "Span channel witnesses are inconsistent");
+          if (!validLogName(n.label)) add(at, "Span label is invalid");
+          walk(n.body, bindings, `${at}.body`);
+        },
       }),
     );
     active.delete(c);
@@ -303,6 +382,25 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
             expression(n.condition).pipe(
               Effect.flatMap((value) => evaluate(value ? n.onTrue : n.onFalse, bindings)),
             ),
+          Log: (n) =>
+            Effect.forEach(n.attributes, ([key, value]) =>
+              expression(value).pipe(Effect.map((evaluated) => [key, evaluated] as const)),
+            ).pipe(
+              Effect.flatMap((entries) => {
+                const record = Object.fromEntries(entries);
+                const logged = Effect.logWithLevel(n.level)(n.message);
+                return Object.keys(record).length === 0
+                  ? logged
+                  : logged.pipe(Effect.annotateLogs(record));
+              }),
+            ),
+          Annotate: (n) =>
+            expression(n.value).pipe(
+              Effect.flatMap((value) =>
+                evaluate(n.body, bindings).pipe(Effect.annotateLogs(n.key, value)),
+              ),
+            ),
+          Span: (n) => evaluate(n.body, bindings).pipe(Effect.withLogSpan(n.label)),
         }),
       );
     });
@@ -313,7 +411,15 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
 });
 export interface LogicalFrame {
   readonly path: string;
-  readonly kind: "function" | "succeed" | "fail" | "map" | "flatMap" | "match";
+  readonly kind:
+    | "function"
+    | "succeed"
+    | "fail"
+    | "map"
+    | "flatMap"
+    | "match"
+    | "annotate"
+    | "span";
 }
 export const maxLogicalFrames = 32;
 export interface FramedExit<A, E> {
@@ -373,6 +479,13 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
         Match: (n) => {
           adaptNode(n.onTrue, `${path}.onTrue`);
           adaptNode(n.onFalse, `${path}.onFalse`);
+        },
+        Log: () => {},
+        Annotate: (n) => {
+          adaptNode(n.body, `${path}.body`);
+        },
+        Span: (n) => {
+          adaptNode(n.body, `${path}.body`);
         },
       }),
     );
@@ -472,6 +585,44 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 ),
               ),
             ),
+          Log: (n) =>
+            Effect.forEach(n.attributes, ([key, value]) =>
+              expression(value, `${path}.attributes.${key}`).pipe(
+                Effect.map((evaluated) => [key, evaluated] as const),
+                Effect.mapError((cause): FramedFailure =>
+                  cause instanceof CompileError
+                    ? { _tag: "Internal", cause }
+                    : (cause as FramedFailure),
+                ),
+              ),
+            ).pipe(
+              Effect.flatMap((entries) => {
+                const record = Object.fromEntries(entries);
+                const logged = Effect.logWithLevel(n.level)(n.message);
+                return Object.keys(record).length === 0
+                  ? logged
+                  : logged.pipe(Effect.annotateLogs(record));
+              }),
+            ),
+          Annotate: (n) =>
+            expression(n.value, `${path}.value`).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap((value) =>
+                evaluate(n.body, bindings).pipe(
+                  Effect.annotateLogs(n.key, value),
+                  Effect.mapError((failure) => outward(failure, "annotate")),
+                ),
+              ),
+            ),
+          Span: (n) =>
+            evaluate(n.body, bindings).pipe(
+              Effect.withLogSpan(n.label),
+              Effect.mapError((failure) => outward(failure, "span")),
+            ),
         }),
       );
     });
@@ -509,6 +660,77 @@ export const EffectReference = Object.freeze({
     args: Inputs<I>,
     basePath?: string,
   ) => runWithFramesUnknown(f, args, basePath),
+});
+const logAttributes = (attributes: readonly LogAttribute[]): readonly LogAttribute[] => {
+  const seen = new Set<string>();
+  for (const [key] of attributes) {
+    checkLogName("attribute", key);
+    if (seen.has(key))
+      throw fail(
+        "INVALID_LOG_METADATA",
+        "authoring",
+        "attribute",
+        "Log attribute keys must be unique within one record",
+      );
+    seen.add(key);
+  }
+  return Object.freeze(Array.from(attributes));
+};
+const logMessage = (level: LogLevel, message: string, attributes: readonly LogAttribute[] = []) => {
+  if (!logLevels.includes(level))
+    throw fail("INVALID_LOG_METADATA", "authoring", "level", "Unknown log severity");
+  if (typeof message !== "string")
+    throw fail("INVALID_LOG_METADATA", "authoring", "message", "Log messages are static strings");
+  return Computation.make(UnitType, NeverType, {
+    _tag: "Log",
+    level,
+    message,
+    attributes: logAttributes(attributes),
+  });
+};
+const annotate: {
+  (
+    key: string,
+    value: Expr<boolean> | Expr<bigint>,
+  ): <A, E>(self: Computation<A, E>) => Computation<A, E>;
+  <A, E>(
+    self: Computation<A, E>,
+    key: string,
+    value: Expr<boolean> | Expr<bigint>,
+  ): Computation<A, E>;
+} = dual(3, <A, E>(self: Computation<A, E>, key: string, value: Expr<boolean> | Expr<bigint>) => {
+  checkLogName("annotation", key);
+  return Computation.make(self.output, self.error, {
+    _tag: "Annotate",
+    key,
+    value,
+    body: self,
+  });
+});
+const span: {
+  (label: string): <A, E>(self: Computation<A, E>) => Computation<A, E>;
+  <A, E>(self: Computation<A, E>, label: string): Computation<A, E>;
+} = dual(2, <A, E>(self: Computation<A, E>, label: string) => {
+  checkLogName("span", label);
+  return Computation.make(self.output, self.error, { _tag: "Span", label, body: self });
+});
+export const LogIR = Object.freeze({
+  levels: logLevels,
+  log: logMessage,
+  trace: (message: string, attributes: readonly LogAttribute[] = []) =>
+    logMessage("Trace", message, attributes),
+  debug: (message: string, attributes: readonly LogAttribute[] = []) =>
+    logMessage("Debug", message, attributes),
+  info: (message: string, attributes: readonly LogAttribute[] = []) =>
+    logMessage("Info", message, attributes),
+  warn: (message: string, attributes: readonly LogAttribute[] = []) =>
+    logMessage("Warn", message, attributes),
+  error: (message: string, attributes: readonly LogAttribute[] = []) =>
+    logMessage("Error", message, attributes),
+  fatal: (message: string, attributes: readonly LogAttribute[] = []) =>
+    logMessage("Fatal", message, attributes),
+  annotate,
+  span,
 });
 export const EffectIR = Object.freeze({
   void: succeed(UnitType.literal()),

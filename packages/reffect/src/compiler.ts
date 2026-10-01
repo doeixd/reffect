@@ -322,6 +322,19 @@ const derive = Effect.fn("Compile.derive")(function* (
           walkComputation(n.onTrue);
           walkComputation(n.onFalse);
         },
+        Log: (n) => {
+          effectRefs.add(SyncEffects.Log);
+          for (const [, value] of n.attributes) walk(value);
+        },
+        Annotate: (n) => {
+          effectRefs.add(SyncEffects.Annotate);
+          walk(n.value);
+          walkComputation(n.body);
+        },
+        Span: (n) => {
+          effectRefs.add(SyncEffects.Span);
+          walkComputation(n.body);
+        },
       }),
     );
   };

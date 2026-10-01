@@ -114,6 +114,21 @@ Failures carry executed-boundary context separately from domain payloads. `Refer
 
 The native binary keeps its stdout payload protocol byte-identical and prints one versioned `reffect.frames@1` JSON object to stderr per failure. The existing payload-only `NativeRunner.run` ignores stderr and is unchanged. Mapped artifacts embed provenance origins in frame literals; `SourceArtifacts.None` omits them while keeping paths identical. Malformed, missing or duplicated envelopes and success-time envelopes are refused as `INVALID_NATIVE_FRAMES`. No new Cargo dependencies; frames allocate only on the failure path.
 
+### Scoped logging
+
+`R.Log.info/warn/...` (plus `R.Log.log` over the six-severity witness) emits
+typed log records as effect nodes returning `Unit`; `R.Log.annotate(key,
+value)` and `R.Log.span(label)` wrap computations with lexical scopes.
+Reference execution delegates filtering, shadowing, restoration and span
+stacking to the official Effect combinators. Native code prints one versioned
+`reffect.log@1` JSON object per record to stderr — level, static message,
+`annotations` object (Booleans as JSON, u64 as decimal strings), innermost-first
+`spans` with elapsed millis — under a default Info minimum checked before
+formatting. Static call-site attributes shadow scope annotations per key.
+Machine stdout carries only evaluator payloads. No new Cargo dependencies;
+scopes save/restore bounded thread-local context on both success and failure
+paths.
+
 ```ts
 const Difference = R.fn([R.U64, R.U64], R.U64, R.U64, (a, b) =>
   R.Match.bool(R.U64.lt(a, b), R.Effect.succeed(R.U64.sub(b, a)), R.Effect.fail(a)).pipe(

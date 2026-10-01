@@ -180,7 +180,11 @@ const decodeFrames = (name: string, stderr: string) =>
           name,
           "Frame envelope carries an empty identity",
         );
-      if (!["function", "succeed", "fail", "map", "flatMap", "match"].includes(frame.kind))
+      if (
+        !["function", "succeed", "fail", "map", "flatMap", "match", "annotate", "span"].includes(
+          frame.kind,
+        )
+      )
         return yield* fail(
           "INVALID_NATIVE_FRAMES",
           "native",

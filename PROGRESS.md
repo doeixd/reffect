@@ -7,6 +7,12 @@
 - Scoped vp check, strict TypeScript and workspace builds pass. Full suite passes 51 tests with fresh native crates; probe confirms normalized value-level identity across Full/None.
 - Published after re-reading the implementation diff and repeating checks, full tests, probe and workspace build. Review fixed two real issues found by the new tests: shared-node path aliasing (canonical first-seen adaptation on both sides) and three Rust brace/type codegen errors. Pre-existing size assertions were updated honestly for frame-literal bytes (linear helper sharing plus sub-exponential path-string bound). Next: scoped logging research.
 
+## 2026-10-01 — Scoped logging implementation
+
+- Added `Log`/`Annotate`/`Span` computation nodes with `R.Log` factories and dual combinators. Reference execution delegates filtering, shadowing, restoration and span stacking to official Effect; native prints versioned `reffect.log@1` JSON to stderr under a default Info minimum, with nested annotations, innermost-first spans, static-wins shadowing and save/restore on both exit paths.
+- Three conformance tests pass in fresh debug/release crates: ordering/levels/attributes/filtering, restoration/span/branch/shared/escaping agreement and authoring refusals. Strict type contracts require no casts.
+- Scoped vp check, strict TypeScript and workspace builds pass. Full suite passes 54 tests with fresh native crates. Published after re-reading the diff and repeating checks, tests and build. Test failures during development caught a real unconditional-comma emission bug, an innermost-first span ordering mismatch and stale expectations; one pre-existing envelope scenario needed a new unknown kind. Next: unary RPC as the driver.
+
 ## 2026-10-01 — Bounded failure-frame preparation
 
 - Verified the Effect oracle: span-less failures carry no StackTrace; `withSpan('inner')` inside `withSpan('outer')` annotates `{name:"inner",parent:{name:"outer"}}`. Only explicit boundaries create observable context.
