@@ -1,5 +1,7 @@
 import { Effect, Match, Pipeable, Schema } from "effect";
 import { dual } from "effect/Function";
+import { emptySource, snapshotSource, SourceLocation } from "./source.ts";
+import type { SourceMetadata } from "./source.ts";
 import type { EffectFn } from "./effect-ir.ts";
 
 export const Diagnostic = Schema.Struct({
@@ -7,6 +9,8 @@ export const Diagnostic = Schema.Struct({
   stage: Schema.String,
   path: Schema.String,
   message: Schema.String,
+  primary: Schema.optionalKey(SourceLocation),
+  related: Schema.optionalKey(Schema.Array(SourceLocation)),
 });
 export type Diagnostic = typeof Diagnostic.Type;
 export class CompileError extends Schema.TaggedError<CompileError>()("CompileError", {
@@ -288,9 +292,13 @@ export class Expr<A> extends Pipeable.Class {
   private constructor(
     readonly type: IRType<A>,
     readonly node: Node,
+    readonly source: SourceMetadata = emptySource,
   ) {
     super();
     Object.freeze(this);
+  }
+  withSource(source: SourceMetadata): Expr<A> {
+    return new Expr(this.type, this.node, snapshotSource(source));
   }
   static parameter<A>(type: IRType<A>, binder: symbol, index: number): Expr<A> {
     return new Expr(type, Object.freeze({ _tag: "Parameter", binder, index }));
@@ -335,9 +343,13 @@ export class Fn<I extends readonly IRType<unknown>[] = readonly IRType<unknown>[
     readonly output: IRType<A>,
     readonly binder: symbol,
     readonly body: Expr<A>,
+    readonly source: SourceMetadata = emptySource,
   ) {
     super();
     Object.freeze(this);
+  }
+  withSource(source: SourceMetadata): Fn<I, A> {
+    return new Fn(this.input, this.output, this.binder, this.body, snapshotSource(source));
   }
   static make<const I extends readonly IRType<unknown>[], A>(
     this: void,
@@ -589,9 +601,9 @@ export const evaluateExpression = (
   root: Expr<unknown>,
   bindings: ReadonlyMap<symbol, readonly unknown[]>,
 ): unknown => {
-  const cache = new Map<Expr<unknown>, unknown>();
+  const cache = new Map<Expr<unknown>["node"], unknown>();
   const evaluate = (e: Expr<unknown>): unknown => {
-    if (cache.has(e)) return cache.get(e);
+    if (cache.has(e.node)) return cache.get(e.node);
     const value = Match.value(e.node).pipe(
       Match.tagsExhaustive({
         Parameter: (n) => bindings.get(n.binder)![n.index],
@@ -601,7 +613,7 @@ export const evaluateExpression = (
       }),
     );
     Schema.decodeUnknownSync(e.type.schema)(value);
-    cache.set(e, value);
+    cache.set(e.node, value);
     return value;
   };
   return evaluate(root);

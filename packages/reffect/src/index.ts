@@ -53,3 +53,19 @@ export { Foldkit } from "./foldkit.ts";
 export type { FoldkitArtifact, QueryAnalysis } from "./foldkit.ts";
 
 export { NativeRunner } from "./native-runner.ts";
+
+export { Source, SourceFile, SourceSite, SourceLocation } from "./source.ts";
+export type { SourceMetadata } from "./source.ts";
+
+export {
+  SourceMaps,
+  SourceMap,
+  SourceManifest,
+  SourceMapError,
+  GeneratedRange,
+} from "./source-artifact.ts";
+export type { SourceResolution } from "./source-artifact.ts";
+
+export { NativeDiagnostic } from "./cargo-diagnostics.ts";
+
+export type { OriginRecord, OccurrenceRecord, ProvenanceSnapshot } from "./provenance.ts";

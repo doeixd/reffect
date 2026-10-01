@@ -2,7 +2,7 @@
 
 [Roadmap](../PLAN.md) · [Research and checked sources](research/observability.md) · [Runtime lowering](runtime-lowering.md) · [Compiler API](compiler-api.md)
 
-This is the selected design direction, finalized 2026-10-01. All new APIs, artifacts and native adapters below are proposed. The implemented compiler supports synchronous Boolean/u64 computations and Foldkit Query evaluation; it does not yet provide native logging, tracing, metrics, source maps or logical failure stacks.
+This is the selected design direction, finalized 2026-10-01. The compiler supports synchronous Boolean/u64 computations and Foldkit Query evaluation. Explicit builder provenance, generated Rust ranges and mapped build diagnostics are now [implemented](source-maps.md#implemented-foundation); native logging, tracing, metrics, logical failure stacks and automatic source-map producers remain proposed.
 
 ## Recommended architecture
 
@@ -57,7 +57,7 @@ A shared Expr DAG may have several authoring/use sites. Model definition and use
 
 ### Capture without widening source syntax
 
-Initially accept explicit source-site/name annotations through immutable authoring combinators. A provisional `R.fn(...).pipe(R.Source.named("loadUser"), R.Source.at(site))` illustrates the shape; these combinators are not implemented. Focused factories should also support expression/computation occurrence metadata without object spreading or user casts.
+Initially accept explicit source-site/name annotations through immutable authoring combinators. `R.fn(...).pipe(R.Source.named("loadUser"), R.Source.at(site))` illustrates the implemented explicit annotation shape; `R.Source.use` distinguishes use occurrences. Focused factories should also support expression/computation occurrence metadata without object spreading or user casts.
 
 Optionally capture a builder's JavaScript call stack once at authoring in development. Map it through available bundler/transpiler source maps and remove internal builder frames. It is best-effort: stack formats, bundling, browser engines and transform pipelines differ. It cannot reliably discover every callback expression's exact column. Never invent a TypeScript line from a generated JavaScript/Rust line. Explicit metadata and named boundaries remain usable when automatic capture is unavailable. An optional metadata-only source transform can add exact sites to the same tables during milestones 2–3; general syntax widening remains later. See [authored-site acquisition](source-maps.md#acquiring-authored-sites).
 
@@ -67,7 +67,7 @@ Optionally capture a builder's JavaScript call stack once at authoring in develo
 
 Plan a versioned `reffect.sources.json` mapping authored sites and generated ranges, plus a build manifest identifying compiler/profile/adapters/dependencies and debug-symbol identity. Runtime builds embed only the IDs/names/locations needed by the selected diagnostics profile. Optionally retain full source content in a developer-only artifact.
 
-Extend Artifact/Cargo writing deliberately to support auxiliary files; today's GeneratedFiles contract has exactly Cargo.toml, src/lib.rs and src/main.rs. The native runner's scalar stdout protocol must not be changed silently. Add a separately versioned diagnostic envelope/companion mode when it can carry failure annotations; retain the existing scalar mode. Emit structured compiler diagnostics with primary/related source sites and stable codes, keeping the existing IR path as a fallback.
+Extend Artifact/Cargo writing deliberately to support auxiliary files; GeneratedFiles now retains Cargo.toml, src/lib.rs and src/main.rs plus validated optional auxiliary files. The native runner's scalar stdout protocol must not be changed silently. Add a separately versioned diagnostic envelope/companion mode when it can carry failure annotations; retain the existing scalar mode. Emit structured compiler diagnostics with primary/related source sites and stable codes, keeping the existing IR path as a fallback.
 
 Maintain the chain TypeScript → transformed JavaScript, authored IR occurrence → generated Rust, and optional Rust debug symbols → native address. These are distinct maps. Rust cannot use `#[track_caller]` or its built-in source metadata to infer TypeScript locations. Source-map lookup belongs in CLI/editor/crash tooling, not in every hot-path event.
 

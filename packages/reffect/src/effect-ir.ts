@@ -1,4 +1,6 @@
 import { Effect, Match, Pipeable, Schema } from "effect";
+import { emptySource, snapshotSource } from "./source.ts";
+import type { SourceMetadata } from "./source.ts";
 import { dual } from "effect/Function";
 import {
   BoolType,
@@ -47,9 +49,13 @@ export class Computation<A, E = never> extends Pipeable.Class {
     readonly output: IRType<A>,
     readonly error: IRType<E>,
     readonly node: ComputationNode,
+    readonly source: SourceMetadata = emptySource,
   ) {
     super();
     Object.freeze(this);
+  }
+  withSource(source: SourceMetadata): Computation<A, E> {
+    return new Computation(this.output, this.error, this.node, snapshotSource(source));
   }
   static make<A, E>(output: IRType<A>, error: IRType<E>, node: ComputationNode): Computation<A, E> {
     return new Computation(output, error, Object.freeze(node));
@@ -120,9 +126,20 @@ export class EffectFn<
     readonly error: IRType<E>,
     readonly binder: symbol,
     readonly body: Computation<A, E>,
+    readonly source: SourceMetadata = emptySource,
   ) {
     super();
     Object.freeze(this);
+  }
+  withSource(source: SourceMetadata): EffectFn<I, A, E> {
+    return new EffectFn(
+      this.input,
+      this.output,
+      this.error,
+      this.binder,
+      this.body,
+      snapshotSource(source),
+    );
   }
   static make<const I extends readonly IRType<unknown>[], A, E>(
     this: void,

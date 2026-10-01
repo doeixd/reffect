@@ -1,3 +1,4 @@
+import { Source } from "./source.ts";
 import { Fn, Program, Expr, BoolType, U64Type, NeverType } from "./kernel.ts";
 import type { IRType, Symbols } from "./kernel.ts";
 import { Computation, EffectFn, EffectIR, matchComputation } from "./effect-ir.ts";
@@ -42,6 +43,7 @@ function bool(
 }
 export const R = Object.freeze({
   fn,
+  Source,
   program: Program.make,
   literal: Expr.literal,
   U64: U64Type,

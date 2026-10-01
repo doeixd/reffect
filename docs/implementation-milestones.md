@@ -141,7 +141,7 @@ This is better than spending the first compiler milestone on artificial arithmet
 
 # 16. Milestone 2 — general compiled functions and Effect IR
 
-> **Later update:** The initial synchronous Boolean/u64 profile is implemented; broader ownership/representations remain. The next [observability foundation](observability.md#delivery-through-the-existing-milestones) adds source/use-site provenance, diagnostic locations, named logical failure frames, Unit and scoped logging/annotations/log-span timers. Compare official Effect/native records and preserve stderr/stdout separation before adding exporters. Implement [source provenance and emission](source-maps.md#emission-and-artifact-layout) before optional automatic annotations: preserve exact byte ranges/use sites, map rustc diagnostics and test Unicode/gaps/stale artifacts. This does not enable arbitrary callback syntax.
+> **Later update:** The initial synchronous Boolean/u64 profile is implemented; broader ownership/representations remain. The explicit [source foundation](source-maps.md#implemented-foundation) now supplies immutable builder annotations, compact provenance, final Rust ranges and mapped compiler/rustc diagnostics. Remaining [observability foundation](observability.md#delivery-through-the-existing-milestones) adds named logical failure frames, Unit and scoped logging/annotations/log-span timers. Compare official Effect/native records and preserve stderr/stdout separation before adding exporters. Implement [source provenance and emission](source-maps.md#emission-and-artifact-layout) before optional automatic annotations: preserve exact byte ranges/use sites, map rustc diagnostics and test Unicode/gaps/stale artifacts. This does not enable arbitrary callback syntax.
 
 Introduce:
 

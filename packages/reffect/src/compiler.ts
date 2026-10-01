@@ -1,4 +1,8 @@
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
+import { SourceMaps } from "./source-artifact.ts";
+import type { SourceMap } from "./source-artifact.ts";
+import type { GeneratedFiles } from "./cargo.ts";
+import { locateCompileError } from "./provenance.ts";
 import { Cargo } from "./cargo.ts";
 import { Foldkit } from "./foldkit.ts";
 import { EffectFn, SyncEffects, checkEffectFunction } from "./effect-ir.ts";
@@ -154,8 +158,9 @@ export interface Ownership {
   readonly mode: "primitive-copy";
   readonly rationale: string;
 }
-export interface Artifact {
-  readonly files: Readonly<Record<"Cargo.toml" | "src/lib.rs" | "src/main.rs", string>>;
+export interface Artifact extends GeneratedFiles {
+  readonly auxiliaryFiles: Readonly<Record<"reffect.sources.json" | "reffect.build.json", string>>;
+  readonly sources: SourceMap;
   readonly explanation: Plan;
   readonly stages: readonly string[];
 }
@@ -440,17 +445,34 @@ const lower = Effect.fn("Compile.lower")(function* (
   const p = yield* verify(ownership.plan);
   if (ownership.mode !== "primitive-copy")
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
-  return lowerFunctions(
-    p.analysis.program,
-    new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
-  );
+  return yield* Effect.try({
+    try: () =>
+      lowerFunctions(
+        p.analysis.program,
+        new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
+      ),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("LOWER_FAILURE", "lower", "program", String(cause)),
+  });
 });
 const emit = Effect.fn("Compile.emit")(function* (
   p: Plan,
 ): Effect.fn.Return<Artifact, CompileError> {
   const verified = yield* verify(p);
   const module = yield* lower(yield* analyzeOwnership(verified));
-  return Object.freeze({ explanation: verified, stages, files: emitFunctions(module) });
+  const emitted = emitFunctions(module);
+  const sources = yield* SourceMaps.create(module.provenance, emitted.files, emitted.ranges).pipe(
+    Effect.mapError((error) => fail("SOURCE_ARTIFACT", "emit", "sources", error.message)),
+  );
+  return Object.freeze({
+    explanation: verified,
+    stages,
+    files: emitted.files,
+    sources: sources.table,
+    auxiliaryFiles: sources.auxiliaryFiles,
+  });
 });
 const run = Effect.fn("Compile.run")(function* (program: Program, target: Target = Rust.std) {
   const checked = yield* check(program);
@@ -462,18 +484,22 @@ const run = Effect.fn("Compile.run")(function* (program: Program, target: Target
   return yield* emit(optimized);
 });
 
+const located = <A, R>(program: Program, effect: Effect.Effect<A, CompileError, R>) =>
+  effect.pipe(Effect.mapError((error) => locateCompileError(program, error)));
+
 export const Compile = {
   fromFoldkitQuery: Foldkit.compile,
-  check,
-  derive,
-  normalize,
-  plan,
-  verify,
-  optimize,
-  analyzeOwnership,
-  lower,
-  emit,
-  run,
+  check: (program: Program) => located(program, check(program)),
+  derive: (program: Program) => located(program, derive(program)),
+  normalize: (analysis: Analysis) => located(analysis.program, normalize(analysis)),
+  plan: (analysis: Analysis, target: Target = Rust.std) =>
+    located(analysis.program, plan(analysis, target)),
+  verify: (p: Plan) => located(p.analysis.program, verify(p)),
+  optimize: (p: Plan) => located(p.analysis.program, optimize(p)),
+  analyzeOwnership: (p: Plan) => located(p.analysis.program, analyzeOwnership(p)),
+  lower: (ownership: Ownership) => located(ownership.plan.analysis.program, lower(ownership)),
+  emit: (p: Plan) => located(p.analysis.program, emit(p)),
+  run: (program: Program, target: Target = Rust.std) => located(program, run(program, target)),
   build: Effect.fn("Compile.build")(function* (
     program: Program,
     output: string,
@@ -481,13 +507,18 @@ export const Compile = {
     target: Target = Rust.std,
   ) {
     const cargo = yield* Cargo;
-    const artifact = yield* run(program, target);
+    const artifact = yield* located(program, run(program, target));
     const directory = yield* cargo.write(artifact, output);
     const process = yield* cargo.build(directory, profile);
     return { artifact, directory, process, stages: stages.concat("build") };
   }),
   explain: Effect.fn("Compile.explain")(function* (program: Program, target: Target = Rust.std) {
-    return yield* plan(yield* derive(program), target);
+    return yield* located(
+      program,
+      Effect.gen(function* () {
+        return yield* plan(yield* derive(program), target);
+      }),
+    );
   }),
 };
 export class Compiler extends Context.Service<Compiler, typeof Compile>()("reffect/Compiler") {

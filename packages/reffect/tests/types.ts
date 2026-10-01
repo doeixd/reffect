@@ -15,6 +15,21 @@ import { Entity, Expr as EntityExpr, Query } from "foldkit-entity";
 
 // Compiled by strict TypeScript checks; never executed.
 export const typeChecks = () => {
+  const source = R.Source.file("src/types.ts", "sum(value)");
+  const site = R.Source.site(source, 0, 10);
+  const annotated = R.fn([R.U64], R.U64, (value) => value.pipe(R.Source.at(site))).pipe(
+    R.Source.named("identity"),
+    R.Source.use(site),
+  );
+  Reference.run(annotated, [1n]);
+  // @ts-expect-error source annotations preserve the original input tuple
+  Reference.run(annotated, [true]);
+  const annotatedEffect = R.fn([R.Bool], R.Bool, R.U64, (value) =>
+    R.Effect.succeed(value).pipe(R.Source.at(site)),
+  ).pipe(R.Source.named("bool"));
+  Reference.run(annotatedEffect, [true]);
+  // @ts-expect-error annotated effects preserve the input representation
+  Reference.run(annotatedEffect, [1n]);
   const add = R.fn([R.U64, R.U64], R.U64, (a, b) => R.U64.add(a, b));
   Reference.run(add, [1n, 2n]);
   // @ts-expect-error exact bigint input, not a lossy number

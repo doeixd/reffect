@@ -25,7 +25,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 [Observability research](research/observability.md) records pinned Effect RC.118 behavior, primary Rust/OTel/W3C sources and observed releases, alternatives and compatibility gaps checked before integration.
 
-[Source maps and authored diagnostics](source-maps.md) defines standard JS maps, authoritative IR-to-Rust provenance/ranges, optional native symbols, MagicString/AST boundaries, coordinate conversions, artifact/privacy policy and delivery gates. It extends the observability design without widening the supported source syntax.
+[Source maps and authored diagnostics](source-maps.md) records the implemented explicit builder/range/build-diagnostic foundation and defines planned standard JS maps, authoritative IR-to-Rust provenance/ranges, optional native symbols, MagicString/AST boundaries, coordinate conversions, artifact/privacy policy and delivery gates. It extends the observability design without widening the supported source syntax.
 
 [Source-map research](research/source-maps.md) records standards, coordinate units, MagicString/map-tool versions, compiler and native symbol boundaries, alternatives and acceptance evidence.
 

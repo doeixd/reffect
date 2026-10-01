@@ -18,7 +18,19 @@ const run = Effect.fn("NativeRunner.run")(function* <
   args: Inputs<I>,
   profile: "debug" | "release" = "debug",
 ) {
-  if (artifact.explanation.analysis.program.functions[name] !== fn)
+  const declared = artifact.explanation.analysis.program.functions[name];
+  // Metadata copies retain their binder/body; unrelated or forged channel declarations do not.
+  if (
+    !declared ||
+    declared.binder !== fn.binder ||
+    declared.body !== fn.body ||
+    !IRType.same(declared.output, fn.output) ||
+    declared.input.length !== fn.input.length ||
+    declared.input.some((type, i) => !IRType.same(type, fn.input[i])) ||
+    (declared instanceof EffectFn
+      ? !(fn instanceof EffectFn) || !IRType.same(declared.error, fn.error)
+      : fn instanceof EffectFn)
+  )
     return yield* fail(
       "INVALID_INPUT",
       "native",

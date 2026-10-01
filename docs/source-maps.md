@@ -1,6 +1,24 @@
 # Source maps and authored diagnostics
 
-This is the source-mapping companion to [observability](observability.md), based on the [research record](research/source-maps.md). It defines planned support. The current compiler reports IR paths and emits Rust templates; it does not yet emit maps, capture exact authoring locations, map rustc diagnostics, or symbolize native failures into TypeScript.
+This is the source-mapping companion to [observability](observability.md), based on the [research record](research/source-maps.md). The explicit builder provenance/range foundation below is implemented for the Boolean/u64 compiler. Automatic JS capture/annotation, standard-map projections, imported Foldkit sites, runtime logical failure frames and native symbolization remain planned.
+
+## Implemented foundation
+
+`R.Source` (also exported as `Source`) supplies `file(path, text)`, `site(file, start, end, name?)`, `at(site)`, `use(site)` and `named(name)`. Sites are explicit caller assertions, with half-open UTF-16 offsets and one-based displayed UTF-16 columns. Source snapshots preserve BOM/CRLF/Unicode separators and use cached line indexes. They require well-formed Unicode and portable workspace-relative paths; virtual/absolute source identifiers need a later producer adapter. Ranges cannot split surrogate pairs or CRLF. Names and snapshots are immutable.
+
+The pipeable annotations support Expr, Fn, Computation and EffectFn. Copies keep the same node or binder/body and retain type inference; they never execute a callback again. `at` records a definition, `use` a use occurrence, and `named` a display label. Lowering shares semantic nodes even when use annotations differ. NativeRunner accepts metadata copies of the same function definition while rejecting unrelated functions and changed witnesses/channels.
+
+`Compile.run/emit` returns the original three `files`, immutable `sources`, and `auxiliaryFiles` containing `reffect.sources.json` and `reffect.build.json`. The schema-version-1 source artifact includes revision-specific source digests, sites, semantic origins, parent/use/definition/name records and exact generated UTF-8 byte ranges. Serialized occurrences store a compact `edge` and parent ID; compiler snapshots retain full IR paths. This avoids expanding shared graphs or serializing every full ancestry path. There are no source contents, absolute workspace paths, timestamps or native dependencies in these artifacts.
+
+Current normalize/optimize stages preserve IR unchanged; lower/emit attach its origins to final bytes rather than inventing rewrite evidence. Shared helper declarations and call ranges are distinct. Definition ranges suppress invocation-site attribution; use ranges prefer their own explicit use site. Context attribution follows the specific occurrence's parent chain before shared ancestry, with `context` precision. Label-only attribution has `named` precision. Lookup returns the entire authored range, not a translated character offset. Unmapped gaps and half-open boundaries do not inherit a nearby site.
+
+`SourceMaps.decode(json)` validates schema, bounds, references, ancestry and the canonical SHA-256 build fingerprint. `SourceMaps.resolver(table, generatedTexts)` verifies exact generated-file digests once, then returns a synchronous `(file, byteStart, byteEnd?)` lookup with mapped/unmapped/stale/missing/invalid status, primary/related locations and the selected range. It performs no file/network lookup. `SourceMaps.verifyManifest` checks the exact source-map bytes/build/generated identity against a manifest. Hashing uses platform Web Crypto through a typed Effect adapter. Metadata IDs are deterministic within the same input/serialization algorithm, not stable across arbitrary edits or native binary identities.
+
+Cargo writing validates optional auxiliary paths before creating output, retains exclusive creation, and writes through filesystem services. `Cargo.build` uses Cargo's JSON message format, preserves complete stdout/stderr and exposes structured diagnostics on success or `CargoError`. It loads optional source/manifest files, verifies their identities, then maps real rustc byte spans and macro/child locations. Native codes, suggestions and related notes remain in `raw`; no TS fix is inferred. Missing/malformed/stale maps retain native diagnostics with an explicit mapping status. `Cargo.run/runInput` and NativeRunner stdout protocols are unchanged.
+
+Initial limits are 16 MiB per map/manifest, 100,000 entries per record collection/range list, 100,000 origin references and 100,000 collected provenance edges. Cargo's diagnostic adapter limits generated files to 64 MiB, JSON message lines to 1 MiB and child/expansion traversal to depth 32/10,000 spans. Unsupported messages remain in raw stdout. These are bounded tooling defaults, not semantic Effect limits or runtime log policies.
+
+See [the package API](../packages/reffect/README.md#source-provenance-and-build-diagnostics) and [runnable example](../examples/source/main.ts). Next is named runtime failure frames and scoped logging; this foundation does not add execution-context records or change typed error payloads.
 
 ## Recommended architecture
 
@@ -66,7 +84,7 @@ Preserve exact input text, including CRLF, BOM, astral characters and combining 
 
 ## Acquiring authored sites
 
-Support a useful path without a frontend plugin: explicit immutable source/name annotations, consistent with the proposed `R.Source.at` / `R.Source.named` direction. These are API proposals, not exports. Validate ranges and distinguish caller assertions from parser-verified ranges. A function/entity name without a range is still useful and must not acquire a fictitious column.
+Support a useful path without a frontend plugin: explicit immutable source/name annotations, consistent with the proposed `R.Source.at` / `R.Source.named` direction. The explicit combinators are implemented in the foundation; automatic producer APIs remain proposals. Validate ranges and distinguish caller assertions from parser-verified ranges. A function/entity name without a range is still useful and must not acquire a fictitious column.
 
 Optional builder-stack capture is a fallback. Normalize engine frames and consult available JS maps, record precision and provenance, exclude internal helper frames, and retain an unknown/virtual location when resolution fails. A stack captured while a callback constructs IR identifies construction context; it is not a runtime Effect stack. Avoid making builds depend on engine-specific stack strings, installed globals or source-map availability.
 
@@ -100,7 +118,7 @@ For a Vite/Rollup-compatible transform, return `{ code, map }` and let the teste
 
 ## Emission and artifact layout
 
-Replace mapping-critical template concatenation with a small structured source writer when implementing this slice. The writer tracks final UTF-8 offsets and line/column indexes, opens/closes origin scopes around emitted fragments and records ranges as it writes. Shared helper definitions and call expressions receive separate ranges. Internal runtime boilerplate, imports and glue receive explicit generated/internal status rather than inheriting the previous user's location.
+The Boolean/u64 emitter now uses a small structured source writer for mapping-critical fragments. Other emitters should adopt this contract when their source producers are implemented. The writer tracks final UTF-8 offsets and line/column indexes, opens/closes origin scopes around emitted fragments and records ranges as it writes. Shared helper definitions and call expressions receive separate ranges. Internal runtime boilerplate, imports and glue receive explicit generated/internal status rather than inheriting the previous user's location.
 
 Validate ranges against emitted file length, nesting/overlap policy and known origins. For lookup, prefer the most specific containing mapped range; consult parents only according to explicit ancestry/precision rules. Gaps remain unknown. A zero-width rustc span at a boundary needs a defined insertion-point rule; never automatically attach it to the previous user range. Macro expansion spans may resolve to an invocation or generated glue; retain expansion ancestry and all unresolved spans.
 
@@ -116,7 +134,7 @@ Proposed artifacts extend the observability layout:
 
 Map the library and runner separately. Preserve a small coherent authoritative schema first; index-map emission, source scopes and multiple packaging layouts can wait for a consumer. Standard-map readers should accept supported index maps from upstream producers.
 
-The current GeneratedFiles/Cargo writer accepts exactly Cargo.toml, lib.rs and main.rs. Implementation must extend this public artifact/write contract deliberately, with safe relative paths, deterministic bytes and overwrite policy, rather than adding a side write outside compiler services. Mapping/profile/content policy affects cache keys and manifest identity. Separate “build generated Rust with symbols” from “embed original TS”; debug symbols do not require public source contents. Avoid timestamps, absolute workspace paths or credentials in reproducible map identities.
+GeneratedFiles retains Cargo.toml, lib.rs and main.rs in `files` and now accepts an optional `auxiliaryFiles` dictionary. The compiler/Cargo writer validates paths and uses the same exclusive output policy for both groups. Future packaging extensions must continue through this contract rather than adding side writes outside compiler services. Mapping/profile/content policy affects cache keys and manifest identity. Separate “build generated Rust with symbols” from “embed original TS”; debug symbols do not require public source contents. Avoid timestamps, absolute workspace paths or credentials in reproducible map identities.
 
 ## Diagnostics and runtime resolution
 
