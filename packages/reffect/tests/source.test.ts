@@ -1,7 +1,7 @@
 import { NodeServices } from "@effect/platform-node";
-import { SourceWriter } from "../src/source-writer.ts";
+import { SourceWriter, joinFragments, mapFragment, textFragment } from "../src/source-writer.ts";
 import { Effect, FileSystem, Exit } from "effect";
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import {
   NativeRunner,
@@ -184,6 +184,55 @@ test("range writer counts UTF-8 and respects unmapped boundaries", () => {
   ]);
   expect(new TextEncoder().encode(writer.text).length).toBe(13);
   expect(() => writer.write("\ud83d")).toThrow();
+});
+
+test("mapped fragments shift authored ranges through composition", () => {
+  const inner = mapFragment("shared", "use", textFragment("call()"), "use");
+  expect(inner.ranges).toEqual([
+    { start: 0, end: 6, origin: "shared", occurrence: "use", role: "use" },
+  ]);
+  // An absent origin leaves the fragment unmapped, like SourceWriter.mapped.
+  expect(mapFragment(undefined, undefined, textFragment("plain")).ranges).toEqual([]);
+  // Empty writes record nothing, matching SourceWriter.mapped.
+  expect(mapFragment("o0", undefined, textFragment("")).ranges).toEqual([]);
+
+  const outer = joinFragments([
+    "fn f() { ",
+    inner,
+    " + ",
+    mapFragment("o0", undefined, textFragment("x"), "definition"),
+    " }",
+  ]);
+  expect(outer.text).toBe("fn f() { call() + x }");
+  expect(outer.ranges).toEqual([
+    { start: 9, end: 15, origin: "shared", occurrence: "use", role: "use" },
+    { start: 18, end: 19, origin: "o0", role: "definition" },
+  ]);
+
+  const writer = new SourceWriter("src/lib.rs");
+  writer.writeFragment(joinFragments(["<", outer, ">"]));
+  expect(writer.text).toBe("<fn f() { call() + x }>");
+  expect(writer.ranges).toEqual([
+    { file: "src/lib.rs", start: 10, end: 16, origin: "shared", occurrence: "use", role: "use" },
+    { file: "src/lib.rs", start: 19, end: 20, origin: "o0", role: "definition" },
+  ]);
+
+  // Off-by-one on multibyte text: ranges are UTF-8 byte offsets, not UTF-16.
+  const utf8 = joinFragments(["\u00e9", mapFragment("o0", undefined, textFragment("z"))]);
+  expect(utf8.ranges).toEqual([{ start: 2, end: 3, origin: "o0", role: "definition" }]);
+
+  // Range tracking off: text is written, no coordinates recorded, no encoding.
+  const off = new SourceWriter("src/lib.rs", false);
+  const spy = vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(() => {
+    throw new Error("Range encoding was requested");
+  });
+  try {
+    off.writeFragment(outer);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(off.text).toBe(outer.text);
+  expect(off.ranges).toEqual([]);
 });
 
 test("maps reject malformed references, cycles, unsafe paths and unsupported versions", async () => {
