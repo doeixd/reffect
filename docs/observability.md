@@ -59,9 +59,11 @@ A shared Expr DAG may have several authoring/use sites. Model definition and use
 
 Initially accept explicit source-site/name annotations through immutable authoring combinators. A provisional `R.fn(...).pipe(R.Source.named("loadUser"), R.Source.at(site))` illustrates the shape; these combinators are not implemented. Focused factories should also support expression/computation occurrence metadata without object spreading or user casts.
 
-Optionally capture a builder's JavaScript call stack once at authoring in development. Map it through available bundler/transpiler source maps and remove internal builder frames. It is best-effort: stack formats, bundling, browser engines and transform pipelines differ. It cannot reliably discover every callback expression's exact column. Never invent a TypeScript line from a generated JavaScript/Rust line. Explicit metadata and named boundaries remain usable when automatic capture is unavailable. A future frontend/source transform can add exact sites to the same tables.
+Optionally capture a builder's JavaScript call stack once at authoring in development. Map it through available bundler/transpiler source maps and remove internal builder frames. It is best-effort: stack formats, bundling, browser engines and transform pipelines differ. It cannot reliably discover every callback expression's exact column. Never invent a TypeScript line from a generated JavaScript/Rust line. Explicit metadata and named boundaries remain usable when automatic capture is unavailable. An optional metadata-only source transform can add exact sites to the same tables during milestones 2–3; general syntax widening remains later. See [authored-site acquisition](source-maps.md#acquiring-authored-sites).
 
 ### Artifact contract
+
+[Source maps and authored diagnostics](source-maps.md) supplies the detailed contract: explicit coordinate units and precision, JS map composition, a provenance-aware Rust writer, exact generated range tables, optional v3 projections, rustc JSON mapping and native symbol lookup. MagicString is optional AST-located JS editing tooling; it does not derive IR-to-Rust origins. Implement provenance/emission before automatic metadata annotation, without widening source syntax.
 
 Plan a versioned `reffect.sources.json` mapping authored sites and generated ranges, plus a build manifest identifying compiler/profile/adapters/dependencies and debug-symbol identity. Runtime builds embed only the IDs/names/locations needed by the selected diagnostics profile. Optionally retain full source content in a developer-only artifact.
 
@@ -274,5 +276,7 @@ Required evidence includes:
 | 13–15 distributed/additional targets/syntax | Durable workflow trace/link policies, target-specific adapters, exact frontend sites and new source-map producers using the same provenance model.                                                                                                                                                                                                 |
 
 This is a cross-cutting track, not a new milestone renumbering. Before RPC, implement the source/logging foundation; before declaring the RPC demo production-observable, implement request propagation, baseline metrics and exporter teardown. Future native capabilities inherit these obligations as their semantic support arrives.
+
+The companion [source-map delivery track](source-maps.md#delivery-through-the-existing-milestones) makes explicit sites, generated Rust ranges and mapped build diagnostics part of the next foundation; the optional AST metadata adapter can follow before the arbitrary-source frontend.
 
 Remaining implementation choices are exact public factories/record/source-map versions, deterministic ID algorithm, per-profile buffer/frame/cardinality defaults and tested release/MSRV/feature sets. The architecture, policy separation, dependency boundaries and acceptance requirements above are the plan. Dashboards, durable audit storage, profiler UI and a general source transformation frontend remain separate work.

@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-01 — Source-map research and design
+
+- Reviewed the current IR/emitter/artifact/Cargo boundaries and observability/migration plans; checked ECMA-426, installed MagicString, jridgewell map tools, Vite/Rollup, Node 24.19, rustc/Cargo JSON and native symbols. Recorded alternatives, coordinate contracts, version limits and acceptance before design integration in [source-map research](docs/research/source-maps.md).
+- Added [source maps and authored diagnostics](docs/source-maps.md): three mapping layers, explicit UTF-16/UTF-8/Unicode-scalar coordinates, immutable definition/use/transform origins, AST/MagicString boundaries, authoritative Rust ranges plus optional v3 maps, rustc JSON diagnostics, native symbol lookup, source/privacy policy and conformance gates. Integrated the foundation/optional-adapter/deployment sequence into PLAN, observability, milestones, compiler/conformance/migration references, docs index and AGENTS.
+- Self-review checked shared helper attribution, exact versus point precision, native/async stack limits, coordinate conversions, fixed artifact writer extension, source digest checks, host map composition and unchanged runner stdout. All 40 added/new local links and anchors resolve. `vp check` passes without warnings; strict package TypeScript passes; all 27 tests pass including fresh native debug/release crates; workspace builds pass with all four tasks cached (documentation-only change).
+- This is researched design and plan integration; no map producer, runtime feature or new dependency is implemented. Next: immutable source/use metadata and provenance-aware Rust emission before optional automatic annotations.
+
 ## 2026-10-01 — Observability design and roadmap integration
 
 - Reviewed implemented compiler/reference/native boundaries and roadmap references; inspected Effect RC.118 Logger/Tracer/Metric/Cause and built-in OTLP source, Rust tracing/OTel release metadata/manifests, W3C propagation, error/log/metric conventions, native backtraces and diagnostic tools. Recorded evidence, alternatives and compatibility gaps before design integration in [observability research](docs/research/observability.md).

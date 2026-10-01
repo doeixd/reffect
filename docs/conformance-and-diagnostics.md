@@ -8,6 +8,8 @@ For additional adapter obligations, see [runtime lowering](runtime-lowering.md):
 
 [Observability conformance](observability.md#compiler-integration-and-acceptance) adds deterministic semantic log/span/metric comparisons, source-frame resolution, independent sampling/log filtering, async context isolation, stock-carrier propagation, bounded export/flush and dependency/overhead checks. Payload-only Exit equality does not establish failure-annotation or telemetry parity.
 
+[Source-map verification](source-maps.md#required-verification) adds independent Unicode/CRLF coordinates, real multi-transform chains, shared definition/use provenance, unmapped boundaries, rustc JSON spans, map digest mismatch and private artifact checks. Native symbol lookup is optional; generated Rust suggestions do not become TS fixes without registered rewrite evidence.
+
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.
 
 ## Contents

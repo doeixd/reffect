@@ -4,6 +4,8 @@
 
 This document integrates the supplied migration conversation as an edited design reference. Commands, package names, diagnostic codes, APIs, and layout below are proposals, not implemented tooling. Current primary-source findings and their limits are recorded in the linked research note; unresolved citation placeholders from the supplied text are not treated as evidence.
 
+[Source-map diagnostics](source-maps.md#diagnostics-and-runtime-resolution) locate authored IR origins and preserve native related spans. A rustc replacement edits generated Rust; it is not an authored TS fix unless a compiler-owned rule proves the inverse transformation. MagicString may preserve maps for mechanical AST edits, while the codemod engine and semantic fix registry remain separate authorities.
+
 ## Goal and boundaries
 
 Make migration a first-class consumer of Effect Native's semantic analysis and compiler diagnostics. Use an existing codemod platform for mechanical source transformations; keep native compatibility and implementation selection in the compiler. Agents continue editing TypeScript; the semantic compiler performs Rust lowering.

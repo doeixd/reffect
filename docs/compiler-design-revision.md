@@ -6,6 +6,8 @@ The later [migration tooling design](migration-tooling.md) uses compiler reachab
 
 The later [runtime lowering reference](runtime-lowering.md) extends this design's implementation planning: distinguish operation, service, and semantic runtime entries; choose generated code, a verified substrate adapter, or dedicated runtime; record reachable crates/features and conformance obligations. It does not change the pass order or milestone sequence.
 
+[Source-map design](source-maps.md) specifies provenance-preserving passes and emission: immutable definition/use origins, transform ancestry, final Rust byte ranges and optional standard-map projections. MagicString can support AST metadata edits but does not supply semantic lowering correspondence. Metadata annotations can arrive before general syntax widening.
+
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.
 
 ## Contents

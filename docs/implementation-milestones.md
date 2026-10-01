@@ -4,6 +4,8 @@
 
 Follow [observability delivery gates](observability.md#delivery-through-the-existing-milestones) as a cross-cutting track: metadata/logging with milestone 2, request propagation/metrics/OTLP with milestone 3, and interruption/finalizer/fiber trace semantics as those milestones arrive. This supplements the existing sequence without renumbering or claiming implementation.
 
+Follow [source-map gates](source-maps.md#delivery-through-the-existing-milestones): explicit immutable sites, IR ancestry and final Rust ranges/mapped diagnostics in the next milestone 2 foundation; optional AST metadata/JS composition in 2–3; private packaging/native symbol lookup with deployment. This is metadata tooling, distinct from the later arbitrary-source frontend.
+
 Treat [migration tooling](migration-tooling.md) as a first-class track attached to supported profiles: source locations/report/fix metadata alongside compiler diagnostics, then constrained codemods as native capabilities stabilize. Migration into the explicit DSL is distinct from the later source syntax-widening milestone and does not reorder the sequence here.
 
 The later [runtime lowering reference](runtime-lowering.md) adds implementation-registry and Rust-substrate guidance without changing these milestones. Establish operation/service/semantic-runtime metadata in kernel/planning work; implement and verify entries as the corresponding workload arrives. Generated batching, schedules, Ref specialization, and stream fusion require semantic evidence before optimization.
@@ -139,7 +141,7 @@ This is better than spending the first compiler milestone on artificial arithmet
 
 # 16. Milestone 2 — general compiled functions and Effect IR
 
-> **Later update:** The initial synchronous Boolean/u64 profile is implemented; broader ownership/representations remain. The next [observability foundation](observability.md#delivery-through-the-existing-milestones) adds source/use-site provenance, diagnostic locations, named logical failure frames, Unit and scoped logging/annotations/log-span timers. Compare official Effect/native records and preserve stderr/stdout separation before adding exporters. This does not enable arbitrary callback syntax.
+> **Later update:** The initial synchronous Boolean/u64 profile is implemented; broader ownership/representations remain. The next [observability foundation](observability.md#delivery-through-the-existing-milestones) adds source/use-site provenance, diagnostic locations, named logical failure frames, Unit and scoped logging/annotations/log-span timers. Compare official Effect/native records and preserve stderr/stdout separation before adding exporters. Implement [source provenance and emission](source-maps.md#emission-and-artifact-layout) before optional automatic annotations: preserve exact byte ranges/use sites, map rustc diagnostics and test Unicode/gaps/stale artifacts. This does not enable arbitrary callback syntax.
 
 Introduce:
 

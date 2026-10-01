@@ -94,7 +94,7 @@ The first meaningful compiler workload is Foldkit Query conformance. Unary RPC r
 
 ## Observability delivery track
 
-Follow [the detailed delivery gates](docs/observability.md#delivery-through-the-existing-milestones) alongside the numbered milestones. This is planned support, not an implemented native telemetry claim.
+Follow [the detailed delivery gates](docs/observability.md#delivery-through-the-existing-milestones) alongside the numbered milestones. The [source-map design](docs/source-maps.md) specifies the location/artifact contracts beneath this track. This is planned support, not an implemented native telemetry claim.
 
 | Milestone               | Required work                                                                                                                                                                          | Acceptance                                                                                                                                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -107,6 +107,19 @@ Follow [the detailed delivery gates](docs/observability.md#delivery-through-the-
 
 Prefer `tracing`/`tracing-subscriber` and `tracing-opentelemetry` for native spans, direct OTel SDK records/instruments where needed for exact Effect logging/metrics, and OTLP to a Collector. Pin/test exact crate versions/features when implementing. Metadata and logical diagnostics remain useful without sampling/export; exporters never install globals from a generated library. Logging is best-effort diagnostics by default, while durable audit writes remain an explicit business service.
 
+## Source-map delivery track
+
+Use [three mapping layers](docs/source-maps.md#recommended-architecture): standard maps across JS transformations, authoritative compiler provenance/ranges from IR to Rust, and optional native symbols from machine addresses to Rust. MagicString is a candidate for AST-located metadata edits; the Rust emitter records origins with a structured writer. Exact ranges, many-origin ancestry and executed use sites remain in the compiler tables rather than a lossy standard-map projection.
+
+| Stage                                  | Required work and gate                                                                                                                                                                                                                                                                                   |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Next milestone 2 foundation            | Explicit immutable sites/use edges, pass ancestry, final Rust byte ranges, versioned source/build artifacts and compiler/rustc diagnostic mapping. Prove Unicode/CRLF coordinates, shared helper occurrences, unmapped gaps and stale-map fallback while preserving semantic identity and runner stdout. |
+| Milestone 2–3 optional adapter         | AST-aware authoring metadata transform, composed JS maps and optional Rust v3 projections. Pin/test host hook ordering, import binding/shadowing and callback counts; keep plugin-free authoring supported.                                                                                              |
+| Milestone 3 deployment                 | Private map/source/symbol packaging, correlation and optional offline native resolver. Match map/binary identity; keep unsampled logical sites usable without symbols or embedded source.                                                                                                                |
+| Later async/target/frontend milestones | Finalizer/fiber ancestry and new target/provenance producers. Maps do not reconstruct logical async stacks or enable arbitrary source syntax.                                                                                                                                                            |
+
+Follow [source-map delivery and verification](docs/source-maps.md#delivery-through-the-existing-milestones). Extend the currently fixed GeneratedFiles/Cargo contract explicitly; use UTF-8 Rust byte ranges and normalized TS UTF-16 coordinates, validate content digests, and omit production source text by default. Complete provenance/emission before automatic annotations; do not defer all exact metadata producers to syntax widening.
+
 ## Compiler pipeline
 
 > **Later update:** [Runtime support reporting](docs/runtime-lowering.md#planning-support-reporting-and-acceptance) extends planning with substrate/adapter choices and reachable crates/features. [Migration diagnostics](docs/migration-tooling.md#structured-diagnostics-and-shared-fix-registry) expose source locations, alternatives, and eligible fixes through the same compiler API.
@@ -117,7 +130,7 @@ Check local invariants; derive dependencies, traits, requirements, and scope rel
 
 Planning should distinguish operation, service, and semantic runtime requirements. Explain generated specializations, selected substrates/adapters, remaining semantic obligations, and reachable Cargo crates/features. Registry metadata can enter the kernel early; implement entries only as workloads require them. Compile-time batching, Schedule state machines, Ref specialization, and stream fusion remain subject to semantic/evidence checks.
 
-Source provenance follows nodes and use edges through every pass, including optimization/shared helper lowering. Planning records selected observability adapters, sinks, context/clock requirements, policies, stripped information and Cargo features. Ownership verifies queued record lifetimes; emission includes versioned source maps/build identity when selected. Compiler pass telemetry uses official Effect and independent providers from the generated application. See [observability stage obligations](docs/observability.md#compiler-integration-and-acceptance).
+Source provenance follows nodes and use edges through every pass, including optimization/shared helper lowering. Planning records selected observability adapters, sinks, context/clock requirements, policies, stripped information and Cargo features. Ownership verifies queued record lifetimes; emission includes versioned source maps/build identity when selected. Compiler pass telemetry uses official Effect and independent providers from the generated application. See [observability stage obligations](docs/observability.md#compiler-integration-and-acceptance) and [source-map emission contracts](docs/source-maps.md#emission-and-artifact-layout).
 
 ## Validation strategy
 
@@ -125,6 +138,7 @@ Source provenance follows nodes and use edges through every pass, including opti
 
 - Compare operation/IR results through reference JS or official Effect and generated Rust, including numeric, null, string, and ordering edge cases.
 - Compare source-aware log/span/metric records with deterministic official Effect and Rust in-memory collectors; verify severity, executed-site frames, context isolation, OTel propagation/status policy, output-stream isolation, redaction, bounded export/shutdown and dependency/overhead profiles. Treat random IDs/timestamps/native stack text separately from semantic invariants.
+- Verify independently specified authored locations across real JS map chains and Rust emission: UTF-16/UTF-8 conversions, shared use/definition sites, explicit unmapped gaps, actual rustc JSON spans, malformed/stale maps and deterministic/private artifact profiles. Native symbols are an optional separate test; no inverse TS fixes without a registered semantic rule.
 - Generate Schema-driven law property tests and track subject-indexed evidence separately from claims.
 - Reuse Entity/Query fixtures across evaluator, Drizzle, and Rust/SQLx; compare NativeRemoteServer with the existing JS server.
 - Test official RPC client interoperability, including middleware, cancellation, backpressure, framing, and session lifetime as supported.
@@ -137,7 +151,7 @@ Use [AGENTS.md](AGENTS.md) for tooling, commits, and guidance on when subagent r
 
 ## Decisions to settle during implementation
 
-- Exact source/record schema versions and deterministic occurrence IDs; diagnostic/source precision, tested observability crate/MSRV/features, and profile buffer/cardinality/flush defaults. The [observability architecture](docs/observability.md) fixes the semantic and dependency boundaries first.
+- Exact source/map/record schema versions, deterministic occurrence IDs, tested AST/host adapters and mapping granularity; diagnostic/source precision, tested observability crate/MSRV/features, and profile buffer/cardinality/flush defaults. The [observability architecture](docs/observability.md) fixes the semantic and dependency boundaries first.
 - Exact public names/package boundaries and which Gen2 primitives are appropriate to adapt.
 - Portable Schema subset and distinct native/wire/storage representations, including numeric semantics.
 - Stable identity/serialization rules, law witness typing, evidence provenance, trust policy, and checked-trait derivation.
