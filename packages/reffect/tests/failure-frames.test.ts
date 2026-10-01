@@ -248,7 +248,7 @@ test(
         dir: "unknownKind",
         fn: "failer",
         out: "err:u64:9",
-          err: '{"schema":"reffect.frames@1","frames":[{"function":"f","path":"p","kind":"fiber"}],"omitted":0}',
+        err: '{"schema":"reffect.frames@1","frames":[{"function":"f","path":"p","kind":"fiber"}],"omitted":0}',
       },
       {
         dir: "emptyIdentity",
