@@ -3,7 +3,7 @@ import { Rpc, type RpcGroup } from "effect/rpc";
 import { Compile, type Plan } from "./compiler.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
 import type { GeneratedFiles } from "./cargo.ts";
-import { EffectFn } from "./effect-ir.ts";
+import { EffectFn, SyncEffects } from "./effect-ir.ts";
 import {
   CompileError,
   BoolType,
@@ -19,6 +19,8 @@ import type { AnyFn } from "./kernel.ts";
 import { Rs } from "./rust-emit.ts";
 import type { RsExpr } from "./rust-emit.ts";
 import { RpcCodecs } from "./rpc-codecs.ts";
+import { RpcBearer } from "./rpc-auth.ts";
+import { rpcAuthRuntime } from "./rpc-auth-runtime.ts";
 import { rpcRuntime } from "./rpc-runtime.ts";
 
 const U64Json = RpcCodecs.U64Json;
@@ -28,19 +30,27 @@ const witness = { u64: U64Type, bool: BoolType, unit: UnitType, never: NeverType
 export interface RpcBinding<F extends AnyFn = AnyFn> {
   readonly fn: F;
   readonly fields: readonly string[];
+  readonly principal: boolean;
 }
 type NativeValue<A> = [A] extends [never] ? never : [A] extends [undefined] ? void : A;
+type HandlerError<P extends Rpc.Any> = P extends {
+  readonly errorSchema: infer E extends Schema.Top;
+}
+  ? E["Type"]
+  : never;
+type HasMiddleware<P extends Rpc.Any> = [Rpc.Middleware<P>] extends [never] ? false : true;
 type Bindings<Rpcs extends Rpc.Any> = {
   readonly [Tag in Rpcs["_tag"]]: RpcBinding<
-    | ([Rpc.Error<Rpc.ExtractTag<Rpcs, Tag>>] extends [never]
+    | ([HandlerError<Rpc.ExtractTag<Rpcs, Tag>>] extends [never]
         ? Fn<readonly IRType<unknown>[], NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>>
         : never)
     | EffectFn<
         readonly IRType<unknown>[],
         NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>,
-        NativeValue<Rpc.Error<Rpc.ExtractTag<Rpcs, Tag>>>
+        NativeValue<HandlerError<Rpc.ExtractTag<Rpcs, Tag>>>
       >
   > & {
+    readonly principal: HasMiddleware<Rpc.ExtractTag<Rpcs, Tag>>;
     readonly fields: Rpc.Payload<Rpc.ExtractTag<Rpcs, Tag>> extends Readonly<
       Record<string, unknown>
     >
@@ -56,6 +66,13 @@ export interface RpcArtifact extends GeneratedFiles {
     readonly id: "rust/axum-unary-json@1";
     readonly crates: readonly string[];
     readonly handlerProfile: "synchronous-scalars";
+    readonly auth:
+      | {
+          readonly middleware: string;
+          readonly principalService: string;
+          readonly credentialsEnv: string;
+        }
+      | undefined;
   };
 }
 const unsupported = (path: string, message: string) =>
@@ -92,13 +109,27 @@ const wellFormed = (value: string) =>
 const bind = <F extends AnyFn, const Fields extends readonly string[] = readonly []>(
   fn: F,
   fields?: Fields,
-): RpcBinding<F> & { readonly fields: Fields } =>
-  Object.freeze({ fn, fields: Object.freeze(Array.from(fields ?? [])) as unknown as Fields });
+): RpcBinding<F> & { readonly fields: Fields; readonly principal: false } =>
+  Object.freeze({
+    fn,
+    fields: Object.freeze(Array.from(fields ?? [])) as unknown as Fields,
+    principal: false,
+  });
+/** Bind a protected handler with its canonical u64 principal before the payload arguments. */
+const bindPrincipal = <F extends AnyFn, const Fields extends readonly string[] = readonly []>(
+  fn: F & (F["input"] extends readonly [IRType<bigint>, ...IRType<unknown>[]] ? unknown : never),
+  fields?: Fields,
+): RpcBinding<F> & { readonly fields: Fields; readonly principal: true } =>
+  Object.freeze({
+    fn,
+    fields: Object.freeze(Array.from(fields ?? [])) as unknown as Fields,
+    principal: true,
+  });
 
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
   bindings: Bindings<Rpcs>,
-  options: { readonly path?: string } = {},
+  options: { readonly path?: string; readonly auth?: RpcBearer } = {},
 ): Effect.Effect<RpcArtifact, import("./kernel.ts").CompileError> =>
   Effect.gen(function* () {
     const prepared = yield* Effect.try({
@@ -113,17 +144,46 @@ const compile = <Rpcs extends Rpc.Any>(
         if (entries.length === 0) throw unsupported("group", "RPC group must contain a procedure");
         if (Reflect.ownKeys(bindings).length !== entries.length)
           throw unsupported("bindings", "Bindings must match the RPC group exactly");
+        const auth = options.auth;
+        if (auth && !(auth instanceof RpcBearer))
+          throw unsupported("auth", "Expected a checked bearer adapter");
+        if (
+          auth &&
+          (auth.middleware.error.ast !== auth.denialAst ||
+            !SchemaAST.isLiteral(auth.denialAst) ||
+            auth.denialAst.literal !== auth.denied ||
+            auth.denialAst.checks ||
+            auth.denialAst.encoding ||
+            auth.denialAst.context ||
+            auth.denialAst.annotations)
+        )
+          throw unsupported("auth", "Middleware denial schema changed after adapter creation");
+        let protectedCount = 0;
         const functions: Record<string, AnyFn> = {};
-        const arms = entries.map((rpc, index) => {
-          if (!Rpc.isRpc(rpc)) throw unsupported("group", "Expected a stock RPC definition");
+        const arms = entries.map((definition, index) => {
+          if (!Rpc.isRpc(definition)) throw unsupported("group", "Expected a stock RPC definition");
+          const rpc: Rpc.AnyWithProps = definition;
           const procedure = `rpc.${rpc._tag}`;
           if (!wellFormed(rpc._tag)) throw unsupported(procedure, "RPC tags must be valid Unicode");
           const descriptor = Object.getOwnPropertyDescriptor(bindings, rpc._tag);
           const binding: RpcBinding | undefined = descriptor?.value;
           if (!binding || (!(binding.fn instanceof Fn) && !(binding.fn instanceof EffectFn)))
             throw unsupported(procedure, "Missing own-data handler binding");
-          if (rpc.middlewares.size !== 0)
-            throw unsupported(procedure, "Middleware is unsupported in the scalar profile");
+          const protectedRpc = rpc.middlewares.size !== 0;
+          if (
+            protectedRpc &&
+            (!auth || rpc.middlewares.size !== 1 || !rpc.middlewares.has(auth.middleware))
+          )
+            throw unsupported(
+              procedure,
+              "Exactly one middleware with a matching bearer adapter is supported",
+            );
+          if (binding.principal !== protectedRpc)
+            throw unsupported(
+              procedure,
+              "Protected procedures require bindPrincipal; public procedures require bind",
+            );
+          if (protectedRpc) protectedCount++;
           if (rpc.defectSchema.ast !== Schema.Defect().ast)
             throw unsupported(procedure, "Custom defect codecs are unsupported");
           const success = codec(rpc.successSchema.ast, `${procedure}.success`);
@@ -171,13 +231,18 @@ const compile = <Rpcs extends Rpc.Any>(
             const kind = codec(payload, `${procedure}.payload`);
             if (binding.fields.length)
               throw unsupported(procedure, "Scalar payload bindings have no named fields");
-            inputs = kind === "unit" && fn.input.length === 0 ? [] : [{ name: "", codec: kind }];
+            inputs =
+              kind === "unit" && fn.input.length === (protectedRpc ? 1 : 0)
+                ? []
+                : [{ name: "", codec: kind }];
           }
+          const offset = protectedRpc ? 1 : 0;
           if (
-            fn.input.length !== inputs.length ||
+            (protectedRpc && !IRType.same(fn.input[0], U64Type)) ||
+            fn.input.length !== inputs.length + offset ||
             inputs.some(
               (input, i) =>
-                input.codec === "never" || !IRType.same(fn.input[i], witness[input.codec]),
+                input.codec === "never" || !IRType.same(fn.input[i + offset], witness[input.codec]),
             )
           )
             throw unsupported(procedure, "Handler argument witnesses disagree with payload fields");
@@ -219,7 +284,54 @@ const compile = <Rpcs extends Rpc.Any>(
             : inputs.length === 0
               ? [Rs.stmt(Rs.try_(callLocal("unit_arg", local("payload"), Rs.none())))]
               : [];
-          const call = Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident(`r_${name}`), args);
+          inputs.forEach((_input, i) =>
+            statements.push(Rs.let_(Rs.ident(`arg_${i}`), undefined, args[i])),
+          );
+          if (protectedRpc && auth) {
+            statements.push(
+              Rs.exprStmt(
+                Rs.letElse(
+                  Rs.variantPat([Rs.ident("Some")], [Rs.identPat(Rs.ident("principal"))]),
+                  callLocal("authenticate", local("headers"), local("message"), local("state")),
+                  Rs.block([
+                    Rs.stmt(
+                      Rs.return_(
+                        Rs.ok(
+                          callLocal(
+                            "failure",
+                            Rs.pathCall([Rs.ident("Value")], Rs.ident("String"), [
+                              Rs.dotCall(Rs.stringLiteral(auth.denied), Rs.ident("to_string"), []),
+                            ]),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            );
+            statements.push(
+              Rs.assign(
+                Rs.field(local("context"), Rs.ident("principal")),
+                Rs.some(local("principal")),
+              ),
+            );
+          }
+          const call = callLocal(
+            "in_context",
+            local("context"),
+            Rs.closureTyped(
+              [],
+              undefined,
+              Rs.pathCall(
+                [Rs.ident("reffect_generated")],
+                Rs.ident(`r_${name}`),
+                (protectedRpc ? [local("principal")] : []).concat(
+                  inputs.map((_input, i) => local(`arg_${i}`)),
+                ),
+              ),
+            ),
+          );
           const result =
             fn instanceof EffectFn
               ? Rs.match_(call, [
@@ -238,8 +350,10 @@ const compile = <Rpcs extends Rpc.Any>(
               : callLocal("success", encode(success, call));
           return { pat: Rs.stringPat(rpc._tag), body: Rs.block(statements, Rs.ok(result)) };
         });
+        if (auth && protectedCount === 0) throw unsupported("auth", "Bearer adapter is unused");
         return {
           path,
+          auth,
           program: Program.make(functions),
           arms,
           hasFrames: Object.values(functions).some((fn) => fn instanceof EffectFn),
@@ -264,6 +378,10 @@ const compile = <Rpcs extends Rpc.Any>(
       [
         { name: Rs.ident("tag"), type: Rs.refType(Rs.strType()) },
         { name: Rs.ident("payload"), type: Rs.refType(Rs.namedType("Value")) },
+        { name: Rs.ident("headers"), type: Rs.refType(Rs.namedType("HeaderMap")) },
+        { name: Rs.ident("message"), type: Rs.refType(Rs.namedType("Value")) },
+        { name: Rs.ident("state"), type: Rs.refType(Rs.namedType("RuntimeState")) },
+        { name: Rs.ident("context"), type: Rs.mutRefType(Rs.namedType("RequestContext")) },
       ],
       Rs.resultType(Rs.namedType("Value"), Rs.stringType()),
       Rs.block(
@@ -284,13 +402,35 @@ const compile = <Rpcs extends Rpc.Any>(
         ),
       ),
     );
+    const hasLogs = core.explanation.analysis.effects.includes(SyncEffects.Log);
+    const contextRuntime = hasLogs
+      ? String.raw`
+fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
+    let metadata = json!({"id":context.id, "tag":context.tag, "principal":context.principal.map(|p| p.to_string())});
+    reffect_generated::with_log_context(metadata.to_string(), f)
+}`
+      : "fn in_context<T>(_context: &RequestContext, f: impl FnOnce() -> T) -> T { f() }";
+    const authRuntime = prepared.auth
+      ? rpcAuthRuntime
+      : "#[derive(Clone)] struct RuntimeState; fn load_state() -> Result<RuntimeState, &'static str> { Ok(RuntimeState) }";
     const main = Rs.itemsText(
       [
         Rs.constItem(Rs.ident("RPC_PATH"), Rs.strRefType(), Rs.stringLiteral(prepared.path)),
         Rs.constItem(Rs.ident("MAX_BODY"), Rs.usizeType(), Rs.litInt(65536)),
         Rs.constItem(Rs.ident("MAX_BATCH"), Rs.usizeType(), Rs.litInt(64)),
+        ...(prepared.auth
+          ? [
+              Rs.constItem(
+                Rs.ident("CREDENTIALS_ENV"),
+                Rs.strRefType(),
+                Rs.stringLiteral(prepared.auth.credentialsEnv),
+              ),
+            ]
+          : []),
         Rs.fnItem(Rs.ident("clear_frames"), [], Rs.unitType(), Rs.block(clear)),
         dispatch,
+        Rs.verbatimItem(contextRuntime),
+        Rs.verbatimItem(authRuntime),
         Rs.verbatimItem(rpcRuntime),
       ],
       "\n",
@@ -302,17 +442,35 @@ const compile = <Rpcs extends Rpc.Any>(
       files: Object.freeze({
         "Cargo.toml":
           core.files["Cargo.toml"] +
-          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n',
+          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n' +
+          (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : ""),
         "src/lib.rs": core.files["src/lib.rs"],
         "src/main.rs": main,
       }),
       runtime: Object.freeze({
         id: "rust/axum-unary-json@1",
-        crates: Object.freeze(["axum@0.8.9", "tokio@1.53.1", "serde_json@1.0.151"]),
+        crates: Object.freeze(
+          ["axum@0.8.9", "tokio@1.53.1", "serde_json@1.0.151"].concat(
+            prepared.auth ? ["subtle@2.6.1"] : [],
+          ),
+        ),
         handlerProfile: "synchronous-scalars",
+        auth: prepared.auth
+          ? Object.freeze({
+              middleware: prepared.auth.middleware.key,
+              principalService: prepared.auth.principal.key,
+              credentialsEnv: prepared.auth.credentialsEnv,
+            })
+          : undefined,
       }),
     });
   });
 
 /** Generate a native unary JSON/HTTP server for the checked synchronous scalar profile. */
-export const NativeRpc = Object.freeze({ U64Json, bind, compile });
+export const NativeRpc = Object.freeze({
+  U64Json,
+  bind,
+  bindPrincipal,
+  bearer: RpcBearer.make,
+  compile,
+});

@@ -240,7 +240,9 @@ test("RPC compiler refuses unsupported codecs, payload layouts and route definit
     }),
   );
   const cases = [
-    NativeRpc.compile(middleware, { Check: NativeRpc.bind(scalar) }),
+    NativeRpc.compile(middleware, {
+      Check: NativeRpc.bindPrincipal(R.fn([R.U64, R.Bool], R.Bool, (_principal, value) => value)),
+    }),
     NativeRpc.compile(customDefect, { Check: NativeRpc.bind(scalar) }),
     NativeRpc.compile(unsupportedString, { Check: NativeRpc.bind(scalar) }),
     NativeRpc.compile(checked, { Check: NativeRpc.bind(scalar) }),

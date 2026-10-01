@@ -93,3 +93,5 @@ export type { OriginRecord, OccurrenceRecord, ProvenanceSnapshot } from "./prove
 export { NativeRpc } from "./native-rpc.ts";
 export type { RpcBinding, RpcArtifact } from "./native-rpc.ts";
 export { RpcCodecs } from "./rpc-codecs.ts";
+
+export { RpcBearer } from "./rpc-auth.ts";

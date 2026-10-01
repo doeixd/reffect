@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-01 — Authenticated native RPC and request logging
+
+- Added a checked bearer adapter for one stock middleware, typed string-literal authorization failure and exact bigint principal-service projection through NativeRpc.bindPrincipal. Payloads decode before auth; header normalization/override agrees with Effect. Domain errors remain separate. General Context/Layer/middleware and async execution are not admitted.
+- Runtime-only credentials are bounded, immutable shared server state; missing/invalid configuration refuses startup without exposing values. subtle 2.6.1 is selected only for auth. Dispatch owns a stack context borrowing ID/tag from the HTTP-owned body; native values remain plain u64/bool/(). Reachable local logging attaches a separate request field via a lexical RAII guard with nested/unwind restoration.
+- [Shared example](examples/rpc-auth/README.md) and [research/results](docs/research/rpc-auth.md) cover stock server/client parity, native debug/release, typed denial, payload-before-auth defects, header precedence/case/repetition, batches, 16 overlapping principals, 25 isolated logs, configuration limits and unsupported adapter/type refusals. Existing RPC corpus and logging conformance remain intact.
+- Validation: vp test passes 87 tests in 15 files; vp check, strict package TypeScript, workspace build, authenticated example and 233 local links/anchors pass. Compiler package build is fresh; unrelated packages use cache. Review corrected Rust closure shape, test logger ownership, Cargo-warning parsing and prelude adjacency; batch assertions use request IDs because the oracle can complete out of order. Post-commit checks repeat before publication.
+- Updated the plan: bounded intermediate failure accumulation and independent instrumentation selection next, then explicit async context/cancellation/finalization. This establishes synchronous request isolation, not async task isolation, JWT/identity-provider support or telemetry export.
+
+## 2026-10-01 — Authenticated RPC preparation
+
+- Recorded [middleware semantics and request ownership](docs/research/rpc-auth.md) before implementation: pinned Effect payload/header ordering, explicit bearer verifier, typed denial, scalar principal projection, runtime-only credentials and lexical synchronous log context. General services, async context and telemetry remain outside this slice.
+
 ## 2026-10-01 — Native scalar unary HTTP server
 
 - Recorded substrate/profile preparation before implementation in [unary RPC research](docs/research/unary-rpc.md). Added NativeRpc typed bindings/compilation and schema-only RpcCodecs, projecting shared flat RPC payloads into existing plain scalar Fn/EffectFn arguments through the checked compiler pipeline. Unsupported schemas, middleware, layouts and witnesses are refused.

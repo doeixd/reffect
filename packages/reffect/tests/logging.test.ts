@@ -1,4 +1,4 @@
-import { Effect, Exit, FileSystem, Logger } from "effect";
+import { Effect, Exit, FileSystem, Logger, Schema } from "effect";
 import { CurrentLogAnnotations, CurrentLogSpans } from "effect/References";
 import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
@@ -305,3 +305,68 @@ test("log authoring refuses invalid metadata and mismatched channels", async () 
   );
   expect(await codes(Compile.run(R.program({ forged })))).toContain("TYPE_MISMATCH");
 });
+
+test(
+  "native lexical log context restores nested and unwound scopes",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-log-context-" });
+          const artifact = yield* Compile.make(
+            R.program({
+              emit: R.fn([], R.Unit, R.Never, () => R.Log.info("context")),
+            }),
+          ).pipe(Compile.withSourceArtifacts(SourceArtifacts.None), Compile.run);
+          const directory = yield* CargoApi.write(
+            {
+              files: {
+                ...artifact.files,
+                "src/main.rs": String.raw`
+use reffect_generated::{r_emit, with_log_context};
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    r_emit().unwrap();
+    with_log_context(r#"{"id":"outer"}"#.to_string(), || {
+        r_emit().unwrap();
+        with_log_context(r#"{"id":"inner"}"#.to_string(), || r_emit().unwrap());
+        r_emit().unwrap();
+    });
+    let result = std::panic::catch_unwind(|| with_log_context(r#"{"id":"unwound"}"#.to_string(), || panic!("fixture")));
+    assert!(result.is_err());
+    r_emit().unwrap();
+}
+`,
+              },
+            },
+            `${parent}/crate`,
+          );
+          for (const profile of ["debug", "release"] as const) {
+            yield* CargoApi.build(directory, profile);
+            const result = yield* CargoApi.run(directory, "unused", [], profile);
+            const records = result.stderr
+              .split("\n")
+              .filter((line) => line.startsWith('{"schema":"reffect.log@1"'))
+              .map((line) =>
+                Schema.decodeUnknownSync(
+                  Schema.Struct({
+                    message: Schema.Literal("context"),
+                    request: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
+                  }),
+                )(JSON.parse(line)),
+              );
+            expect(records.map((record) => record.request?.id)).toEqual([
+              undefined,
+              "outer",
+              "inner",
+              "outer",
+              undefined,
+            ]);
+          }
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(2),
+);

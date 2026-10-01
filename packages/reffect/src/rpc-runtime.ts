@@ -1,6 +1,6 @@
 /** Audited HTTP substrate; dynamic tags/fields/calls are emitted separately through Rs. */
 export const rpcRuntime = String.raw`
-use axum::{body::Bytes, extract::DefaultBodyLimit, http::StatusCode, routing::post, Json, Router};
+use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use serde_json::{json, Value};
 
 fn success(value: Value) -> Value { json!({"_tag":"Success", "value":value}) }
@@ -41,7 +41,8 @@ fn bool_arg(value: &Value, name: Option<&str>) -> Result<bool, String> {
 fn unit_arg(value: &Value, name: Option<&str>) -> Result<(), String> {
     if value.is_null() { Ok(()) } else { Err(path_error("Expected null", name)) }
 }
-fn request(message: &Value) -> Value {
+struct RequestContext<'a> { id: &'a Value, tag: &'a str, principal: Option<u64> }
+fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState) -> Value {
     let Some(object) = message.as_object() else { return invalid("Expected Request object") };
     let Some(id) = object.get("id").filter(|v| v.is_string() || v.is_number()) else { return invalid("Invalid request id") };
     let Some(tag) = object.get("tag").and_then(Value::as_str) else { return invalid("Invalid request tag") };
@@ -59,14 +60,15 @@ fn request(message: &Value) -> Value {
     if object.get("sampled").map(|v| !v.is_boolean()).unwrap_or(false) { return invalid("Invalid trace context") }
     // Synchronous generated calls never suspend; no thread-local diagnostic state escapes a dispatch.
     clear_frames();
-    let result = dispatch(tag, payload);
+    let mut context = RequestContext { id, tag, principal: None };
+    let result = dispatch(tag, payload, headers, message, state, &mut context);
     clear_frames();
     match result { Ok(value) => exit(id, value), Err(error) => die(id, error) }
 }
 fn same_id(a: &Value, b: &Value) -> bool {
     match (a.as_f64(), b.as_f64()) { (Some(a), Some(b)) => a == b, _ => a == b }
 }
-async fn rpc(body: Bytes) -> (StatusCode, Json<Value>) {
+async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Value>) {
     let messages: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(_) => return (StatusCode::OK, Json(json!([{"_tag":"Defect", "defect":{"name":"SyntaxError", "message":"Invalid JSON"}}]))),
@@ -82,8 +84,8 @@ async fn rpc(body: Bytes) -> (StatusCode, Json<Value>) {
                 ids.push(id);
             }
         }
-        batch.iter().map(request).collect::<Vec<_>>()
-    } else { vec![request(&messages)] };
+        batch.iter().map(|message| request(message, &headers, &state)).collect::<Vec<_>>()
+    } else { vec![request(&messages, &headers, &state)] };
     (StatusCode::OK, Json(Value::Array(responses)))
 }
 #[tokio::main(flavor = "current_thread")]
@@ -98,11 +100,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => return Err("unknown server argument".into()),
         }
     }
+    let state = load_state()?;
     let listener = tokio::net::TcpListener::bind((address.as_str(), port)).await?;
     let address = listener.local_addr()?;
     let mut app = Router::new().route(RPC_PATH, post(rpc));
     if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }
-    app = app.layer(DefaultBodyLimit::max(MAX_BODY));
+    let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
     axum::serve(listener, app).await?;
     Ok(())

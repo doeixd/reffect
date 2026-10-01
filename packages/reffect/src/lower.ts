@@ -541,6 +541,17 @@ const logPrelude = Rs.itemsText(
         value: newCall(refCellPath, [newCall(rsSegments("Vec"), [])]),
       },
     ]),
+    Rs.verbatimItem(String.raw`
+thread_local! { static LOG_CONTEXT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }
+struct LogContextGuard(Option<String>);
+impl Drop for LogContextGuard {
+    fn drop(&mut self) { LOG_CONTEXT.with(|scope| *scope.borrow_mut() = self.0.take()); }
+}
+/// Lexical synchronous context only; returning a future does not install context during its polls.
+pub fn with_log_context<T>(context: String, f: impl FnOnce() -> T) -> T {
+    let _guard = LogContextGuard(LOG_CONTEXT.with(|scope| scope.replace(Some(context))));
+    f()
+}`),
   ],
   "\n",
 );
@@ -786,6 +797,7 @@ export const emitFunctions = (
               ` LOG_ANNOS.with(|scope| { for (name, value) in scope.borrow().iter() {${shadowed} if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str("\\""); log_record.push_str(name); log_record.push_str("\\":"); log_attr_json(*value, &mut log_record); } });`,
               ` } log_record.push('}');`,
               ` LOG_SPANS.with(|scope| { log_record.push_str(",\\"spans\\":["); for (index, entry) in scope.borrow().iter().rev().enumerate() { if index > 0 { log_record.push(','); } log_record.push_str("{\\"label\\":\\""); log_record.push_str(entry.0); log_record.push_str("\\",\\"elapsed_ms\\":"); log_record.push_str(&entry.1.elapsed().as_millis().to_string()); log_record.push('}'); } log_record.push(']'); });`,
+              ` LOG_CONTEXT.with(|scope| { if let Some(context) = scope.borrow().as_ref() { log_record.push_str(",\\"request\\":"); log_record.push_str(context); } });`,
               ` log_record.push('}'); eprintln!("{}", log_record); } } Ok(()) }`,
             );
             return joinFragments(parts);

@@ -21,7 +21,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 ## Observability design and research
 
-[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; source artifacts, logical frames and scoped logging are implemented for the scalar profile, while request telemetry remains planned.
+[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; source artifacts, logical frames and scoped logging are implemented for the scalar profile, with synchronous authenticated RPC request/log correlation now implemented. Async context, propagation and exported telemetry remain planned.
 
 [Observability research](research/observability.md) records pinned Effect RC.118 behavior, primary Rust/OTel/W3C sources and observed releases, alternatives and compatibility gaps checked before integration.
 
@@ -63,6 +63,8 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 ## RPC conformance
 
 [Unary RPC foundation](research/unary-rpc.md) records pinned HTTP/JSON and Schema contracts, the portable request/response corpus, stock-client/reference-server tests, the generated native scalar HTTP profile, and its real-socket debug/release acceptance evidence.
+
+[Authenticated RPC research](research/rpc-auth.md) defines the checked bearer adapter, principal service projection, runtime credentials and request/log ownership gates.
 
 ## Kernel research
 

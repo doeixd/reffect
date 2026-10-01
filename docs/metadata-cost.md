@@ -95,6 +95,8 @@ Static source names/messages/attribute keys can be interned or emitted as string
 
 Filter before expensive formatting, optional backtrace capture and ownership conversion where semantics permit. A disabled sink cannot justify dropping effectful payload computations or custom-logger observations. `format_args!` can borrow values for immediate formatting; an async queue needs a safe owned/redacted record before those values go out of scope. Bounded queues, record/attribute limits and declared overflow/flush behavior are part of the design. Telemetry-off, unsampled traces and stripped source names are distinct policies.
 
+The [authenticated RPC slice](research/rpc-auth.md) now follows this ownership model for synchronous calls: HTTP tasks own decoded bodies, dispatch borrows ID/tag through a stack context view, and the authenticated principal remains a plain u64. Immutable credentials allocate once in shared server state. Selected local logging prepares one context JSON string per invoked handler in a group with reachable logs; a lexical RAII guard restores it through nesting/unwinding. Groups without reachable logs skip that formatting and storage. There is still a per-log context lookup in logging builds, and JSON boundary/context allocations are not zero-overhead claims. Async poll/fork ownership remains unimplemented.
+
 ## Opt-out controls and defaults
 
 Keep independent policy axes. The implemented CompileSpec exposes Full/None artifact collection; the broader names below remain descriptive design choices:

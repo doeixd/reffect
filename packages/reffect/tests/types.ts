@@ -13,8 +13,8 @@ import {
   SourceArtifacts,
   SemanticRef,
 } from "../src/index.ts";
-import { Rpc, RpcGroup } from "effect/rpc";
-import { Effect, Schema } from "effect";
+import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
+import { Context, Effect, Schema } from "effect";
 import { Entity, Expr as EntityExpr, Query } from "foldkit-entity";
 import { Rs } from "../src/rust-emit.ts";
 import type { RsExpr, RsItem, RsMacroGroup, RsMacroRule, RsType } from "../src/rust-emit.ts";
@@ -37,6 +37,41 @@ export const typeChecks = () => {
       ["left"],
     ),
   });
+  class Principal extends Context.Service<Principal, bigint>()("test/Principal") {}
+  class OtherPrincipal extends Context.Service<OtherPrincipal, bigint>()("test/OtherPrincipal") {}
+  class Auth extends RpcMiddleware.Service<Auth, { provides: Principal }>()("test/Auth", {
+    error: Schema.Literal("Unauthorized"),
+  }) {}
+  const auth = NativeRpc.bearer(Auth, Principal, { credentialsEnv: "TEST_CREDENTIALS" });
+  // @ts-expect-error the adapter projects the middleware's declared service
+  NativeRpc.bearer(Auth, OtherPrincipal, { credentialsEnv: "TEST_CREDENTIALS" });
+  class NeedsService extends RpcMiddleware.Service<
+    NeedsService,
+    { provides: Principal; requires: OtherPrincipal }
+  >()("test/NeedsService", { error: Schema.Literal("Unauthorized") }) {}
+  // @ts-expect-error additional middleware requirements are unsupported
+  NativeRpc.bearer(NeedsService, Principal, { credentialsEnv: "TEST_CREDENTIALS" });
+  class MultipleServices extends RpcMiddleware.Service<
+    MultipleServices,
+    { provides: Principal | OtherPrincipal }
+  >()("test/MultipleServices", { error: Schema.Literal("Unauthorized") }) {}
+  // @ts-expect-error the adapter cannot silently drop an additional provided service
+  NativeRpc.bearer(MultipleServices, Principal, { credentialsEnv: "TEST_CREDENTIALS" });
+  const protectedGroup = rpcGroup.middleware(Auth);
+  const protectedFn = R.fn([R.U64, R.U64], R.U64, (principal, value) =>
+    principal.pipe(R.U64.add(value)),
+  );
+  NativeRpc.compile(
+    protectedGroup,
+    { Add: NativeRpc.bindPrincipal(protectedFn, ["left"]) },
+    { auth },
+  );
+  // @ts-expect-error protected procedures require principal projection
+  NativeRpc.compile(protectedGroup, { Add: NativeRpc.bind(rpcFn, ["left"]) }, { auth });
+  // @ts-expect-error a public procedure cannot receive an unauthenticated principal
+  NativeRpc.compile(rpcGroup, { Add: NativeRpc.bindPrincipal(protectedFn, ["left"]) });
+  // @ts-expect-error principal projection requires a first bigint argument
+  NativeRpc.bindPrincipal(R.fn([R.Bool], R.Bool, (value) => value));
   const rpcUnit = RpcGroup.make(
     Rpc.make("Unit", { payload: Schema.Undefined, success: Schema.Undefined }),
   );

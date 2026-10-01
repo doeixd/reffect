@@ -36,7 +36,7 @@ The compiler must know what each operation means, which types and representation
 
 Compile Effect semantics onto Rust std/Tokio and suitable crates. Prefer generated code when an abstraction can disappear; otherwise reuse execution machinery with a verified semantic adapter. Keep dedicated runtime code focused on the observable Effect behavior that those strategies cannot supply.
 
-The first meaningful workload is existing Foldkit Entity Expr/Query conformance running through a generated Rust evaluator. Unary Effect RPC is the first major public demo. The combined showcase is `examples/todo-fullstack`: one native executable serving Foldkit SSR, Effect RPC, Remote data/live updates, and SQLx/Postgres, with an ordinary Foldkit/Effect browser client. Foldkit Query conformance and a scalar unary RPC demonstration are implemented; the combined fullstack showcase remains a target.
+The first meaningful workload is existing Foldkit Entity Expr/Query conformance running through a generated Rust evaluator. Unary Effect RPC is the first major public demo. The combined showcase is `examples/todo-fullstack`: one native executable serving Foldkit SSR, Effect RPC, Remote data/live updates, and SQLx/Postgres, with an ordinary Foldkit/Effect browser client. Foldkit Query conformance and scalar unary RPC demonstrations, including checked bearer authentication and synchronous request/log context, are implemented; the combined fullstack showcase remains a target.
 
 # Read before working
 
