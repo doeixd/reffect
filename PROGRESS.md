@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-01 — Reconciling concurrent upstream implementation
+
+- Fetched twelve incoming commits through e91efa1 and fast-forwarded master after saving the unfinished local Query draft/research/dependency experiment in stash 0ca3899ac5100c02f3c8f2f29cbc88a766fc4eea. The four untracked effect reference documents remain preserved.
+- Reviewed the incoming Query, Effect, source-map/Cargo and design work. Recorded evidence and choices in [reconciliation research](docs/research/upstream-reconciliation.md): retain the broader dynamic UTF-16/encoded-primitive evaluator and RC.118 family instead of adding the narrower closed-fixture backend or retaining RC.116 overrides.
+- The fresh merged baseline initially passed 35 of 37 tests, including published three-interpreter Query conformance. Two multi-failure tests timed out on this Windows host; direct taskkill probing reproduced a 61.87-second host timeout, and the official Node spawner uses that path for failed processes. This identified the need for bounded test-budget adjustments alongside reachable inherited/accessor cell refusal before integrated validation.
+- Completed and pushed 2a52cb4: retain all broader upstream APIs, reject reachable inherited/accessor cells before native I/O, preserve unrelated row fields/original identities, use built-in scalar predicates, and apply bounded Windows multi-failure test budgets without weakening cleanup/assertions. Added LF checkout policy to make cross-platform formatting consistent; no Git user configuration changed.
+- Post-commit validation: all 38 tests pass with fresh native debug/release compilation, all 27 original evaluate/SQLite/Rust cases and actual mapped rustc failures. Task-scoped vp check and strict package TypeScript pass without warnings; workspace builds pass freshly; Expr, Query, Effect and Source examples pass. Root lint/type checking (`vp check --no-fmt`) passes; full formatting remains blocked only by the four preserved untracked user documents. The host taskkill delay recovered during the repeat: the same full suite fell from about 329 seconds to 42 seconds with unchanged native semantics.
+- Self-review traced reachable property reads, source snapshots, row identity, UTF-16/f64 protocol, data rejection before getters/native execution, diagnostic fallback, LF/coordinate fixtures and test failure counts. The unfinished local closed-fixture draft remains preserved in the named stash as historical work; no duplicate evaluator or RC.116 overrides were applied over the verified upstream implementation.
+
 ## 2026-10-01 — Facet evaluation
 
 - Reviewed Facet source at 65bae5c31a7ce401bc44630fb96250ea884cfd3e and registry releases before selecting a role. Recorded static SHAPE/borrowed Peek versus allocated Partial plans, feature/MSRV/version distinctions, unsafe layout/invariant boundaries and Schema/wire compatibility gates in [Facet research](docs/research/facet.md).
