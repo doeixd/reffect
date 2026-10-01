@@ -5,6 +5,8 @@ import { CargoApi } from "./cargo.ts";
 import type { GeneratedFiles } from "./cargo.ts";
 import { CompileError, SemanticRef, fail } from "./kernel.ts";
 import { foldkitMain, foldkitRuntime } from "./foldkit-runtime.ts";
+import { Rs } from "./rust-emit.ts";
+import type { RsExpr, RsStmt } from "./rust-emit.ts";
 
 type Scalar = string | number | boolean | null;
 type Kind = "string" | "number" | "boolean" | "null";
@@ -262,93 +264,302 @@ const token = (value: Scalar): string => {
   }
   return `s${Array.from({ length: value.length }, (_, i) => value.charCodeAt(i).toString(16).padStart(4, "0")).join("")}`;
 };
-const literalRust = (value: Scalar): string => {
-  // Only compiler-created ASCII token characters reach Rust source.
-  return `parse_value("${token(value)}")?`;
-};
+const literalRust = (value: Scalar): RsExpr =>
+  Rs.try_(Rs.call(Rs.identExpr(Rs.ident("parse_value")), [Rs.stringLiteral(token(value))]));
 const emitQuery = (query: CheckedQuery): string => {
-  const lines: string[] = [];
-  const emitted = new Map<Node, string>();
-  const expr = (node: Node): string => {
+  const emitted = new Map<Node, RsExpr>();
+  const bindings: RsStmt[] = [];
+  const rowsRef = Rs.identExpr(Rs.ident("rows"));
+  const inputRef = Rs.identExpr(Rs.ident("input"));
+  const expr = (node: Node): RsExpr => {
     const found = emitted.get(node);
     if (found) return found;
     const source = Match.value(node).pipe(
       Match.tagsExhaustive({
-        Field: (n) => `&row[${n.index}]`,
-        Input: (n) => `&input[${n.index}]`,
+        Field: (n) => Rs.refExpr(Rs.index(Rs.identExpr(Rs.ident("row")), n.index)),
+        Input: (n) => Rs.refExpr(Rs.index(inputRef, n.index)),
         Literal: (n) => literalRust(n.value),
-        Eq: (n) => `eq(${expr(n.left)}, ${expr(n.right)})`,
-        Null: (n) => `null(${expr(n.operand)}, ${n.present})`,
-        Contains: (n) => `contains(${expr(n.value)}, ${expr(n.search)})?`,
+        Eq: (n) => Rs.call(Rs.identExpr(Rs.ident("eq")), [expr(n.left), expr(n.right)]),
+        Null: (n) =>
+          Rs.call(Rs.identExpr(Rs.ident("null")), [expr(n.operand), Rs.litBool(n.present)]),
+        Contains: (n) =>
+          Rs.try_(Rs.call(Rs.identExpr(Rs.ident("contains")), [expr(n.value), expr(n.search)])),
       }),
     );
     const id = emitted.size;
+    const local = Rs.ident(`v${id}`);
     const borrowed = Match.value(node).pipe(
       Match.tags({ Field: () => true, Input: () => true }),
       Match.orElse(() => false),
     );
-    if (borrowed) lines.push(`    let v${id} = ${source};`);
-    else lines.push(`    let l${id} = ${source}; let v${id} = &l${id};`);
-    emitted.set(node, `v${id}`);
-    return `v${id}`;
+    if (borrowed) bindings.push(Rs.let_(local, undefined, source));
+    else {
+      const owned = Rs.ident(`l${id}`);
+      bindings.push(
+        Rs.concatStmt(
+          Rs.let_(owned, undefined, source),
+          Rs.let_(local, undefined, Rs.refExpr(Rs.identExpr(owned))),
+        ),
+      );
+    }
+    const reference = Rs.identExpr(local);
+    emitted.set(node, reference);
+    return reference;
   };
   // Retain where short-circuiting: later predicates may refuse unsupported runtime values.
   for (const predicate of query.where) {
     const value = expr(predicate);
-    lines.push(`    if !matches!(${value}, Value::Bool(true)) { return Ok(false); }`);
+    bindings.push(
+      Rs.blockStmt(
+        Rs.if_(
+          Rs.prefix("!", Rs.matchesExpr(value, [Rs.pat("Value::Bool(true)")])),
+          Rs.inlineStmtBlock(Rs.stmt(Rs.return_(Rs.ok(Rs.litBool(false))))),
+        ),
+      ),
+    );
   }
   const name = query.analysis.name;
-  const validate = (slot: Slot, value: string) => {
-    const patterns = [
-      "Value::Null",
+  const matchesName = Rs.ident(`matches_${name}`);
+  const validate = (slot: Slot, value: RsExpr): RsExpr =>
+    Rs.matchesExpr(value, [
+      Rs.pat("Value::Null"),
       ...slot.kinds
         .filter((k) => k !== "null")
-        .map(
-          (k) =>
-            ({ string: "Value::Text(_)", number: "Value::Number(_)", boolean: "Value::Bool(_)" })[
-              k
-            ],
+        .map((k) =>
+          Rs.pat(
+            { string: "Value::Text(_)", number: "Value::Number(_)", boolean: "Value::Bool(_)" }[k],
+          ),
         ),
-    ];
-    return `matches!(${value}, ${patterns.join(" | ")})`;
-  };
+    ]);
   const checks = [
-    ...query.analysis.inputs.map((s, i) => validate(s, `&input[${i}]`)),
-    ...query.analysis.fields.map((s, i) => `rows.iter().all(|row| ${validate(s, `&row[${i}]`)})`),
+    ...query.analysis.inputs.map((s, i) => validate(s, Rs.refExpr(Rs.index(inputRef, i)))),
+    ...query.analysis.fields.map((s, i) =>
+      Rs.dotChain(rowsRef, [
+        { method: Rs.ident("iter"), args: [] },
+        {
+          method: Rs.ident("all"),
+          args: [
+            Rs.closure(
+              Rs.pat("row"),
+              validate(s, Rs.refExpr(Rs.index(Rs.identExpr(Rs.ident("row")), i))),
+            ),
+          ],
+        },
+      ]),
+    ),
   ];
-  const comparison = query.order
-    .map(
-      (term) => `        let order = compare(&rows[*a][${term.index}], &rows[*b][${term.index}])?;
-        if order != Ordering::Equal { return Ok(${term.direction === "desc" ? "order.reverse()" : "order"}); }`,
-    )
-    .join("\n");
-  const validateOrder = query.order
-    .map(
-      (term) =>
-        `        for index in &selected { compare(&rows[*index][${term.index}], &rows[*index][${term.index}])?; }`,
-    )
-    .join("\n");
-  return `fn matches_${name}(input: &[Value], row: &[Value]) -> Result<bool, &'static str> {
-${lines.join("\n")}
-    Ok(true)
-}
-pub fn r_${name}(input: &[Value], rows: &[Vec<Value>]) -> Result<Vec<usize>, &'static str> {
-    if input.len() != ${query.analysis.inputs.length} || rows.iter().any(|r| r.len() != ${query.analysis.fields.length}) { return Err("incorrect evaluator arity"); }
-    if !(${checks.join(" && ") || "true"}) { return Err("INVALID_INPUT: expected an encoded primitive representation"); }
-    let mut selected = Vec::new();
-    for (index, row) in rows.iter().enumerate() { if matches_${name}(input, row)? { selected.push(index); } }
-    if selected.len() > 1 {
-${validateOrder}
-    }
-    let compare_rows = |a: &usize, b: &usize| -> Result<Ordering, &'static str> {
-${comparison}
-        Ok(Ordering::Equal)
-    };
-    // All sort keys have been validated; compare_rows is a total order in this profile.
-    selected.sort_by(|a, b| compare_rows(a, b).expect("validated primitive sort keys"));
-    Ok(selected)
-}
-`;
+  const rowKey = (row: RsExpr, term: { readonly index: number }) =>
+    Rs.indexExpr(row, Rs.litInt(term.index));
+  const comparison = query.order.flatMap((term) => [
+    Rs.let_(
+      Rs.ident("order"),
+      undefined,
+      Rs.try_(
+        Rs.call(Rs.identExpr(Rs.ident("compare")), [
+          Rs.refExpr(
+            rowKey(Rs.indexExpr(rowsRef, Rs.prefix("*", Rs.identExpr(Rs.ident("a")))), term),
+          ),
+          Rs.refExpr(
+            rowKey(Rs.indexExpr(rowsRef, Rs.prefix("*", Rs.identExpr(Rs.ident("b")))), term),
+          ),
+        ]),
+      ),
+    ),
+    Rs.blockStmt(
+      Rs.if_(
+        Rs.cmp(
+          Rs.identExpr(Rs.ident("order")),
+          "!=",
+          Rs.pathExpr(Rs.path([Rs.ident("Ordering"), Rs.ident("Equal")])),
+        ),
+        Rs.inlineStmtBlock(
+          Rs.stmt(
+            Rs.return_(
+              Rs.ok(
+                term.direction === "desc"
+                  ? Rs.dotCall(Rs.identExpr(Rs.ident("order")), Rs.ident("reverse"), [])
+                  : Rs.identExpr(Rs.ident("order")),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ]);
+  const validateOrder = query.order.map((term) =>
+    Rs.blockStmt(
+      Rs.forLoop(
+        Rs.pat("index"),
+        Rs.refExpr(Rs.identExpr(Rs.ident("selected"))),
+        Rs.inlineStmtBlock(
+          Rs.stmt(
+            Rs.try_(
+              Rs.call(Rs.identExpr(Rs.ident("compare")), [
+                Rs.refExpr(
+                  rowKey(
+                    Rs.indexExpr(rowsRef, Rs.prefix("*", Rs.identExpr(Rs.ident("index")))),
+                    term,
+                  ),
+                ),
+                Rs.refExpr(
+                  rowKey(
+                    Rs.indexExpr(rowsRef, Rs.prefix("*", Rs.identExpr(Rs.ident("index")))),
+                    term,
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  const ordering = Rs.pathExpr(Rs.path([Rs.ident("Ordering"), Rs.ident("Equal")]));
+  const matchesFn = Rs.fnItem(
+    matchesName,
+    [
+      { name: Rs.ident("input"), type: Rs.refType(Rs.sliceType(Rs.namedType("Value"))) },
+      { name: Rs.ident("row"), type: Rs.refType(Rs.sliceType(Rs.namedType("Value"))) },
+    ],
+    Rs.resultType(Rs.boolType(), Rs.strRefType()),
+    Rs.block(bindings, Rs.ok(Rs.litBool(true))),
+  );
+  const runFn = Rs.withVisibility(
+    Rs.visibility.public,
+    Rs.fnItem(
+      Rs.ident(`r_${name}`),
+      [
+        { name: Rs.ident("input"), type: Rs.refType(Rs.sliceType(Rs.namedType("Value"))) },
+        {
+          name: Rs.ident("rows"),
+          type: Rs.refType(Rs.sliceType(Rs.vecType(Rs.namedType("Value")))),
+        },
+      ],
+      Rs.resultType(Rs.vecType(Rs.usizeType()), Rs.strRefType()),
+      Rs.block(
+        [
+          Rs.blockStmt(
+            Rs.if_(
+              Rs.or(
+                Rs.cmp(
+                  Rs.dotCall(inputRef, Rs.ident("len"), []),
+                  "!=",
+                  Rs.litInt(query.analysis.inputs.length),
+                ),
+                Rs.dotChain(rowsRef, [
+                  { method: Rs.ident("iter"), args: [] },
+                  {
+                    method: Rs.ident("any"),
+                    args: [
+                      Rs.closure(
+                        Rs.pat("r"),
+                        Rs.cmp(
+                          Rs.dotCall(Rs.identExpr(Rs.ident("r")), Rs.ident("len"), []),
+                          "!=",
+                          Rs.litInt(query.analysis.fields.length),
+                        ),
+                      ),
+                    ],
+                  },
+                ]),
+              ),
+              Rs.inlineStmtBlock(
+                Rs.stmt(Rs.return_(Rs.err(Rs.stringLiteral("incorrect evaluator arity")))),
+              ),
+            ),
+          ),
+          Rs.blockStmt(
+            Rs.if_(
+              Rs.prefix("!", Rs.paren(Rs.and(...checks))),
+              Rs.inlineStmtBlock(
+                Rs.stmt(
+                  Rs.return_(
+                    Rs.err(
+                      Rs.stringLiteral(
+                        "INVALID_INPUT: expected an encoded primitive representation",
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Rs.letMut(
+            Rs.ident("selected"),
+            undefined,
+            Rs.pathCall([Rs.ident("Vec")], Rs.ident("new"), []),
+          ),
+          Rs.blockStmt(
+            Rs.forLoop(
+              Rs.pat("(index, row)"),
+              Rs.dotChain(rowsRef, [
+                { method: Rs.ident("iter"), args: [] },
+                { method: Rs.ident("enumerate"), args: [] },
+              ]),
+              Rs.inlineStmtBlock(
+                Rs.blockStmt(
+                  Rs.if_(
+                    Rs.try_(
+                      Rs.call(Rs.identExpr(matchesName), [inputRef, Rs.identExpr(Rs.ident("row"))]),
+                    ),
+                    Rs.inlineStmtBlock(
+                      Rs.stmt(
+                        Rs.dotCall(Rs.identExpr(Rs.ident("selected")), Rs.ident("push"), [
+                          Rs.identExpr(Rs.ident("index")),
+                        ]),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Rs.blockStmt(
+            Rs.if_(
+              Rs.cmp(
+                Rs.dotCall(Rs.identExpr(Rs.ident("selected")), Rs.ident("len"), []),
+                ">",
+                Rs.litInt(1),
+              ),
+              Rs.block(validateOrder, undefined, 8),
+            ),
+          ),
+          Rs.let_(
+            Rs.ident("compare_rows"),
+            undefined,
+            Rs.closureTyped(
+              [
+                { name: Rs.ident("a"), type: Rs.refType(Rs.usizeType()) },
+                { name: Rs.ident("b"), type: Rs.refType(Rs.usizeType()) },
+              ],
+              Rs.resultType(Rs.namedType("Ordering"), Rs.strRefType()),
+              Rs.block(comparison, Rs.ok(ordering), 8),
+            ),
+          ),
+          Rs.comment(
+            "All sort keys have been validated; compare_rows is a total order in this profile.",
+          ),
+          Rs.stmt(
+            Rs.dotCall(Rs.identExpr(Rs.ident("selected")), Rs.ident("sort_by"), [
+              Rs.closure(
+                Rs.pat("a, b"),
+                Rs.dotCall(
+                  Rs.call(Rs.identExpr(Rs.ident("compare_rows")), [
+                    Rs.identExpr(Rs.ident("a")),
+                    Rs.identExpr(Rs.ident("b")),
+                  ]),
+                  Rs.ident("expect"),
+                  [Rs.stringLiteral("validated primitive sort keys")],
+                ),
+              ),
+            ]),
+          ),
+        ],
+        Rs.ok(Rs.identExpr(Rs.ident("selected"))),
+      ),
+    ),
+  );
+  return `${matchesFn.text}\n${runFn.text}\n`;
 };
 const compile = Effect.fn("Foldkit.compile")(function* (
   queries: Readonly<Record<string, AnyQuery>>,
@@ -383,7 +594,15 @@ const compile = Effect.fn("Foldkit.compile")(function* (
         all
           .map(
             (q) =>
-              `        "${q.analysis.name}" => (${q.analysis.fields.length}, ${q.analysis.inputs.length}, reffect_generated::r_${q.analysis.name}),`,
+              `        ${Rs.stringPat(q.analysis.name).text} => ${
+                Rs.tuple(
+                  Rs.litInt(q.analysis.fields.length),
+                  Rs.litInt(q.analysis.inputs.length),
+                  Rs.pathExpr(
+                    Rs.path([Rs.ident("reffect_generated"), Rs.ident(`r_${q.analysis.name}`)]),
+                  ),
+                ).text
+              },`,
           )
           .join("\n"),
       ),

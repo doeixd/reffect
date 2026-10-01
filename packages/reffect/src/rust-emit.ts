@@ -460,6 +460,14 @@ export const Rs = Object.freeze({
     if (values.length === 0) return expr("true");
     return expr(values.map((value) => value.text).join(" && "));
   },
+  or: (...values: ReadonlyArray<RsExpr>): RsExpr => {
+    if (values.length === 0) return expr("false");
+    return expr(values.map((value) => value.text).join(" || "));
+  },
+  comment: (text: string): RsStmt => {
+    if (/[\r\n]/.test(text)) throw new TypeError("Rust comments must be single-line");
+    return stmt(`// ${text}`);
+  },
   await: (value: RsExpr): RsExpr => expr(`${value.text}.await`),
   awaitTry: (value: RsExpr): RsExpr => expr(`${value.text}.await?`),
   struct: (name: RustIdent, fields: ReadonlyArray<readonly [RustIdent, RsExpr]>): RsExpr =>
@@ -486,9 +494,10 @@ export const Rs = Object.freeze({
   },
   index: (value: RsExpr, index: number): RsExpr => {
     if (!Number.isInteger(index) || index < 0)
-      throw new RangeError(`Index must be a non-negative integer: ${String(index)}`);
+      throw new RangeError("Index must be a non-negative integer: " + String(index));
     return expr(`${value.text}[${String(index)}]`);
   },
+  indexExpr: (value: RsExpr, index: RsExpr): RsExpr => expr(`${value.text}[${index.text}]`),
   prefix: (operator: "!" | "*" | "&", value: RsExpr): RsExpr => expr(`${operator}${value.text}`),
   refExpr: (value: RsExpr): RsExpr => expr(`&${value.text}`),
   mutRefExpr: (value: RsExpr): RsExpr => expr(`&mut ${value.text}`),

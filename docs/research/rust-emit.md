@@ -96,6 +96,16 @@
   pre-migration emitter against the migrated one across a matrix covering pure
   Boolean/Unit functions, effect U64/Boolean/Unit/Never channels and scoped
   logging: all three matched character-for-character.
+- Foldkit's separate emitter (`foldkit.ts` `emitQuery`/`literalRust` and the
+  CLI arms) now builds through `Rs` too. Its `foldkitRuntime`/`foldkitMain`
+  shells remain a static audited template, which is exactly the documented role
+  of the `verbatim*` boundary. Foldkit output is unmapped (no authored ranges).
+  Generated `src/main.rs` is byte-identical and `src/lib.rs` is identical apart
+  from one deliberate normalization: the old template emitted a blank line when
+  a statement list was empty (`lines.join("\n")` on `[]`, or an empty
+  `if selected.len() > 1` block). Those artifacts are gone; the remaining lines
+  match one-for-one. Foldkit three-interpreter conformance (evaluate, upstream
+  Drizzle/SQLite, fresh debug/release native) passes unchanged.
 
 ## Alternatives
 
