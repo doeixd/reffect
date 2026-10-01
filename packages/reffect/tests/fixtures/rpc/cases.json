@@ -1,0 +1,137 @@
+[
+  {
+    "name": "u64 max stays a decimal string",
+    "request": {
+      "_tag": "Request",
+      "id": "max",
+      "tag": "Add",
+      "payload": { "left": "18446744073709551615", "right": "0" },
+      "headers": []
+    },
+    "response": [
+      {
+        "_tag": "Exit",
+        "requestId": "max",
+        "exit": { "_tag": "Success", "value": "18446744073709551615" }
+      }
+    ]
+  },
+  {
+    "name": "u64 arithmetic wraps",
+    "request": {
+      "_tag": "Request",
+      "id": 7,
+      "tag": "Add",
+      "payload": { "left": "18446744073709551615", "right": "1" },
+      "headers": []
+    },
+    "response": [{ "_tag": "Exit", "requestId": 7, "exit": { "_tag": "Success", "value": "0" } }]
+  },
+  {
+    "name": "Boolean success",
+    "request": {
+      "_tag": "Request",
+      "id": "yes",
+      "tag": "Guard",
+      "payload": { "allowed": true },
+      "headers": []
+    },
+    "response": [
+      { "_tag": "Exit", "requestId": "yes", "exit": { "_tag": "Success", "value": true } }
+    ]
+  },
+  {
+    "name": "Boolean domain failure is Fail",
+    "request": {
+      "_tag": "Request",
+      "id": "no",
+      "tag": "Guard",
+      "payload": { "allowed": false },
+      "headers": []
+    },
+    "response": [
+      {
+        "_tag": "Exit",
+        "requestId": "no",
+        "exit": { "_tag": "Failure", "cause": [{ "_tag": "Fail", "error": false }] }
+      }
+    ]
+  },
+  {
+    "name": "exact Unit crosses JSON as null",
+    "request": { "_tag": "Request", "id": "unit", "tag": "Unit", "payload": null, "headers": [] },
+    "response": [
+      { "_tag": "Exit", "requestId": "unit", "exit": { "_tag": "Success", "value": null } }
+    ]
+  },
+  {
+    "name": "unknown procedure is Die",
+    "request": {
+      "_tag": "Request",
+      "id": "unknown",
+      "tag": "Unknown",
+      "payload": {},
+      "headers": []
+    },
+    "response": [
+      {
+        "_tag": "Exit",
+        "requestId": "unknown",
+        "exit": {
+          "_tag": "Failure",
+          "cause": [{ "_tag": "Die", "defect": "Unknown request tag: Unknown" }]
+        }
+      }
+    ]
+  },
+  {
+    "name": "negative u64 never reaches the handler",
+    "request": {
+      "_tag": "Request",
+      "id": "negative",
+      "tag": "Add",
+      "payload": { "left": "-1", "right": "0" },
+      "headers": []
+    },
+    "response": [
+      {
+        "_tag": "Exit",
+        "requestId": "negative",
+        "exit": {
+          "_tag": "Failure",
+          "cause": [
+            {
+              "_tag": "Die",
+              "defect": "Expected a value greater than or equal to 0n\n  at [\"left\"]"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "out of range u64 never reaches the handler",
+    "request": {
+      "_tag": "Request",
+      "id": "overflow",
+      "tag": "Add",
+      "payload": { "left": "18446744073709551616", "right": "0" },
+      "headers": []
+    },
+    "response": [
+      {
+        "_tag": "Exit",
+        "requestId": "overflow",
+        "exit": {
+          "_tag": "Failure",
+          "cause": [
+            {
+              "_tag": "Die",
+              "defect": "Expected a value less than or equal to 18446744073709551615n\n  at [\"left\"]"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

@@ -21,7 +21,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 ## Observability design and research
 
-[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; native capabilities remain planned.
+[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; source artifacts, logical frames and scoped logging are implemented for the scalar profile, while request telemetry remains planned.
 
 [Observability research](research/observability.md) records pinned Effect RC.118 behavior, primary Rust/OTel/W3C sources and observed releases, alternatives and compatibility gaps checked before integration.
 
@@ -59,6 +59,10 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 ## Runtime lowering reference
 
 [Lowering Effect onto the Rust ecosystem](runtime-lowering.md) covers the candidate crate/primitive catalogue, direct lowering versus adapters versus dedicated runtime, operation/service/semantic registry families, Layer wiring, Ref specialization, caches/pools, batching, schedules, streams, and support reporting. The duplicated pasted conversation is integrated as one edited reference. Candidate mappings and research leads require verification; coverage percentages are not measured support.
+
+## RPC conformance
+
+[Unary RPC foundation](research/unary-rpc.md) records pinned HTTP/JSON and Schema contracts, the portable request/response corpus, stock-client/reference-server tests, and the next native server acceptance gates.
 
 ## Kernel research
 

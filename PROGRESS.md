@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-01 — Unary RPC conformance foundation
+
+- Reviewed milestone 3, current scalar handlers and diagnostic context; verified pinned Effect RC.118 source online and recorded decisions before implementation in [unary RPC research](docs/research/unary-rpc.md).
+- Added a shared RpcGroup with decimal-string bounded u64, Boolean success/error and exact Unit, backed by existing reffect reference handler IR. The injectable Fetch harness captures stock HTTP request/response bytes and owns the official server fiber through each scoped scenario. Fixed JSON vectors and the replay helper can target a future native server without replacing the stock client or codecs.
+- Tests cover exact success/typed-error/Unit envelopes, u64 precision and wrapping, schema rejection before handler execution, malformed JSON/unknown tags, overlapping requests and scoped header restoration, batch correlation/header precedence, broken-response refusal and independent RPC/HTTP trace locations.
+- Updated stale roadmap/package status. Native RPC serving, async compiled effects, general schema lowering, middleware, socket cancellation and request-safe native diagnostics remain unimplemented. Recorded intermediate failure-vector growth as a runtime hardening follow-up; the current 32-frame cap applies at storage.
+- Validation: all 81 workspace tests in 13 files pass, including 12 RPC tests and fresh native crates for existing profiles; strict package TypeScript, full `vp check`, workspace build and `git diff --check` pass. Reviewed the complete diff and verified 127 local document links/anchors. No feature exports, dependencies or generated Rust were changed.
+
 ## 2026-10-01 — Internal Rust emission helpers
 
 - Recorded scope, alternatives, byte-identity obligations and validation in [Rust emission research](docs/research/rust-emit.md). Added an internal `Rs` module with role-branded fragments, checked identifiers/types/literals, syntax and standard-library helpers, typed fragment templates, and `defineFn` for custom generated helpers. The custom helper's symbolic declared parameters produce an inferred argument tuple and runtime arity check; negative type contracts verify wrong-role interpolation and wrong call arity without casts. `Rs` remains off the package barrel.
