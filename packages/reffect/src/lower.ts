@@ -1,6 +1,7 @@
 import type { ProvenanceSnapshot } from "./provenance.ts";
 import { Provenance } from "./provenance.ts";
-import { SourceWriter } from "./source-writer.ts";
+import { SourceWriter, joinFragments, mapFragment, textFragment } from "./source-writer.ts";
+import type { MappedFragment } from "./source-writer.ts";
 import type { GeneratedRange } from "./source-artifact.ts";
 import { Match, Predicate } from "effect";
 import { BoolType, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.ts";
@@ -594,11 +595,6 @@ export const emitFunctions = (
   const typeName = (type: IRType<unknown>) => rsTypeOf(type).text;
   const write = (text: string | { readonly text: string }) =>
     writer.write(typeof text === "string" ? text : text.text);
-  const mapped = (
-    origin: string | undefined,
-    use: string | undefined,
-    text: string | { readonly text: string },
-  ) => writer.mapped(origin, use, () => write(text));
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   if (hasEffect) write(framePrelude);
   const hasLogScopes = module.functions.some((f) =>
@@ -615,28 +611,30 @@ export const emitFunctions = (
         helper.input.map((p) => Rs.identExpr(Rs.ident(p.name))),
       ).text;
     };
-    const call = (index: number, occurrence?: string) => {
-      const helper = f.helpers[index];
-      mapped(helper.origin, occurrence, callText(index));
+    const callFrag = (index: number, occurrence?: string): MappedFragment =>
+      mapFragment(f.helpers[index].origin, occurrence, textFragment(callText(index)));
+    const adaptFrag = (index: number, output: IRType<unknown>, occurrence?: string) => {
+      if (IRType.same(f.helpers[index].output, NeverType) && !IRType.same(output, NeverType))
+        return joinFragments([
+          "match ",
+          callFrag(index, occurrence),
+          " { Ok(value) => match value {}, Err((error, frames)) => Err((error, frames)) }",
+        ]);
+      return callFrag(index, occurrence);
     };
-    const adapt = (index: number, output: IRType<unknown>, occurrence?: string) => {
-      if (IRType.same(f.helpers[index].output, NeverType) && !IRType.same(output, NeverType)) {
-        write("match ");
-        call(index, occurrence);
-        write(" { Ok(value) => match value {}, Err((error, frames)) => Err((error, frames)) }");
-      } else call(index, occurrence);
-    };
-    const render = (e: RustExpr, role?: GeneratedRange["role"]): void => {
-      const body = () =>
+    const render = (e: RustExpr, role?: GeneratedRange["role"]): MappedFragment =>
+      mapFragment(
+        e.origin,
+        e.occurrence,
         Match.value(e).pipe(
           Match.tagsExhaustive({
-            Parameter: (n) => write(Rs.ident(`p${n.index}`).text),
-            Bound: (n) => write(Rs.ident(n.name).text),
-            Local: (n) => write(Rs.ident(`v${n.index}`).text),
+            Parameter: (n) => textFragment(Rs.ident(`p${n.index}`).text),
+            Bound: (n) => textFragment(Rs.ident(n.name).text),
+            Local: (n) => textFragment(Rs.ident(`v${n.index}`).text),
             Literal: (n) => {
-              if (Predicate.isUndefined(n.value)) return write(Rs.litUnit().text);
-              if (Predicate.isBigInt(n.value)) return write(Rs.litU64(n.value).text);
-              if (Predicate.isBoolean(n.value)) return write(Rs.litBool(n.value).text);
+              if (Predicate.isUndefined(n.value)) return textFragment(Rs.litUnit().text);
+              if (Predicate.isBigInt(n.value)) return textFragment(Rs.litU64(n.value).text);
+              if (Predicate.isBoolean(n.value)) return textFragment(Rs.litBool(n.value).text);
               throw fail(
                 "UNSUPPORTED_REPRESENTATION",
                 "lower",
@@ -645,57 +643,57 @@ export const emitFunctions = (
               );
             },
             Call: (n) => {
-              if (n.method === "not") {
-                write("!(");
-                render(n.args[0]);
-                write(")");
-              } else if (n.method === "eq" || n.method === "lt") {
-                write("(");
-                render(n.args[0]);
-                write(n.method === "eq" ? ") == (" : ") < (");
-                render(n.args[1]);
-                write(")");
-              } else {
-                write("(");
-                render(n.args[0]);
-                write(`).${Rs.ident(n.method).text}(`);
-                render(n.args[1]);
-                write(")");
-              }
+              if (n.method === "not") return joinFragments(["!(", render(n.args[0]), ")"]);
+              if (n.method === "eq" || n.method === "lt")
+                return joinFragments([
+                  "(",
+                  render(n.args[0]),
+                  n.method === "eq" ? ") == (" : ") < (",
+                  render(n.args[1]),
+                  ")",
+                ]);
+              return joinFragments([
+                "(",
+                render(n.args[0]),
+                `).${Rs.ident(n.method).text}(`,
+                render(n.args[1]),
+                ")",
+              ]);
             },
-            Match: (n) => {
-              write("if ");
-              render(n.condition);
-              write(" { ");
-              call(n.onTrue, n.onTrueUse);
-              write(" } else { ");
-              call(n.onFalse, n.onFalseUse);
-              write(" }");
-            },
+            Match: (n) =>
+              joinFragments([
+                "if ",
+                render(n.condition),
+                " { ",
+                callFrag(n.onTrue, n.onTrueUse),
+                " } else { ",
+                callFrag(n.onFalse, n.onFalseUse),
+                " }",
+              ]),
           }),
-        );
-      if (e.origin) writer.mapped(e.origin, e.occurrence, body, role);
-      else body();
-    };
-    const renderBlock = (block: RustBlock) => {
-      write("{\n");
+        ),
+        role,
+      );
+    const renderBlock = (block: RustBlock): MappedFragment => {
+      const parts: Array<string | MappedFragment> = ["{\n"];
       for (const binding of block.bindings) {
-        write(`    let ${Rs.ident(`v${binding.index}`).text}: `);
-        if (binding.value.origin)
-          writer.mapped(
+        parts.push(`    let ${Rs.ident(`v${binding.index}`).text}: `);
+        parts.push(
+          mapFragment(
             binding.value.origin,
             binding.value.occurrence,
-            () => write(typeName(binding.type)),
+            textFragment(typeName(binding.type)),
             "definition",
-          );
-        else write(typeName(binding.type));
-        write(" = ");
-        render(binding.value, "definition");
-        write(";\n");
+          ),
+        );
+        parts.push(" = ");
+        parts.push(render(binding.value, "definition"));
+        parts.push(";\n");
       }
-      write("    ");
-      render(block.body);
-      write("\n}");
+      parts.push("    ");
+      parts.push(render(block.body));
+      parts.push("\n}");
+      return joinFragments(parts);
     };
     const resultType = (output: IRType<unknown>, error?: IRType<unknown>) =>
       error ? Rs.resultType(rsTypeOf(output), rsTypeOf(error)).text : rsTypeOf(output).text;
@@ -707,78 +705,60 @@ export const emitFunctions = (
     const frameOf = (helper: Helper, kind: string): RsExpr =>
       frameLiteral(f.name, helper.path, kind, helper.origin);
     for (const helper of f.helpers) {
-      // Inlining shared control flow can recreate exponential trees; preserve existing optimization boundary.
-      write("#[inline(never)]\nfn ");
-      writer.mapped(
-        helper.origin,
-        useAt(helper.path),
-        () => write(Rs.ident(`h_${f.name}_${helper.index}`).text),
-        "definition",
-      );
-      write(
-        `(${helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`).join(", ")}) -> `,
-      );
+      const use = (edge: string) => useAt(`${helper.path}.${edge}`);
       const signature =
         helper.body._tag === "Pure"
           ? resultType(helper.output, helper.error)
           : helper.error
             ? tracedType(helper.output, helper.error)
             : resultType(helper.output, helper.error);
-      writer.mapped(helper.origin, useAt(helper.path), () => write(signature), "definition");
-      write(" ");
-      const use = (edge: string) => useAt(`${helper.path}.${edge}`);
-      Match.value(helper.body).pipe(
+      const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
           Pure: (n) => renderBlock(n.block),
-          Succeed: (n) => {
-            write("{ ");
-            mapped(helper.origin, undefined, "Ok");
-            write("(");
-            renderBlock(n.block);
-            write(") }");
-          },
-          Fail: (n) => {
-            write("{ ");
-            mapped(helper.origin, undefined, "Err");
-            write("((");
-            renderBlock(n.block);
-            write(`, vec![${frameOf(helper, "fail").text}])) }`);
-          },
-          Map: (n) => {
-            write("{ match ");
-            call(n.source, use("source"));
-            write(` { Ok(${Rs.ident(n.binder).text}) => Ok(`);
-            renderBlock(n.block);
-            write(
+          Succeed: (n) =>
+            joinFragments([
+              "{ ",
+              mapFragment(helper.origin, undefined, textFragment("Ok")),
+              "(",
+              renderBlock(n.block),
+              ") }",
+            ]),
+          Fail: (n) =>
+            joinFragments([
+              "{ ",
+              mapFragment(helper.origin, undefined, textFragment("Err")),
+              "((",
+              renderBlock(n.block),
+              `, vec![${frameOf(helper, "fail").text}])) }`,
+            ]),
+          Map: (n) =>
+            joinFragments([
+              "{ match ",
+              callFrag(n.source, use("source")),
+              ` { Ok(${Rs.ident(n.binder).text}) => Ok(`,
+              renderBlock(n.block),
               `), Err((error, mut frames)) => { frames.push(${frameOf(helper, "map").text}); Err((error, frames)) } } }`,
-            );
-          },
-          FlatMap: (n) => {
-            write("{ match ");
-            call(n.source, use("source"));
-            write(` { Ok(${Rs.ident(n.binder).text}) => match `);
-            adapt(n.body, helper.output, use("body"));
-            write(
+            ]),
+          FlatMap: (n) =>
+            joinFragments([
+              "{ match ",
+              callFrag(n.source, use("source")),
+              ` { Ok(${Rs.ident(n.binder).text}) => match `,
+              adaptFrag(n.body, helper.output, use("body")),
               ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap").text}); Err((error, frames)) } }`,
-            );
-            write(
               `, Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap").text}); Err((error, frames)) } } }`,
-            );
-          },
-          Match: (n) => {
-            write("{ if ");
-            renderBlock(n.condition);
-            write(" { match ");
-            adapt(n.onTrue, helper.output, use("onTrue"));
-            write(
+            ]),
+          Match: (n) =>
+            joinFragments([
+              "{ if ",
+              renderBlock(n.condition),
+              " { match ",
+              adaptFrag(n.onTrue, helper.output, use("onTrue")),
               ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match").text}); Err((error, frames)) } }`,
-            );
-            write(" } else { match ");
-            adapt(n.onFalse, helper.output, use("onFalse"));
-            write(
+              " } else { match ",
+              adaptFrag(n.onFalse, helper.output, use("onFalse")),
               ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match").text}); Err((error, frames)) } } } }`,
-            );
-          },
+            ]),
           Log: (n) => {
             const ordinal = logLevelOrdinal[n.level] ?? 99;
             const head =
@@ -786,100 +766,116 @@ export const emitFunctions = (
               n.level +
               '","message":' +
               jsonString(n.message).text;
-            write(
-              `{ if ${Rs.litU8(ordinal).text} >= MIN_LOG_LEVEL { { let mut log_record = String::from(`,
-            );
-            write(rustString(head));
-            write(`);`);
-            write(` log_record.push_str(",\\"annotations\\":{");`);
-            write(` { let mut log_attr_first = true;`);
+            const parts: Array<string | MappedFragment> = [
+              `{ if ${Rs.litU8(ordinal).text} >= MIN_LOG_LEVEL { { let mut log_record = String::from(${rustString(head).text});`,
+              ` log_record.push_str(",\\"annotations\\":{");`,
+              ` { let mut log_attr_first = true;`,
+            ];
             for (const attr of n.attributes) {
-              write(` { let log_attr_value = LogAttr::${attrVariant(attr.type).text}(`);
-              renderBlock(attr.block);
-              write(
-                `); if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str(`,
+              parts.push(` { let log_attr_value = LogAttr::${attrVariant(attr.type).text}(`);
+              parts.push(renderBlock(attr.block));
+              parts.push(
+                `); if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str(${rustString(`"${attr.key}":`).text}); log_attr_json(log_attr_value, &mut log_record); }`,
               );
-              write(rustString(`"${attr.key}":`));
-              write(`); log_attr_json(log_attr_value, &mut log_record); }`);
             }
             const shadowed =
               n.attributes.length === 0
                 ? ``
                 : ` if ${n.attributes.map((attr) => `*name == ${rustString(attr.key).text}`).join(" || ")} { continue; }`;
-            write(
+            parts.push(
               ` LOG_ANNOS.with(|scope| { for (name, value) in scope.borrow().iter() {${shadowed} if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str("\\""); log_record.push_str(name); log_record.push_str("\\":"); log_attr_json(*value, &mut log_record); } });`,
-            );
-            write(` } log_record.push('}');`);
-            write(
+              ` } log_record.push('}');`,
               ` LOG_SPANS.with(|scope| { log_record.push_str(",\\"spans\\":["); for (index, entry) in scope.borrow().iter().rev().enumerate() { if index > 0 { log_record.push(','); } log_record.push_str("{\\"label\\":\\""); log_record.push_str(entry.0); log_record.push_str("\\",\\"elapsed_ms\\":"); log_record.push_str(&entry.1.elapsed().as_millis().to_string()); log_record.push('}'); } log_record.push(']'); });`,
+              ` log_record.push('}'); eprintln!("{}", log_record); } } Ok(()) }`,
             );
-            write(` log_record.push('}'); eprintln!("{}", log_record); } } Ok(()) }`);
+            return joinFragments(parts);
           },
           Annotate: (n) => {
-            write(`{ let saved_log_annos = LOG_ANNOS.with(|scope| scope.borrow().clone());`);
-            write(` LOG_ANNOS.with(|scope| { let value = LogAttr::${attrVariant(n.type).text}(`);
-            renderBlock(n.value);
-            write(
+            const key = rustString(n.key).text;
+            return joinFragments([
+              `{ let saved_log_annos = LOG_ANNOS.with(|scope| scope.borrow().clone());`,
+              ` LOG_ANNOS.with(|scope| { let value = LogAttr::${attrVariant(n.type).text}(`,
+              renderBlock(n.value),
               `); let mut scope = scope.borrow_mut(); if let Some(slot) = scope.iter_mut().find(|(name, _)| *name == `,
-            );
-            write(rustString(n.key));
-            write(`) { *slot = (`);
-            write(rustString(n.key));
-            write(`, value); } else { scope.push((`);
-            write(rustString(n.key));
-            write(`, value)); } });`);
-            write(` match `);
-            adapt(n.body, helper.output, use("body"));
-            write(
+              key,
+              `) { *slot = (`,
+              key,
+              `, value); } else { scope.push((`,
+              key,
+              `, value)); } });`,
+              ` match `,
+              adaptFrag(n.body, helper.output, use("body")),
               ` { Ok(value) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); Ok(value) } Err((error, mut frames)) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); frames.push(${frameOf(helper, "annotate").text}); Err((error, frames)) } } }`,
-            );
+            ]);
           },
-          Span: (n) => {
-            write(`{ LOG_SPANS.with(|scope| scope.borrow_mut().push((`);
-            write(rustString(n.label));
-            write(`, std::time::Instant::now())));`);
-            write(` match `);
-            adapt(n.body, helper.output, use("body"));
-            write(
+          Span: (n) =>
+            joinFragments([
+              `{ LOG_SPANS.with(|scope| scope.borrow_mut().push((`,
+              rustString(n.label).text,
+              `, std::time::Instant::now())));`,
+              ` match `,
+              adaptFrag(n.body, helper.output, use("body")),
               ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } Err((error, mut frames)) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); frames.push(${frameOf(helper, "span").text}); Err((error, frames)) } } }`,
-            );
-          },
+            ]),
         }),
       );
-      write("\n\n");
-    }
-    write("\npub fn ");
-    writer.mapped(f.origin, useAt(f.path), () => write(`r_${f.name}`), "definition");
-    write(`(${f.input.map((type, i) => `p${i}: ${rsTypeOf(type).text}`).join(", ")}) -> `);
-    writer.mapped(
-      f.origin,
-      useAt(f.path),
-      () =>
-        write(
-          Match.value(f.node).pipe(
-            Match.tagsExhaustive({
-              Pure: () => typeName(f.output),
-              Effect: (n) => resultType(f.output, n.error),
-            }),
+      // Inlining shared control flow can recreate exponential trees; preserve existing optimization boundary.
+      writer.writeFragment(
+        joinFragments([
+          "#[inline(never)]\nfn ",
+          mapFragment(
+            helper.origin,
+            useAt(helper.path),
+            textFragment(Rs.ident(`h_${f.name}_${helper.index}`).text),
+            "definition",
           ),
+          `(${helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`).join(", ")}) -> `,
+          mapFragment(helper.origin, useAt(helper.path), textFragment(signature), "definition"),
+          " ",
+          helperBody,
+          "\n\n",
+        ]),
+      );
+    }
+    writer.writeFragment(
+      joinFragments([
+        "\npub fn ",
+        mapFragment(
+          f.origin,
+          useAt(f.path),
+          textFragment(Rs.ident(`r_${f.name}`).text),
+          "definition",
         ),
-      "definition",
+        `(${f.input.map((type, i) => `p${i}: ${rsTypeOf(type).text}`).join(", ")}) -> `,
+        mapFragment(
+          f.origin,
+          useAt(f.path),
+          textFragment(
+            Match.value(f.node).pipe(
+              Match.tagsExhaustive({
+                Pure: () => typeName(f.output),
+                Effect: (n) => resultType(f.output, n.error),
+              }),
+            ),
+          ),
+          "definition",
+        ),
+        " ",
+        Match.value(f.node).pipe(
+          Match.tagsExhaustive({
+            Pure: (n) => renderBlock(n.block),
+            // Public functions keep Result<T, E>; frames go to the thread-local stash for the binary.
+            Effect: (n) =>
+              joinFragments([
+                "{ match ",
+                adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
+                ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); store_frames(frames); Err(error) } } }`,
+              ]),
+          }),
+        ),
+        "\n\n",
+      ]),
     );
-    write(" ");
-    Match.value(f.node).pipe(
-      Match.tagsExhaustive({
-        Pure: (n) => renderBlock(n.block),
-        Effect: (n) => {
-          // Public functions keep Result<T, E>; frames go to the thread-local stash for the binary.
-          write("{ match ");
-          adapt(n.root, f.output, useAt(`${f.path}.body`));
-          write(
-            ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); store_frames(frames); Err(error) } } }`,
-          );
-        },
-      }),
-    );
-    write("\n\n");
   }
   const print = (type: IRType<unknown>, value: RsExpr, channel?: "ok" | "err"): RsExpr => {
     if (IRType.same(type, NeverType)) return Rs.unreachableMatch(value);

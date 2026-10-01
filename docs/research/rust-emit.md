@@ -81,16 +81,21 @@
   macro definitions; macro re-exports use ordinary structured `use` items.
 - Core emitter migration: `lower.ts` now builds both preludes, every
   result/signature type, frame/log JSON string literals, `print` output
-  expressions, the CLI match arms and `src/main.rs` through `Rs`. Identifiers,
-  literals and strings interpolated into the remaining interleaved mapped-write
-  glue are validated through `Rs.ident`/`Rs.litU8`/`Rs.stringLiteral`. Mapped
-  writes stay sequential because nested definition/use ranges are asserted
-  byte-exactly; full fragment composition would need relative-span writes in
-  `SourceWriter` and is deliberately not attempted here.
-- Byte identity was verified by generating `src/lib.rs`/`src/main.rs` from the
-  pre-migration emitter and the migrated one across a matrix covering pure
+  expressions, the CLI match arms and `src/main.rs` through `Rs`. The
+  interleaved helper/function bodies are composed with `MappedFragment`
+  (`joinFragments`/`mapFragment`/`textFragment` in `source-writer.ts`), which
+  carries authored ranges as UTF-8 byte offsets relative to the fragment;
+  `SourceWriter.writeFragment` turns them into file coordinates. This removes
+  the hand-assembled raw Rust templates without collapsing nested definition/
+  use attribution.
+- `joinFragments` measures UTF-8 offsets lazily, so artifact-off compilation
+  never touches `TextEncoder` (preserving the None-policy fault-injection
+  contract).
+- Byte **and** range identity were verified by diffing generated
+  `src/lib.rs`/`src/main.rs` plus the full `sources.ranges` array from the
+  pre-migration emitter against the migrated one across a matrix covering pure
   Boolean/Unit functions, effect U64/Boolean/Unit/Never channels and scoped
-  logging: both files matched character-for-character.
+  logging: all three matched character-for-character.
 
 ## Alternatives
 
