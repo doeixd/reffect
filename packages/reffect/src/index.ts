@@ -95,3 +95,5 @@ export type { RpcBinding, RpcArtifact } from "./native-rpc.ts";
 export { RpcCodecs } from "./rpc-codecs.ts";
 
 export { RpcBearer } from "./rpc-auth.ts";
+
+export { FailureFrames, FailureFramePolicy } from "./frame-policy.ts";

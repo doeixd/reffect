@@ -11,6 +11,7 @@ import {
   Foldkit,
   Compile,
   SourceArtifacts,
+  FailureFrames,
   SemanticRef,
 } from "../src/index.ts";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
@@ -142,6 +143,16 @@ export const typeChecks = () => {
     R.Effect.succeed(value).pipe(R.Effect.asVoid),
   );
   Reference.run(discard, [1n]);
+  const frameOff = Compile.make(R.program({ add })).pipe(
+    Compile.withFailureFrames(FailureFrames.None),
+  );
+  Compile.run(frameOff);
+  // @ts-expect-error frame selection does not alter the compiled input tuple
+  Reference.run(add, [true, true]);
+  // @ts-expect-error frame policies must be registered policy values
+  Compile.withFailureFrames("None");
+  // @ts-expect-error source artifact policies are independent from frame policies
+  Compile.withFailureFrames(SourceArtifacts.None);
   const framed = R.fn([R.Bool], R.U64, R.Unit, (c) =>
     R.Match.bool(c, R.Effect.succeed(R.U64.literal(1n)), R.Effect.fail(R.Unit.literal())),
   );

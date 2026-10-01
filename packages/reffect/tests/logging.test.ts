@@ -8,6 +8,7 @@ import {
   CompileError,
   Computation,
   EffectFn,
+  FailureFrames,
   NativeRunner,
   R,
   Reference,
@@ -174,45 +175,53 @@ test(
             directory: ".",
             prefix: "reffect-log-",
           });
-          const artifact = yield* Compile.make(program).pipe(
-            Compile.withSourceArtifacts(SourceArtifacts.None),
-            Compile.run,
-          );
-          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-          for (const profile of ["debug", "release"] as const) {
-            yield* CargoApi.build(directory, profile);
-            const cases: {
-              name: "ordered" | "shadowed" | "spanned" | "branched" | "shared" | "escaped";
-              args: readonly [];
-              nativeArgs: readonly [];
-            }[] = [
-              { name: "ordered", args: [], nativeArgs: [] },
-              { name: "shadowed", args: [], nativeArgs: [] },
-              { name: "spanned", args: [], nativeArgs: [] },
-              { name: "escaped", args: [], nativeArgs: [] },
-            ];
-            for (const c of cases) {
-              const expected = yield* referenceLogs(c.name, c.args);
-              expect(Exit.isSuccess(expected.exit), `${profile}/${c.name}`).toBe(true);
-              const result = yield* CargoApi.run(directory, c.name, c.nativeArgs, profile);
-              expect(result.stdout.trim()).toBe("ok:unit");
-              expect(nativeLogs(result.stderr).map(normalizeNative)).toEqual(expected.logs);
-            }
-            for (const flag of [true, false]) {
-              for (const name of ["branched", "shared"] as const) {
-                const expected = yield* referenceLogs(name, [flag]);
-                const result = yield* CargoApi.run(directory, name, [flag], profile);
+          for (const policy of [FailureFrames.Bounded, FailureFrames.None]) {
+            const artifact = yield* Compile.make(program).pipe(
+              Compile.withSourceArtifacts(SourceArtifacts.None),
+              Compile.withFailureFrames(policy),
+              Compile.run,
+            );
+            const directory = yield* CargoApi.write(artifact, `${parent}/${policy._tag}`);
+            for (const profile of ["debug", "release"] as const) {
+              yield* CargoApi.build(directory, profile);
+              const cases: {
+                name: "ordered" | "shadowed" | "spanned" | "branched" | "shared" | "escaped";
+                args: readonly [];
+                nativeArgs: readonly [];
+              }[] = [
+                { name: "ordered", args: [], nativeArgs: [] },
+                { name: "shadowed", args: [], nativeArgs: [] },
+                { name: "spanned", args: [], nativeArgs: [] },
+                { name: "escaped", args: [], nativeArgs: [] },
+              ];
+              for (const c of cases) {
+                const expected = yield* referenceLogs(c.name, c.args);
+                expect(Exit.isSuccess(expected.exit), `${profile}/${c.name}`).toBe(true);
+                const result = yield* CargoApi.run(directory, c.name, c.nativeArgs, profile);
+                expect(result.stdout.trim()).toBe("ok:unit");
                 expect(nativeLogs(result.stderr).map(normalizeNative)).toEqual(expected.logs);
               }
+              for (const flag of [true, false]) {
+                for (const name of ["branched", "shared"] as const) {
+                  const expected = yield* referenceLogs(name, [flag]);
+                  const result = yield* CargoApi.run(directory, name, [flag], profile);
+                  expect(nativeLogs(result.stderr).map(normalizeNative)).toEqual(expected.logs);
+                }
+              }
+              // Shared log nodes emit once per execution, not once per static use.
+              const sharedTrue = yield* referenceLogs("shared", [true]);
+              expect(sharedTrue.logs).toHaveLength(1);
+              // Default minimum filters Trace and Debug on both sides.
+              const levels = yield* referenceLogs("everyLevel", []);
+              expect(levels.logs.map((log) => log.level)).toEqual([
+                "Info",
+                "Warn",
+                "Error",
+                "Fatal",
+              ]);
+              const nativeLevels = yield* CargoApi.run(directory, "everyLevel", [], profile);
+              expect(nativeLogs(nativeLevels.stderr).map(normalizeNative)).toEqual(levels.logs);
             }
-            // Shared log nodes emit once per execution, not once per static use.
-            const sharedTrue = yield* referenceLogs("shared", [true]);
-            expect(sharedTrue.logs).toHaveLength(1);
-            // Default minimum filters Trace and Debug on both sides.
-            const levels = yield* referenceLogs("everyLevel", []);
-            expect(levels.logs.map((log) => log.level)).toEqual(["Info", "Warn", "Error", "Fatal"]);
-            const nativeLevels = yield* CargoApi.run(directory, "everyLevel", [], profile);
-            expect(nativeLogs(nativeLevels.stderr).map(normalizeNative)).toEqual(levels.logs);
           }
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
@@ -369,4 +378,52 @@ fn main() {
     );
   },
   nativeTestBudget(2),
+);
+
+test(
+  "failure restores native annotation/span scopes with either frame policy",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-log-restoration-" });
+          const expected = [];
+          for (const flag of [true, false]) {
+            const record = yield* referenceLogs("failing", [flag]);
+            expect(Exit.isFailure(record.exit)).toBe(true);
+            expected.push(...record.logs);
+          }
+          expected.push(...(yield* referenceLogs("ordered", [])).logs);
+          for (const policy of [FailureFrames.Bounded, FailureFrames.None]) {
+            const artifact = yield* Compile.make(program).pipe(
+              Compile.withSourceArtifacts(SourceArtifacts.None),
+              Compile.withFailureFrames(policy),
+              Compile.run,
+            );
+            const directory = yield* CargoApi.write(
+              {
+                files: {
+                  ...artifact.files,
+                  "src/main.rs": `fn main() {
+    assert_eq!(reffect_generated::r_failing(true), Err(()));
+    assert_eq!(reffect_generated::r_failing(false), Err(()));
+    reffect_generated::r_ordered().unwrap();
+}
+`,
+                },
+              },
+              `${parent}/${policy._tag}`,
+            );
+            for (const profile of ["debug", "release"] as const) {
+              yield* CargoApi.build(directory, profile);
+              const result = yield* CargoApi.run(directory, "ignored", [], profile);
+              expect(nativeLogs(result.stderr).map(normalizeNative)).toEqual(expected);
+            }
+          }
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(0),
 );

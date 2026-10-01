@@ -12,7 +12,7 @@ The later [runtime lowering reference](runtime-lowering.md) adds implementation-
 
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.
 
-The [metadata cost design](metadata-cost.md) adds a real compiler artifact-off path and independent instrumentation policy before the next logical-frame/Unit/logging slice. Keep native scalar layouts unchanged and measure failure representations, disabled paths and context ownership. [Typed Rust helpers](rust-emission.md) grow with those emitters. The [optional Volar/editor track](editor-tooling.md) is a tooling consumer in milestones 2–3, with source/checker compatibility gates, not a new prerequisite or syntax milestone.
+The [metadata cost design](metadata-cost.md) now includes the shipped source artifact-off path and independent frame policy, with bounded failure construction and measured allocation/layout costs. Unit, logical frames and scoped logging are also shipped for the scalar profile. Keep native scalar layouts unchanged and measure failure representations, disabled paths and context ownership. [Typed Rust helpers](rust-emission.md) grow with those emitters. The [optional Volar/editor track](editor-tooling.md) is a tooling consumer in milestones 2–3, with source/checker compatibility gates, not a new prerequisite or syntax milestone.
 
 ## Contents
 

@@ -1,6 +1,7 @@
 import { Effect, Exit, Predicate, Schema } from "effect";
 import { CargoApi } from "./cargo.ts";
-import { EffectFn } from "./effect-ir.ts";
+import { FailureFrames } from "./frame-policy.ts";
+import { EffectFn, maxLogicalFrames } from "./effect-ir.ts";
 import { BoolType, IRType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Fn, Inputs } from "./kernel.ts";
 import type { Artifact } from "./compiler.ts";
@@ -172,6 +173,16 @@ const decodeFrames = (name: string, stderr: string) =>
     const decoded = yield* Schema.decodeUnknownEffect(frameEnvelope)(envelope).pipe(
       Effect.mapError((cause) => fail("INVALID_NATIVE_FRAMES", "native", name, cause.message)),
     );
+    if (
+      decoded.frames.length > maxLogicalFrames ||
+      (decoded.omitted > 0 && decoded.frames.length !== maxLogicalFrames)
+    )
+      return yield* fail(
+        "INVALID_NATIVE_FRAMES",
+        "native",
+        name,
+        "Frame envelope violates the capture bound",
+      );
     for (const frame of decoded.frames) {
       if (!frame.function.length || !frame.path.length || !frame.kind.length)
         return yield* fail(
@@ -224,6 +235,13 @@ const runWithFramesUnknown = Effect.fn("NativeRunner.runWithFramesUnknown")(func
   args: readonly unknown[],
   profile: "debug" | "release" = "debug",
 ) {
+  if (FailureFrames.isNone(artifact.failureFrames))
+    return yield* fail(
+      "UNSUPPORTED_FRAME_POLICY",
+      "native",
+      name,
+      "Failure frame observation requires FailureFrames.Bounded",
+    );
   yield* locate(artifact, name, fn);
   const values = yield* encodeArguments(fn, name, args);
   const result = yield* CargoApi.run(directory, name, values, profile);

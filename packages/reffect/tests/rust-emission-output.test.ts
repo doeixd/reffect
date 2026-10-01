@@ -4,12 +4,10 @@ import { Effect, Schema } from "effect";
 import { Entity, Expr, Order, Query } from "foldkit-entity";
 
 /**
- * Locks the exact Rust scaffolding built by the typed `Rs` helpers: the two
- * runtime preludes and the CLI shell. Function bodies are covered by the
- * native conformance suites; these assertions pin the audited static shapes so
- * a builder change cannot silently rewrite them.
+ * Pins the typed logging prelude/CLI shell and bounded-frame scaffold interface.
+ * Native conformance and allocation probes verify propagation and storage behavior.
  */
-test("Rs-built preludes and CLI keep their exact generated shape", async () => {
+test("runtime scaffolds and Rs-built logging/CLI retain their generated contracts", async () => {
   const pure = R.fn([R.Bool, R.Bool], R.Bool, (c, v) => R.Match.bool(c, v, v));
   const logged = R.fn([R.U64], R.U64, R.U64, (v) =>
     R.Log.info("first", [["count", R.U64.literal(1n)]]).pipe(
@@ -20,24 +18,10 @@ test("Rs-built preludes and CLI keep their exact generated shape", async () => {
   const lib = artifact.files["src/lib.rs"];
   const main = artifact.files["src/main.rs"];
 
-  const framePrelude = [
-    "thread_local! {",
-    "    static LAST_FRAMES: std::cell::RefCell<Vec<&'static str>> = std::cell::RefCell::new(Vec::new());",
-    "    static LAST_OMITTED: std::cell::Cell<usize> = std::cell::Cell::new(0);",
-    "}",
-    "fn store_frames(frames: Vec<&'static str>) {",
-    "    let omitted = frames.len().saturating_sub(32);",
-    "    let mut kept = frames;",
-    "    kept.truncate(32);",
-    "    LAST_OMITTED.set(omitted);",
-    "    LAST_FRAMES.with(|cell| *cell.borrow_mut() = kept);",
-    "}",
-    "pub fn take_last_frames() -> (Vec<&'static str>, usize) {",
-    "    (LAST_FRAMES.with(|cell| std::mem::take(&mut *cell.borrow_mut())), LAST_OMITTED.get())",
-    "}",
-    "",
-  ].join("\n");
-  expect(lib.startsWith(framePrelude)).toBe(true);
+  expect(lib.startsWith("const MAX_LOGICAL_FRAMES: usize = 32;\nstruct FrameTrail {")).toBe(true);
+  expect(lib).toContain("frames: [&'static str; MAX_LOGICAL_FRAMES]");
+  expect(lib).toContain("pub fn take_last_frames() -> (Vec<&'static str>, usize)");
+  expect(lib).toContain("pub fn clear_last_frames()");
 
   const logPrelude = [
     "#[derive(Clone, Copy)]",

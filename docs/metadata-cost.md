@@ -2,19 +2,19 @@
 
 [Research and measurements](research/metadata-and-editor-tooling.md) · [Source maps](source-maps.md) · [Observability](observability.md)
 
-Source annotations cost TypeScript authoring/compiler memory and build work. They do not add fields, pointers, allocations, map lookups or instrumentation to generated Rust numbers. Keep that separation as logging and logical failure frames arrive. Full/None compiler artifact policy is now implemented; the broader capture/instrumentation/storage controls below remain design guidance.
+Source annotations cost TypeScript authoring/compiler memory and build work. They do not add fields, pointers, allocations, map lookups or instrumentation to generated Rust numbers. Full/None source artifact policy and independent Bounded/None failure frame capture are implemented. Authored logging remains independent; automatic capture and broader signal/export controls below remain design guidance.
 
 ## What the current implementation carries
 
-| Place                            | Implemented storage and lifetime                                                                                   | Cost                                                                                                                      |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| TS type witnesses and operations | Shared immutable semantic objects; source sites belong to expression/function wrappers                             | Semantic descriptions already exist at authoring; no per-runtime-number source descriptor                                 |
-| TS Expr/Fn/Computation/EffectFn  | One `source` reference; unannotated wrappers share frozen `emptySource`                                            | JS object slot on every wrapper; annotated copies allocate a wrapper and metadata objects                                 |
-| SourceFile/SourceSite            | File text and cached line starts shared by sites; sites store offsets/name/file reference                          | Text lives while reachable through a program, artifact explanation or editor snapshot; it is not copied per number        |
-| Compile/lower/emit               | Build-local node/occurrence indexes, origin/site tables, paths, Rust source chunks/ranges, digest buffers and JSON | Traversal, allocations, hashing and serialization even for unannotated programs                                           |
-| Returned Artifact                | Rust strings, decoded map, serialized auxiliary files and explanation retaining the program                        | Several representations coexist; omitting source text from JSON does not remove the in-memory program's source references |
-| Native library                   | Ordinary `u64`, `bool`, `Result` and helper functions                                                              | No source metadata in runtime values; no native provenance resolver or frames are emitted today                           |
-| Map files on disk                | External `reffect.sources.json` and build manifest                                                                 | Build/package bytes; these JSON files are not linked into the executable                                                  |
+| Place                            | Implemented storage and lifetime                                                                                   | Cost                                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| TS type witnesses and operations | Shared immutable semantic objects; source sites belong to expression/function wrappers                             | Semantic descriptions already exist at authoring; no per-runtime-number source descriptor                                                 |
+| TS Expr/Fn/Computation/EffectFn  | One `source` reference; unannotated wrappers share frozen `emptySource`                                            | JS object slot on every wrapper; annotated copies allocate a wrapper and metadata objects                                                 |
+| SourceFile/SourceSite            | File text and cached line starts shared by sites; sites store offsets/name/file reference                          | Text lives while reachable through a program, artifact explanation or editor snapshot; it is not copied per number                        |
+| Compile/lower/emit               | Build-local node/occurrence indexes, origin/site tables, paths, Rust source chunks/ranges, digest buffers and JSON | Full collects provenance/ranges/hashes/JSON even for unannotated programs; None skips that bookkeeping                                    |
+| Returned Artifact                | Rust strings, optional map/auxiliary files, selected frame policy and explanation retaining the program            | Several representations coexist; omitting source text from JSON does not remove the in-memory program's source references                 |
+| Native library                   | Ordinary `u64`, `bool`, `Result` and helper functions                                                              | Scalars remain plain; optional boxed bounded failure trails, static frame descriptors and scoped log context are separate runtime storage |
+| Map files on disk                | External `reffect.sources.json` and build manifest                                                                 | Build/package bytes; these JSON files are not linked into the executable                                                                  |
 
 An IR `Expr<u64>` describes code to compile; it is not the native `u64` produced by that code. Generated values can live in registers, stack slots or enclosing objects as Rust optimizes them. Existing CLI `String`/`Vec` allocations are separate from metadata. The reference interpreter runs JS/Effect and has its own allocation costs; native conclusions do not describe its throughput.
 
@@ -40,7 +40,74 @@ Historical mapped baseline on Node 24.19.0, linux/x64, before artifact-off imple
 
 The generated sources were identical. Compiler timing differences are within this small noisy sample; they do not prove annotations improve compilation. Heap readings include runtime caches and exclude transient peak buffers, and this workload shares source sites heavily. No universal overhead percentage follows. The clearest finding is that baseline provenance serialization/retention is substantial relative to the small generated program, including when there are no authored sites. Prioritize skipping unrequested artifacts and compact build-local indexes before micro-optimizing the source reference.
 
-### Full/None implementation measurement
+### Native failure-frame costs
+
+The scalar compiler now offers `Compile.withFailureFrames(FailureFrames.None)`
+and `NativeRpc.compile(..., { failureFrames: FailureFrames.None })` independently
+of Full/None source artifacts. Default Bounded capture uses a Box<FrameTrail>
+with 32 static string references, length and omitted count. Error propagation
+never grows an intermediate vector. Reference capture obeys the same bound;
+innermost-first ordering and payloads stay unchanged. Frame-off native code
+contains no frame descriptors, stash, propagation or envelope. Authored logging,
+annotations and span timers remain enabled whenever authored/reachable.
+
+The [reproducible native probe](../packages/reffect/scripts/frame-cost.ts) measures
+actual generated u64/u64 helper Result layout, representative Boolean/Unit/Never
+layouts, allocations/bytes and five release timing samples. Run from the root:
+
+```sh
+. "$HOME/.cargo/env"
+vp exec node --experimental-transform-types packages/reffect/scripts/frame-cost.ts
+```
+
+Observed on **rustc 1.98.1, LLVM 22.1.8, x86_64-unknown-linux-gnu**:
+
+| Shape                                   | Frames stripped |         Bounded capture |
+| --------------------------------------- | --------------: | ----------------------: |
+| Native u64                              |         8 bytes |                 8 bytes |
+| Generated Result<u64,u64> helper        |        16 bytes |                16 bytes |
+| Representative Result<bool,bool> helper |         2 bytes |                16 bytes |
+| Representative Result<Unit,Unit> helper |          1 byte |                 8 bytes |
+| Representative Result<u64,Never> helper |         8 bytes |                16 bytes |
+| Diagnostic allocations on success       |               0 |                       0 |
+| Diagnostic allocations per failure      |               0 | 1 allocation, 528 bytes |
+
+The former Result<u64,(u64,Vec<&str>)> layout measures 32 bytes; putting the
+bounded array inline in that Err representation measures 536 bytes. The boxed
+capsule therefore improves this generated helper's layout while avoiding an
+array inside each Result. These sizes are target/compiler observations, not ABI
+promises. Infallibility alone did not erase the annotated representation in the
+representative layout probe; future specialization should be driven by evidence.
+
+The deep workload chooses either immediate success or failure through 128 Map
+boundaries. Its failure retains exactly 32 frames and reports 99 omitted
+boundaries (131 total including Fail, Match and function). No diagnostic
+allocation occurs on success in either debug or release; failure uses one
+capsule without reallocations, independent of depth. Observation through
+`take_last_frames` converts to Vec and may allocate separately; RPC uses
+`clear_last_frames` to drop without conversion. A second take returns empty/zero,
+including the omitted count. The stash retains at most one prior failure; when
+a new failure is constructed before replacing it, two capsules can briefly
+coexist (1,056 bytes of capsule storage on this target). Releasing/draining the
+stash releases its owner; public successful calls do not access or clear it.
+
+Timing samples are recorded in the [research](research/failure-frames.md#construction-bounds-and-frame-policy-preparation--2026-10-01).
+They exclude CLI parsing, JSON/envelope serialization, observation and authored
+logs; allocator counters and black_box are included. Constant payloads and
+metadata stripping allow Rust to simplify this workload, and a shared cloud
+executor adds scheduling noise. The observations establish bounds and show
+nonzero diagnostic overhead; they are not a general throughput claim.
+
+Source path literals still contribute static executable bytes and can grow
+roughly quadratically with deep nesting. This slice bounds trail entries and
+allocations, not emitted descriptor bytes or execution call-stack depth. Source
+artifacts and Plan explanations still retain their authored graphs as described
+above. The frame selection is recorded in immutable requests/plans/artifacts;
+existing source manifests bind emitted byte digests, and there is no persisted
+compile-cache policy API yet. Async task/future layout, retained dynamic context,
+export queues and sink policy remain separately costed follow-ups.
+
+## Full/None implementation measurement
 
 Observed on Node 24.21.0, win32/x64, five isolated samples per variant (same workload; native checks were running concurrently, so timing remains noisy):
 
@@ -99,19 +166,19 @@ The [authenticated RPC slice](research/rpc-auth.md) now follows this ownership m
 
 ## Opt-out controls and defaults
 
-Keep independent policy axes. The implemented CompileSpec exposes Full/None artifact collection; the broader names below remain descriptive design choices:
+Keep independent policy axes. CompileSpec implements Full/None source artifacts and FailureFrames.Bounded/None. The remaining choices below are design guidance:
 
-| Policy                             | Proposed choices                                                 | What turning it off means                                                                                                              |
+| Policy                             | Choices                                                          | What turning it off means                                                                                                              |
 | ---------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Automatic authoring capture        | none / names / explicit-or-AST ranges / best-effort dev stacks   | Plugin/capture does no work; manually created annotations already allocated unless author omits them                                   |
 | Compiler artifact retention        | none / names / external full ranges                              | Skip unrequested collection/ranges/hashing/JSON, not merely omit files after emission; none retains semantic diagnostic codes/IR paths |
 | Original source packaging          | omit / private snapshots                                         | Runtime does not load source text; program/editor memory is governed separately                                                        |
-| Runtime diagnostic instrumentation | none / bounded failures / selected detailed frames               | None emits no site arguments/frame operations/descriptors; failures preserve selected failure observations                             |
+| Runtime diagnostic instrumentation | Bounded / None (implemented); detailed frames (planned)          | None emits no site arguments/frame operations/descriptors; failures preserve selected failure observations                             |
 | Runtime signals and sinks          | selected local/tracing/log/metric/OTLP capabilities and policies | No providers/crates/queues for unreachable signals; observed application logging cannot be silently erased                             |
 
-Keep the current default experience: explicit annotations, external ranges, source contents omitted and no native runtime instrumentation. Add opt-outs without changing outcomes, wire schemas or plugin-free authoring. Artifact types must honestly represent absence/precision instead of fabricating an empty full-quality map. Diagnose incompatibilities if a requested observer requires stripped information. Include policy/schema/version and selected runtime representation in cache keys/manifest/explain output.
+The current default uses explicit annotations, external ranges, omitted source contents and bounded failure capture. Frame capture can be stripped at compilation; authored local logging and annotation/span behavior stay enabled. Add opt-outs without changing outcomes, wire schemas or plugin-free authoring. Artifact types must honestly represent absence/precision instead of fabricating an empty full-quality map. Diagnose incompatibilities if a requested observer requires stripped information. Include policy/schema/version and selected runtime representation in cache keys/manifest/explain output.
 
-Before the next frame/logging implementation, preserve these policy contracts and verify that no-instrumentation native sources stay identical with annotations on/off. The artifact-off path now has fault-injection tests for omitted work, reduced diagnostics, native parity and missing-map fallback. Names-only projection, source-bundle formats and metadata-storage replacement can follow consumers and measurements rather than blocking basic logging.
+Frame-off code uses plain Result helpers and emits no frame descriptors, propagation, stash or envelope; Full/None source artifact selection produces identical frame-off Rust files. The artifact-off path now has fault-injection tests for omitted work, reduced diagnostics, native parity and missing-map fallback. Names-only projection, source-bundle formats and metadata-storage replacement can follow consumers and measurements rather than blocking basic logging.
 
 ## Performance acceptance
 

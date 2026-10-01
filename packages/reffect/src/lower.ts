@@ -6,7 +6,10 @@ import type { GeneratedRange } from "./source-artifact.ts";
 import { Match, Predicate } from "effect";
 import { BoolType, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Expr, OperationRef, Program } from "./kernel.ts";
-import { EffectFn } from "./effect-ir.ts";
+import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
+import type { FailureFramePolicy } from "./frame-policy.ts";
+import { frameRuntime } from "./frame-runtime.ts";
+import { EffectFn, maxLogicalFrames } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
@@ -124,11 +127,13 @@ interface RustFunction {
     | { readonly _tag: "Effect"; readonly root: number; readonly error: IRType<unknown> };
 }
 export interface RustModule {
+  readonly failureFrames: FailureFramePolicy;
   readonly sourceArtifacts: FullSourceArtifacts;
   readonly provenance: ProvenanceSnapshot;
   readonly functions: readonly RustFunction[];
 }
 export interface UnmappedRustModule {
+  readonly failureFrames: FailureFramePolicy;
   readonly sourceArtifacts: NoneSourceArtifacts;
   readonly provenance?: never;
   readonly functions: readonly RustFunction[];
@@ -147,23 +152,28 @@ export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: FullSourceArtifacts,
+  failureFrames?: FailureFramePolicy,
 ): RustModule;
 export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: NoneSourceArtifacts,
+  failureFrames?: FailureFramePolicy,
 ): UnmappedRustModule;
 export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: ArtifactPolicy,
+  failureFrames?: FailureFramePolicy,
 ): LoweredModule;
 export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.Bounded,
 ): LoweredModule {
   checkArtifactPolicy(policy);
+  checkFailureFramePolicy(failureFrames);
   const provenance = SourceArtifacts.isNone(policy) ? undefined : new Provenance(program);
   const functions = Object.freeze(
     Object.entries(program.functions).map(([name, f]): RustFunction => {
@@ -373,92 +383,27 @@ export function lowerFunctions(
   );
   return provenance
     ? Object.freeze({
+        failureFrames,
         sourceArtifacts: SourceArtifacts.Full,
         provenance: provenance.snapshot(),
         functions,
       })
-    : Object.freeze({ sourceArtifacts: SourceArtifacts.None, functions });
+    : Object.freeze({ failureFrames, sourceArtifacts: SourceArtifacts.None, functions });
 }
 
 const rsSegments = (...names: string[]) => names.map((name) => Rs.ident(name));
 const identExpr = (name: string) => Rs.identExpr(Rs.ident(name));
 const stdCellPath = rsSegments("std", "cell");
 const refCellPath = [...stdCellPath, Rs.ident("RefCell")];
-const cellPath = [...stdCellPath, Rs.ident("Cell")];
-const framesType = Rs.vecType(Rs.strRefType());
 const refCellOf = (inner: RsType) => Rs.genericType(Rs.pathType(refCellPath), [inner]);
-const cellOf = (inner: RsType) => Rs.genericType(Rs.pathType(cellPath), [inner]);
 const newCall = (path: ReturnType<typeof rsSegments>, args: readonly RsExpr[]) =>
   Rs.pathCall(path, Rs.ident("new"), args);
 
-/** Failure-only frame stash; success paths never touch it. No dependencies. */
+/** The bounded array lives behind a failure-only handle, keeping helper Results compact. */
 const framePrelude = Rs.itemsText(
   [
-    Rs.threadLocalItem([
-      {
-        name: Rs.ident("LAST_FRAMES"),
-        type: refCellOf(framesType),
-        value: newCall(refCellPath, [newCall(rsSegments("Vec"), [])]),
-      },
-      {
-        name: Rs.ident("LAST_OMITTED"),
-        type: cellOf(Rs.usizeType()),
-        value: newCall(cellPath, [Rs.litInt(0)]),
-      },
-    ]),
-    Rs.fnItem(
-      Rs.ident("store_frames"),
-      [{ name: Rs.ident("frames"), type: framesType }],
-      Rs.unitType(),
-      Rs.block([
-        Rs.let_(
-          Rs.ident("omitted"),
-          undefined,
-          Rs.dotChain(identExpr("frames"), [
-            { method: Rs.ident("len"), args: [] },
-            { method: Rs.ident("saturating_sub"), args: [Rs.litInt(32)] },
-          ]),
-        ),
-        Rs.letMut(Rs.ident("kept"), undefined, identExpr("frames")),
-        Rs.stmt(Rs.dotCall(identExpr("kept"), Rs.ident("truncate"), [Rs.litInt(32)])),
-        Rs.stmt(Rs.dotCall(identExpr("LAST_OMITTED"), Rs.ident("set"), [identExpr("omitted")])),
-        Rs.stmt(
-          Rs.dotCall(identExpr("LAST_FRAMES"), Rs.ident("with"), [
-            Rs.closure(
-              Rs.pat("cell"),
-              Rs.assignExpr(
-                Rs.prefix("*", Rs.dotCall(identExpr("cell"), Rs.ident("borrow_mut"), [])),
-                identExpr("kept"),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-    ),
-    Rs.withVisibility(
-      Rs.visibility.public,
-      Rs.fnItem(
-        Rs.ident("take_last_frames"),
-        [],
-        Rs.tupleType([framesType, Rs.usizeType()]),
-        Rs.block(
-          [],
-          Rs.tuple(
-            Rs.dotCall(identExpr("LAST_FRAMES"), Rs.ident("with"), [
-              Rs.closure(
-                Rs.pat("cell"),
-                Rs.pathCall(rsSegments("std", "mem"), Rs.ident("take"), [
-                  Rs.mutRefExpr(
-                    Rs.prefix("*", Rs.dotCall(identExpr("cell"), Rs.ident("borrow_mut"), [])),
-                  ),
-                ]),
-              ),
-            ]),
-            Rs.dotCall(identExpr("LAST_OMITTED"), Rs.ident("get"), []),
-          ),
-        ),
-      ),
-    ),
+    Rs.constItem(Rs.ident("MAX_LOGICAL_FRAMES"), Rs.usizeType(), Rs.litInt(maxLogicalFrames)),
+    Rs.verbatimItem(frameRuntime),
   ],
   "\n",
 );
@@ -607,7 +552,8 @@ export const emitFunctions = (
   const write = (text: string | { readonly text: string }) =>
     writer.write(typeof text === "string" ? text : text.text);
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
-  if (hasEffect) write(framePrelude);
+  const captureFrames = !FailureFrames.isNone(module.failureFrames);
+  if (hasEffect && captureFrames) write(framePrelude);
   const hasLogScopes = module.functions.some((f) =>
     f.helpers.some(
       (h) => h.body._tag === "Log" || h.body._tag === "Annotate" || h.body._tag === "Span",
@@ -629,7 +575,7 @@ export const emitFunctions = (
         return joinFragments([
           "match ",
           callFrag(index, occurrence),
-          " { Ok(value) => match value {}, Err((error, frames)) => Err((error, frames)) }",
+          " { Ok(value) => match value {}, Err(error) => Err(error) }",
         ]);
       return callFrag(index, occurrence);
     };
@@ -711,10 +657,21 @@ export const emitFunctions = (
     // Internal Effect helpers carry failure frames alongside the payload; the public
     // function strips them back to Result<T, E> and stashes the frames for the binary.
     const tracedType = (output: IRType<unknown>, error: IRType<unknown>) =>
-      Rs.resultType(rsTypeOf(output), Rs.tupleType([rsTypeOf(error), Rs.vecType(Rs.strRefType())]))
-        .text;
+      captureFrames
+        ? Rs.resultType(
+            rsTypeOf(output),
+            Rs.tupleType([
+              rsTypeOf(error),
+              Rs.genericType(Rs.namedType("Box"), [Rs.namedType("FrameTrail")]),
+            ]),
+          ).text
+        : resultType(output, error);
     const frameOf = (helper: Helper, kind: string): RsExpr =>
       frameLiteral(f.name, helper.path, kind, helper.origin);
+    const failureArm = (helper: Helper, kind: string, cleanup = ""): string =>
+      captureFrames
+        ? `Err((error, mut frames)) => { ${cleanup}frames.push(${frameOf(helper, kind).text}); Err((error, frames)) }`
+        : `Err(error) => { ${cleanup}Err(error) }`;
     for (const helper of f.helpers) {
       const use = (edge: string) => useAt(`${helper.path}.${edge}`);
       const signature =
@@ -738,9 +695,11 @@ export const emitFunctions = (
             joinFragments([
               "{ ",
               mapFragment(helper.origin, undefined, textFragment("Err")),
-              "((",
+              captureFrames ? "((" : "(",
               renderBlock(n.block),
-              `, vec![${frameOf(helper, "fail").text}])) }`,
+              captureFrames
+                ? `, ${Rs.pathCall(rsSegments("FrameTrail"), Rs.ident("new"), [frameOf(helper, "fail")]).text})) }`
+                : ") }",
             ]),
           Map: (n) =>
             joinFragments([
@@ -748,7 +707,7 @@ export const emitFunctions = (
               callFrag(n.source, use("source")),
               ` { Ok(${Rs.ident(n.binder).text}) => Ok(`,
               renderBlock(n.block),
-              `), Err((error, mut frames)) => { frames.push(${frameOf(helper, "map").text}); Err((error, frames)) } } }`,
+              `), ${failureArm(helper, "map")} } }`,
             ]),
           FlatMap: (n) =>
             joinFragments([
@@ -756,8 +715,8 @@ export const emitFunctions = (
               callFrag(n.source, use("source")),
               ` { Ok(${Rs.ident(n.binder).text}) => match `,
               adaptFrag(n.body, helper.output, use("body")),
-              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap").text}); Err((error, frames)) } }`,
-              `, Err((error, mut frames)) => { frames.push(${frameOf(helper, "flatMap").text}); Err((error, frames)) } } }`,
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "flatMap")} }`,
+              `, ${failureArm(helper, "flatMap")} } }`,
             ]),
           Match: (n) =>
             joinFragments([
@@ -765,10 +724,10 @@ export const emitFunctions = (
               renderBlock(n.condition),
               " { match ",
               adaptFrag(n.onTrue, helper.output, use("onTrue")),
-              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match").text}); Err((error, frames)) } }`,
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "match")} }`,
               " } else { match ",
               adaptFrag(n.onFalse, helper.output, use("onFalse")),
-              ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameOf(helper, "match").text}); Err((error, frames)) } } } }`,
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "match")} } } }`,
             ]),
           Log: (n) => {
             const ordinal = logLevelOrdinal[n.level] ?? 99;
@@ -817,7 +776,7 @@ export const emitFunctions = (
               `, value)); } });`,
               ` match `,
               adaptFrag(n.body, helper.output, use("body")),
-              ` { Ok(value) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); Ok(value) } Err((error, mut frames)) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); frames.push(${frameOf(helper, "annotate").text}); Err((error, frames)) } } }`,
+              ` { Ok(value) => { LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); Ok(value) } ${failureArm(helper, "annotate", "LOG_ANNOS.with(|scope| *scope.borrow_mut() = saved_log_annos); ")} } }`,
             ]);
           },
           Span: (n) =>
@@ -827,7 +786,7 @@ export const emitFunctions = (
               `, std::time::Instant::now())));`,
               ` match `,
               adaptFrag(n.body, helper.output, use("body")),
-              ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } Err((error, mut frames)) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); frames.push(${frameOf(helper, "span").text}); Err((error, frames)) } } }`,
+              ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } ${failureArm(helper, "span", "LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); ")} } }`,
             ]),
         }),
       );
@@ -878,11 +837,13 @@ export const emitFunctions = (
             Pure: (n) => renderBlock(n.block),
             // Public functions keep Result<T, E>; frames go to the thread-local stash for the binary.
             Effect: (n) =>
-              joinFragments([
-                "{ match ",
-                adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
-                ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); store_frames(frames); Err(error) } } }`,
-              ]),
+              captureFrames
+                ? joinFragments([
+                    "{ match ",
+                    adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
+                    ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); store_frames(frames); Err(error) } } }`,
+                  ])
+                : joinFragments(["{ ", adaptFrag(n.root, f.output, useAt(`${f.path}.body`)), " }"]),
           }),
         ),
         "\n\n",
@@ -984,7 +945,7 @@ export const emitFunctions = (
               pat: Rs.pat("Err(error)"),
               body: Rs.inlineStmtBlock(
                 Rs.stmt(print(n.error, identExpr("error"), "err")),
-                Rs.blockStmt(framesBlock),
+                ...(captureFrames ? [Rs.blockStmt(framesBlock)] : []),
               ),
             },
           ]),

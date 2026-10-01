@@ -428,7 +428,12 @@ export interface FramedExit<A, E> {
   readonly omitted: number;
 }
 type FramedFailure =
-  | { readonly _tag: "Domain"; readonly error: unknown; readonly frames: readonly LogicalFrame[] }
+  | {
+      readonly _tag: "Domain";
+      readonly error: unknown;
+      readonly frames: readonly LogicalFrame[];
+      readonly omitted: number;
+    }
   | { readonly _tag: "Internal"; readonly cause: CompileError };
 const frame = (path: string, kind: LogicalFrame["kind"]): LogicalFrame =>
   Object.freeze({ path, kind });
@@ -519,7 +524,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           : {
               _tag: "Domain",
               error: failure.error,
-              frames: failure.frames.concat([frame(path, kind)]),
+              frames:
+                failure.frames.length < maxLogicalFrames
+                  ? failure.frames.concat([frame(path, kind)])
+                  : failure.frames,
+              omitted: failure.omitted + (failure.frames.length < maxLogicalFrames ? 0 : 1),
             };
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
@@ -543,6 +552,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   _tag: "Domain",
                   error: payload,
                   frames: [frame(path, "fail")],
+                  omitted: 0,
                 } as const),
               ),
             ),
@@ -640,14 +650,16 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
       frames: Object.freeze([]),
       omitted: 0,
     };
-  const withFunction = outcome.failure.frames.concat([
-    frame(basePath.split(".").slice(0, -1).join(".") || basePath, "function"),
-  ]);
-  const kept = withFunction.slice(0, maxLogicalFrames);
+  const hasRoom = outcome.failure.frames.length < maxLogicalFrames;
+  const kept = hasRoom
+    ? outcome.failure.frames.concat([
+        frame(basePath.split(".").slice(0, -1).join(".") || basePath, "function"),
+      ])
+    : outcome.failure.frames;
   return {
     exit: Exit.fail(outcome.failure.error as E),
     frames: Object.freeze(kept),
-    omitted: withFunction.length - kept.length,
+    omitted: outcome.failure.omitted + (hasRoom ? 0 : 1),
   };
 });
 export const EffectReference = Object.freeze({

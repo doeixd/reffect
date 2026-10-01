@@ -2,7 +2,7 @@
 
 [Roadmap](../PLAN.md) · [Research and checked sources](research/observability.md) · [Runtime lowering](runtime-lowering.md) · [Compiler API](compiler-api.md)
 
-This is the selected design direction, finalized 2026-10-01. The compiler supports synchronous Boolean/u64 computations and Foldkit Query evaluation. Explicit builder provenance, generated Rust ranges and mapped build diagnostics are now [implemented](source-maps.md#implemented-foundation); native logging, tracing, metrics, logical failure stacks and automatic source-map producers remain proposed.
+This is the selected design direction, finalized 2026-10-01. The compiler supports synchronous Boolean/u64 computations and Foldkit Query evaluation. Explicit builder provenance, generated Rust ranges and mapped build diagnostics are now [implemented](source-maps.md#implemented-foundation); bounded logical failure stacks, independent frame stripping, scoped JSON logging and synchronous authenticated RPC log correlation are implemented. Async context, exported tracing/metrics and automatic source-map producers remain proposed.
 
 ## Recommended architecture
 

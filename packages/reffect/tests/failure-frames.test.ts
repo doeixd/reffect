@@ -153,7 +153,7 @@ test(
             );
             const deepRef = yield* Reference.runWithFrames(deep, [], "functions.deep.body");
             expect(deepNative.frames).toHaveLength(32);
-            expect(deepNative.omitted).toBeGreaterThan(0);
+            expect(deepNative.omitted).toBe(10);
             expect(pathsOf(deepNative.frames)).toEqual(pathsOf(deepRef.frames));
             expect(deepNative.omitted).toBe(deepRef.omitted);
           }
@@ -261,6 +261,22 @@ test(
         fn: "failer",
         out: "err:u64:9",
         err: '{"schema":"reffect.frames@1","frames":[],"omitted":-1}',
+      },
+      {
+        dir: "overBound",
+        fn: "failer",
+        out: "err:u64:9",
+        err: JSON.stringify({
+          schema: "reffect.frames@1",
+          frames: Array.from({ length: 33 }, () => ({ function: "f", path: "p", kind: "fail" })),
+          omitted: 0,
+        }),
+      },
+      {
+        dir: "falseTruncation",
+        fn: "failer",
+        out: "err:u64:9",
+        err: '{"schema":"reffect.frames@1","frames":[],"omitted":1}',
       },
       {
         dir: "successEnvelope",

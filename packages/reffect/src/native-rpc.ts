@@ -1,6 +1,8 @@
 import { Effect, Schema, SchemaAST } from "effect";
 import { Rpc, type RpcGroup } from "effect/rpc";
 import { Compile, type Plan } from "./compiler.ts";
+import { FailureFrames } from "./frame-policy.ts";
+import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
 import type { GeneratedFiles } from "./cargo.ts";
 import { EffectFn, SyncEffects } from "./effect-ir.ts";
@@ -59,6 +61,7 @@ type Bindings<Rpcs extends Rpc.Any> = {
   };
 };
 export interface RpcArtifact extends GeneratedFiles {
+  readonly failureFrames: FailureFramePolicy;
   readonly explanation: Plan;
   readonly stages: readonly string[];
   readonly sourceArtifacts: typeof SourceArtifacts.None;
@@ -129,7 +132,11 @@ const bindPrincipal = <F extends AnyFn, const Fields extends readonly string[] =
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
   bindings: Bindings<Rpcs>,
-  options: { readonly path?: string; readonly auth?: RpcBearer } = {},
+  options: {
+    readonly path?: string;
+    readonly auth?: RpcBearer;
+    readonly failureFrames?: FailureFramePolicy;
+  } = {},
 ): Effect.Effect<RpcArtifact, import("./kernel.ts").CompileError> =>
   Effect.gen(function* () {
     const prepared = yield* Effect.try({
@@ -363,16 +370,20 @@ const compile = <Rpcs extends Rpc.Any>(
         cause instanceof CompileError ? cause : unsupported("group", String(cause)),
     });
     const core = yield* Compile.run(
-      Compile.make(prepared.program).pipe(Compile.withSourceArtifacts(SourceArtifacts.None)),
+      Compile.make(prepared.program).pipe(
+        Compile.withSourceArtifacts(SourceArtifacts.None),
+        Compile.withFailureFrames(options.failureFrames ?? FailureFrames.Bounded),
+      ),
     );
-    const clear = prepared.hasFrames
-      ? [
-          Rs.letDiscard(
-            Rs.tupleType([Rs.vecType(Rs.strRefType()), Rs.usizeType()]),
-            Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident("take_last_frames"), []),
-          ),
-        ]
-      : [];
+    const clear =
+      prepared.hasFrames && !FailureFrames.isNone(core.failureFrames)
+        ? [
+            Rs.letDiscard(
+              Rs.unitType(),
+              Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident("clear_last_frames"), []),
+            ),
+          ]
+        : [];
     const dispatch = Rs.fnItem(
       Rs.ident("dispatch"),
       [
@@ -427,16 +438,19 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
               ),
             ]
           : []),
-        Rs.fnItem(Rs.ident("clear_frames"), [], Rs.unitType(), Rs.block(clear)),
+        ...(clear.length
+          ? [Rs.fnItem(Rs.ident("clear_frames"), [], Rs.unitType(), Rs.block(clear))]
+          : []),
         dispatch,
         Rs.verbatimItem(contextRuntime),
         Rs.verbatimItem(authRuntime),
-        Rs.verbatimItem(rpcRuntime),
+        Rs.verbatimItem(rpcRuntime(clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined)),
       ],
       "\n",
     ).text;
     return Object.freeze({
       sourceArtifacts: SourceArtifacts.None,
+      failureFrames: core.failureFrames,
       explanation: core.explanation,
       stages: Object.freeze(core.stages.concat("rpc-http")),
       files: Object.freeze({

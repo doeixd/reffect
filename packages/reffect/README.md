@@ -46,9 +46,9 @@ const request = Compile.make(program).pipe(Compile.withSourceArtifacts(SourceArt
 const artifact = await Effect.runPromise(request.pipe(Compile.run));
 ```
 
-`SourceArtifacts.None` omits `sources` and `auxiliaryFiles` and skips provenance collection, mapped UTF-8 byte tracking, source/generated hashing and map JSON serialization. It produces identical Rust/Cargo files and native results. Full/None specifications compose with `Compile.withTarget`; `Compile.build(request, output)` respects the same policy. Public `Compile.lower(ownership, policy)` and `Compile.emit(plan, policy)` also expose the choice.
+`SourceArtifacts.None` omits `sources` and `auxiliaryFiles` and skips provenance collection, mapped UTF-8 byte tracking, source/generated hashing and map JSON serialization. Native payloads and Cargo files remain unchanged. Enabled failure-frame literals carry origins only under Full; frame-off Rust files are identical across source policies. Full/None specifications compose with `Compile.withTarget`; `Compile.build(request, output)` respects the same policy. Public `Compile.lower(ownership, policy)` and `Compile.emit(plan, policy)` also expose the choice.
 
-Default calls infer `MappedArtifact`; None requests infer `UnmappedArtifact` without casts. None compile diagnostics retain semantic codes/stages/IR paths without authored enrichment, and Cargo preserves raw errors with missing-map fallback. Manually constructed Source annotations and the semantic Plan remain retained by the authored program/explanation; artifact-off is independent of capture and future runtime instrumentation. Releasing programs/artifacts remains the caller's ownership responsibility.
+Default calls infer `MappedArtifact`; None requests infer `UnmappedArtifact` without casts. None compile diagnostics retain semantic codes/stages/IR paths without authored enrichment, and Cargo preserves raw errors with missing-map fallback. Manually constructed Source annotations and the semantic Plan remain retained by the authored program/explanation; artifact-off is independent of capture, failure-frame instrumentation and authored logging. Releasing programs/artifacts remains the caller's ownership responsibility.
 
 `Reference.run` preserves tuple types. `Reference.runUnknown` is the explicit boundary for runtime inputs requiring schema/arity validation. Examples and tests require no casts or semantic-object spreading. IR traversal uses Effect's exhaustive Match handlers.
 
@@ -199,3 +199,31 @@ Run [examples/rpc](../../examples/rpc/README.md) for the unchanged stock client 
 Credentials are a bounded runtime environment JSON array of token/principal pairs, never compiler inputs. Invalid configuration fails before listening; denied calls return a typed middleware failure without executing handlers. Payload decoding precedes middleware; normalized envelope authorization overrides HTTP authorization, matching Effect. See [the runnable authenticated example](../../examples/rpc-auth/README.md) for configuration and limits.
 
 Each synchronous dispatch owns a stack context view borrowing request ID/tag from the HTTP-owned body, with a plain optional u64 principal. Local handler logs carry a separate request field; a lexical RAII guard restores previous context through typed errors and unwinding. JSON context is prepared only for the reachable logging profile; values and Result channels gain no metadata fields. Credentials allocate once at startup in immutable shared server state. This adapter does not compile arbitrary middleware/Context/Layer operations or establish async context, JWT verification, cancellation/draining or OTel export.
+
+## Failure-frame selection and native costs
+
+Bounded logical failure capture is the default. To strip it independently of
+source artifacts and authored logs:
+
+```ts
+import { Compile, FailureFrames } from "reffect";
+
+const artifact = await Effect.runPromise(
+  Compile.make(program).pipe(Compile.withFailureFrames(FailureFrames.None), Compile.run),
+);
+```
+
+None generates plain Result helpers and no frame descriptors, stash, propagation
+or CLI frame envelope. NativeRunner.run preserves payload behavior;
+NativeRunner.runWithFrames refuses this policy before execution. The selection
+is retained in the artifact and verified explanation. Staged plans use
+Plan.withFailureFrames; NativeRpc.compile accepts `{ failureFrames: FailureFrames.None }`.
+Source maps and authored log/annotation/span behavior remain independent.
+
+Bounded capture allocates one fixed-capacity, heap-owned trail on failure, retaining
+32 innermost frames and an omitted count during propagation. It leaves Rust
+scalars plain and success paths allocation-free, but can enlarge internal Result
+layouts. Observation through take_last_frames may allocate a Vec; RPC cleanup
+uses clear_last_frames without converting. This synchronous thread-local owner
+is not an async task context. See [measured costs](../../docs/metadata-cost.md#native-failure-frame-costs)
+and [design research](../../docs/research/failure-frames.md#construction-bounds-and-frame-policy-preparation--2026-10-01).

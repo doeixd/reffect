@@ -21,13 +21,15 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 ## Observability design and research
 
-[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; source artifacts, logical frames and scoped logging are implemented for the scalar profile, with synchronous authenticated RPC request/log correlation now implemented. Async context, propagation and exported telemetry remain planned.
+[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; source artifacts, logical frames, bounded failure construction, independent frame stripping and scoped logging are implemented for the scalar profile, with synchronous authenticated RPC request/log correlation now implemented. Async context, propagation and exported telemetry remain planned.
 
 [Observability research](research/observability.md) records pinned Effect RC.118 behavior, primary Rust/OTel/W3C sources and observed releases, alternatives and compatibility gaps checked before integration.
 
 [Source maps and authored diagnostics](source-maps.md) records the implemented explicit builder/range/build-diagnostic foundation and defines planned standard JS maps, authoritative IR-to-Rust provenance/ranges, optional native symbols, MagicString/AST boundaries, coordinate conversions, artifact/privacy policy and delivery gates. It extends the observability design without widening the supported source syntax.
 
 [Source-map research](research/source-maps.md) records standards, coordinate units, MagicString/map-tool versions, compiler and native symbol boundaries, alternatives and acceptance evidence.
+
+[Failure frame research](research/failure-frames.md#construction-bounds-and-frame-policy-preparation--2026-10-01) records the bounded capsule/frame opt-out design, primary layout sources and conformance gates. The [native cost probe](../packages/reffect/scripts/frame-cost.ts) reproduces allocation/layout and release timing observations.
 
 [Metadata ownership and costs](metadata-cost.md) explains current compiler/native storage, measured annotation/build overhead, WeakMap tradeoffs, plain native values, independent opt-out policies and failure/context allocation gates. [The research](research/metadata-and-editor-tooling.md) records checked Rust/Volar interfaces and the reproducible probe.
 

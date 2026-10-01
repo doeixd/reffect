@@ -9,6 +9,8 @@ import { EffectFn, SyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
+import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
+import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts, checkArtifactPolicy } from "./artifact-policy.ts";
 import type {
   ArtifactPolicy,
@@ -140,6 +142,7 @@ export class Plan extends Pipeable.Class {
     readonly target: Target,
     readonly selections: readonly Selection[],
     readonly crates: readonly string[],
+    readonly failureFrames: FailureFramePolicy,
   ) {
     super();
     this.runtime = analysis.effects.length === 0 ? undefined : syncResultAdapter;
@@ -150,19 +153,27 @@ export class Plan extends Pipeable.Class {
     target: Target,
     selections: readonly Selection[],
     crates: readonly string[],
+    failureFrames: FailureFramePolicy = FailureFrames.Bounded,
   ): Plan {
     return new Plan(
       analysis,
       target,
       Object.freeze(Array.from(selections)),
       Object.freeze(Array.from(crates)),
+      failureFrames,
     );
   }
+  static withFailureFrames(policy: FailureFramePolicy) {
+    return (self: Plan): Plan =>
+      Plan.make(self.analysis, self.target, self.selections, self.crates, policy);
+  }
   static withSelections(selections: readonly Selection[]) {
-    return (self: Plan): Plan => Plan.make(self.analysis, self.target, selections, self.crates);
+    return (self: Plan): Plan =>
+      Plan.make(self.analysis, self.target, selections, self.crates, self.failureFrames);
   }
   static withCrates(crates: readonly string[]) {
-    return (self: Plan): Plan => Plan.make(self.analysis, self.target, self.selections, crates);
+    return (self: Plan): Plan =>
+      Plan.make(self.analysis, self.target, self.selections, crates, self.failureFrames);
   }
 }
 export interface Ownership {
@@ -171,6 +182,7 @@ export interface Ownership {
   readonly rationale: string;
 }
 interface ArtifactBase extends GeneratedFiles {
+  readonly failureFrames: FailureFramePolicy;
   readonly sourceArtifacts: ArtifactPolicy;
   readonly explanation: Plan;
   readonly stages: readonly string[];
@@ -196,20 +208,25 @@ export class CompileSpec<P extends ArtifactPolicy = FullSourceArtifacts> extends
     readonly program: Program,
     readonly target: Target,
     readonly sourceArtifacts: P,
+    readonly failureFrames: FailureFramePolicy,
   ) {
     super();
     Object.freeze(this);
   }
   static make(this: void, program: Program): CompileSpec {
-    return new CompileSpec(program, Rust.std, SourceArtifacts.Full);
+    return new CompileSpec(program, Rust.std, SourceArtifacts.Full, FailureFrames.Bounded);
   }
   static withSourceArtifacts<P extends ArtifactPolicy>(this: void, policy: P) {
     return <Previous extends ArtifactPolicy>(self: CompileSpec<Previous>): CompileSpec<P> =>
-      new CompileSpec(self.program, self.target, policy);
+      new CompileSpec(self.program, self.target, policy, self.failureFrames);
+  }
+  static withFailureFrames(this: void, policy: FailureFramePolicy) {
+    return <P extends ArtifactPolicy>(self: CompileSpec<P>): CompileSpec<P> =>
+      new CompileSpec(self.program, self.target, self.sourceArtifacts, policy);
   }
   static withTarget(this: void, target: Target) {
     return <P extends ArtifactPolicy>(self: CompileSpec<P>): CompileSpec<P> =>
-      new CompileSpec(self.program, target, self.sourceArtifacts);
+      new CompileSpec(self.program, target, self.sourceArtifacts, self.failureFrames);
   }
 }
 export const stages = Object.freeze([
@@ -451,7 +468,16 @@ const plan = Effect.fn("Compile.plan")(function* (
   );
 });
 const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
-  const expected = yield* plan(p.analysis, p.target);
+  yield* Effect.try({
+    try: () => checkFailureFramePolicy(p.failureFrames),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("INVALID_PLAN", "verify", "failureFrames", String(cause)),
+  });
+  const expected = (yield* plan(p.analysis, p.target)).pipe(
+    Plan.withFailureFrames(p.failureFrames),
+  );
   if (
     p.runtime !== expected.runtime ||
     p.selections.length !== expected.selections.length ||
@@ -515,6 +541,7 @@ const lower = Effect.fn("Compile.lower")(function* (
         p.analysis.program,
         new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
         policy,
+        p.failureFrames,
       ),
     catch: (cause) =>
       cause instanceof CompileError
@@ -532,6 +559,7 @@ const emit = Effect.fn("Compile.emit")(function* (
   if (SourceArtifacts.isNone(policy))
     return Object.freeze({
       sourceArtifacts: SourceArtifacts.None,
+      failureFrames: verified.failureFrames,
       explanation: verified,
       stages,
       files: emitted.files,
@@ -543,6 +571,7 @@ const emit = Effect.fn("Compile.emit")(function* (
   );
   return Object.freeze({
     sourceArtifacts: SourceArtifacts.Full,
+    failureFrames: verified.failureFrames,
     explanation: verified,
     stages,
     files: emitted.files,
@@ -554,6 +583,7 @@ const run = Effect.fn("Compile.run")(function* (
   program: Program,
   target: Target = Rust.std,
   policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.Bounded,
 ) {
   yield* Effect.try({
     try: () => checkArtifactPolicy(policy),
@@ -565,7 +595,7 @@ const run = Effect.fn("Compile.run")(function* (
   const checked = yield* check(program);
   const derived = yield* derive(checked);
   const normalized = yield* normalize(derived);
-  const planned = yield* plan(normalized, target);
+  const planned = (yield* plan(normalized, target)).pipe(Plan.withFailureFrames(failureFrames));
   const verified = yield* verify(planned);
   const optimized = yield* optimize(verified);
   return yield* emit(optimized, policy);
@@ -594,7 +624,16 @@ const runRequest = <Value extends Program | CompileSpec<ArtifactPolicy>>(
   const policy = value instanceof CompileSpec ? value.sourceArtifacts : SourceArtifacts.Full;
   const selectedTarget = target ?? (value instanceof CompileSpec ? value.target : Rust.std);
   // Canonical policy selection determines the artifact branch; the generic signature preserves pipe inference.
-  return withLocations(program, policy, run(program, selectedTarget, policy)) as Effect.Effect<
+  return withLocations(
+    program,
+    policy,
+    run(
+      program,
+      selectedTarget,
+      policy,
+      value instanceof CompileSpec ? value.failureFrames : FailureFrames.Bounded,
+    ),
+  ) as Effect.Effect<
     Value extends CompileSpec<infer P> ? ArtifactFor<P> : MappedArtifact,
     CompileError
   >;
@@ -648,7 +687,16 @@ const build = Effect.fn("Compile.build")(function* (
   const program = value instanceof CompileSpec ? value.program : value;
   const policy = value instanceof CompileSpec ? value.sourceArtifacts : SourceArtifacts.Full;
   const selectedTarget = value instanceof CompileSpec ? value.target : target;
-  const artifact = yield* withLocations(program, policy, run(program, selectedTarget, policy));
+  const artifact = yield* withLocations(
+    program,
+    policy,
+    run(
+      program,
+      selectedTarget,
+      policy,
+      value instanceof CompileSpec ? value.failureFrames : FailureFrames.Bounded,
+    ),
+  );
   const directory = yield* cargo.write(artifact, output);
   const process = yield* cargo.build(directory, profile);
   return { artifact, directory, process, stages: stages.concat("build") };
@@ -688,6 +736,7 @@ function buildRequest(
 export const Compile = {
   make: CompileSpec.make,
   withTarget: CompileSpec.withTarget,
+  withFailureFrames: CompileSpec.withFailureFrames,
   withSourceArtifacts: CompileSpec.withSourceArtifacts,
   fromFoldkitQuery: Foldkit.compile,
   check: (program: Program) => located(program, check(program)),

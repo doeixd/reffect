@@ -3,7 +3,7 @@ import { ChildProcess } from "effect/process";
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
-import { CargoApi, NativeRpc, R, SourceArtifacts } from "../src/index.ts";
+import { CargoApi, FailureFrames, NativeRpc, R, SourceArtifacts } from "../src/index.ts";
 import { UnaryGroup, unaryHandlers } from "./fixtures/rpc/contract.ts";
 import { replayUnaryCorpus } from "./fixtures/rpc/corpus.ts";
 import { makeHarness } from "./fixtures/rpc/harness.ts";
@@ -180,34 +180,45 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-rpc-" });
-          const artifact = yield* NativeRpc.compile(nativeGroup, {
-            Add: bindings.Add,
-            Guard: bindings.Guard,
-            Unit: bindings.Unit,
-            EmptyField: NativeRpc.bind(
-              R.fn([R.U64], R.U64, (value) => value),
-              [""],
-            ),
-            Scalar: NativeRpc.bind(R.fn([R.Bool], R.Bool, (value) => value)),
-          });
-          expect(artifact.sourceArtifacts).toBe(SourceArtifacts.None);
-          expect(artifact.runtime.crates).toEqual([
-            "axum@0.8.9",
-            "tokio@1.53.1",
-            "serde_json@1.0.151",
-          ]);
-          const directory = yield* CargoApi.write(artifact, `${parent}/server`);
-          yield* CargoApi.fetch(directory);
-          for (const profile of ["debug", "release"] as const) {
-            yield* CargoApi.build(directory, profile);
-            yield* checkServer(directory, profile);
+          for (const policy of [FailureFrames.Bounded, FailureFrames.None]) {
+            const artifact = yield* NativeRpc.compile(
+              nativeGroup,
+              {
+                Add: bindings.Add,
+                Guard: bindings.Guard,
+                Unit: bindings.Unit,
+                EmptyField: NativeRpc.bind(
+                  R.fn([R.U64], R.U64, (value) => value),
+                  [""],
+                ),
+                Scalar: NativeRpc.bind(R.fn([R.Bool], R.Bool, (value) => value)),
+              },
+              { failureFrames: policy },
+            );
+            expect(artifact.failureFrames).toBe(policy);
+            if (policy === FailureFrames.None) {
+              expect(artifact.files["src/lib.rs"]).not.toContain("FrameTrail");
+              expect(artifact.files["src/main.rs"]).not.toContain("clear_frames");
+            }
+            expect(artifact.sourceArtifacts).toBe(SourceArtifacts.None);
+            expect(artifact.runtime.crates).toEqual([
+              "axum@0.8.9",
+              "tokio@1.53.1",
+              "serde_json@1.0.151",
+            ]);
+            const directory = yield* CargoApi.write(artifact, `${parent}/${policy._tag}`);
+            yield* CargoApi.fetch(directory);
+            for (const profile of ["debug", "release"] as const) {
+              yield* CargoApi.build(directory, profile);
+              yield* checkServer(directory, profile);
+            }
           }
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );
   },
-  // Fresh HTTP dependencies compile in both profiles; allow contention and two server cleanups.
-  nativeTestBudget(2) + 120000,
+  // Fresh HTTP dependencies compile in both profiles; allow contention and four server cleanups.
+  nativeTestBudget(4) + 120000,
 );
 
 test("RPC compiler refuses unsupported codecs, payload layouts and route definitions", async () => {

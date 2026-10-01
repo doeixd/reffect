@@ -1,5 +1,7 @@
+import type { RsStmt } from "./rust-emit.ts";
+
 /** Audited HTTP substrate; dynamic tags/fields/calls are emitted separately through Rs. */
-export const rpcRuntime = String.raw`
+export const rpcRuntime = (frameCleanup?: RsStmt): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use serde_json::{json, Value};
 
@@ -59,10 +61,10 @@ fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState) -> Value 
     }
     if object.get("sampled").map(|v| !v.is_boolean()).unwrap_or(false) { return invalid("Invalid trace context") }
     // Synchronous generated calls never suspend; no thread-local diagnostic state escapes a dispatch.
-    clear_frames();
+    ${frameCleanup?.text ?? ""}
     let mut context = RequestContext { id, tag, principal: None };
     let result = dispatch(tag, payload, headers, message, state, &mut context);
-    clear_frames();
+    ${frameCleanup?.text ?? ""}
     match result { Ok(value) => exit(id, value), Err(error) => die(id, error) }
 }
 fn same_id(a: &Value, b: &Value) -> bool {
