@@ -2,6 +2,7 @@ import { NodeServices } from "@effect/platform-node";
 import { SourceWriter } from "../src/source-writer.ts";
 import { Effect, FileSystem, Exit } from "effect";
 import { expect, test } from "vite-plus/test";
+import { nativeTestBudget } from "./native-test-budget.ts";
 import {
   NativeRunner,
   CargoApi,
@@ -229,90 +230,103 @@ test("maps reject malformed references, cycles, unsafe paths and unsupported ver
   ).toBe(true);
 });
 
-test("Cargo maps real rustc errors and preserves raw diagnostics through stale/missing maps", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const parent = yield* fs.makeTempDirectoryScoped({
-          directory: ".",
-          prefix: "reffect-source-",
-        });
-        const file = Source.file("src/native-fault.ts", "// 😀\r\n7n");
-        const site = Source.site(file, 7, 9, "seven");
-        const bad = R.fn([], R.U64, () => R.U64.literal(7n).pipe(Source.at(site))).pipe(
-          Source.named("broken fixture"),
-        );
-        const artifact = yield* Compile.run(R.program({ bad }));
-        const module = yield* Compile.lower(yield* Compile.analyzeOwnership(artifact.explanation));
-        // Same-length, deliberately invalid backend result type: span offsets stay unchanged.
-        const files = {
-          ...artifact.files,
-          "src/lib.rs": artifact.files["src/lib.rs"].replace(
-            "pub fn r_bad() -> u64",
-            "pub fn r_bad() -> u32",
-          ),
-        };
-        expect(files["src/lib.rs"]).not.toBe(artifact.files["src/lib.rs"]);
-        const sources = yield* SourceMaps.create(module.provenance, files, artifact.sources.ranges);
-        const directory = yield* CargoApi.write(
-          { files, auxiliaryFiles: sources.auxiliaryFiles },
-          `${parent}/output`,
-        );
-        expect(yield* fs.readFileString(`${directory}/reffect.sources.json`)).toBe(
-          sources.auxiliaryFiles["reffect.sources.json"],
-        );
-        const buildError = () =>
-          CargoApi.build(directory).pipe(
-            Effect.map(() => undefined),
-            Effect.catchTag("CargoError", (error) => Effect.succeed(error)),
+test(
+  "Cargo maps real rustc errors and preserves raw diagnostics through stale/missing maps",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const parent = yield* fs.makeTempDirectoryScoped({
+            directory: ".",
+            prefix: "reffect-source-",
+          });
+          const file = Source.file("src/native-fault.ts", "// 😀\r\n7n");
+          const site = Source.site(file, 7, 9, "seven");
+          const bad = R.fn([], R.U64, () => R.U64.literal(7n).pipe(Source.at(site))).pipe(
+            Source.named("broken fixture"),
           );
-        const error = yield* buildError();
-        expect(error?.exitCode).not.toBe(0);
-        expect(error?.command).toContain("--message-format=json");
-        expect(error?.stdout).toContain('"reason":"compiler-message"');
-        const mismatch = error?.diagnostics?.find((diagnostic) => diagnostic.code === "E0308");
-        expect(mismatch).toBeDefined();
-        expect(mismatch?.raw).toMatchObject({
-          code: { code: "E0308" },
-          children: expect.any(Array),
-        });
-        const primary = mismatch?.spans.find((span) => span.primary && span.mapping === "mapped");
-        expect(primary?.authored).toMatchObject({
-          file: "src/native-fault.ts",
-          name: "seven",
-          line: 2,
-          column: 1,
-          start: 7,
-          end: 9,
-          precision: "explicit",
-        });
-        expect(primary?.related).toContainEqual({ name: "broken fixture", precision: "named" });
-        yield* fs.writeFileString(`${directory}/src/lib.rs`, files["src/lib.rs"] + "// changed\n");
-        const stale = yield* buildError();
-        expect(
-          stale?.diagnostics
-            ?.find((d) => d.code === "E0308")
-            ?.spans.some((s) => s.mapping === "stale"),
-        ).toBe(true);
-        yield* fs.writeFileString(`${directory}/reffect.sources.json`, "{broken");
-        const invalid = yield* buildError();
-        expect(
-          invalid?.diagnostics
-            ?.find((d) => d.code === "E0308")
-            ?.spans.some((s) => s.mapping === "invalid"),
-        ).toBe(true);
-        yield* fs.remove(`${directory}/reffect.sources.json`);
-        const missing = yield* buildError();
-        expect(
-          missing?.diagnostics
-            ?.find((d) => d.code === "E0308")
-            ?.spans.some((s) => s.mapping === "missing"),
-        ).toBe(true);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  );
-}, 120000);
+          const artifact = yield* Compile.run(R.program({ bad }));
+          const module = yield* Compile.lower(
+            yield* Compile.analyzeOwnership(artifact.explanation),
+          );
+          // Same-length, deliberately invalid backend result type: span offsets stay unchanged.
+          const files = {
+            ...artifact.files,
+            "src/lib.rs": artifact.files["src/lib.rs"].replace(
+              "pub fn r_bad() -> u64",
+              "pub fn r_bad() -> u32",
+            ),
+          };
+          expect(files["src/lib.rs"]).not.toBe(artifact.files["src/lib.rs"]);
+          const sources = yield* SourceMaps.create(
+            module.provenance,
+            files,
+            artifact.sources.ranges,
+          );
+          const directory = yield* CargoApi.write(
+            { files, auxiliaryFiles: sources.auxiliaryFiles },
+            `${parent}/output`,
+          );
+          expect(yield* fs.readFileString(`${directory}/reffect.sources.json`)).toBe(
+            sources.auxiliaryFiles["reffect.sources.json"],
+          );
+          const buildError = () =>
+            CargoApi.build(directory).pipe(
+              Effect.map(() => undefined),
+              Effect.catchTag("CargoError", (error) => Effect.succeed(error)),
+            );
+          const error = yield* buildError();
+          expect(error?.exitCode).not.toBe(0);
+          expect(error?.command).toContain("--message-format=json");
+          expect(error?.stdout).toContain('"reason":"compiler-message"');
+          const mismatch = error?.diagnostics?.find((diagnostic) => diagnostic.code === "E0308");
+          expect(mismatch).toBeDefined();
+          expect(mismatch?.raw).toMatchObject({
+            code: { code: "E0308" },
+            children: expect.any(Array),
+          });
+          const primary = mismatch?.spans.find((span) => span.primary && span.mapping === "mapped");
+          expect(primary?.authored).toMatchObject({
+            file: "src/native-fault.ts",
+            name: "seven",
+            line: 2,
+            column: 1,
+            start: 7,
+            end: 9,
+            precision: "explicit",
+          });
+          expect(primary?.related).toContainEqual({ name: "broken fixture", precision: "named" });
+          yield* fs.writeFileString(
+            `${directory}/src/lib.rs`,
+            files["src/lib.rs"] + "// changed\n",
+          );
+          const stale = yield* buildError();
+          expect(
+            stale?.diagnostics
+              ?.find((d) => d.code === "E0308")
+              ?.spans.some((s) => s.mapping === "stale"),
+          ).toBe(true);
+          yield* fs.writeFileString(`${directory}/reffect.sources.json`, "{broken");
+          const invalid = yield* buildError();
+          expect(
+            invalid?.diagnostics
+              ?.find((d) => d.code === "E0308")
+              ?.spans.some((s) => s.mapping === "invalid"),
+          ).toBe(true);
+          yield* fs.remove(`${directory}/reffect.sources.json`);
+          const missing = yield* buildError();
+          expect(
+            missing?.diagnostics
+              ?.find((d) => d.code === "E0308")
+              ?.spans.some((s) => s.mapping === "missing"),
+          ).toBe(true);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(4),
+);
 
 test("auxiliary artifact paths are validated before output creation", async () => {
   await Effect.runPromise(

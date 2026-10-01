@@ -1,4 +1,4 @@
-import { Effect, Match, SchemaAST } from "effect";
+import { Effect, Match, Predicate, SchemaAST } from "effect";
 import { isPredicate } from "foldkit-entity";
 import type { AnyQuery, Operandish, Operation, Row } from "foldkit-entity";
 import { CargoApi } from "./cargo.ts";
@@ -56,10 +56,10 @@ const kindsOf = (ast: SchemaAST.AST, path: string): readonly Kind[] => {
   throw fail("UNSUPPORTED_REPRESENTATION", "check", path, "Expected an encoded primitive schema");
 };
 const scalarKind = (value: unknown, path: string): Kind => {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "string") return "string";
-  if (typeof value === "number") return "number";
-  if (typeof value === "boolean") return "boolean";
+  if (Predicate.isNull(value) || Predicate.isUndefined(value)) return "null";
+  if (Predicate.isString(value)) return "string";
+  if (Predicate.isNumber(value)) return "number";
+  if (Predicate.isBoolean(value)) return "boolean";
   throw fail(
     "UNSUPPORTED_REPRESENTATION",
     "check",
@@ -135,7 +135,7 @@ const checked = (name: string, body: AnyQuery): CheckedQuery => {
           };
         },
         Null: (n): Node => {
-          if (isPredicate(n.operand) || typeof n.present !== "boolean")
+          if (isPredicate(n.operand) || !Predicate.isBoolean(n.present))
             throw fail(
               "INVALID_IR",
               "check",
@@ -253,9 +253,9 @@ const checked = (name: string, body: AnyQuery): CheckedQuery => {
 };
 
 const token = (value: Scalar): string => {
-  if (value === null) return "n";
-  if (typeof value === "boolean") return value ? "t" : "f";
-  if (typeof value === "number") {
+  if (Predicate.isNull(value)) return "n";
+  if (Predicate.isBoolean(value)) return value ? "t" : "f";
+  if (Predicate.isNumber(value)) {
     const bytes = new DataView(new ArrayBuffer(8));
     bytes.setFloat64(0, value);
     return `d${bytes.getBigUint64(0).toString(16).padStart(16, "0")}`;
@@ -394,7 +394,15 @@ const compile = Effect.fn("Foldkit.compile")(function* (
 
 const encode = (analysis: QueryAnalysis, input: Row, rows: readonly Row[]): string => {
   const value = (record: Row, slot: Slot, path: string) => {
-    const item = Object.hasOwn(record, slot.key) ? record[slot.key] : null;
+    const descriptor = Object.getOwnPropertyDescriptor(record, slot.key);
+    if ((descriptor && !("value" in descriptor)) || (!descriptor && slot.key in record))
+      throw fail(
+        "UNSUPPORTED_DATA",
+        "evaluate",
+        path,
+        "Reachable encoded cells must be own data properties; inherited cells and accessors are unsupported",
+      );
+    const item: unknown = descriptor ? descriptor.value : null;
     const kind = scalarKind(item, path);
     // Foldkit treats absent values as SQL null even where the schema is not nullable.
     if (kind !== "null" && !slot.kinds.includes(kind))

@@ -2,14 +2,16 @@ import { DatabaseSync } from "node:sqlite";
 import { Cause, Effect, Exit, FileSystem, Option, Schema, SchemaGetter } from "effect";
 import { NodeServices } from "@effect/platform-node";
 import { Entity, Expr, Order, Query, evaluate } from "foldkit-entity";
-import type { AnyQuery } from "foldkit-entity";
+import type { AnyQuery, Row } from "foldkit-entity";
 import { cases, rows } from "foldkit-entity/conformance";
 import { and, asc, desc, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, Compile, CompileError, Foldkit } from "../src/index.ts";
+import type { FoldkitArtifact } from "../src/index.ts";
 import { compileOrderBy, compileWhere } from "./fixtures/foldkit-drizzle-compile.ts";
+import { nativeTestBudget } from "./native-test-budget.ts";
 
 const table = sqliteTable("conformance_rows", {
   id: text("id").primaryKey(),
@@ -122,102 +124,126 @@ const testQueries = {
   shared: from.pipe(Query.where(Expr.eq(shared, shared))),
 };
 
-test("dynamic rows preserve primitive and UTF-16 semantics, stable ordering and unknown propagation", async () => {
-  const literal = Expr.literal("a");
-  const snapshot = from.pipe(Query.where(Expr.eq(Item.fields.id, literal)));
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const artifact = yield* Foldkit.compile({ ...testQueries, snapshot });
-        Object.assign(literal, { value: "b" });
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-foldkit-edge-" });
-        const crate = `${dir}/crate`;
-        yield* CargoApi.write(artifact, crate);
-        for (const profile of ["debug", "release"] as const) {
-          yield* CargoApi.build(crate, profile);
-          for (const name of ["stable", "text", "booleans", "empty", "shared"] as const) {
-            const actual = yield* Foldkit.run(artifact, crate, name, {}, testRows, profile);
-            expect(actual).toEqual(evaluate(testQueries[name], {}, testRows));
-            expect(actual.every((r) => testRows.includes(r))).toBe(true);
-          }
-          for (const text of testRows.map((r) => r.text)) {
-            const input = { text };
-            expect(
-              yield* Foldkit.run(artifact, crate, "equality", input, testRows, profile),
-            ).toEqual(evaluate(testQueries.equality, input, testRows));
-          }
-          for (const rank of [NaN, Infinity, -Infinity, -0, Number.MAX_VALUE, Number.MIN_VALUE]) {
-            const values = [
-              { id: "x", rank },
-              { id: "y", rank: 0 },
-            ];
-            expect(
-              yield* Foldkit.run(artifact, crate, "number", { rank }, values, profile),
-            ).toEqual(evaluate(testQueries.number, { rank }, values));
-          }
-          expect(yield* Foldkit.run(artifact, crate, "absent", {}, nullishRows, profile)).toEqual(
-            nullishRows,
+test(
+  "dynamic rows preserve primitive and UTF-16 semantics, stable ordering and unknown propagation",
+  async () => {
+    const literal = Expr.literal("a");
+    const snapshot = from.pipe(Query.where(Expr.eq(Item.fields.id, literal)));
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const queries = Object.fromEntries(
+            Object.entries(testQueries).concat([["snapshot", snapshot]]),
           );
-          expect(yield* Foldkit.run(artifact, crate, "unknown", {}, nullishRows, profile)).toEqual(
-            [],
-          );
-          expect(yield* Foldkit.run(artifact, crate, "stable", {}, [], profile)).toEqual([]);
-          expect(yield* Foldkit.run(artifact, crate, "snapshot", {}, testRows, profile)).toEqual([
-            testRows[0],
-          ]);
-          // The first predicate rejects the row before the unsupported containment is evaluated.
-          expect(
-            yield* Foldkit.run(artifact, crate, "shortCircuit", {}, [testRows[0]], profile),
-          ).toEqual([]);
-          const wildcardRows = [{ text: "100%_\\cotton" }];
-          for (const text of ["%", "_", "\\", "", "COTTON"]) {
+          const artifact = yield* Foldkit.compile(queries);
+          Object.assign(literal, { value: "b" });
+          const fs = yield* FileSystem.FileSystem;
+          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-foldkit-edge-" });
+          const crate = `${dir}/crate`;
+          yield* CargoApi.write(artifact, crate);
+          for (const profile of ["debug", "release"] as const) {
+            yield* CargoApi.build(crate, profile);
+            for (const name of ["stable", "text", "booleans", "empty", "shared"] as const) {
+              const actual = yield* Foldkit.run(artifact, crate, name, {}, testRows, profile);
+              expect(actual).toEqual(evaluate(testQueries[name], {}, testRows));
+              expect(actual.every((r) => testRows.includes(r))).toBe(true);
+            }
+            for (const text of testRows.map((r) => r.text)) {
+              const input = { text };
+              expect(
+                yield* Foldkit.run(artifact, crate, "equality", input, testRows, profile),
+              ).toEqual(evaluate(testQueries.equality, input, testRows));
+            }
+            for (const rank of [NaN, Infinity, -Infinity, -0, Number.MAX_VALUE, Number.MIN_VALUE]) {
+              const values = [
+                { id: "x", rank },
+                { id: "y", rank: 0 },
+              ];
+              expect(
+                yield* Foldkit.run(artifact, crate, "number", { rank }, values, profile),
+              ).toEqual(evaluate(testQueries.number, { rank }, values));
+            }
+            expect(yield* Foldkit.run(artifact, crate, "absent", {}, nullishRows, profile)).toEqual(
+              nullishRows,
+            );
             expect(
-              yield* Foldkit.run(artifact, crate, "contains", { text }, wildcardRows, profile),
-            ).toEqual(wildcardRows);
+              yield* Foldkit.run(artifact, crate, "unknown", {}, nullishRows, profile),
+            ).toEqual([]);
+            expect(yield* Foldkit.run(artifact, crate, "stable", {}, [], profile)).toEqual([]);
+            expect(yield* Foldkit.run(artifact, crate, "snapshot", {}, testRows, profile)).toEqual([
+              testRows[0],
+            ]);
+            const unrelated = {
+              text: "a",
+              get extra() {
+                throw new Error("Unreachable cell must not be read");
+              },
+            };
+            const preserved = yield* Foldkit.run(
+              artifact,
+              crate,
+              "equality",
+              { text: "a" },
+              [unrelated],
+              profile,
+            );
+            expect(preserved).toHaveLength(1);
+            expect(preserved[0]).toBe(unrelated);
+            // The first predicate rejects the row before the unsupported containment is evaluated.
+            expect(
+              yield* Foldkit.run(artifact, crate, "shortCircuit", {}, [testRows[0]], profile),
+            ).toEqual([]);
+            const wildcardRows = [{ text: "100%_\\cotton" }];
+            for (const text of ["%", "_", "\\", "", "COTTON"]) {
+              expect(
+                yield* Foldkit.run(artifact, crate, "contains", { text }, wildcardRows, profile),
+              ).toEqual(wildcardRows);
+            }
           }
-        }
-        for (const input of [{ text: "é" }, { text: "\0" }]) {
-          const exit = yield* Effect.exit(
-            Foldkit.run(artifact, crate, "contains", input, [{ text: "ascii" }]),
+          for (const input of [{ text: "é" }, { text: "\0" }]) {
+            const exit = yield* Effect.exit(
+              Foldkit.run(artifact, crate, "contains", input, [{ text: "ascii" }]),
+            );
+            expect(Exit.isFailure(exit)).toBe(true);
+            if (Exit.isFailure(exit))
+              expect(String(exit.cause)).toContain("UNSUPPORTED_CONTAINMENT");
+          }
+          const orderExit = yield* Effect.exit(
+            Foldkit.run(artifact, crate, "stable", {}, [{ rank: null }, { rank: 1 }]),
           );
-          expect(Exit.isFailure(exit)).toBe(true);
-          if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("UNSUPPORTED_CONTAINMENT");
-        }
-        const orderExit = yield* Effect.exit(
-          Foldkit.run(artifact, crate, "stable", {}, [{ rank: null }, { rank: 1 }]),
-        );
-        expect(Exit.isFailure(orderExit)).toBe(true);
-        if (Exit.isFailure(orderExit))
-          expect(String(orderExit.cause)).toContain("UNSUPPORTED_ORDERING");
-        const nonfinite = yield* Effect.exit(
-          Foldkit.run(artifact, crate, "stable", {}, [{ rank: NaN }, { rank: 1 }]),
-        );
-        expect(Exit.isFailure(nonfinite)).toBe(true);
-        const inputExit = yield* Effect.exit(
-          Foldkit.run(artifact, crate, "number", { rank: "1" }, []),
-        );
-        expect(Exit.isFailure(inputExit)).toBe(true);
-        if (Exit.isFailure(inputExit)) {
-          const error = Cause.findErrorOption(inputExit.cause);
-          expect(
-            Option.isSome(error) &&
-              error.value instanceof CompileError &&
-              error.value.diagnostics.some((d) => d.code === "INVALID_INPUT"),
-          ).toBe(true);
-        }
-        const unknownQuery = yield* Effect.exit(
-          Foldkit.run(artifact, crate, "noSuchQuery", {}, []),
-        );
-        expect(Exit.isFailure(unknownQuery)).toBe(true);
-        const malformed = yield* Effect.exit(
-          CargoApi.runInput(crate, "stable", "reffect-query-v1\n1\n"),
-        );
-        expect(Exit.isFailure(malformed)).toBe(true);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  );
-}, 120000);
+          expect(Exit.isFailure(orderExit)).toBe(true);
+          if (Exit.isFailure(orderExit))
+            expect(String(orderExit.cause)).toContain("UNSUPPORTED_ORDERING");
+          const nonfinite = yield* Effect.exit(
+            Foldkit.run(artifact, crate, "stable", {}, [{ rank: NaN }, { rank: 1 }]),
+          );
+          expect(Exit.isFailure(nonfinite)).toBe(true);
+          const inputExit = yield* Effect.exit(
+            Foldkit.run(artifact, crate, "number", { rank: "1" }, []),
+          );
+          expect(Exit.isFailure(inputExit)).toBe(true);
+          if (Exit.isFailure(inputExit)) {
+            const error = Cause.findErrorOption(inputExit.cause);
+            expect(
+              Option.isSome(error) &&
+                error.value instanceof CompileError &&
+                error.value.diagnostics.some((d) => d.code === "INVALID_INPUT"),
+            ).toBe(true);
+          }
+          const unknownQuery = yield* Effect.exit(
+            Foldkit.run(artifact, crate, "noSuchQuery", {}, []),
+          );
+          expect(Exit.isFailure(unknownQuery)).toBe(true);
+          const malformed = yield* Effect.exit(
+            CargoApi.runInput(crate, "stable", "reffect-query-v1\n1\n"),
+          );
+          expect(Exit.isFailure(malformed)).toBe(true);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(5),
+);
 
 const codes = (queries: Readonly<Record<string, AnyQuery>>) =>
   Effect.runPromise(
@@ -226,6 +252,40 @@ const codes = (queries: Readonly<Record<string, AnyQuery>>) =>
       Effect.catchTag("CompileError", (e) => Effect.succeed(e.diagnostics.map((d) => d.code))),
     ),
   );
+
+const inputCodes = (artifact: FoldkitArtifact, name: string, input: Row, values: readonly Row[]) =>
+  Effect.runPromise(
+    Foldkit.run(artifact, "/unused", name, input, values).pipe(
+      Effect.map(() => Array<string>()),
+      Effect.catchTag("CompileError", (error) =>
+        Effect.succeed(error.diagnostics.map((d) => d.code)),
+      ),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+test("reachable inherited cells and accessors are refused before native execution", async () => {
+  const prototype = Entity.define("Prototype", Schema.Struct({ toString: Schema.String }));
+  const inherited = Query.from(prototype).pipe(Query.where(Expr.isNull(prototype.fields.toString)));
+  const inheritedArtifact = await Effect.runPromise(Foldkit.compile({ inherited }));
+  // Ordinary reference lookup sees Object.prototype.toString, not an absent/null cell.
+  expect(evaluate(inherited, {}, [{}])).toEqual([]);
+  expect(await inputCodes(inheritedArtifact, "inherited", {}, [{}])).toContain("UNSUPPORTED_DATA");
+  const artifact = await Effect.runPromise(Foldkit.compile({ equality: testQueries.equality }));
+  let reads = 0;
+  const getter = () => {
+    reads++;
+    return "a";
+  };
+  const accessor: Row = Object.defineProperty({}, "text", { enumerable: true, get: getter });
+  expect(await inputCodes(artifact, "equality", { text: "a" }, [accessor])).toContain(
+    "UNSUPPORTED_DATA",
+  );
+  expect(await inputCodes(artifact, "equality", accessor, [{ text: "a" }])).toContain(
+    "UNSUPPORTED_DATA",
+  );
+  expect(reads).toBe(0);
+});
 
 test("compilation refuses unsupported representations, foreign identities, invalid binders and decoded literals", async () => {
   expect(await codes({})).toContain("EMPTY_PROGRAM");
