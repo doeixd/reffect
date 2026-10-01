@@ -1,0 +1,318 @@
+import { Effect, Schema, SchemaAST } from "effect";
+import { Rpc, type RpcGroup } from "effect/rpc";
+import { Compile, type Plan } from "./compiler.ts";
+import { SourceArtifacts } from "./artifact-policy.ts";
+import type { GeneratedFiles } from "./cargo.ts";
+import { EffectFn } from "./effect-ir.ts";
+import {
+  CompileError,
+  BoolType,
+  Fn,
+  IRType,
+  NeverType,
+  Program,
+  U64Type,
+  UnitType,
+  fail,
+} from "./kernel.ts";
+import type { AnyFn } from "./kernel.ts";
+import { Rs } from "./rust-emit.ts";
+import type { RsExpr } from "./rust-emit.ts";
+import { RpcCodecs } from "./rpc-codecs.ts";
+import { rpcRuntime } from "./rpc-runtime.ts";
+
+const U64Json = RpcCodecs.U64Json;
+
+type Codec = "u64" | "bool" | "unit" | "never";
+const witness = { u64: U64Type, bool: BoolType, unit: UnitType, never: NeverType };
+export interface RpcBinding<F extends AnyFn = AnyFn> {
+  readonly fn: F;
+  readonly fields: readonly string[];
+}
+type NativeValue<A> = [A] extends [never] ? never : [A] extends [undefined] ? void : A;
+type Bindings<Rpcs extends Rpc.Any> = {
+  readonly [Tag in Rpcs["_tag"]]: RpcBinding<
+    | ([Rpc.Error<Rpc.ExtractTag<Rpcs, Tag>>] extends [never]
+        ? Fn<readonly IRType<unknown>[], NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>>
+        : never)
+    | EffectFn<
+        readonly IRType<unknown>[],
+        NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>,
+        NativeValue<Rpc.Error<Rpc.ExtractTag<Rpcs, Tag>>>
+      >
+  > & {
+    readonly fields: Rpc.Payload<Rpc.ExtractTag<Rpcs, Tag>> extends Readonly<
+      Record<string, unknown>
+    >
+      ? readonly Extract<keyof Rpc.Payload<Rpc.ExtractTag<Rpcs, Tag>>, string>[]
+      : readonly [];
+  };
+};
+export interface RpcArtifact extends GeneratedFiles {
+  readonly explanation: Plan;
+  readonly stages: readonly string[];
+  readonly sourceArtifacts: typeof SourceArtifacts.None;
+  readonly runtime: {
+    readonly id: "rust/axum-unary-json@1";
+    readonly crates: readonly string[];
+    readonly handlerProfile: "synchronous-scalars";
+  };
+}
+const unsupported = (path: string, message: string) =>
+  fail("RPC_UNSUPPORTED", "rpc", path, message);
+const codec = (ast: SchemaAST.AST, path: string): Codec => {
+  if (ast === U64Json.ast) return "u64";
+  if (ast.checks || ast.encoding || ast.context || ast.annotations)
+    throw unsupported(
+      path,
+      "Checked, annotated, optional or transformed schemas require a supported codec",
+    );
+  if (SchemaAST.isBoolean(ast)) return "bool";
+  if (SchemaAST.isUndefined(ast)) return "unit";
+  if (SchemaAST.isNever(ast)) return "never";
+  throw unsupported(path, "Only Boolean, Undefined, Never and NativeRpc.U64Json are supported");
+};
+const local = (name: string) => Rs.identExpr(Rs.ident(name));
+const callLocal = (name: string, ...args: readonly RsExpr[]) => Rs.call(local(name), args);
+const encode = (kind: Codec, value: RsExpr): RsExpr => {
+  if (kind === "never") return Rs.unreachableMatch(value);
+  if (kind === "unit")
+    return Rs.block(
+      [Rs.letDiscard(Rs.unitType(), value)],
+      Rs.pathExpr(Rs.path([Rs.ident("Value"), Rs.ident("Null")])),
+    );
+  return Rs.pathCall([Rs.ident("Value")], Rs.ident(kind === "u64" ? "String" : "Bool"), [
+    kind === "u64" ? Rs.dotCall(value, Rs.ident("to_string"), []) : value,
+  ]);
+};
+const wellFormed = (value: string) =>
+  !Array.from(value).some(
+    (char) => char.length === 1 && char.charCodeAt(0) >= 0xd800 && char.charCodeAt(0) <= 0xdfff,
+  );
+const bind = <F extends AnyFn, const Fields extends readonly string[] = readonly []>(
+  fn: F,
+  fields?: Fields,
+): RpcBinding<F> & { readonly fields: Fields } =>
+  Object.freeze({ fn, fields: Object.freeze(Array.from(fields ?? [])) as unknown as Fields });
+
+const compile = <Rpcs extends Rpc.Any>(
+  group: RpcGroup.RpcGroup<Rpcs>,
+  bindings: Bindings<Rpcs>,
+  options: { readonly path?: string } = {},
+): Effect.Effect<RpcArtifact, import("./kernel.ts").CompileError> =>
+  Effect.gen(function* () {
+    const prepared = yield* Effect.try({
+      try: () => {
+        const path = options.path ?? "/rpc";
+        if (!/^\/(?:[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)?$/.test(path))
+          throw unsupported(
+            "path",
+            "Path must be a literal absolute route without a trailing slash",
+          );
+        const entries = Array.from(group.requests.values());
+        if (entries.length === 0) throw unsupported("group", "RPC group must contain a procedure");
+        if (Reflect.ownKeys(bindings).length !== entries.length)
+          throw unsupported("bindings", "Bindings must match the RPC group exactly");
+        const functions: Record<string, AnyFn> = {};
+        const arms = entries.map((rpc, index) => {
+          if (!Rpc.isRpc(rpc)) throw unsupported("group", "Expected a stock RPC definition");
+          const procedure = `rpc.${rpc._tag}`;
+          if (!wellFormed(rpc._tag)) throw unsupported(procedure, "RPC tags must be valid Unicode");
+          const descriptor = Object.getOwnPropertyDescriptor(bindings, rpc._tag);
+          const binding: RpcBinding | undefined = descriptor?.value;
+          if (!binding || (!(binding.fn instanceof Fn) && !(binding.fn instanceof EffectFn)))
+            throw unsupported(procedure, "Missing own-data handler binding");
+          if (rpc.middlewares.size !== 0)
+            throw unsupported(procedure, "Middleware is unsupported in the scalar profile");
+          if (rpc.defectSchema.ast !== Schema.Defect().ast)
+            throw unsupported(procedure, "Custom defect codecs are unsupported");
+          const success = codec(rpc.successSchema.ast, `${procedure}.success`);
+          const error = codec(rpc.errorSchema.ast, `${procedure}.error`);
+          const fn = binding.fn;
+          if (
+            !IRType.same(fn.output, witness[success]) ||
+            !IRType.same(fn instanceof EffectFn ? fn.error : NeverType, witness[error])
+          )
+            throw unsupported(
+              procedure,
+              "Handler success/error witnesses disagree with RPC schemas",
+            );
+          const payload = rpc.payloadSchema.ast;
+          let inputs: readonly { readonly name: string; readonly codec: Codec }[];
+          if (SchemaAST.isObjects(payload)) {
+            if (
+              payload.encoding ||
+              payload.checks ||
+              payload.context ||
+              payload.annotations ||
+              payload.indexSignatures.length ||
+              payload.encodingChecks
+            )
+              throw unsupported(
+                `${procedure}.payload`,
+                "Only plain flat required Struct payloads are supported",
+              );
+            const fields = payload.propertySignatures;
+            if (
+              fields.some((field) => typeof field.name !== "string" || !wellFormed(field.name)) ||
+              binding.fields.length !== fields.length ||
+              new Set(binding.fields).size !== fields.length
+            )
+              throw unsupported(
+                `${procedure}.payload`,
+                "Supply every payload field exactly once in handler argument order",
+              );
+            inputs = binding.fields.map((name) => {
+              const field = fields.find((field) => field.name === name);
+              if (!field) throw unsupported(procedure, `Unknown payload field ${name}`);
+              return { name, codec: codec(field.type, `${procedure}.payload.${name}`) };
+            });
+          } else {
+            const kind = codec(payload, `${procedure}.payload`);
+            if (binding.fields.length)
+              throw unsupported(procedure, "Scalar payload bindings have no named fields");
+            inputs = kind === "unit" && fn.input.length === 0 ? [] : [{ name: "", codec: kind }];
+          }
+          if (
+            fn.input.length !== inputs.length ||
+            inputs.some(
+              (input, i) =>
+                input.codec === "never" || !IRType.same(fn.input[i], witness[input.codec]),
+            )
+          )
+            throw unsupported(procedure, "Handler argument witnesses disagree with payload fields");
+          const name = `handler_${index}`;
+          functions[name] = fn;
+          const isRecord = SchemaAST.isObjects(payload);
+          const args = inputs.map((input) =>
+            Rs.try_(
+              callLocal(
+                `${input.codec}_arg`,
+                isRecord
+                  ? Rs.try_(callLocal("field", local("payload"), Rs.stringLiteral(input.name)))
+                  : local("payload"),
+                isRecord ? Rs.some(Rs.stringLiteral(input.name)) : Rs.none(),
+              ),
+            ),
+          );
+          const statements = isRecord
+            ? [
+                Rs.stmt(
+                  Rs.if_(
+                    Rs.prefix("!", Rs.dotCall(local("payload"), Rs.ident("is_object"), [])),
+                    Rs.inlineStmtBlock(
+                      Rs.stmt(
+                        Rs.return_(
+                          Rs.err(
+                            Rs.dotCall(
+                              Rs.stringLiteral("Expected payload object"),
+                              Rs.ident("to_string"),
+                              [],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ]
+            : inputs.length === 0
+              ? [Rs.stmt(Rs.try_(callLocal("unit_arg", local("payload"), Rs.none())))]
+              : [];
+          const call = Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident(`r_${name}`), args);
+          const result =
+            fn instanceof EffectFn
+              ? Rs.match_(call, [
+                  {
+                    pat: Rs.variantPat([Rs.ident("Ok")], [Rs.identPat(Rs.ident("value"))]),
+                    body: callLocal("success", encode(success, local("value"))),
+                  },
+                  {
+                    pat: Rs.variantPat([Rs.ident("Err")], [Rs.identPat(Rs.ident("error"))]),
+                    body:
+                      error === "never"
+                        ? Rs.unreachableMatch(local("error"))
+                        : callLocal("failure", encode(error, local("error"))),
+                  },
+                ])
+              : callLocal("success", encode(success, call));
+          return { pat: Rs.stringPat(rpc._tag), body: Rs.block(statements, Rs.ok(result)) };
+        });
+        return {
+          path,
+          program: Program.make(functions),
+          arms,
+          hasFrames: Object.values(functions).some((fn) => fn instanceof EffectFn),
+        };
+      },
+      catch: (cause) =>
+        cause instanceof CompileError ? cause : unsupported("group", String(cause)),
+    });
+    const core = yield* Compile.run(
+      Compile.make(prepared.program).pipe(Compile.withSourceArtifacts(SourceArtifacts.None)),
+    );
+    const clear = prepared.hasFrames
+      ? [
+          Rs.letDiscard(
+            Rs.tupleType([Rs.vecType(Rs.strRefType()), Rs.usizeType()]),
+            Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident("take_last_frames"), []),
+          ),
+        ]
+      : [];
+    const dispatch = Rs.fnItem(
+      Rs.ident("dispatch"),
+      [
+        { name: Rs.ident("tag"), type: Rs.refType(Rs.strType()) },
+        { name: Rs.ident("payload"), type: Rs.refType(Rs.namedType("Value")) },
+      ],
+      Rs.resultType(Rs.namedType("Value"), Rs.stringType()),
+      Rs.block(
+        [],
+        Rs.match_(
+          local("tag"),
+          prepared.arms.concat([
+            {
+              pat: Rs.wildcardPat(),
+              body: Rs.err(
+                Rs.macroCall(Rs.ident("format"), [
+                  Rs.stringLiteral("Unknown request tag: {}"),
+                  local("tag"),
+                ]),
+              ),
+            },
+          ]),
+        ),
+      ),
+    );
+    const main = Rs.itemsText(
+      [
+        Rs.constItem(Rs.ident("RPC_PATH"), Rs.strRefType(), Rs.stringLiteral(prepared.path)),
+        Rs.constItem(Rs.ident("MAX_BODY"), Rs.usizeType(), Rs.litInt(65536)),
+        Rs.constItem(Rs.ident("MAX_BATCH"), Rs.usizeType(), Rs.litInt(64)),
+        Rs.fnItem(Rs.ident("clear_frames"), [], Rs.unitType(), Rs.block(clear)),
+        dispatch,
+        Rs.verbatimItem(rpcRuntime),
+      ],
+      "\n",
+    ).text;
+    return Object.freeze({
+      sourceArtifacts: SourceArtifacts.None,
+      explanation: core.explanation,
+      stages: Object.freeze(core.stages.concat("rpc-http")),
+      files: Object.freeze({
+        "Cargo.toml":
+          core.files["Cargo.toml"] +
+          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n',
+        "src/lib.rs": core.files["src/lib.rs"],
+        "src/main.rs": main,
+      }),
+      runtime: Object.freeze({
+        id: "rust/axum-unary-json@1",
+        crates: Object.freeze(["axum@0.8.9", "tokio@1.53.1", "serde_json@1.0.151"]),
+        handlerProfile: "synchronous-scalars",
+      }),
+    });
+  });
+
+/** Generate a native unary JSON/HTTP server for the checked synchronous scalar profile. */
+export const NativeRpc = Object.freeze({ U64Json, bind, compile });

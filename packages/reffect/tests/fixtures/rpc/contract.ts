@@ -1,11 +1,8 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
-import { R } from "../../../src/index.ts";
+import { NativeRpc, R } from "../../../src/index.ts";
 
-export const U64Json = Schema.BigIntFromString.check(
-  Schema.isGreaterThanOrEqualToBigInt(0n),
-  Schema.isLessThanOrEqualToBigInt(18446744073709551615n),
-);
+export const U64Json = NativeRpc.U64Json;
 
 /** Wire records map to existing scalar handlers; no general native record support is implied. */
 export const UnaryGroup = RpcGroup.make(

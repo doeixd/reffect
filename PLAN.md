@@ -94,9 +94,11 @@ The first meaningful compiler workload is Foldkit Query conformance. Unary RPC r
 
 ## Next implementation: unary RPC
 
-The [RPC conformance foundation](docs/research/unary-rpc.md) records the pinned protocol and executable test harness. Shared RpcGroup schemas and reffect reference handlers now establish stock HTTP client success, typed failure, Unit, decimal-string u64, response framing, malformed-input refusal, request correlation/header isolation and broken-response behavior. This is reference evidence; no native RPC server is shipped.
+The [RPC conformance foundation](docs/research/unary-rpc.md) records the pinned protocol and executable test harness. Shared RpcGroup schemas and reffect reference handlers now establish stock HTTP client success, typed failure, Unit, decimal-string u64, response framing, malformed-input refusal, request correlation/header isolation and broken-response behavior. The reference oracle and native scalar HTTP profile now pass the same checked corpus; broader RPC semantics remain planned.
 
-Next, generate a small Rust JSON/HTTP server that calls the existing scalar handlers in process and replay the same portable corpus and stock-client calls through real fetch. Accept both configured RPC paths and the stock client's trailing slash. Keep Schema/wire validation separate from native scalar representation; refuse unsupported schemas. Own diagnostics per request before introducing async compiled handlers. Add strings/records and early auth/context middleware from the resulting endpoint needs; socket teardown/cancellation, resource budgets and propagation require dedicated native evidence. General Services/Layers and async effect lowering remain milestone 3 work.
+The small native JSON/HTTP server now calls existing scalar handlers in process, with real-socket corpus and stock-client checks in debug/release; see [the runnable example](examples/rpc/README.md). This is a bounded synchronous scalar profile with exact canonical codecs and unmapped artifacts, not completion of milestone 3. Transport fields are validated without native request services or trace propagation.
+
+Next: early middleware and owned request context, driven by an authenticated endpoint; establish explicit context/diagnostic ownership and cancellation/resource cleanup before async compiled effects. Expand string/record codecs from that endpoint's needs rather than accepting arbitrary Schema transforms. General Services/Layers, async effects, source maps for RPC scaffolding, CORS and graceful server draining remain following work.
 
 ## Observability delivery track
 

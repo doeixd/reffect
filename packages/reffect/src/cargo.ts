@@ -209,7 +209,11 @@ const runInput = Effect.fn("Cargo.runInput")(function* (
     input,
   );
 });
-export const CargoApi = { write, build, run, runInput, validate };
+/** Explicit dependency preparation; build and execution remain offline. */
+const fetch = Effect.fn("Cargo.fetch")(function* (directory: string) {
+  return yield* execute(["fetch"], directory);
+});
+export const CargoApi = { write, fetch, build, run, runInput, validate };
 export class Cargo extends Context.Service<Cargo, typeof CargoApi>()("reffect/Cargo") {
   static readonly layer = Layer.succeed(Cargo, CargoApi);
 }

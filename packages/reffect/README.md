@@ -182,4 +182,12 @@ Source annotations are compiler-side data; generated Boolean/u64 values remain p
 
 ## RPC conformance foundation
 
-`vp test packages/reffect/tests/rpc.test.ts` exercises the pinned stock Effect HTTP client and reference server against the shared scalar-handler contract and portable JSON fixtures. [Research and reuse instructions](../../docs/research/unary-rpc.md) define the next native server acceptance gates. The harness is test infrastructure; native RPC serving is not implemented.
+`vp test packages/reffect/tests/rpc.test.ts` exercises the pinned stock Effect HTTP client and reference server against the shared scalar-handler contract and portable JSON fixtures. [Research and reuse instructions](../../docs/research/unary-rpc.md) define the next native server acceptance gates. The harness is test infrastructure; the native scalar JSON/HTTP profile now passes it over real sockets in debug/release.
+
+### Native unary HTTP profile
+
+`NativeRpc.compile(group, bindings, { path: "/rpc" })` emits a Rust server that calls compiled Fn/EffectFn handlers directly. Bind arguments with `NativeRpc.bind(fn, ["left", "right"])`; use ordinary `Schema.Boolean`, exact `Schema.Undefined`, `Schema.Never`, and `RpcCodecs.U64Json` in the shared contract. Only plain required flat Struct payloads and those scalar channels are supported. Unsupported codecs, middleware, layouts and native witness mismatches produce RPC_UNSUPPORTED diagnostics. Unit IR void maps to the shared undefined schema and JSON null without casts.
+
+The artifact includes core handler explanation/stages and an Axum/Tokio/serde_json runtime profile. Write with CargoApi.write, explicitly prepare dependencies with CargoApi.fetch, then build offline with CargoApi.build. Server arguments are `--host` and `--port`; loopback/3000 is the default, and port 0 prints a versioned ready record. Both configured route spellings with/without a trailing slash accept POST. Requests are limited to 64 KiB and 64 entries per batch.
+
+Run [examples/rpc](../../examples/rpc/README.md) for the unchanged stock client calling native Rust. The current server uses synchronous scalar execution on a current-thread HTTP substrate and drains failure frames around dispatch. RPC artifacts have SourceArtifacts.None; middleware, general Schema lowering, native request services, trace propagation, CORS, async Effect execution and graceful draining are following work.

@@ -89,3 +89,7 @@ export type { SourceResolution } from "./source-artifact.ts";
 export { NativeDiagnostic } from "./cargo-diagnostics.ts";
 
 export type { OriginRecord, OccurrenceRecord, ProvenanceSnapshot } from "./provenance.ts";
+
+export { NativeRpc } from "./native-rpc.ts";
+export type { RpcBinding, RpcArtifact } from "./native-rpc.ts";
+export { RpcCodecs } from "./rpc-codecs.ts";

@@ -62,7 +62,7 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 ## RPC conformance
 
-[Unary RPC foundation](research/unary-rpc.md) records pinned HTTP/JSON and Schema contracts, the portable request/response corpus, stock-client/reference-server tests, and the next native server acceptance gates.
+[Unary RPC foundation](research/unary-rpc.md) records pinned HTTP/JSON and Schema contracts, the portable request/response corpus, stock-client/reference-server tests, the generated native scalar HTTP profile, and its real-socket debug/release acceptance evidence.
 
 ## Kernel research
 

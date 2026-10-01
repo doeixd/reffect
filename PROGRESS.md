@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-01 — Native scalar unary HTTP server
+
+- Recorded substrate/profile preparation before implementation in [unary RPC research](docs/research/unary-rpc.md). Added NativeRpc typed bindings/compilation and schema-only RpcCodecs, projecting shared flat RPC payloads into existing plain scalar Fn/EffectFn arguments through the checked compiler pipeline. Unsupported schemas, middleware, layouts and witnesses are refused.
+- Generates unmapped HTTP main with internal Rs fragments and static audited Axum/Tokio substrate; handler explanations and selected pinned crates/features remain reviewable. Added explicit CargoApi.fetch while preserving offline build/run. JSON bodies/batches are bounded, malformed envelopes cannot dispatch, and synchronous handlers drain frame stashes without carrying diagnostics across an await.
+- Real HTTP debug/release tests replay the portable corpus and use unchanged stock clients for precision/wrapping/Unit/typed failure, concurrent success/error recovery, trace metadata, malformed requests, route/method refusal and body/batch limits. Added compiler refusal and negative TypeScript contracts; the [runnable example](examples/rpc/README.md) prints native success and typed failure and closes its process/crate scope.
+- The HTTP transport is async; compiled effects remain synchronous. Native auth/request services, async context ownership, full Schema/defect formatting parity, propagation/exporters, CORS, graceful draining and RPC source maps remain follow-ups. This completes a scalar unary demonstration, not all of milestone 3.
+- Review corrected empty-string field projection, Unit/undefined type adaptation, HTTP dependency features and initial Rust macro ambiguity. Batches now refuse duplicate IDs before dispatch, matching JavaScript numeric ID equality. Native build budgets account for fresh HTTP dependency compilation in both profiles and scoped server cleanup; no conformance assertions were skipped.
+- Validation: full workspace suite passes 83 tests in 14 files; final native debug/release checks also pass after the duplicate-ID/float-roundtrip review. Full formatting/lint, strict package TypeScript, workspace builds, runnable example and 217 local links/anchors pass. The example confirms stock client → native Rust with sum=0 and typed failure=false. Post-commit checks repeat the complete suite before publication.
+
 ## 2026-10-01 — Unary RPC conformance foundation
 
 - Reviewed milestone 3, current scalar handlers and diagnostic context; verified pinned Effect RC.118 source online and recorded decisions before implementation in [unary RPC research](docs/research/unary-rpc.md).

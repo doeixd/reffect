@@ -89,6 +89,7 @@ test("portable golden corpus replays against the stock server before native impl
             expect(invocations.map((entry) => entry.tag)).toEqual([
               "Add",
               "Add",
+              "Add",
               "Guard",
               "Guard",
               "Unit",

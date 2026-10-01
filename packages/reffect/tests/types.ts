@@ -4,6 +4,7 @@ import {
   IRType,
   Law,
   Native,
+  NativeRpc,
   Operation,
   R,
   Reference,
@@ -12,6 +13,7 @@ import {
   SourceArtifacts,
   SemanticRef,
 } from "../src/index.ts";
+import { Rpc, RpcGroup } from "effect/rpc";
 import { Effect, Schema } from "effect";
 import { Entity, Expr as EntityExpr, Query } from "foldkit-entity";
 import { Rs } from "../src/rust-emit.ts";
@@ -19,6 +21,29 @@ import type { RsExpr, RsItem, RsMacroGroup, RsMacroRule, RsType } from "../src/r
 
 // Compiled by strict TypeScript checks; never executed.
 export const typeChecks = () => {
+  const rpcGroup = RpcGroup.make(
+    Rpc.make("Add", { payload: { left: NativeRpc.U64Json }, success: NativeRpc.U64Json }),
+  );
+  const rpcFn = R.fn([R.U64], R.U64, (value) => value);
+  NativeRpc.compile(rpcGroup, { Add: NativeRpc.bind(rpcFn, ["left"]) });
+  // @ts-expect-error payload fields are checked against the shared RpcGroup
+  NativeRpc.compile(rpcGroup, { Add: NativeRpc.bind(rpcFn, ["missing"]) });
+  // @ts-expect-error every RPC procedure requires a binding
+  NativeRpc.compile(rpcGroup, {});
+  NativeRpc.compile(rpcGroup, {
+    // @ts-expect-error handler success values must match the shared schema
+    Add: NativeRpc.bind(
+      R.fn([], R.Bool, () => R.Bool.literal(true)),
+      ["left"],
+    ),
+  });
+  const rpcUnit = RpcGroup.make(
+    Rpc.make("Unit", { payload: Schema.Undefined, success: Schema.Undefined }),
+  );
+  NativeRpc.compile(rpcUnit, {
+    Unit: NativeRpc.bind(R.fn([], R.Unit, R.Never, () => R.Effect.void)),
+  });
+
   const addOne = Rs.defineFn(
     Rs.ident("add_one"),
     [{ name: Rs.ident("value"), type: Rs.u64Type() }],

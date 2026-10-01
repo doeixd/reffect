@@ -230,6 +230,8 @@ The full structured-concurrency lifetime analysis comes when fibers arrive.
 
 # 18. Milestone 3 — unary Effect RPC
 
+> **Implementation update:** The [native scalar HTTP profile](research/unary-rpc.md#native-slice-results-and-public-boundary) and [runnable stock-client demo](../examples/rpc/README.md) cover synchronous scalar handlers and canonical codecs over real HTTP. General Schema lowering, async compiled effects, Services/Layers and early auth/context middleware below remain milestone work.
+
 > **Later update:** Include [request observability](observability.md#spans-context-and-propagation): explicit request/span context, W3C ingress/egress propagation, bounded source-aware logging, baseline counters/duration metrics and selected OTLP exporters with tested teardown. Keep stock payload/error schemas intact, separate Effect span compatibility from service-boundary conventions, and verify context isolation and SDK/Collector export before claiming this demo is production-observable.
 
 This is the first major public demo.

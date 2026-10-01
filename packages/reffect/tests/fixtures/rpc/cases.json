@@ -5,14 +5,20 @@
       "_tag": "Request",
       "id": "max",
       "tag": "Add",
-      "payload": { "left": "18446744073709551615", "right": "0" },
+      "payload": {
+        "left": "18446744073709551615",
+        "right": "0"
+      },
       "headers": []
     },
     "response": [
       {
         "_tag": "Exit",
         "requestId": "max",
-        "exit": { "_tag": "Success", "value": "18446744073709551615" }
+        "exit": {
+          "_tag": "Success",
+          "value": "18446744073709551615"
+        }
       }
     ]
   },
@@ -22,10 +28,45 @@
       "_tag": "Request",
       "id": 7,
       "tag": "Add",
-      "payload": { "left": "18446744073709551615", "right": "1" },
+      "payload": {
+        "left": "18446744073709551615",
+        "right": "1"
+      },
       "headers": []
     },
-    "response": [{ "_tag": "Exit", "requestId": 7, "exit": { "_tag": "Success", "value": "0" } }]
+    "response": [
+      {
+        "_tag": "Exit",
+        "requestId": 7,
+        "exit": {
+          "_tag": "Success",
+          "value": "0"
+        }
+      }
+    ]
+  },
+  {
+    "name": "signed zero and leading zeros preserve bigint semantics",
+    "request": {
+      "_tag": "Request",
+      "id": "zero-alias",
+      "tag": "Add",
+      "payload": {
+        "left": "-0",
+        "right": "0001"
+      },
+      "headers": []
+    },
+    "response": [
+      {
+        "_tag": "Exit",
+        "requestId": "zero-alias",
+        "exit": {
+          "_tag": "Success",
+          "value": "1"
+        }
+      }
+    ]
   },
   {
     "name": "Boolean success",
@@ -33,11 +74,20 @@
       "_tag": "Request",
       "id": "yes",
       "tag": "Guard",
-      "payload": { "allowed": true },
+      "payload": {
+        "allowed": true
+      },
       "headers": []
     },
     "response": [
-      { "_tag": "Exit", "requestId": "yes", "exit": { "_tag": "Success", "value": true } }
+      {
+        "_tag": "Exit",
+        "requestId": "yes",
+        "exit": {
+          "_tag": "Success",
+          "value": true
+        }
+      }
     ]
   },
   {
@@ -46,22 +96,45 @@
       "_tag": "Request",
       "id": "no",
       "tag": "Guard",
-      "payload": { "allowed": false },
+      "payload": {
+        "allowed": false
+      },
       "headers": []
     },
     "response": [
       {
         "_tag": "Exit",
         "requestId": "no",
-        "exit": { "_tag": "Failure", "cause": [{ "_tag": "Fail", "error": false }] }
+        "exit": {
+          "_tag": "Failure",
+          "cause": [
+            {
+              "_tag": "Fail",
+              "error": false
+            }
+          ]
+        }
       }
     ]
   },
   {
     "name": "exact Unit crosses JSON as null",
-    "request": { "_tag": "Request", "id": "unit", "tag": "Unit", "payload": null, "headers": [] },
+    "request": {
+      "_tag": "Request",
+      "id": "unit",
+      "tag": "Unit",
+      "payload": null,
+      "headers": []
+    },
     "response": [
-      { "_tag": "Exit", "requestId": "unit", "exit": { "_tag": "Success", "value": null } }
+      {
+        "_tag": "Exit",
+        "requestId": "unit",
+        "exit": {
+          "_tag": "Success",
+          "value": null
+        }
+      }
     ]
   },
   {
@@ -79,7 +152,12 @@
         "requestId": "unknown",
         "exit": {
           "_tag": "Failure",
-          "cause": [{ "_tag": "Die", "defect": "Unknown request tag: Unknown" }]
+          "cause": [
+            {
+              "_tag": "Die",
+              "defect": "Unknown request tag: Unknown"
+            }
+          ]
         }
       }
     ]
@@ -90,7 +168,10 @@
       "_tag": "Request",
       "id": "negative",
       "tag": "Add",
-      "payload": { "left": "-1", "right": "0" },
+      "payload": {
+        "left": "-1",
+        "right": "0"
+      },
       "headers": []
     },
     "response": [
@@ -115,7 +196,10 @@
       "_tag": "Request",
       "id": "overflow",
       "tag": "Add",
-      "payload": { "left": "18446744073709551616", "right": "0" },
+      "payload": {
+        "left": "18446744073709551616",
+        "right": "0"
+      },
       "headers": []
     },
     "response": [
