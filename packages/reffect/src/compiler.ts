@@ -29,6 +29,7 @@ import {
   Program,
   U64Type,
   BoolType,
+  UnitType,
   NeverType,
   EqU64,
   LtU64,
@@ -110,7 +111,12 @@ const syncResultAdapter = Object.freeze({
 export const Rust = Object.freeze({
   syncResult: syncResultAdapter,
   std: Target.make(Targets.RustStd, implementations).pipe(
-    Target.withCapabilities([Capabilities.U64, Capabilities.Bool, Capabilities.SyncResult]),
+    Target.withCapabilities([
+      Capabilities.U64,
+      Capabilities.Bool,
+      Capabilities.Unit,
+      Capabilities.SyncResult,
+    ]),
   ),
 });
 
@@ -345,7 +351,9 @@ const derive = Effect.fn("Compile.derive")(function* (
           ? [Capabilities.U64]
           : IRType.same(type, BoolType)
             ? [Capabilities.Bool]
-            : [],
+            : IRType.same(type, UnitType)
+              ? [Capabilities.Unit]
+              : [],
       ),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
     ]),
@@ -448,12 +456,12 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
       "Selected plan does not cover the reachable graph with verified implementations",
     );
   for (const type of expected.analysis.types) {
-    if (![U64Type, BoolType, NeverType].some((builtin) => IRType.same(type, builtin)))
+    if (![U64Type, BoolType, UnitType, NeverType].some((builtin) => IRType.same(type, builtin)))
       return yield* fail(
         "UNSUPPORTED_REPRESENTATION",
         "verify",
         type.id,
-        "Only canonical Boolean/u64/Never witnesses have registered native representations",
+        "Only canonical Boolean/u64/Unit/Never witnesses have registered native representations",
       );
   }
   for (const f of Object.values(expected.analysis.program.functions)) {
@@ -478,7 +486,7 @@ const analyzeOwnership = Effect.fn("Compile.ownership")(function* (
     plan: yield* verify(p),
     mode: "primitive-copy",
     rationale:
-      "Boolean/u64 are Copy; Never is uninhabited. Branch and continuation scopes keep values local.",
+      "Boolean/u64/Unit are Copy; Never is uninhabited. Branch and continuation scopes keep values local.",
   });
 });
 const lower = Effect.fn("Compile.lower")(function* (

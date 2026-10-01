@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-01 — Unit implementation
+
+- Added canonical R.Unit/UnitType as IRType<void> with owned frozen Schema.Undefined, typed capability and Rust `()` representation. Unit supports parameters, pure results and success/error channels; it remains distinct from Never and discarding Schema.Void.
+- Added R.Effect.void and pipeable asVoid using existing succeed/map IR, preserving reference execution, errors and short-circuiting. Extended lowering/runner tokens with exact unit/ok:unit/err:unit while keeping existing Boolean/u64 protocols and logical arity unchanged.
+- Unit conformance passes in fresh Rust debug/release crates: primitive identity, mixed input tuples, zero-sized layout, success/failure(undefined), Match/Never joins, nested map/flatMap and failed-source discard. Schema/capability/type and malformed native channel cases are refused; strict type contracts require no casts.
+- Scoped vp check, strict TypeScript and workspace builds pass; all 48 tests pass with fresh native crates, including the existing Query/Effect/source conformance. Self-review traced exact Undefined admission, canonical identity/capabilities, Unit/ Never distinction, zero-sized layout, binder/branch behavior, retained failure payloads and strict bridge tokens. Publication/post-commit checks follow; bounded failure context/logging remain the next researched slice.
+
+## 2026-10-01 — Unit preparation
+
+- Reviewed the current compiler/Effect/runner and observability delivery constraints; checked installed RC.118 Schema.Void/Undefined and Effect.void/asVoid behavior against primary sources and Rust unit semantics.
+- Recorded alternatives, exact runtime admission, internal protocol and acceptance in [Unit research](docs/research/unit.md) before implementation. Unit uses IRType<void> with exact Undefined validation; result-discarding is an explicit computation combinator rather than permissive native input coercion.
+
 ## 2026-10-01 — Source-artifact opt-out preparation
 
 - Reviewed current compiler/lowering/provenance/writer/hash behavior and upstream metadata cost/source-map contracts before planning the next slice. Recorded choices and acceptance in [source-artifact policy research](docs/research/source-artifact-policy.md).

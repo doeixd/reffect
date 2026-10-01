@@ -1,6 +1,6 @@
 # reffect semantic compiler
 
-Implemented profiles cover unsigned arithmetic, Foldkit Query conformance, and synchronous Boolean/u64 Effect computations with official Effect reference execution, explainable Rust planning, and Cargo integration.
+Implemented profiles cover unsigned arithmetic, Foldkit Query conformance, and synchronous Boolean/u64/Unit Effect computations with official Effect reference execution, explainable Rust planning, and Cargo integration.
 
 ```ts
 import { Effect } from "effect";
@@ -94,6 +94,19 @@ All 27 upstream fixtures run against evaluate, the unchanged licensed upstream D
 Run `vp exec node --experimental-transform-types examples/query/main.ts` for a native/reference search example. Additional general representations, RPC, concurrency, and asynchronous runtime adapters follow the roadmap.
 
 ## Synchronous Effect profile
+
+### Unit and result discarding
+
+`R.Unit` is the canonical `IRType<void>` witness with exact `undefined` runtime validation and Rust `()` representation. It is distinct from `R.Never` and from Effect's permissive `Schema.Void`, which discards values during parsing.
+
+```ts
+const Done = R.Effect.fn([], R.Unit, R.Never, () => R.Effect.void);
+const Discard = R.Effect.fn([R.U64], R.Unit, R.Never, (value) =>
+  R.Effect.succeed(value).pipe(R.Effect.asVoid),
+);
+```
+
+Use `R.Unit.literal()` for the one pure value. Unit supports function inputs/results, Match and map/flatMap success/error channels. `R.Effect.asVoid` evaluates its source and preserves failures before discarding a successful result. Unit input slots retain tuple arity; NativeRunner's internal bridge uses `unit`, `ok:unit` and `err:unit` tokens and rejects malformed/wrong-channel values. No native allocation, metadata wrapper or Cargo dependency is introduced.
 
 ```ts
 const Difference = R.fn([R.U64, R.U64], R.U64, R.U64, (a, b) =>

@@ -33,6 +33,23 @@ export const typeChecks = () => {
   // @ts-expect-error annotated effects preserve the input representation
   Reference.run(annotatedEffect, [1n]);
   const add = R.fn([R.U64, R.U64], R.U64, (a, b) => R.U64.add(a, b));
+  const unit = R.fn([R.Unit], R.Unit, (value) => value);
+  Reference.run(unit, [undefined]).pipe(
+    Effect.map((value) => {
+      const empty: void = value;
+      return empty;
+    }),
+  );
+  // @ts-expect-error Unit factories have no payload
+  R.Unit.literal(1n);
+  // @ts-expect-error Unit arguments are not null
+  Reference.run(unit, [null]);
+  const discard = R.fn([R.U64], R.Unit, R.Bool, (value) =>
+    R.Effect.succeed(value).pipe(R.Effect.asVoid),
+  );
+  Reference.run(discard, [1n]);
+  // @ts-expect-error a Unit success channel cannot return a Boolean payload
+  R.fn([], R.Unit, R.Never, () => R.Effect.succeed(R.Bool.literal(true)));
   const compiled = R.program({ add });
   Compile.run(compiled).pipe(Effect.map((artifact) => artifact.sources.ranges));
   const fullSpec = Compile.make(compiled);

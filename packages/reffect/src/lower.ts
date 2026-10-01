@@ -2,8 +2,8 @@ import type { ProvenanceSnapshot } from "./provenance.ts";
 import { Provenance } from "./provenance.ts";
 import { SourceWriter } from "./source-writer.ts";
 import type { GeneratedRange } from "./source-artifact.ts";
-import { Match } from "effect";
-import { BoolType, IRType, NeverType, U64Type } from "./kernel.ts";
+import { Match, Predicate } from "effect";
+import { BoolType, IRType, NeverType, U64Type, UnitType } from "./kernel.ts";
 import type { Expr, OperationRef, Program } from "./kernel.ts";
 import { EffectFn } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
@@ -20,7 +20,7 @@ export type RustExpr = (
   | { readonly _tag: "Parameter"; readonly index: number }
   | { readonly _tag: "Bound"; readonly name: string }
   | { readonly _tag: "Local"; readonly index: number }
-  | { readonly _tag: "Literal"; readonly value: bigint | boolean }
+  | { readonly _tag: "Literal"; readonly value: bigint | boolean | void }
   | {
       readonly _tag: "Call";
       readonly method: Implementation["method"];
@@ -39,7 +39,7 @@ export const RustExpr = Object.freeze({
   parameter: (index: number): RustExpr => Object.freeze({ _tag: "Parameter", index }),
   bound: (name: string): RustExpr => Object.freeze({ _tag: "Bound", name }),
   local: (index: number): RustExpr => Object.freeze({ _tag: "Local", index }),
-  literal: (value: bigint | boolean): RustExpr => Object.freeze({ _tag: "Literal", value }),
+  literal: (value: bigint | boolean | void): RustExpr => Object.freeze({ _tag: "Literal", value }),
   call: (method: Implementation["method"], left: RustExpr, right: RustExpr): RustExpr =>
     Object.freeze({ _tag: "Call", method, args: Object.freeze([left, right]) }),
 });
@@ -196,7 +196,7 @@ export function lowerFunctions(
                 const parameter = scope.bindings.get(n.binder)![n.index];
                 return RustExpr.bound(parameter.name);
               },
-              Literal: (n) => RustExpr.literal(n.value as bigint | boolean),
+              Literal: (n) => RustExpr.literal(n.value as bigint | boolean | void),
               Apply: (n): RustExpr =>
                 Object.freeze({
                   _tag: "Call",
@@ -364,7 +364,14 @@ export const emitFunctions = (
             Parameter: (n) => write(`p${n.index}`),
             Bound: (n) => write(n.name),
             Local: (n) => write(`v${n.index}`),
-            Literal: (n) => write(typeof n.value === "bigint" ? `${n.value}u64` : String(n.value)),
+            Literal: (n) =>
+              write(
+                Predicate.isUndefined(n.value)
+                  ? "()"
+                  : Predicate.isBigInt(n.value)
+                    ? `${n.value}u64`
+                    : String(n.value),
+              ),
             Call: (n) => {
               if (n.method === "not") {
                 write("!(");
@@ -514,6 +521,8 @@ export const emitFunctions = (
   }
   const print = (type: IRType<unknown>, value: string, channel?: "ok" | "err") => {
     if (IRType.same(type, NeverType)) return `match ${value} {}`;
+    if (IRType.same(type, UnitType))
+      return `{ let _: () = ${value}; println!("${channel ? `${channel}:` : ""}unit"); }`;
     const prefix = channel
       ? `${channel}:${IRType.same(type, U64Type) ? "u64" : "bool"}:`
       : IRType.same(type, BoolType)
@@ -523,7 +532,7 @@ export const emitFunctions = (
   };
   const arms = module.functions
     .map((f) => {
-      const call = `reffect_generated::r_${f.name}(${f.input.map((type, i) => `args[${i + 1}].parse::<${typeName(type)}>().map_err(|_| "invalid ${typeName(type)}")?`).join(", ")})`;
+      const call = `reffect_generated::r_${f.name}(${f.input.map((type, i) => (IRType.same(type, UnitType) ? `{ if args[${i + 1}] != "unit" { return Err("invalid unit"); } () }` : `args[${i + 1}].parse::<${typeName(type)}>().map_err(|_| "invalid ${typeName(type)}")?`)).join(", ")})`;
       const output = Match.value(f.node).pipe(
         Match.tagsExhaustive({
           Pure: () => `{ let value = ${call}; ${print(f.output, "value")}; }`,

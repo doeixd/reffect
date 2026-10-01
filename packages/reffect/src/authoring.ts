@@ -1,5 +1,5 @@
 import { Source } from "./source.ts";
-import { Fn, Program, Expr, BoolType, U64Type, NeverType } from "./kernel.ts";
+import { Fn, Program, Expr, BoolType, U64Type, UnitType, NeverType } from "./kernel.ts";
 import type { IRType, Symbols } from "./kernel.ts";
 import { Computation, EffectFn, EffectIR, matchComputation } from "./effect-ir.ts";
 
@@ -48,6 +48,7 @@ export const R = Object.freeze({
   literal: Expr.literal,
   U64: U64Type,
   Bool: BoolType,
+  Unit: UnitType,
   Never: NeverType,
   Match: Object.freeze({ bool }),
   Predicate: Object.freeze({

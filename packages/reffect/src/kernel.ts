@@ -63,6 +63,7 @@ export type Requirement = SemanticRef<"requirement">;
 export const Capabilities = Object.freeze({
   U64: SemanticRef.capability("reffect/capability/u64@1"),
   Bool: SemanticRef.capability("reffect/capability/bool@1"),
+  Unit: SemanticRef.capability("reffect/capability/unit@1"),
   SyncResult: SemanticRef.capability("reffect/capability/sync-result@1"),
 });
 export const Targets = Object.freeze({ RustStd: SemanticRef.target("rust/std@1") });
@@ -80,6 +81,7 @@ export interface NativeRepresentation {
 export const Native = Object.freeze({
   U64: Object.freeze({ target: Targets.RustStd, type: "u64" }) satisfies NativeRepresentation,
   Bool: Object.freeze({ target: Targets.RustStd, type: "bool" }) satisfies NativeRepresentation,
+  Unit: Object.freeze({ target: Targets.RustStd, type: "()" }) satisfies NativeRepresentation,
   Never: Object.freeze({
     target: Targets.RustStd,
     type: "std::convert::Infallible",
@@ -474,6 +476,27 @@ class BoolWitness extends IRType<boolean> {
   } = dual(2, (a: Expr<boolean>, b: Expr<boolean>) => Expr.apply(EqBool, a, b));
 }
 export const BoolType = new BoolWitness();
+class UnitWitness extends IRType<void> {
+  constructor() {
+    // Schema.Void discards arbitrary values; native unit admits exactly undefined.
+    const schema = Schema.Undefined.check(Schema.makeFilter(() => true));
+    for (const check of schema.ast.checks ?? []) Object.freeze(check);
+    if (schema.ast.checks) Object.freeze(schema.ast.checks);
+    Object.freeze(schema.ast);
+    Object.freeze(schema);
+    super(
+      SemanticRef.type("reffect/unit@1"),
+      schema,
+      Native.Unit,
+      Object.freeze([Traits.Copyable, Traits.Cloneable, Traits.Eq, Traits.TotallyOrdered]),
+    );
+    Object.freeze(this);
+  }
+  literal(): Expr<void> {
+    return Expr.literal(this, undefined);
+  }
+}
+export const UnitType = new UnitWitness();
 const neverSchema = Schema.Never.check(Schema.makeFilter(() => true));
 for (const check of neverSchema.ast.checks ?? []) Object.freeze(check);
 if (neverSchema.ast.checks) Object.freeze(neverSchema.ast.checks);

@@ -8,6 +8,7 @@ import {
   Expr,
   IRType,
   NeverType,
+  UnitType,
   SemanticRef,
   checkExpression,
   evaluateExpression,
@@ -316,6 +317,9 @@ export const EffectReference = Object.freeze({
     runUnknown(f, args),
 });
 export const EffectIR = Object.freeze({
+  void: succeed(UnitType.literal()),
+  asVoid: <A, E>(self: Computation<A, E>): Computation<void, E> =>
+    map(self, () => UnitType.literal()),
   succeed,
   fail: failValue,
   map,

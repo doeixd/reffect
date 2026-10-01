@@ -16,6 +16,7 @@ export {
   Diagnostic,
   U64Type,
   BoolType,
+  UnitType,
   NeverType,
   AddU64,
   SubU64,

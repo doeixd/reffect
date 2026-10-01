@@ -1,4 +1,4 @@
-import { Context, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema, Stream } from "effect";
 import { safeRelativePath } from "./source.ts";
 import { NativeDiagnostic, readBuildDiagnostics } from "./cargo-diagnostics.ts";
 import { ChildProcess } from "effect/process";
@@ -144,7 +144,7 @@ const build = Effect.fn("Cargo.build")(function* (
 const run = Effect.fn("Cargo.run")(function* (
   directory: string,
   name: string,
-  args: readonly (bigint | boolean)[],
+  args: readonly (bigint | boolean | undefined)[],
   profile: "debug" | "release" = "debug",
 ) {
   return yield* execute(
@@ -155,7 +155,7 @@ const run = Effect.fn("Cargo.run")(function* (
       ...(profile === "release" ? ["--release"] : []),
       "--",
       name,
-      ...args.map(String),
+      ...args.map((value) => (Predicate.isUndefined(value) ? "unit" : String(value))),
     ],
     directory,
   );

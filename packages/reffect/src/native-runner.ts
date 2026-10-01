@@ -1,7 +1,7 @@
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Exit, Predicate, Schema } from "effect";
 import { CargoApi } from "./cargo.ts";
 import { EffectFn } from "./effect-ir.ts";
-import { BoolType, IRType, U64Type, fail } from "./kernel.ts";
+import { BoolType, IRType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Fn, Inputs } from "./kernel.ts";
 import type { Artifact } from "./compiler.ts";
 
@@ -39,12 +39,16 @@ const run = Effect.fn("NativeRunner.run")(function* <
     );
   if (args.length !== fn.input.length)
     return yield* fail("ARITY_MISMATCH", "native", name, "Incorrect input count");
-  const values: (bigint | boolean)[] = [];
+  const values: (bigint | boolean | undefined)[] = [];
   for (let i = 0; i < args.length; i++) {
     const value = yield* Schema.decodeUnknownEffect(fn.input[i].schema)(args[i]).pipe(
       Effect.mapError((cause) => fail("INVALID_INPUT", "native", `args[${i}]`, cause.message)),
     );
-    if (typeof value !== "bigint" && typeof value !== "boolean")
+    if (Predicate.isUndefined(value) && IRType.same(fn.input[i], UnitType)) {
+      values.push(undefined);
+      continue;
+    }
+    if (!Predicate.isBigInt(value) && !Predicate.isBoolean(value))
       return yield* fail("INVALID_INPUT", "native", `args[${i}]`, "Unsupported native scalar");
     values.push(value);
   }
@@ -57,6 +61,7 @@ const run = Effect.fn("NativeRunner.run")(function* <
         value = BigInt(encoded.slice(4));
       else if (IRType.same(type, BoolType) && /^bool:(true|false)$/.test(encoded))
         value = encoded === "bool:true";
+      else if (IRType.same(type, UnitType) && encoded === "unit") value = undefined;
       else
         return yield* fail(
           "INVALID_NATIVE_OUTPUT",
