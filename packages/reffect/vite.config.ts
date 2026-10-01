@@ -1,6 +1,6 @@
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
-  pack: { entry: ["src/index.ts"], dts: true },
+  pack: { entry: ["src/index.ts"], dts: true, tsconfig: "./tsconfig.build.json" },
   test: { testTimeout: 120000 },
 });
