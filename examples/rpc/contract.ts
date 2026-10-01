@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
-import { RpcCodecs } from "../../packages/reffect/src/index.ts";
+import { RpcCodecs } from "reffect/rpc-codecs";
 
 /** Shared unchanged by the stock client and native compiler. */
 export const Arithmetic = RpcGroup.make(

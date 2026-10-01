@@ -8,6 +8,7 @@
 - The HTTP transport is async; compiled effects remain synchronous. Native auth/request services, async context ownership, full Schema/defect formatting parity, propagation/exporters, CORS, graceful draining and RPC source maps remain follow-ups. This completes a scalar unary demonstration, not all of milestone 3.
 - Review corrected empty-string field projection, Unit/undefined type adaptation, HTTP dependency features and initial Rust macro ambiguity. Batches now refuse duplicate IDs before dispatch, matching JavaScript numeric ID equality. Native build budgets account for fresh HTTP dependency compilation in both profiles and scoped server cleanup; no conformance assertions were skipped.
 - Validation: full workspace suite passes 83 tests in 14 files; final native debug/release checks also pass after the duplicate-ID/float-roundtrip review. Full formatting/lint, strict package TypeScript, workspace builds, runnable example and 217 local links/anchors pass. The example confirms stock client → native Rust with sum=0 and typed failure=false. Post-commit checks repeat the complete suite before publication.
+- Post-commit review verified the full suite/build/example again, then identified eager compiler-module loading through the root barrel in shared contracts. Added the dedicated reffect/rpc-codecs source export and switched the example contract to it; canonical schema identity is shared with the compiler without importing compiler modules from client contracts.
 
 ## 2026-10-01 — Unary RPC conformance foundation
 
