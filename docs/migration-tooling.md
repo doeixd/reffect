@@ -217,6 +217,8 @@ Workflows can represent unresolved agent/human decisions without turning ordinar
 
 ## Editor tooling
 
+[Editor integration and Volar](editor-tooling.md) refines this track with checked virtual-code/mapping APIs. Start with public compiler diagnostics and read-only generated previews; consider Volar for a concrete virtual-document/navigation consumer. Keep TS/Effect services intact, verify TypeScript-native checker compatibility, adapt UTF-8/UTF-16 and half-open boundaries, and disable generated-code inverse edits without semantic fix rules. No editor dependency is required by compilation.
+
 Investigate integration with Effect-tsgo's diagnostics, completions, refactors, and editor experience. Its README documents Effect-aware tooling and v3/v4 refactor status; it does not establish an Effect Native extension API. [Effect-tsgo upstream](https://github.com/Effect-TS/tsgo)
 
 The desired experience combines TypeScript, Effect, and Effect Native diagnostics; target-compatible hover information might show a generated native signature and selected dependencies. Native compatibility, cancellation claims, and fixes must come from the compiler's supported profile and evidence rather than decorative editor labels.

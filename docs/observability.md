@@ -31,6 +31,8 @@ flowchart LR
 
 Compiler activity and generated application activity use separate providers/resources. A build trace describes check/derive/plan/build; it must not become the parent of application requests merely because the compiler launched an executable.
 
+The [metadata ownership and performance design](metadata-cost.md) specifies the storage/opt-out contracts behind this architecture: plain scalar values, external compiler tables, optional static native IDs, scoped dynamic context and owned records at export. Include a real artifact-off path and disabled-profile allocation/layout checks before adding logical frames/logging. The current source annotations add compiler work but no native instrumentation.
+
 ## Four distinct kinds of information
 
 | Kind                       | Purpose                                                                                      | Lifetime and ownership                                                                  |

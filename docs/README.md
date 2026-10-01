@@ -29,6 +29,12 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 [Source-map research](research/source-maps.md) records standards, coordinate units, MagicString/map-tool versions, compiler and native symbol boundaries, alternatives and acceptance evidence.
 
+[Metadata ownership and costs](metadata-cost.md) explains current compiler/native storage, measured annotation/build overhead, WeakMap tradeoffs, plain native values, independent opt-out policies and failure/context allocation gates. [The research](research/metadata-and-editor-tooling.md) records checked Rust/Volar interfaces and the reproducible probe.
+
+[Editor tooling and Volar](editor-tooling.md) selects a compiler-diagnostic/preview-first path and optional virtual-document integration, with explicit mapping/feature/checker boundaries.
+
+[Typed Rust emission](rust-emission.md) guides composable internal identifier/type/expression/item helpers around the existing IR/source writer as new lowering needs them.
+
 ## Original detailed references
 
 | Document                                        | Focus                                                                                                                       |

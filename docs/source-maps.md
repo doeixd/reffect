@@ -20,6 +20,8 @@ Initial limits are 16 MiB per map/manifest, 100,000 entries per record collectio
 
 See [the package API](../packages/reffect/README.md#source-provenance-and-build-diagnostics) and [runnable example](../examples/source/main.ts). Next is named runtime failure frames and scoped logging; this foundation does not add execution-context records or change typed error payloads.
 
+[Metadata ownership and costs](metadata-cost.md) distinguishes TS build memory from native runtime values and specifies independent capture/artifact/instrumentation controls. Current annotations produce no native metadata fields or instructions; a true compiler artifact-off path is still proposed. [Editor/Volar adapters](editor-tooling.md) project these tables for optional virtual-document features, and [typed Rust emission helpers](rust-emission.md) preserve byte ranges as lowering grows.
+
 ## Recommended architecture
 
 Use three connected layers:

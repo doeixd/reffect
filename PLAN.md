@@ -94,7 +94,7 @@ The first meaningful compiler workload is Foldkit Query conformance. Unary RPC r
 
 ## Observability delivery track
 
-The explicit source-provenance/build-diagnostic slice is complete for the Boolean/u64 profile. Next: named logical failure frames, Unit and scoped logging/annotations with deterministic reference/native conformance, before request/OTLP adapters. Follow [the detailed delivery gates](docs/observability.md#delivery-through-the-existing-milestones) alongside the numbered milestones. The [source-map design](docs/source-maps.md) specifies the location/artifact contracts beneath this track. This is planned support, not an implemented native telemetry claim.
+The explicit source-provenance/build-diagnostic slice is complete for the Boolean/u64 profile. Next: settle independent metadata/artifact/instrumentation policies and add a real artifact-off path, then named logical failure frames, Unit and scoped logging/annotations with deterministic reference/native conformance, before request/OTLP adapters. Keep native scalars plain and verify disabled-path allocation/layout costs under [metadata ownership](docs/metadata-cost.md). Follow [the detailed delivery gates](docs/observability.md#delivery-through-the-existing-milestones) alongside the numbered milestones. The [source-map design](docs/source-maps.md) specifies the location/artifact contracts beneath this track. This is planned support, not an implemented native telemetry claim.
 
 | Milestone               | Required work                                                                                                                                                                          | Acceptance                                                                                                                                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -120,6 +120,8 @@ Use [three mapping layers](docs/source-maps.md#recommended-architecture): standa
 
 Follow [source-map delivery and verification](docs/source-maps.md#delivery-through-the-existing-milestones). GeneratedFiles now supports validated auxiliary artifacts; use UTF-8 Rust byte ranges and normalized TS UTF-16 coordinates, validate content digests, and omit production source text by default. Complete provenance/emission before automatic annotations; do not defer all exact metadata producers to syntax widening.
 
+The [optional editor track](docs/editor-tooling.md) starts with compiler diagnostics and a read-only generated preview. Volar is a researched candidate for virtual-document mappings/navigation, with checker/API compatibility and lifecycle tests required; it is not a compiler/runtime dependency or a source-syntax milestone.
+
 ## Compiler pipeline
 
 > **Later update:** [Runtime support reporting](docs/runtime-lowering.md#planning-support-reporting-and-acceptance) extends planning with substrate/adapter choices and reachable crates/features. [Migration diagnostics](docs/migration-tooling.md#structured-diagnostics-and-shared-fix-registry) expose source locations, alternatives, and eligible fixes through the same compiler API.
@@ -131,6 +133,8 @@ Check local invariants; derive dependencies, traits, requirements, and scope rel
 Planning should distinguish operation, service, and semantic runtime requirements. Explain generated specializations, selected substrates/adapters, remaining semantic obligations, and reachable Cargo crates/features. Registry metadata can enter the kernel early; implement entries only as workloads require them. Compile-time batching, Schedule state machines, Ref specialization, and stream fusion remain subject to semantic/evidence checks.
 
 Source provenance follows nodes and use edges through every pass, including optimization/shared helper lowering. Planning records selected observability adapters, sinks, context/clock requirements, policies, stripped information and Cargo features. Ownership verifies queued record lifetimes; emission includes versioned source maps/build identity when selected. Compiler pass telemetry uses official Effect and independent providers from the generated application. See [observability stage obligations](docs/observability.md#compiler-integration-and-acceptance) and [source-map emission contracts](docs/source-maps.md#emission-and-artifact-layout).
+
+Grow [typed Rust emission helpers](docs/rust-emission.md) around the existing verified IR/source writer as new lowering constructs need them. Keep identifier/type/expression/item roles distinct, preserve final byte ranges and use rustc/conformance to verify ownership and semantics.
 
 ## Validation strategy
 
@@ -151,6 +155,7 @@ Use [AGENTS.md](AGENTS.md) for tooling, commits, and guidance on when subagent r
 
 ## Decisions to settle during implementation
 
+- Independent automatic-capture/artifact-retention/runtime-instrumentation policies, real artifact-off compilation, compiler retention/index costs and per-profile Result/future/frame/native allocation budgets; no per-scalar metadata wrapper or global runtime metadata map. See [metadata costs and policies](docs/metadata-cost.md).
 - Exact source/map/record schema versions, deterministic occurrence IDs, tested AST/host adapters and mapping granularity; diagnostic/source precision, tested observability crate/MSRV/features, and profile buffer/cardinality/flush defaults. The [observability architecture](docs/observability.md) fixes the semantic and dependency boundaries first.
 - Exact public names/package boundaries and which Gen2 primitives are appropriate to adapt.
 - Portable Schema subset and distinct native/wire/storage representations, including numeric semantics.

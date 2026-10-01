@@ -10,6 +10,8 @@
 
 [Implemented source-map artifacts and diagnostics](source-maps.md#implemented-foundation) extend GeneratedFiles/Cargo with validated auxiliary files, immutable `Artifact.sources`, authoritative UTF-8 ranges and versioned provenance/build manifests. Explicit annotations and digest-checked offline lookup are available; optional v3 projections and automatic producers remain planned. Expose authored/related locations with precision and preserve raw rustc diagnostics; build JSON parsing stays separate from runner stdout.
 
+[Metadata policies](metadata-cost.md#opt-out-controls-and-defaults) require independent capture, artifact-retention/source packaging and runtime instrumentation/sink options in future build specifications. Current Boolean/u64 `Compile.run/emit` always emits provenance artifacts; no off profile is shipped. Types/explanations/cache identities must represent absent or reduced-precision metadata honestly. [Editor adapters](editor-tooling.md) consume the same diagnostics without duplicating semantic checking.
+
 The [revised compiler design](compiler-design-revision.md) expands the public stages to check/derive/normalize/plan/verify/optimize/ownership/lower/emit/build and adds explainable planning. Read the [Gen2 semantic kernel discussion](gen2-semantic-kernel.md) for evidence policy and implementation selection; retain this document for build specs, results, watch/dev, and integration details.
 
 This document preserves a design discussion from the original PLAN.md. APIs and package names are proposals, not implemented guarantees. Original citation placeholders are retained; verify external API and protocol claims against the installed dependencies before implementation.
