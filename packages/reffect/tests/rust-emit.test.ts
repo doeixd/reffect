@@ -3,6 +3,7 @@ import {
   Rs,
   RustIdent,
   escapeJsonContent,
+  escapeRustChar,
   escapeRustContent,
   formatTemplate,
 } from "../src/rust-emit.ts";
@@ -357,6 +358,77 @@ test("declarative macros use role-indexed groups, metavariables and repetitions"
       Rs.macroPunct("matcher", ","),
     ),
   ).toThrow("cannot have a separator");
+});
+
+test("item, chain and literal builders cover emitter scaffolding shapes", () => {
+  expect(Rs.litChar('"').text).toBe("'\"'");
+  expect(Rs.litChar("'").text).toBe("'\\''");
+  expect(Rs.litChar("\n").text).toBe("'\\n'");
+  expect(() => Rs.litChar("ab")).toThrow();
+  expect(escapeRustChar("\u0001")).toBe("\\u{1}");
+  expect(escapeRustChar('a"')).toBe('a"');
+
+  expect(Rs.dotCall(Rs.identExpr(Rs.ident("x")), Rs.ident("len"), []).text).toBe("x.len()");
+  expect(
+    Rs.dotChain(Rs.identExpr(Rs.ident("x")), [
+      { method: Rs.ident("iter"), args: [] },
+      { method: Rs.ident("collect"), args: [], turboTypes: [Rs.u8Type()] },
+    ]).text,
+  ).toBe("x.iter().collect::<u8>()");
+  expect(Rs.cmp(Rs.identExpr(Rs.ident("i")), ">", Rs.litInt(0)).text).toBe("i > 0");
+  expect(Rs.cmp(Rs.identExpr(Rs.ident("i")), "!=", Rs.stringLiteral("u")).text).toBe('i != "u"');
+  expect(Rs.assignExpr(Rs.identExpr(Rs.ident("a")), Rs.litU64(1n)).text).toBe("a = 1u64");
+  expect(Rs.refExpr(Rs.identExpr(Rs.ident("a"))).text).toBe("&a");
+  expect(Rs.mutRefExpr(Rs.identExpr(Rs.ident("a"))).text).toBe("&mut a");
+
+  expect(
+    Rs.letPat(Rs.tuplePat(Rs.identPat(Rs.ident("a")), Rs.wildcardPat()), undefined, Rs.litU64(1n))
+      .text,
+  ).toBe("let (a, _) = 1u64;");
+  expect(Rs.letDiscard(Rs.unitType(), Rs.litUnit()).text).toBe("let _: () = ();");
+  expect(Rs.stringPat('a"b').text).toBe('"a\\"b"');
+  expect(Rs.blockStmt(Rs.if_(Rs.litBool(true), Rs.litUnit())).text).toBe("if true ()");
+  expect(Rs.inlineStmtBlock(Rs.stmt(Rs.litU64(1n)))).toBeDefined();
+  expect(Rs.inlineStmtBlock(Rs.stmt(Rs.litU64(1n))).text).toBe("{ 1u64; }");
+
+  expect(Rs.genericType(Rs.namedType("Vec"), [Rs.u8Type()]).text).toBe("Vec<u8>");
+  expect(() => Rs.genericType(Rs.namedType("Vec"), [])).toThrow();
+  expect(Rs.pathExpr(Rs.cratePath([Rs.ident("api")])).text).toBe("crate::api");
+  expect(
+    Rs.enumItem(Rs.ident("E"), [
+      { name: Rs.ident("A") },
+      { name: Rs.ident("B"), fields: [Rs.boolType()] },
+    ]).text,
+  ).toBe("enum E { A, B(bool) }");
+  expect(() => Rs.enumItem(Rs.ident("E"), [])).toThrow();
+  expect(() =>
+    Rs.enumItem(Rs.ident("E"), [{ name: Rs.ident("A") }, { name: Rs.ident("A") }]),
+  ).toThrow("Duplicate Rust enum variant");
+  expect(Rs.constItem(Rs.ident("N"), Rs.u8Type(), Rs.litInt(2)).text).toBe("const N: u8 = 2;");
+  expect(
+    Rs.staticItem(Rs.ident("S"), Rs.u8Type(), Rs.litInt(0), true, Rs.visibility.public).text,
+  ).toBe("pub static mut S: u8 = 0;");
+  expect(
+    Rs.threadLocalItem([
+      { name: Rs.ident("T"), type: Rs.usizeType(), value: Rs.litInt(0), mutable: true },
+    ]).text,
+  ).toBe("thread_local! {\n    static mut T: usize = 0;\n}");
+  expect(() => Rs.threadLocalItem([])).toThrow();
+  expect(Rs.whileLoop(Rs.litBool(true), Rs.litUnit()).text).toBe("while true ()");
+  expect(Rs.letElse(Rs.pat("Some(x)"), Rs.identExpr(Rs.ident("v")), Rs.litUnit()).text).toBe(
+    "let Some(x) = v else ()",
+  );
+  expect(
+    Rs.itemsText(
+      [
+        Rs.constItem(Rs.ident("A"), Rs.u8Type(), Rs.litInt(1)),
+        Rs.constItem(Rs.ident("B"), Rs.u8Type(), Rs.litInt(2)),
+      ],
+      "\n",
+    ).text,
+  ).toBe("const A: u8 = 1;\nconst B: u8 = 2;\n");
+  expect(Rs.printlnExpr("a:", Rs.identExpr(Rs.ident("v"))).text).toBe('println!("a:{}", v)');
+  expect(Rs.eprintlnExpr("a").text).toBe('eprintln!("a")');
 });
 
 test("verbatim hatches round-trip audited scaffolding", () => {
