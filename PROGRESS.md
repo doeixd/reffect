@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-01 — Facet evaluation
+
+- Reviewed Facet source at 65bae5c31a7ce401bc44630fb96250ea884cfd3e and registry releases before selecting a role. Recorded static SHAPE/borrowed Peek versus allocated Partial plans, feature/MSRV/version distinctions, unsafe layout/invariant boundaries and Schema/wire compatibility gates in [Facet research](docs/research/facet.md).
+- Kept Facet optional for later native record inspection/Schema codecs alongside generated operations and Serde. Deriving static type metadata does not add a field to every number, but it cannot identify executed source occurrences or establish Effect RPC/SchemaBinary compatibility. Linked the evaluation from metadata/runtime designs, docs index and PLAN; no dependency or native code changed.
+- Next implementation remains honest artifact-off compilation with skipped provenance/ranges/hashing/serialization, unchanged generated sources/domain results and reduced-diagnostic/retention checks, then Unit, bounded failure frames and scoped logging.
+- Review verified static derive output, pointer/view construction, allocated reflection state, stable versus prerelease MSRVs/features and identity/wire boundaries. Validation: vp check passes without warnings, strict package TypeScript passes, all 37 tests pass with fresh native debug/release builds, workspace builds pass with all four tasks cached, and all 114 local documentation links/anchors in changed/new Markdown resolve. This evaluates source/APIs; it does not claim a compiled Facet integration or benchmark.
+
 ## 2026-10-01 — Metadata cost, Volar and Rust emission design
 
 - Reviewed current annotation/provenance/emission lifetimes and the source-map, observability and migration designs. Checked Volar upstream/registry interfaces, Rust representation/static/reference-counting guarantees, JavaScript WeakMap behavior and tracing callsites. Recorded alternatives, choices and performance/editor acceptance before proceeding in [metadata and editor research](docs/research/metadata-and-editor-tooling.md).

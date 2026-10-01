@@ -73,6 +73,8 @@ Keep `Result<A,E>` and existing public payload/wire schemas compatible. An inter
 
 Start bounded and explicit. Inline arrays or a small-vector candidate can avoid common-path heap allocation when useful, but large stack buffers enlarge frames, async futures and error values. Do not select a capacity without measuring the actual generated shapes. Error capsules may allocate only on failure; exporters and multiple sinks may still need ownership/copies. Logical-frame observations must match the supported Effect contract even when native backtraces/OTel sampling are absent.
 
+[Facet](research/facet.md) provides a useful example of shared static type descriptions: SHAPE belongs to a Rust type, and a borrowed reflection view is separate from the value. It can serve later optional record/codec consumers, but its reflective builders can allocate and it does not replace executed SiteIds or dynamic context. The current compiler does not need Facet to emit plain numbers or external provenance.
+
 ## Logging annotations are different
 
 Static source names/messages/attribute keys can be interned or emitted as string literals and static schemas. Dynamic request IDs and scoped annotation values are execution data. For synchronous lexical scopes, prefer borrowed context plus small typed deltas or save/restore fields; shadowing restores previous values. Static annotations can often become generated arguments/fields rather than repeated HashMap clones. For escaping/async/forked work, use owned task context or a persistent shared structure only where the selected Effect sharing semantics require it. Arc is useful there, but its heap and atomic costs must be justified. Thread-local state alone cannot model tasks migrating between threads or interleaving on one thread.

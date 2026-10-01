@@ -6,6 +6,8 @@ This reference integrates the supplied runtime-reuse conversation once; the past
 
 > **Later update:** [Observability](observability.md) and its [research](research/observability.md) refine Logger/Tracer/Metric lowering: typed records, logical frames/source provenance, explicit context across async polling, distinct trace/log bridges and optional SDK/exporter profiles. That document controls the observability design; catalogue entries below remain candidates.
 
+[Facet evaluation](research/facet.md) adds an optional structural-reflection/record-inspection/codec candidate. Prefer generated schema-specialized operations where available; choose Facet or Serde only for a tested consumer/profile, preserving Effect Schema and wire contracts. No Facet dependency is currently implemented.
+
 ## Design principle
 
 First ask whether an abstraction can disappear into generated code. If it must remain, select an existing Rust primitive or crate and add the semantic adapter needed to preserve observable Effect behavior. Implement dedicated runtime machinery only for semantics that neither code generation nor a verified substrate provides.

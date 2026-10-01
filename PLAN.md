@@ -134,6 +134,8 @@ Planning should distinguish operation, service, and semantic runtime requirement
 
 Source provenance follows nodes and use edges through every pass, including optimization/shared helper lowering. Planning records selected observability adapters, sinks, context/clock requirements, policies, stripped information and Cargo features. Ownership verifies queued record lifetimes; emission includes versioned source maps/build identity when selected. Compiler pass telemetry uses official Effect and independent providers from the generated application. See [observability stage obligations](docs/observability.md#compiler-integration-and-acceptance) and [source-map emission contracts](docs/source-maps.md#emission-and-artifact-layout).
 
+[Facet](docs/research/facet.md) is a researched optional candidate for native record inspection and Schema/codec adapters alongside generated operations and Serde. Evaluate it when structured wire types have a real consumer; it does not replace compiler provenance or change the artifact-off → Unit/frames/logging sequence.
+
 Grow [typed Rust emission helpers](docs/rust-emission.md) around the existing verified IR/source writer as new lowering constructs need them. Keep identifier/type/expression/item roles distinct, preserve final byte ranges and use rustc/conformance to verify ownership and semantics.
 
 ## Validation strategy
