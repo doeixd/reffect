@@ -429,6 +429,37 @@ test("item, chain and literal builders cover emitter scaffolding shapes", () => 
   ).toBe("const A: u8 = 1;\nconst B: u8 = 2;\n");
   expect(Rs.printlnExpr("a:", Rs.identExpr(Rs.ident("v"))).text).toBe('println!("a:{}", v)');
   expect(Rs.eprintlnExpr("a").text).toBe('eprintln!("a")');
+
+  expect(Rs.sliceType(Rs.namedType("Value")).text).toBe("[Value]");
+  expect(Rs.refType(Rs.sliceType(Rs.namedType("Value"))).text).toBe("&[Value]");
+  expect(Rs.fnPtrType([Rs.u8Type()], Rs.boolType()).text).toBe("fn(u8) -> bool");
+  expect(
+    Rs.closureTyped(
+      [
+        { name: Rs.ident("a"), type: Rs.refType(Rs.usizeType()) },
+        { name: Rs.ident("b"), type: Rs.refType(Rs.usizeType()) },
+      ],
+      Rs.resultType(Rs.namedType("Ordering"), Rs.strRefType()),
+      Rs.litUnit(),
+    ).text,
+  ).toBe("|a: &usize, b: &usize| -> Result<Ordering, &'static str> ()");
+  expect(
+    Rs.matchesExpr(Rs.identExpr(Rs.ident("v")), [Rs.pat("Value::Null"), Rs.pat("Value::Bool(_)")])
+      .text,
+  ).toBe("matches!(v, Value::Null | Value::Bool(_))");
+  expect(() => Rs.matchesExpr(Rs.litUnit(), [])).toThrow();
+  expect(
+    Rs.concatStmt(
+      Rs.let_(Rs.ident("a"), undefined, Rs.litU64(1n)),
+      Rs.let_(Rs.ident("b"), undefined, Rs.litU64(2n)),
+    ).text,
+  ).toBe("let a = 1u64; let b = 2u64;");
+  expect(Rs.paren(Rs.identExpr(Rs.ident("x"))).text).toBe("(x)");
+  expect(Rs.and().text).toBe("true");
+  expect(Rs.and(Rs.litBool(true), Rs.litBool(false)).text).toBe("true && false");
+  expect(Rs.block([Rs.stmt(Rs.litU64(1n))], Rs.litU64(2n), 8).text).toBe(
+    "{\n        1u64;\n        2u64\n    }",
+  );
 });
 
 test("verbatim hatches round-trip audited scaffolding", () => {

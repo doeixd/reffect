@@ -333,6 +333,9 @@ export const Rs = Object.freeze({
     attribute(`#[cfg(feature = "${escapeRustContent(feature)}")]`),
   allowAttribute: (lint: RustIdent): RsAttribute => attribute(`#[allow(${lint.text})]`),
   vecType: (inner: RsType): RsType => type_(`Vec<${inner.text}>`),
+  sliceType: (inner: RsType): RsType => type_(`[${inner.text}]`),
+  fnPtrType: (params: ReadonlyArray<RsType>, ret: RsType): RsType =>
+    type_(`fn(${params.map((p) => p.text).join(", ")}) -> ${ret.text}`),
   tupleType: (members: ReadonlyArray<RsType>): RsType =>
     type_(`(${members.map((m) => m.text).join(", ")})`),
   resultType: (ok: RsType, err: RsType): RsType => type_(`Result<${ok.text}, ${err.text}>`),
@@ -452,6 +455,11 @@ export const Rs = Object.freeze({
   cmp: (left: RsExpr, operator: "==" | "!=" | "<" | ">" | "<=" | ">=", right: RsExpr): RsExpr =>
     expr(`${left.text} ${operator} ${right.text}`),
   cast: (value: RsExpr, target: RsType): RsExpr => expr(`(${value.text}) as ${target.text}`),
+  paren: (value: RsExpr): RsExpr => expr(`(${value.text})`),
+  and: (...values: ReadonlyArray<RsExpr>): RsExpr => {
+    if (values.length === 0) return expr("true");
+    return expr(values.map((value) => value.text).join(" && "));
+  },
   await: (value: RsExpr): RsExpr => expr(`${value.text}.await`),
   awaitTry: (value: RsExpr): RsExpr => expr(`${value.text}.await?`),
   struct: (name: RustIdent, fields: ReadonlyArray<readonly [RustIdent, RsExpr]>): RsExpr =>
@@ -489,6 +497,14 @@ export const Rs = Object.freeze({
   lt: (left: RsExpr, right: RsExpr): RsExpr => expr(`(${left.text}) < (${right.text})`),
   not: (value: RsExpr): RsExpr => expr(`!(${value.text})`),
   closure: (params: RsPat, body: RsExpr): RsExpr => expr(`|${params.text}| ${body.text}`),
+  closureTyped: (params: ReadonlyArray<RsParam>, ret: RsType | undefined, body: RsExpr): RsExpr =>
+    expr(
+      `|${params.map((p) => `${p.name.text}: ${p.type.text}`).join(", ")}|${ret ? ` -> ${ret.text}` : ""} ${body.text}`,
+    ),
+  matchesExpr: (value: RsExpr, patterns: ReadonlyArray<RsPat>): RsExpr => {
+    if (patterns.length === 0) throw new TypeError("matches! needs at least one pattern");
+    return expr(`matches!(${value.text}, ${patterns.map((p) => p.text).join(" | ")})`);
+  },
   match_: (
     scrutinee: RsExpr,
     arms: ReadonlyArray<{ readonly pat: RsPat; readonly guard?: RsExpr; readonly body: RsExpr }>,
@@ -504,15 +520,20 @@ export const Rs = Object.freeze({
     ),
   ifLet: (pat: RsPat, scrutinee: RsExpr, onTrue: RsExpr, onFalse: RsExpr): RsExpr =>
     expr(`if let ${pat.text} = ${scrutinee.text} ${onTrue.text} else ${onFalse.text}`),
-  block: (statements: ReadonlyArray<RsStmt>, tail?: RsExpr): RsExpr =>
-    expr(
-      `{\n${statements.map((s) => `    ${s.text}\n`).join("")}${tail ? `    ${tail.text}\n` : ""}}`,
-    ),
+  block: (statements: ReadonlyArray<RsStmt>, tail?: RsExpr, indent = 4): RsExpr => {
+    const pad = " ".repeat(indent);
+    const close = " ".repeat(Math.max(0, indent - 4));
+    return expr(
+      `{\n${statements.map((s) => `${pad}${s.text}\n`).join("")}${tail ? `${pad}${tail.text}\n` : ""}${close}}`,
+    );
+  },
   inlineBlock: (...parts: ReadonlyArray<RsExpr>): RsExpr =>
     expr(`{ ${parts.map((p) => p.text).join(" ")} }`),
   inlineStmtBlock: (...parts: ReadonlyArray<RsStmt>): RsExpr =>
     expr(`{ ${parts.map((p) => p.text).join(" ")} }`),
   stmt: (value: RsExpr): RsStmt => stmt(`${value.text};`),
+  /** Joins statements onto one source line, matching hand-written `let a = ..; let b = ..;`. */
+  concatStmt: (...parts: ReadonlyArray<RsStmt>): RsStmt => stmt(parts.map((p) => p.text).join(" ")),
   blockStmt: (value: RsExpr): RsStmt => stmt(value.text),
   exprStmt: (value: RsExpr): RsStmt => stmt(`${value.text};`),
   itemStmt: (value: RsItem): RsStmt => stmt(value.text),
