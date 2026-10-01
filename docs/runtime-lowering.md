@@ -4,6 +4,8 @@
 
 This reference integrates the supplied runtime-reuse conversation once; the pasted message contained two copies of the same discussion. Formatting, missing arrows, and wording are cleaned up. The mapping candidates, registry examples, and research leads remain proposals. Original citation placeholders did not include recoverable source links, so upstream API/crate claims must be verified before implementation. Percentage estimates of reusable machinery are hypotheses, not measured coverage or acceptance criteria.
 
+> **Later update:** [Observability](observability.md) and its [research](research/observability.md) refine Logger/Tracer/Metric lowering: typed records, logical frames/source provenance, explicit context across async polling, distinct trace/log bridges and optional SDK/exporter profiles. That document controls the observability design; catalogue entries below remain candidates.
+
 ## Design principle
 
 First ask whether an abstraction can disappear into generated code. If it must remain, select an existing Rust primitive or crate and add the semantic adapter needed to preserve observable Effect behavior. Implement dedicated runtime machinery only for semantics that neither code generation nor a verified substrate provides.
@@ -24,51 +26,53 @@ The strategy belongs to a supported operation/profile, not merely a module name.
 
 The original discussion proposes the following research/implementation candidates. “Direct” describes a possible lowering after semantic checks; it does not establish full-module compatibility or a selected dependency.
 
-| Effect concept                  | Candidate Rust substrate                             | Work to plan and verify                                       |
-| ------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------- |
-| Clock                           | `std::time`, `tokio::time`                           | Time service adapter, clock semantics, timer interruption     |
-| Random                          | `rand`, seeded RNG such as ChaCha                    | Random service adapter, seeding/reproducibility policy        |
-| Console                         | `std::io` / `tracing`                                | Output service adapter                                        |
-| Tracer                          | `tracing` + OpenTelemetry                            | Trace/context adapter                                         |
-| ConfigProvider                  | `config` / Figment                                   | Configuration semantics adapter                               |
-| FileSystem                      | `tokio::fs`, `std::fs`                               | Typed failures, scope and interruption where required         |
-| Path                            | `std::path`                                          | Path/platform semantic mapping                                |
-| Process execution               | `tokio::process`                                     | Process lifecycle and interruption adapter                    |
-| Filesystem watch                | `notify`                                             | Event, scope, and shutdown adapter                            |
-| HTTP client                     | `reqwest`                                            | Effect failures, codecs, resource lifecycle                   |
-| HTTP server                     | Axum + Hyper + Tower                                 | Route/middleware lowering and request lifetime                |
-| Sockets                         | `tokio::net`                                         | Scoped I/O and cancellation adapter                           |
-| WebSocket                       | `tokio-tungstenite` / Axum WS                        | Protocol and session adapter                                  |
-| TLS                             | `rustls`                                             | Configuration/transport adapter                               |
-| SQL                             | SQLx                                                 | Schema/query lowering, transactions and connection lifetime   |
-| SQL connection pool             | SQLx `Pool`                                          | Pool policy, acquisition, and shutdown parity                 |
-| Generic Pool                    | `deadpool` / `bb8`                                   | Resource acquisition/release and Scope adapter                |
-| Semaphore                       | `tokio::sync::Semaphore`                             | Permit ownership and interruption contract                    |
-| Queue                           | `tokio::sync::mpsc` or custom queue machinery        | Bounded/dropping/sliding strategies and shutdown contract     |
-| PubSub                          | `tokio::sync::broadcast` or custom channel machinery | Effect policy, scoped subscription, backpressure and shutdown |
-| Deferred                        | `oneshot` + shared completion state                  | Completion and observation wrapper                            |
-| SubscriptionRef                 | `watch` + current state                              | State/change subscription wrapper                             |
-| Ref                             | `Atomic*`, `Mutex`, `RwLock`, or local mutable state | Type/use/escape-based specialization                          |
-| SynchronizedRef                 | Tokio `Mutex`                                        | Effectful mutation and interruption adapter                   |
-| Stream                          | `futures::Stream` / `tokio-stream`                   | Typed error/environment, scope, backpressure and operators    |
-| Sink                            | `futures::Sink` as possible prior art                | Compare consumption/result semantics; do not assume an alias  |
-| Schedule                        | `tokio::time` + cron logic                           | Generated schedule state machine and semantic adapter         |
-| Cache                           | Moka                                                 | Effect lookup, failure, sharing and eviction contract         |
-| ScopedCache                     | Moka + native Scope                                  | Scoped entry/resource lifetime adapter                        |
-| RequestResolver                 | DataLoader-style batching or generated batch calls   | Batching, ordering, caching and failure semantics             |
-| Option                          | `Option<T>`                                          | Direct representation where the value contract matches        |
-| Either / fallible values        | Enum / `Result<T, E>`                                | Direct representation with explicit variant/error mapping     |
-| HashMap                         | `std::collections::HashMap`                          | Key/equality/hash and iteration semantics                     |
-| HashSet                         | `HashSet`                                            | Equality/hash and collection semantics                        |
-| Sorted maps/sets                | `BTreeMap` / `BTreeSet`                              | Ordering and collection semantics                             |
-| Duration                        | `std::time::Duration`                                | Range, precision and supported-value mapping                  |
-| Fiber task execution            | Tokio tasks / `JoinSet`                              | Effect supervision and lifecycle wrapper                      |
-| Interruption                    | `CancellationToken` + generated checks               | Structured interruption, masking and finalization             |
-| FiberRef                        | Generated task/fiber context                         | Inheritance/join semantics                                    |
-| Scope                           | Generated async finalizer scope                      | Dedicated lifecycle/finalization semantics                    |
-| Exit / Cause                    | Generated enums                                      | Dedicated representation when observable                      |
-| STM / TxRef and related modules | Rust STM research or custom implementation           | Substantial semantic work; deferred scope                     |
-| Cluster / workflows             | Cruster                                              | Optional later target adapter                                 |
+| Effect concept                  | Candidate Rust substrate                             | Work to plan and verify                                            |
+| ------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| Clock                           | `std::time`, `tokio::time`                           | Time service adapter, clock semantics, timer interruption          |
+| Random                          | `rand`, seeded RNG such as ChaCha                    | Random service adapter, seeding/reproducibility policy             |
+| Console                         | `std::io`                                            | Preserve explicit console output; not interchangeable with logging |
+| Logger                          | `tracing` / typed OTel log records                   | Severity/body/annotations, context, stderr and sink adapter        |
+| Tracer                          | `tracing` + `tracing-opentelemetry` + OTel SDK       | Explicit parent/context/status/lifetime and source adapter         |
+| Metric                          | OTel metrics API/SDK                                 | Per-kind aggregation/state, cardinality and export adapter         |
+| ConfigProvider                  | `config` / Figment                                   | Configuration semantics adapter                                    |
+| FileSystem                      | `tokio::fs`, `std::fs`                               | Typed failures, scope and interruption where required              |
+| Path                            | `std::path`                                          | Path/platform semantic mapping                                     |
+| Process execution               | `tokio::process`                                     | Process lifecycle and interruption adapter                         |
+| Filesystem watch                | `notify`                                             | Event, scope, and shutdown adapter                                 |
+| HTTP client                     | `reqwest`                                            | Effect failures, codecs, resource lifecycle                        |
+| HTTP server                     | Axum + Hyper + Tower                                 | Route/middleware lowering and request lifetime                     |
+| Sockets                         | `tokio::net`                                         | Scoped I/O and cancellation adapter                                |
+| WebSocket                       | `tokio-tungstenite` / Axum WS                        | Protocol and session adapter                                       |
+| TLS                             | `rustls`                                             | Configuration/transport adapter                                    |
+| SQL                             | SQLx                                                 | Schema/query lowering, transactions and connection lifetime        |
+| SQL connection pool             | SQLx `Pool`                                          | Pool policy, acquisition, and shutdown parity                      |
+| Generic Pool                    | `deadpool` / `bb8`                                   | Resource acquisition/release and Scope adapter                     |
+| Semaphore                       | `tokio::sync::Semaphore`                             | Permit ownership and interruption contract                         |
+| Queue                           | `tokio::sync::mpsc` or custom queue machinery        | Bounded/dropping/sliding strategies and shutdown contract          |
+| PubSub                          | `tokio::sync::broadcast` or custom channel machinery | Effect policy, scoped subscription, backpressure and shutdown      |
+| Deferred                        | `oneshot` + shared completion state                  | Completion and observation wrapper                                 |
+| SubscriptionRef                 | `watch` + current state                              | State/change subscription wrapper                                  |
+| Ref                             | `Atomic*`, `Mutex`, `RwLock`, or local mutable state | Type/use/escape-based specialization                               |
+| SynchronizedRef                 | Tokio `Mutex`                                        | Effectful mutation and interruption adapter                        |
+| Stream                          | `futures::Stream` / `tokio-stream`                   | Typed error/environment, scope, backpressure and operators         |
+| Sink                            | `futures::Sink` as possible prior art                | Compare consumption/result semantics; do not assume an alias       |
+| Schedule                        | `tokio::time` + cron logic                           | Generated schedule state machine and semantic adapter              |
+| Cache                           | Moka                                                 | Effect lookup, failure, sharing and eviction contract              |
+| ScopedCache                     | Moka + native Scope                                  | Scoped entry/resource lifetime adapter                             |
+| RequestResolver                 | DataLoader-style batching or generated batch calls   | Batching, ordering, caching and failure semantics                  |
+| Option                          | `Option<T>`                                          | Direct representation where the value contract matches             |
+| Either / fallible values        | Enum / `Result<T, E>`                                | Direct representation with explicit variant/error mapping          |
+| HashMap                         | `std::collections::HashMap`                          | Key/equality/hash and iteration semantics                          |
+| HashSet                         | `HashSet`                                            | Equality/hash and collection semantics                             |
+| Sorted maps/sets                | `BTreeMap` / `BTreeSet`                              | Ordering and collection semantics                                  |
+| Duration                        | `std::time::Duration`                                | Range, precision and supported-value mapping                       |
+| Fiber task execution            | Tokio tasks / `JoinSet`                              | Effect supervision and lifecycle wrapper                           |
+| Interruption                    | `CancellationToken` + generated checks               | Structured interruption, masking and finalization                  |
+| FiberRef                        | Generated task/fiber context                         | Inheritance/join semantics                                         |
+| Scope                           | Generated async finalizer scope                      | Dedicated lifecycle/finalization semantics                         |
+| Exit / Cause                    | Generated enums                                      | Dedicated representation when observable                           |
+| STM / TxRef and related modules | Rust STM research or custom implementation           | Substantial semantic work; deferred scope                          |
+| Cluster / workflows             | Cruster                                              | Optional later target adapter                                      |
 
 Treat queue/channel topology and policies, Deferred completion sharing, Sink consumption, duration values, and collection ordering as conformance questions. The catalogue should not turn an illustrative mapping into an unchecked alias.
 

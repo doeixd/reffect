@@ -44,22 +44,23 @@ Start with [PLAN.md](PLAN.md) for the current vision, constraints, milestone ord
 
 The [revision overview](docs/op-expr-revision-convo.md), [revised compiler design](docs/compiler-design-revision.md), and [detailed implementation milestones](docs/implementation-milestones.md) provide the latest design direction. They update earlier kernel, reuse, pipeline, and sequencing proposals. Follow the detailed milestones 0–15 when the conversation's final condensed sequence uses different numbering.
 
-| Reference                                                          | Use for                                                                                            |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| [Revision overview](docs/op-expr-revision-convo.md)                | Design changes, precedence, and reading order                                                      |
-| [Revised compiler design](docs/compiler-design-revision.md)        | Kernel, repository shape, representations, Operation/Law/Trait, passes, API, and CLI               |
-| [Implementation milestones](docs/implementation-milestones.md)     | Current scope, acceptance, ownership, and workload-driven sequence                                 |
-| [Conformance and diagnostics](docs/conformance-and-diagnostics.md) | Test obligations, diagnostics, postponed scope, and fullstack target                               |
-| [Foldkit IR design](docs/foldkit-ir-design.md)                     | Expr/Query reuse, symbolic inputs, dependency/support analysis, normalization, and stable identity |
-| [Gen2 semantic kernel](docs/gen2-semantic-kernel.md)               | Typed law witnesses, evidence policy, checked traits, and explainable planning                     |
-| [Reuse strategy](docs/reuse-strategy.md)                           | Adaptation, public contracts, semantic ports, and deferred shared extraction                       |
-| [Cruster backend](docs/cruster-backend.md)                         | Optional later distributed/durable profile and cluster RPC separation                              |
-| [Original architecture](docs/architecture.md)                      | Foundational typed DSL/IR, ownership, Services/Layers, fibers/Scope, and native lowering details   |
-| [Compiler API](docs/compiler-api.md)                               | Build specs, results, diagnostics, watch/dev, and thin CLI                                         |
-| [RPC MVP](docs/rpc-mvp.md)                                         | Shared contracts and unary JSON/HTTP stock-client demo                                             |
-| [RPC protocol](docs/rpc-protocol.md)                               | Middleware, streaming/backpressure, sessions, serialization, and transports                        |
-| [Foldkit Remote and SQL](docs/foldkit-remote.md)                   | Sources, authorization, normalized data, SQLx/storage, liveHub, and resume                         |
-| [Foldkit SSR](docs/foldkit-ssr.md)                                 | Server-reachable rendering, routing/init/view, hydration, SSG, and HTML streaming                  |
+| Reference                                                          | Use for                                                                                                                    |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| [Revision overview](docs/op-expr-revision-convo.md)                | Design changes, precedence, and reading order                                                                              |
+| [Revised compiler design](docs/compiler-design-revision.md)        | Kernel, repository shape, representations, Operation/Law/Trait, passes, API, and CLI                                       |
+| [Implementation milestones](docs/implementation-milestones.md)     | Current scope, acceptance, ownership, and workload-driven sequence                                                         |
+| [Conformance and diagnostics](docs/conformance-and-diagnostics.md) | Test obligations, diagnostics, postponed scope, and fullstack target                                                       |
+| [Foldkit IR design](docs/foldkit-ir-design.md)                     | Expr/Query reuse, symbolic inputs, dependency/support analysis, normalization, and stable identity                         |
+| [Gen2 semantic kernel](docs/gen2-semantic-kernel.md)               | Typed law witnesses, evidence policy, checked traits, and explainable planning                                             |
+| [Reuse strategy](docs/reuse-strategy.md)                           | Adaptation, public contracts, semantic ports, and deferred shared extraction                                               |
+| [Cruster backend](docs/cruster-backend.md)                         | Optional later distributed/durable profile and cluster RPC separation                                                      |
+| [Original architecture](docs/architecture.md)                      | Foundational typed DSL/IR, ownership, Services/Layers, fibers/Scope, and native lowering details                           |
+| [Compiler API](docs/compiler-api.md)                               | Build specs, results, diagnostics, watch/dev, and thin CLI                                                                 |
+| [Observability](docs/observability.md)                             | Source provenance/logical stacks, logging/OTel/metrics, context semantics, optional native dependencies and delivery gates |
+| [RPC MVP](docs/rpc-mvp.md)                                         | Shared contracts and unary JSON/HTTP stock-client demo                                                                     |
+| [RPC protocol](docs/rpc-protocol.md)                               | Middleware, streaming/backpressure, sessions, serialization, and transports                                                |
+| [Foldkit Remote and SQL](docs/foldkit-remote.md)                   | Sources, authorization, normalized data, SQLx/storage, liveHub, and resume                                                 |
+| [Foldkit SSR](docs/foldkit-ssr.md)                                 | Server-reachable rendering, routing/init/view, hydration, SSG, and HTML streaming                                          |
 
 Preserved discussions contain provisional API spellings, unresolved citation placeholders, and historical upstream/licensing observations. They are design context. Verify external facts against the installed dependency version and authoritative upstream material before implementation; do not infer shipped support from an example.
 
@@ -109,6 +110,7 @@ Keep the record proportional to the work: concise evidence and design decisions 
 - Verify each supported mapping rather than aliasing similarly named primitives. Queue/PubSub strategies and shutdown, shared Deferred completion, Scope/finalization, Layer identity, cache/pool lifecycle, and Stream/Sink/Schedule semantics need explicit conformance. Direct timer or semaphore lowering still needs the required interruption/resource contract.
 - Consider compile-time batching, Schedule state machines, Ref specialization, and stream fusion before adding general runtime machinery. Apply these rewrites only when their supported semantics and evidence justify them; do not infer equivalence from crate availability or reuse-percentage estimates.
 - Adapt small Gen2 primitives; consume existing Foldkit Entity/Query IR, protocol schemas, and conformance fixtures where possible. Preserve source semantics in Rust ports. Defer extracting a shared cross-project kernel.
+- Follow [observability](docs/observability.md) for provenance, logging, tracing and metrics work. Preserve semantic identities separately from source/use-site metadata, keep logical/native/distributed traces distinct, and verify event ordering/context/export policy against official Effect. Select optional crates/features by reachable capability; preserve machine stdout and do not install globals from libraries.
 - Keep Cruster optional and later. Ordinary programs should not acquire distributed dependencies. Browser Effect RPC compatibility and internal cluster RPC remain separate boundaries.
 
 ## Scope and validation

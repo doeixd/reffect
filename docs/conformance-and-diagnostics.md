@@ -6,6 +6,8 @@
 
 For additional adapter obligations, see [runtime lowering](runtime-lowering.md): validate substrate policy/lifecycle parity, distinguish operation/service/semantic requirements in support reports, and verify reachable dependency selection. Candidate crate mappings are not conformance evidence.
 
+[Observability conformance](observability.md#compiler-integration-and-acceptance) adds deterministic semantic log/span/metric comparisons, source-frame resolution, independent sampling/log filtering, async context isolation, stock-carrier propagation, bounded export/flush and dependency/overhead checks. Payload-only Exit equality does not establish failure-annotation or telemetry parity.
+
 This document preserves part of the later design conversation. Read the revision overview for how it updates earlier proposals. Examples and upstream API, repository, and licensing claims are historical design material, not verified current facts or implemented guarantees.
 
 ## Contents

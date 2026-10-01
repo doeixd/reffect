@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-01 — Observability design and roadmap integration
+
+- Reviewed implemented compiler/reference/native boundaries and roadmap references; inspected Effect RC.118 Logger/Tracer/Metric/Cause and built-in OTLP source, Rust tracing/OTel release metadata/manifests, W3C propagation, error/log/metric conventions, native backtraces and diagnostic tools. Recorded evidence, alternatives and compatibility gaps before design integration in [observability research](docs/research/observability.md).
+- Added [the full observability design](docs/observability.md): compiler provenance/source artifacts, three separate stack/trace views, failure annotations, typed logging and severity/stream routing, scoped async context, Effect versus OTel status policies, metrics, Rust substrate choices, optional dependency profiles, redaction and bounded export/shutdown. Integrated delivery/acceptance gates into PLAN, detailed milestones, runtime/compiler/conformance references, docs index and agent guidance.
+- Review checked existing scalar/typed-error compatibility, source capture limits, Effect versus OTel policies, Fatal/integer preservation, shared-source occurrences, context restoration, signal-independent filtering and exporter lifetimes. Validation: all 42 new local documentation links/anchors resolve; published RC.118 OtlpTracer source matches the installed source byte-for-byte; `vp check` passes without warnings, strict package TypeScript passes, all 27 tests pass with fresh native debug/release crates, and workspace builds pass (all cached because only Markdown changed).
+- This work specifies the design and milestone obligations; it does not install crates or claim native telemetry/logging/source maps are implemented.
+
 ## 2026-09-30 — Milestone 2 synchronous Boolean/u64 profile
 
 - Added immutable Boolean/Never witnesses, Boolean/u64 predicates, exhaustive pure/computation `R.Match.bool`, separate typed Computation nodes, and `R.Effect.succeed/fail/map/flatMap`. The four-argument `R.fn` and `R.Effect.fn` declare success/error channels; mixed pure/effectful programs retain the existing pipeline. Builders execute once with symbolic lexical continuation parameters.

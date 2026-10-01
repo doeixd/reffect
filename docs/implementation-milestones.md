@@ -2,6 +2,8 @@
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Revision overview](op-expr-revision-convo.md)
 
+Follow [observability delivery gates](observability.md#delivery-through-the-existing-milestones) as a cross-cutting track: metadata/logging with milestone 2, request propagation/metrics/OTLP with milestone 3, and interruption/finalizer/fiber trace semantics as those milestones arrive. This supplements the existing sequence without renumbering or claiming implementation.
+
 Treat [migration tooling](migration-tooling.md) as a first-class track attached to supported profiles: source locations/report/fix metadata alongside compiler diagnostics, then constrained codemods as native capabilities stabilize. Migration into the explicit DSL is distinct from the later source syntax-widening milestone and does not reorder the sequence here.
 
 The later [runtime lowering reference](runtime-lowering.md) adds implementation-registry and Rust-substrate guidance without changing these milestones. Establish operation/service/semantic-runtime metadata in kernel/planning work; implement and verify entries as the corresponding workload arrives. Generated batching, schedules, Ref specialization, and stream fusion require semantic evidence before optimization.
@@ -137,6 +139,8 @@ This is better than spending the first compiler milestone on artificial arithmet
 
 # 16. Milestone 2 — general compiled functions and Effect IR
 
+> **Later update:** The initial synchronous Boolean/u64 profile is implemented; broader ownership/representations remain. The next [observability foundation](observability.md#delivery-through-the-existing-milestones) adds source/use-site provenance, diagnostic locations, named logical failure frames, Unit and scoped logging/annotations/log-span timers. Compare official Effect/native records and preserve stderr/stdout separation before adding exporters. This does not enable arbitrary callback syntax.
+
 Introduce:
 
 ```ts
@@ -222,6 +226,8 @@ The full structured-concurrency lifetime analysis comes when fibers arrive.
 
 # 18. Milestone 3 — unary Effect RPC
 
+> **Later update:** Include [request observability](observability.md#spans-context-and-propagation): explicit request/span context, W3C ingress/egress propagation, bounded source-aware logging, baseline counters/duration metrics and selected OTLP exporters with tested teardown. Keep stock payload/error schemas intact, separate Effect span compatibility from service-boundary conventions, and verify context isolation and SDK/Collector export before claiming this demo is production-observable.
+
 This is the first major public demo.
 
 Goal:
@@ -269,6 +275,8 @@ An unmodified browser Effect RPC client successfully calls a Rust backend genera
 ---
 
 # 19. Middleware belongs in RPC early
+
+> **Later update:** [Observability](observability.md) distinguishes request IDs, remote trace context and allowlisted baggage; Tower HTTP tracing does not establish Effect/OTel propagation parity. Assign one owner to the server span, preserve scoped annotations and redact before local output/export.
 
 Immediately after unary RPC, support semantic RPC middleware:
 

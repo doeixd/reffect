@@ -19,6 +19,12 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 | [Reuse strategy](reuse-strategy.md)                               | Adaptation, public contracts, semantic ports, and deferred common-kernel extraction         |
 | [Cruster backend](cruster-backend.md)                             | Optional distributed/durable capabilities and isolation from local execution/browser RPC    |
 
+## Observability design and research
+
+[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; native capabilities remain planned.
+
+[Observability research](research/observability.md) records pinned Effect RC.118 behavior, primary Rust/OTel/W3C sources and observed releases, alternatives and compatibility gaps checked before integration.
+
 ## Original detailed references
 
 | Document                                        | Focus                                                                                                                       |

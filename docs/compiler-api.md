@@ -6,6 +6,8 @@
 
 [Runtime lowering](runtime-lowering.md) extends the proposed support/explain API: report required operations, services, and semantic primitives separately, along with selected substrates, adapters, generated strategies, and reachable Cargo crates/features.
 
+[Observability](observability.md#compiler-integration-and-acceptance) extends compiler artifacts/explanations with source/use-site mappings, build identity and selected signal/context/sink/export policies. Compiler telemetry uses official Effect with caller-owned layers, separate from generated application providers. Existing scalar runner stdout stays stable; richer diagnostic envelopes need a versioned API.
+
 The [revised compiler design](compiler-design-revision.md) expands the public stages to check/derive/normalize/plan/verify/optimize/ownership/lower/emit/build and adds explainable planning. Read the [Gen2 semantic kernel discussion](gen2-semantic-kernel.md) for evidence policy and implementation selection; retain this document for build specs, results, watch/dev, and integration details.
 
 This document preserves a design discussion from the original PLAN.md. APIs and package names are proposals, not implemented guarantees. Original citation placeholders are retained; verify external API and protocol claims against the installed dependencies before implementation.
