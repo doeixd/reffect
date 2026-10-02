@@ -1,6 +1,6 @@
 # Records and tagged unions
 
-Status: **proposed; awaiting review before implementation.** Prepared 2026-10-02 for the "Before milestone 4" gate (owned strings/records, explicit unions, portable Schema subset). Checked against installed Effect **4.0.0-rc.118** (`Schema.Struct`, `Schema.TaggedStruct`, `Schema.TaggedUnion`, `Schema.Union`, `Schema.Literals`, `Struct.get`, `Match.valueTags`) and the Remote wire schemas in the `doeixd/foldkit-plus` checkout at `67cf3735` (`packages/remote/src/wire.ts`).
+Status: **accepted for implementation (2026-10-02)** with the defaults below; part 1 (IR, reference, native) then part 2 (RPC codecs). Prepared 2026-10-02 for the "Before milestone 4" gate (owned strings/records, explicit unions, portable Schema subset). Checked against installed Effect **4.0.0-rc.118** (`Schema.Struct`, `Schema.TaggedStruct`, `Schema.TaggedUnion`, `Schema.Union`, `Schema.Literals`, `Struct.get`, `Match.valueTags`) and the Remote wire schemas in the `doeixd/foldkit-plus` checkout at `67cf3735` (`packages/remote/src/wire.ts`).
 
 ## Prior work (searched first)
 
@@ -23,10 +23,28 @@ Core `foldkit/foldkit` does not contain Remote. `remote`, `remote-server`, `remo
 - **REC-004 — Ownership.** Field access borrows; moving a whole record follows the move/borrow/clone order from §17. Records with only Copy fields stay Copy.
 - **REC-005 — Wire codecs.** The RPC boundary recognizes `Schema.Struct`, `Schema.TaggedStruct`/`TaggedUnion` and equivalent `Union` of `_tag`-literal Structs whose fields are admitted codecs, structurally from SchemaAST rather than by registered identity (identity registration stays for refined scalars such as `U64Json`). Native decode/encode errors must match the pinned server for admitted shapes, including `_tag` failures.
 
+## Pinned upstream behavior (probed 2026-10-02)
+
+Probed with the official RC.118 `RpcServer`, raw JSON bodies and `RpcSerialization.layerJson`:
+
+- `Schema.TaggedUnion` builds `Union` of `TaggedStruct`s; each `_tag` is a `Literal` whose AST carries `context` (a constructor default), unlike a hand-written `Literal`. Both shapes decode identically. The union exposes `cases`, `guards`, `isAnyOf` and a dual `match(value, cases)`; `Match.valueTags` is the generic form; `Struct.get` is dual.
+- Decoding selects a union case by its `_tag` sentinel. A missing, unknown or non-string `_tag`, or a non-object value, fails with one message: the union's `expected` annotation, or the de-duplicated members joined by `|`, where a member with literal properties prints as `{ readonly "_tag": "Cursor", ... }` (`SchemaAST.Union.getExpected`). Inside a selected case, errors carry paths: `Missing key\n  at ["cursor"]`, `Expected string\n  at ["cursor"]`, and nested `at ["boundary"]["cursor"]`.
+- A non-object Struct fails with `Expected <identifier>` when annotated, otherwise `Expected object`. Field errors follow schema order; only the first error is reported. Excess properties are ignored and dropped.
+- Encoded output lists `_tag` first, then fields in schema order. `Schema.Literals(["a","b"])` and a `Union` of literals both fail with `Expected "a" | "b"`.
+
+## Implementation decisions
+
+- **REC-001 (refined):** witnesses are interned by structure (field names in order and field witness identity), so identical structures share one witness and `IRType.same` stays reference equality. `.annotate({ identifier })` mirrors Effect and yields a distinct witness because diagnostics differ. Rust names use the identifier when present (validated, unique), otherwise a readable prefix plus a stable digest of the structure.
+- **REC-002 (refined):** `R.TaggedUnion({ Tag: fields })` holds case witnesses (`cases.Tag`); case constructors `cases.Tag.make({...})` return a **union-typed** value, narrower than Effect's case-typed value. Native: one Rust struct per case (without `_tag`) and an enum whose variants wrap them.
+- **REC-003 (refined):** new Expr nodes `Make`, `Get` and `MatchTags`, plus a Computation `MatchTags`, instead of synthetic operations: construction, projection and branching are language primitives like `Match`. `Union.match(value, cases)` and `R.Match.valueTags` share the node. Cases receive the case-struct value; exhaustiveness is checked in types and by the checker.
+- **REC-004 (refined):** non-Copy values follow one uniform rule. Parameter and bound names are borrows (`&T`, or `&str` for strings; top-level owned parameters are shadowed to borrows), computed locals are owned, field access is a place expression (borrowed as an operand, cloned only in value positions), and a block's final owned local moves. Strings move onto this rule. Composite witnesses are not Copy in this slice.
+- **REC-005 (refined):** contract `Struct`/`TaggedUnion`/`_tag`-literal `Union` schemas whose leaves are admitted codecs are recognized structurally and mapped to the interned witness. Generated decoders/encoders reproduce the messages above, including identifier/`object`, union expected text, schema-ordered first error and nested paths. Divergence recorded: native JSON key order follows serde_json, so bytes differ while decoded values are identical.
+- **REC-006: runner boundary.** The dependency-free native runner keeps scalar arguments and results; functions with composite signatures get a refusing runner arm, and composite I/O is verified through `NativeRpc`.
+
 ## Open questions
 
-- Rust type naming: structural digests are stable but unreadable; a user-supplied identifier (like `R.Context.service`) would read better but diverges from Effect's structural schemas.
-- Whether typed error unions (`Data.TaggedError`/`Schema.TaggedError` in error channels) belong in this slice or the next; Remote uses them for `RemoteReadError | RemoteProtocolError`.
+- Resolved: Rust names use Effect's `identifier` annotation when present, otherwise a digest (REC-001).
+- Deferred to the next slice: whether typed error unions (`Data.TaggedError`/`Schema.TaggedError` in error channels) belong in this slice or the next; Remote uses them for `RemoteReadError | RemoteProtocolError`.
 - `Schema.Number` with integer checks needs its own numeric decision (JS double versus a native integer), separate from this gate.
 
 ## Deferred
