@@ -91,7 +91,7 @@ is context only; the roadmap order stands.
 1. Done: `NativeRpc.StringJson` payloads/results match the official server ([STR-006/007](docs/research/string-profile.md#rpc-boundary-2026-10-02)).
 2. Done: [records and tagged unions](docs/research/records-unions.md), including pure/effectful matching and RPC codecs with exact invalid-input parity.
 3. Done: [arrays and structured iteration](docs/research/arrays.md), including `Effect.forEach` and RPC array codecs.
-4. Remaining Remote wire gaps before a RemoteServer path: `NullOr`/optional fields, literal unions, records/maps, integer-checked `Schema.Number`, and typed error unions. Search existing designs first for each.
+4. Next, per the [milestone 4 gap analysis](docs/research/remote-gap-analysis.md): write the NativeRemote engine design (authoring of Entities/Sources/authorization in R, generated vs reused parts, TS server as oracle), then add `Schema.Number`, optional fields, `TaggedError` error unions, array length checks and JS-ordered `Record` maps as that design requires.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

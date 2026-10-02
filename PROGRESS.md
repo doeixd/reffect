@@ -1,5 +1,9 @@
 # Progress
 
+## 2026-10-02 — Milestone 4 gap analysis
+
+- Measured the `foldkit-plus` Remote wire and server against admitted features and probed pinned Effect codecs for `Schema.Number` (non-finite strings, safe-integer `isInt`), `Schema.optional` (null decodes as absent; undefined encodes as null) and `Schema.Record` (JS key order: integer keys first). Recorded in the [gap analysis](docs/research/remote-gap-analysis.md): design the native Remote engine next, since it decides which generic schema features are needed (for example, `Unknown` becomes typed per-entity codecs and two-stage input decoding). No code changed.
+
 ## 2026-10-02 — Arrays, part C (RPC codecs)
 
 - `NativeRpc` recognizes plain `Schema.Array(item)` recursively and generates decoders and encoders with official `Expected array` text and unquoted index path segments; tuples and checked arrays are refused.
