@@ -34,6 +34,7 @@ import {
 } from "./records.ts";
 import {
   NumberType,
+  UnknownType,
   arrayItem,
   recordValue,
   structLayout,
@@ -81,6 +82,8 @@ interface Composite {
   readonly lengths?: readonly { readonly rust: string; readonly expected: string }[];
   /** Value codec of a string-keyed `Schema.Record` (RECJS-001). */
   readonly record?: Codec;
+  /** `Schema.Unknown` carried as normalized JSON data (UNK-002). */
+  readonly json?: true;
   /** A JS number: plain JSON numbers when finite-only, plus verified checks (NUM-002). */
   readonly number?: {
     readonly finiteOnly: boolean;
@@ -215,6 +218,8 @@ const kindsOf = (
         };
   if (codec.item) return { kinds: ["array"], expected: codec.expected };
   if (codec.record) return { kinds: ["object"], expected: codec.expected };
+  if (codec.json)
+    throw unsupported(path, "optional(Unknown) is not supported: null matches Unknown first");
   if (codec.cases.length === 0 && codec.fields.length === 0)
     throw unsupported(path, "optional(Struct({})) accepts any value in Effect and is refused");
   return { kinds: ["object"], expected: codec.expected };
@@ -322,6 +327,7 @@ const sampleOf = (codec: Codec, path: string): unknown => {
       }),
     );
   if (codec.number) return 1.5;
+  if (codec.json) return null;
   if (codec.item) return [];
   if (codec.record) return {};
   if (codec.cases.length)
@@ -533,6 +539,7 @@ const register = (registry: Registry, base: string, shape: Omit<Composite, "name
     shape.record === undefined ? null : codecKey(shape.record),
     shape.number ?? null,
     shape.lengths ?? null,
+    shape.json ?? null,
   ]);
   const name = `${base}_${digest(signature)}`;
   const existing = registry.get(name);
@@ -703,6 +710,17 @@ const codec = (
   if (ast === U64Json.ast) return "u64";
   if (ast === StringJson.ast) return "string";
   if (SchemaAST.isNumber(ast)) return numberCodec(ast, path, decodeOnly, registry);
+  if (SchemaAST.isUnknown(ast)) {
+    if (ast.checks || ast.encoding || ast.context || ast.annotations)
+      throw unsupported(path, "Only plain Schema.Unknown is supported");
+    return register(registry, "Unknown", {
+      type: UnknownType,
+      fields: [],
+      cases: [],
+      expected: "",
+      json: true,
+    });
+  }
   if (
     SchemaAST.isObjects(ast) ||
     SchemaAST.isUnion(ast) ||
@@ -1168,9 +1186,13 @@ const compile = <Rpcs extends Rpc.Any>(
         Compile.withFailureFrames(options.failureFrames ?? FailureFrames.Bounded),
       ),
     );
-    // This checked scalar HTTP profile only composes the selected Tokio core dependency.
-    // Refuse new core crate requirements until manifest composition supports them explicitly.
-    if (core.explanation.crates.some((crate) => crate !== "tokio@1.53.1"))
+    // The HTTP manifest composes Tokio and serde_json (which Unknown codecs configure with
+    // preserve_order, UNK-003). Refuse other core crates until composition supports them.
+    if (
+      core.explanation.crates.some(
+        (crate) => crate !== "tokio@1.53.1" && crate !== "serde_json@1.0.151",
+      )
+    )
       return yield* unsupported(
         "crates",
         "HTTP manifest composition does not support selected core crates",
@@ -1306,7 +1328,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
             .replace(
               '["float_roundtrip"]',
               // Records observe insertion order, so only crates that reach one pay for it.
-              prepared.composites.some((shape) => shape.record !== undefined)
+              prepared.composites.some((shape) => shape.record !== undefined || shape.json)
                 ? '["float_roundtrip", "preserve_order"]'
                 : '["float_roundtrip"]',
             )
@@ -1362,6 +1384,7 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
     if (item) return `Vec<${rustType(item)}>`;
     const value = recordValue(type);
     if (value) return `Vec<(String, ${rustType(value)})>`;
+    if (IRType.same(type, UnknownType)) return "Value";
     const defined = undefinedOrItem(type);
     if (defined) return `Option<${rustType(defined)}>`;
     if (type.layout) return `reffect_generated::${type.native.type}`;
@@ -1469,6 +1492,11 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
         `fn encode_${name}(value: &f64) -> Value { js_number(*value) }\n`
       );
     }
+    if (shape.json)
+      return (
+        `fn decode_${name}(value: &Value, _path: Option<&Path>) -> Result<Value, String> { Ok(js_json(value)) }\n` +
+        `fn encode_${name}(value: &Value) -> Value { value.clone() }\n`
+      );
     if (shape.record !== undefined)
       return (
         `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
@@ -1546,8 +1574,25 @@ fn string_in(value: &Value, path: Option<&Path>) -> Result<String, String> { str
 fn unit_in(value: &Value, path: Option<&Path>) -> Result<(), String> { unit_arg(value, None).map_err(|message| at(&message, path)) }
 fn never_in(_value: &Value, path: Option<&Path>) -> Result<std::convert::Infallible, String> { Err(at("Expected never", path)) }
 ${
-  composites.some((shape) => shape.record !== undefined)
-    ? `/// JS own-property order (RECJS-003): array-index keys ascending, then insertion order.
+  composites.some((shape) => shape.json)
+    ? `/// The value as JSON.parse sees it (UNK-002): doubles in JS form, objects in JS key order.
+fn js_json(value: &Value) -> Value {
+    match value {
+        Value::Number(number) => js_number(number.as_f64().unwrap_or(f64::NAN)),
+        Value::Array(items) => Value::Array(items.iter().map(js_json).collect()),
+        Value::Object(object) => {
+            let mut map = serde_json::Map::new();
+            for (key, item) in js_entries(object) { map.insert(key.clone(), js_json(item)); }
+            Value::Object(map)
+        }
+        other => other.clone(),
+    }
+}
+`
+    : ""
+}${
+    composites.some((shape) => shape.record !== undefined || shape.json)
+      ? `/// JS own-property order (RECJS-003): array-index keys ascending, then insertion order.
 fn js_entries(object: &serde_json::Map<String, Value>) -> Vec<(&String, &Value)> {
     let mut indexed = Vec::new();
     let mut named = Vec::new();
@@ -1563,7 +1608,7 @@ fn array_index(key: &str) -> Option<u32> {
     key.parse::<u32>().ok().filter(|index| *index != u32::MAX)
 }
 `
-    : ""
-}
+      : ""
+  }
 ${items.join("")}`;
 };

@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-10-02 — Raw Unknown as JSON data
+
+- Recorded [Unknown decisions](docs/research/unknown-json.md) (UNK-001–004) from Remote's `values`/`input`/`output` and probes on Effect 4.0.0. The official server returns Unknown data **as `JSON.parse` saw it**: objects in JS key order at every depth, numbers as doubles (`1.0`→`1`, `-0`→`0`, large integers rounded), duplicate keys last-wins. `1e400` is a per-request `Expected JSON value`.
+- Added `R.Unknown` (natively `serde_json::Value`; no literals or operations). A reachable Unknown, including inside layouts, derives `reffect/capability/json@1`. The plan then lists `serde_json`, and generated crates depend on it with `preserve_order`. Programs without Unknown are unchanged. The native runner excludes Unknown functions.
+- `NativeRpc` decodes Unknown by rebuilding it in `JSON.parse` form (`js_json`) and encodes it unchanged. It works at the top level, in fields, in records, in arrays and in projected payloads. Refused: `optional(Unknown)`, annotated Unknown and literals.
+- **Open decision:** Remote's requests decode plain `Schema.String` (ids, names, `requestId`, field lists), which STR-006 refuses. Options are recorded in the [Unknown record](docs/research/unknown-json.md#open-question-for-the-remote-contract-recorded-2026-10-02). Remote's responses also use a non-tagged literal union (`"prepend" | "append"`).
+- Validation (focused):
+  - `unknown-rpc.test.ts` 2/2: about 55 raw requests strictly equal to the official server, with **raw** key order compared through an order-preserving reader, since `JSON.parse` hides index-key order. Capability and crate derivation, literal refusal and the `1e400` divergence are asserted.
+  - Dropping the JS key partition in `js_json` fails the test.
+  - Records, TaggedError, compiler, effect, native RPC, numbers and emission suites pass (8 files, 29 tests), as does `vp check`.
+
 ## 2026-10-02 — TaggedError classes in RPC error schemas
 
 - Recorded [TaggedError decisions](docs/research/tagged-errors.md) (TE-001–004) from Remote's error classes and probes on Effect 4.0.0. A class is a `Declaration` encoding to its tagged struct. Failures go over the wire as the struct form. A handler failing with a plain object (not an instance) is a defect, so JS boundaries must build instances.
