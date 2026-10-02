@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Remote version assumption (NR-007)
+
+- Checked versions. Effect 4.0.0 stable was published on 2026-10-01, and `foldkit` 0.165.0 already peers on it. `foldkit-remote`/`foldkit-remote-server` 0.9.0 cannot load under rc.118 (`effect/unstable/rpc` moved to `effect/rpc`), so their narrow peer range is accurate.
+- Per the user's decision, reffect assumes foldkit-plus will be upgraded to Effect 4.0.0 stable. It does not isolate, vendor or patch the rc.116 packages. The wire slices continue with locally mirrored schemas. Before the differential harness, reffect moves its oracle pin to 4.0.0 and rechecks the Query adapter against the upgraded `foldkit-entity`. Details: [native RemoteServer design → Versions](docs/research/native-remote.md#versions). No code changed.
+
 ## 2026-10-02 — JS numbers, part B (RPC codec)
 
 - `NativeRpc` admits `Schema.Number` (plain, and checked with `isInt`/`isFinite`/range filters recognized by representation id and verified by running them) at top level, in fields, in structs and in arrays. Generated codecs follow `toCodecJson`'s finite rule and encode like `JSON.stringify`. Codec names now derive from the full codec structure. Verification found that Effect range filters order NaN below every number (upper bounds accept NaN); native predicates match.

@@ -91,7 +91,7 @@ is context only; the roadmap order stands.
 1. Done: `NativeRpc.StringJson` payloads/results match the official server ([STR-006/007](docs/research/string-profile.md#rpc-boundary-2026-10-02)).
 2. Done: [records and tagged unions](docs/research/records-unions.md), including pure/effectful matching and RPC codecs with exact invalid-input parity.
 3. Done: [arrays and structured iteration](docs/research/arrays.md), including `Effect.forEach` and RPC array codecs.
-4. Next: the [native RemoteServer design](docs/research/native-remote.md) (proposed). Its order of work starts with the wire codec features ([`Schema.Number`](docs/research/number-profile.md) done; next optional fields, JS-ordered `Record`, array length checks, `TaggedError` error unions, raw `Unknown`), then the engine port and memory backend for Read with a differential harness.
+4. Next: the [native RemoteServer design](docs/research/native-remote.md) (proposed). Its order of work starts with the wire codec features ([`Schema.Number`](docs/research/number-profile.md) done; next optional fields, JS-ordered `Record`, array length checks, `TaggedError` error unions, raw `Unknown`), then the engine port and memory backend for Read with a differential harness. Versions (NR-007): foldkit-plus is assumed to move to Effect 4.0.0 stable; reffect moves its oracle pin from rc.118 to 4.0.0 before the harness.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

@@ -41,10 +41,28 @@ Order is observable. Read order and the order of returned `entities` follow JS o
 - **NR-005 — compiled Sources and authorization come next.** Entity reads become R functions returning typed rows (`R.Struct` of the entity's declared fields, with optional fields for omission), projected and encoded by the engine with per-entity field codecs. Mutation and query Sources become R `EffectFn`s with typed Input/Output. `authorize` becomes a compiled function or a declarative rule (milestone §21). The principal flows from the existing checked bearer adapter.
 - **NR-006 — Live is deferred** to milestones 6–7; the native server refuses `FoldkitRemoteLive` explicitly rather than returning an empty stream.
 
+- **NR-007 — versions: assume foldkit-plus moves to Effect 4.0.0 stable.** This is an assumption, not yet a published fact (recorded 2026-10-02). See [Versions](#versions).
+
+## Versions
+
+Checked 2026-10-02 with `npm view` and a scratch install:
+
+- Effect **4.0.0** stable was published on 2026-10-01 and is npm `latest`. rc.118 was published on 2026-09-28. reffect pins rc.118.
+- `foldkit` 0.165.0 already declares the peer `effect: 4.0.0`.
+- `foldkit-remote`/`foldkit-remote-server` 0.9.0 declare `effect >=4.0.0-rc.116 <4.0.0-rc.118`. The range is accurate: rc.118 moved `effect/unstable/rpc`, `effect/unstable/http` and `effect/unstable/httpapi` to `effect/rpc`, `effect/http` and `effect/http-api` (4.0.0 matches rc.118). Importing Remote 0.9.0 under rc.118 fails with `ERR_MODULE_NOT_FOUND …/effect/dist/unstable/rpc.js`. Running it under rc.118 is not an option.
+- Remote 0.9.0 depends on `foldkit-entity` 0.5.0, while reffect pins 0.4.0. The published `dist` differs between the two versions, and the differences have not been reviewed yet.
+
+**Assumption (user decision, 2026-10-02):** foldkit-plus (`foldkit-remote`, `foldkit-remote-server`, `foldkit-entity` and the related packages) will be upgraded to Effect 4.0.0 stable. Consequences:
+
+- reffect does not run the reference Remote server in an isolated rc.116 process, and does not vendor or patch it.
+- The wire slices (order of work, step 1) do not need the Remote packages at runtime. Their tests declare Remote's schemas locally, exactly as `foldkit-remote`'s wire module does, against the official server on reffect's own Effect version.
+- Before the differential harness (step 2), reffect moves its pin from rc.118 to 4.0.0 in a focused commit and reruns the Effect-sensitive suites: Schema formatter messages, RPC, and Layer/Scope. It then adds the upgraded foldkit-plus releases as dev dependencies.
+- The Query adapter's conformance is rechecked against the `foldkit-entity` release that the upgraded Remote depends on (0.5.0 or later), not against 0.4.0.
+- If the upgraded releases are not available when step 2 starts, the harness waits; the wire slices continue.
+
 ## Open questions
 
-- `foldkit-remote`/`foldkit-remote-server` 0.9.0 declare `effect >=4.0.0-rc.116 <4.0.0-rc.118`, while reffect pins rc.118. Tests need either a published peer range that includes rc.118, or verified use under rc.118 with the warning recorded.
-- reffect pins `foldkit-entity` 0.4.0; Remote 0.9.0 depends on 0.5.0. The Query adapter's conformance must be rechecked against 0.5.0.
+- Whether foldkit-plus changes any Remote wire schema during the 4.0.0 upgrade. The locally mirrored schemas must be re-diffed against the upgraded `foldkit-remote` wire module.
 - Whether native `entities` arrays can expose a different but equivalent order when the client cache is order-insensitive. Until shown, order is preserved exactly.
 
 ## Acceptance
@@ -56,6 +74,6 @@ Order is observable. Read order and the order of returned `entities` follow JS o
 ## Order of work
 
 1. Wire features (NR-002), each as a small NativeRpc codec slice, ending with the full `RemoteRpc` Read/Query payloads compiling with parity.
-2. The engine port and memory backend for Read (NR-001, NR-003, NR-004), with the differential harness.
+2. Move the oracle pin to Effect 4.0.0, then the engine port and memory backend for Read (NR-001, NR-003, NR-004), with the differential harness against the upgraded foldkit-plus releases (NR-007).
 3. Query with the Query evaluator, then query `select`.
 4. Compiled Sources, authorization and mutations (NR-005).
