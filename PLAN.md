@@ -79,16 +79,18 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Next: choose between finishing milestone 3B and preparing milestone 4.**
-[Server-lifetime RPC services](docs/research/server-layer.md) are implemented:
-`NativeRpc.compile(..., { layer })` builds a layer once at startup, handlers
-receive scalar services through `bindServices`, and Ctrl-C/stdin-EOF shutdown
-interrupts and awaits in-flight requests before LIFO release. Remaining 3B
-gaps are services combined with protected procedures, non-scalar service
-values (service objects/methods) and shutdown deadlines.
+**Next: a bounded owned-string profile driven by Foldkit escaping.**
+[Server-lifetime RPC services](docs/research/server-layer.md) completed the
+current 3B workload; remaining 3B gaps (services with protected procedures,
+service objects, shutdown deadlines) wait for a workload. The
+[north-star review](docs/research/north-star-review.md) adopted corpus-driven
+priorities, and the [Foldkit SSR inventory](docs/research/foldkit-ssr-inventory.md)
+shows strings are the dominant data in the server-reachable graph. Strings
+also gate milestone 4, so this step serves either ordering.
 
-1. Review [north-star acceptance input](docs/north_star.md) and [runtime suggestions](docs/suggestions.txt) against this roadmap; record which claims change milestone order.
-2. Either close 3B by combining `bindServices` with `bindPrincipal`, or begin milestone 4 preparation: owned strings/records and the portable Schema subset that RemoteServer needs.
+1. Research Effect `Schema.String`/JSON string semantics, JS UTF-16 code units versus Rust UTF-8 `String`, and wire decoding of lone surrogates; record the string witness, ownership and refusal decisions.
+2. Admit string literals, equality, the JSON wire codec and fixed-character-set replacement; port Foldkit `escapeText`/`escapeAttributeValue` and compare against the pinned upstream functions on a generated corpus.
+3. Open decisions for the user: Q-1 (milestone 8 acceptance on unmodified upstream source, and whether SSR moves ahead of Remote/SQL) and Q-2 (upstream Foldkit or the `foldkit-plus` fork).
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

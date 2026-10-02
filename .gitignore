@@ -35,3 +35,6 @@ examples/heartbeat/generated/
 !.vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Pinned upstream sources fetched by research scripts
+.cache/

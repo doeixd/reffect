@@ -1,0 +1,447 @@
+{
+  "schema": "reffect.foldkit-ssr-inventory@1",
+  "repository": "https://github.com/foldkit/foldkit.git",
+  "commit": "0b2a4fd04171afa8c8911d22aa9bec2f22faae52",
+  "entry": "packages/foldkit/src/experimental/server/index.ts",
+  "method": "syntax-only ESTree walk over runtime-import reachability; counts are occurrences",
+  "files": [
+    "packages/foldkit/src/buildToken.ts",
+    "packages/foldkit/src/controlledDomState.ts",
+    "packages/foldkit/src/cssStyleProperties.ts",
+    "packages/foldkit/src/domReflection.ts",
+    "packages/foldkit/src/effectExtensions/index.ts",
+    "packages/foldkit/src/effectExtensions/optionExtensions.ts",
+    "packages/foldkit/src/effectExtensions/stringExtensions.ts",
+    "packages/foldkit/src/experimental/server/entry.ts",
+    "packages/foldkit/src/experimental/server/fetch.ts",
+    "packages/foldkit/src/experimental/server/host.ts",
+    "packages/foldkit/src/experimental/server/index.ts",
+    "packages/foldkit/src/experimental/server/serialize.ts",
+    "packages/foldkit/src/experimental/server/server.ts",
+    "packages/foldkit/src/experimental/server/template.ts",
+    "packages/foldkit/src/html/boundary.ts",
+    "packages/foldkit/src/html/childAttribute.ts",
+    "packages/foldkit/src/html/dragZoneTracking.ts",
+    "packages/foldkit/src/html/index.ts",
+    "packages/foldkit/src/html/lazy.ts",
+    "packages/foldkit/src/html/runtimeSingleton.ts",
+    "packages/foldkit/src/html/submodel.ts",
+    "packages/foldkit/src/hydrationMarker.ts",
+    "packages/foldkit/src/hydrationMarkers.ts",
+    "packages/foldkit/src/mount/index.ts",
+    "packages/foldkit/src/nativeInnerHtml.ts",
+    "packages/foldkit/src/onUnmountModule.ts",
+    "packages/foldkit/src/propertyProvenance.ts",
+    "packages/foldkit/src/propsModule.ts",
+    "packages/foldkit/src/snabbdom/attributes.ts",
+    "packages/foldkit/src/snabbdom/class.ts",
+    "packages/foldkit/src/snabbdom/dataset.ts",
+    "packages/foldkit/src/snabbdom/eventlisteners.ts",
+    "packages/foldkit/src/snabbdom/h.ts",
+    "packages/foldkit/src/snabbdom/htmldomapi.ts",
+    "packages/foldkit/src/snabbdom/index.ts",
+    "packages/foldkit/src/snabbdom/init.ts",
+    "packages/foldkit/src/snabbdom/is.ts",
+    "packages/foldkit/src/snabbdom/style.ts",
+    "packages/foldkit/src/snabbdom/tovnode.ts",
+    "packages/foldkit/src/snabbdom/vnode.ts",
+    "packages/foldkit/src/tagName.ts",
+    "packages/foldkit/src/url/index.ts",
+    "packages/foldkit/src/vdom.ts"
+  ],
+  "lines": 16186,
+  "external": {
+    "effect": 11,
+    "parse5": 2
+  },
+  "effect": {
+    "Option.isSome": {
+      "count": 14,
+      "spelledInR": false
+    },
+    "Schema.String": {
+      "count": 12,
+      "spelledInR": false
+    },
+    "Effect.fail": {
+      "count": 7,
+      "spelledInR": true
+    },
+    "Data.TaggedError": {
+      "count": 6,
+      "spelledInR": false
+    },
+    "Predicate.isString": {
+      "count": 5,
+      "spelledInR": false
+    },
+    "Effect.try": {
+      "count": 4,
+      "spelledInR": false
+    },
+    "Option.match": {
+      "count": 4,
+      "spelledInR": false
+    },
+    "Predicate.hasProperty": {
+      "count": 4,
+      "spelledInR": false
+    },
+    "Schema.Literals": {
+      "count": 4,
+      "spelledInR": false
+    },
+    "Schema.Struct": {
+      "count": 4,
+      "spelledInR": false
+    },
+    "Array.fromIterable": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Effect.gen": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Option.fromNullishOr": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Option.liftPredicate": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Predicate.isNotUndefined": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Schema.decodeTo": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Schema.Option": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Schema.optional": {
+      "count": 3,
+      "spelledInR": false
+    },
+    "Array.empty": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Array.getUnsafe": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Array.zip": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Context.empty": {
+      "count": 2,
+      "spelledInR": true
+    },
+    "Context.getOption": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Context.Service": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Effect.succeed": {
+      "count": 2,
+      "spelledInR": true
+    },
+    "Effect.sync": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Effect.void": {
+      "count": 2,
+      "spelledInR": true
+    },
+    "Fiber.interrupt": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Function.constVoid": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Function.dual": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Option.isNone": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Predicate.isNotNull": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "String.split": {
+      "count": 2,
+      "spelledInR": false
+    },
+    "Array.findFirst": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Array.forEach": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Array.isArrayNonEmpty": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Array.isReadonlyArrayEmpty": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Array.isReadonlyArrayNonEmpty": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Data.taggedEnum": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Data.TaggedEnum": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Effect.andThen": {
+      "count": 1,
+      "spelledInR": true
+    },
+    "Effect.catchCause": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Effect.mapError": {
+      "count": 1,
+      "spelledInR": true
+    },
+    "Effect.never": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Effect.runFork": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Effect.runForkWith": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Effect.suspend": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Match.tagsExhaustive": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Match.value": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Option.flatMap": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Option.getOrElse": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Option.map": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Predicate.isObject": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Predicate.isTagged": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Queue.offerUnsafe": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Schema.decodeOption": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Schema.decodeUnknownSync": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Schema.encodeEffect": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Schema.encodeSync": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Schema.toCodecJson": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "SchemaIssue.InvalidValue": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "SchemaTransformation.transform": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "SchemaTransformation.transformEffect": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Stream.callback": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Stream.concat": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Stream.make": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Stream.map": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Stream.never": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "Stream.runForEach": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "String.isEmpty": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "String.isNonEmpty": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "String.slice": {
+      "count": 1,
+      "spelledInR": false
+    },
+    "String.startsWith": {
+      "count": 1,
+      "spelledInR": false
+    }
+  },
+  "language": {
+    "closure": 1184,
+    "if/else": 698,
+    "object literal": 573,
+    "destructuring": 343,
+    "array literal": 183,
+    "template literal": 147,
+    "reassignment": 144,
+    "optional chaining": 127,
+    "ternary": 105,
+    "throw": 97,
+    "property mutation": 77,
+    "for-of": 76,
+    "function declaration": 62,
+    "??": 51,
+    "++/--": 46,
+    "spread": 43,
+    "for": 34,
+    "try": 17,
+    "yield*": 12,
+    "for-in": 9,
+    "class": 8,
+    "while": 8,
+    "await": 1
+  },
+  "globals": {
+    "new Error": 99,
+    "new Set": 96,
+    "RegExp literal": 32,
+    "Object.keys": 30,
+    "Reflect.set": 18,
+    "Object.hasOwn": 17,
+    "JSON.stringify": 15,
+    "new Map": 15,
+    "Reflect.get": 10,
+    "new URL": 5,
+    "Math.imul": 4,
+    "new FlagsEncodeError": 4,
+    "new Response": 4,
+    "new WeakMap": 4,
+    "Object.defineProperty": 4,
+    "new InvalidHydrationRoot": 3,
+    "Number.isFinite": 3,
+    "Number.isNaN": 3,
+    "Math.min": 2,
+    "new Headers": 2,
+    "Number.isInteger": 2,
+    "Object.entries": 2,
+    "Reflect.deleteProperty": 2,
+    "Symbol.for": 2,
+    "JSON.parse": 1,
+    "new InvalidRuntimeId": 1,
+    "new InvalidUrl": 1,
+    "new MissingBuildId": 1,
+    "new RegExp": 1,
+    "new SerializationError": 1,
+    "new WeakSet": 1,
+    "Number.NaN": 1,
+    "Object.fromEntries": 1,
+    "Object.getOwnPropertyDescriptor": 1,
+    "Object.getPrototypeOf": 1
+  },
+  "methods": {
+    ".push()": 69,
+    ".toLowerCase()": 50,
+    ".get()": 48,
+    ".has()": 47,
+    ".set()": 45,
+    ".slice()": 21,
+    ".delete()": 19,
+    ".startsWith()": 17,
+    ".test()": 16,
+    ".includes()": 15,
+    ".replace()": 15,
+    ".some()": 14,
+    ".join()": 12,
+    ".add()": 11,
+    ".map()": 11,
+    ".filter()": 10,
+    ".indexOf()": 9,
+    ".pop()": 9,
+    ".split()": 9,
+    ".every()": 8,
+    ".trim()": 8,
+    ".find()": 7,
+    ".sort()": 3,
+    ".toUpperCase()": 3,
+    ".endsWith()": 2,
+    ".exec()": 2,
+    ".reverse()": 2,
+    ".charCodeAt()": 1,
+    ".flatMap()": 1,
+    ".forEach()": 1,
+    ".match()": 1,
+    ".splice()": 1
+  }
+}

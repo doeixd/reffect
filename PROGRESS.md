@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-02 — North-star review and Foldkit SSR inventory
+
+- Reviewed [docs/north_star.md](docs/north_star.md) and [docs/suggestions.txt](docs/suggestions.txt) against the roadmap in [the review record](docs/research/north-star-review.md). Verified the pinned upstream `foldkit/foldkit@0b2a4fd` SSR files and their small Effect surface; adopted corpus-driven priorities (NS-1), the codemod as syntax frontend (NS-2) and semantic foreign operations as registry entries (NS-3). Milestone 8's "unmodified upstream" acceptance/reordering (Q-1) and which Foldkit tree to target (Q-2) are left for the user.
+- Added the exploratory [inventory script](packages/reffect/scripts/foldkit-ssr-inventory.ts). It caches the pinned commit in gitignored `.cache/` and walks runtime-reachable modules with Vite's bundled oxc parser, adding no dependency. [Results](docs/research/foldkit-ssr-inventory.md): 43 files and 16,186 lines (module-level upper bound); 73 Effect members, of which 6 have same-named `R` members; ordinary TypeScript (1,184 closures, 698 branches, mutation, Sets/Maps, regex) dominates. Strings are the first representation gate, starting with Foldkit's `escapeText`/`escapeAttributeValue`.
+- Validation: the script ran successfully and regenerated the committed JSON; `vp check` passes. No compiler code changed, so no tests were run.
+
 ## 2026-10-02 — Server-lifetime RPC services and graceful shutdown
 
 - Researched pinned RC.118 `RpcGroup.toLayer` (handlers built once in `Layer.effectContext`), `RpcServer.make` shutdown (interrupt and await in-flight request fibers before dependent layers release) and the generated Axum server, then recorded decisions SL-001–005 in [server-lifetime Layers](docs/research/server-layer.md) before implementation.
