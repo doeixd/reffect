@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-02 — Optional struct fields
+
+- Recorded [optional-field decisions](docs/research/optional-fields.md) (OPT-001–005) after probing `Schema.optional`/`optionalKey` JSON codecs under rc.118. Findings: `null` decodes as a **present** `undefined`; a present `undefined` encodes as `null` while an absent key is omitted; type mismatches gain `| null` only for JSON kinds the item rejects; `optional(Struct({}))` accepts any value.
+- Added `R.UndefinedOr(T)` (native `Option<T>`) with `match` and `map` mirroring `effect/UndefinedOr`, plus `R.optional(T)`/`R.optionalKey(T)` struct fields. `make` may omit optional keys, and `Struct.get` reads `T | undefined`. Natively, `optionalKey` is `Option<T>` and `optional` is `Option<Option<T>>`, so presence round-trips. The kernel gains `MatchUndefined`, `Defined` and `Undefined` nodes, and `Make` admits absent entries.
+- `NativeRpc` decodes and encodes optional fields by presence. Each `optional` field's mismatch text is verified while compiling by running Effect's decoder on one probe per rejected JSON kind. Refused: `optional(Struct({}))`, optional fields in projected payload bindings, and non-plain key contexts.
+- Validation (focused): `optional-fields.test.ts` 3/3 (Schema parity, presence and key order, `UndefinedOr` parity with Effect, type-level construction errors). `optional-rpc.test.ts` 2/2: about 170 raw requests strictly equal to the official server, including echo and rebuild handlers; stock-client round trips keep absent versus present `undefined`; refusals. Making native `null` decode as absent fails the differential test. Records, arrays, numbers, string, native/schema RPC, compiler, effect, emission and scope suites pass (14 files, 47 tests). `vp check` passes; TypeScript 5.9.3, 6.0.3 and 7.0.2 typecheck clean.
+
 ## 2026-10-02 — Remote version assumption (NR-007)
 
 - Checked versions. Effect 4.0.0 stable was published on 2026-10-01, and `foldkit` 0.165.0 already peers on it. `foldkit-remote`/`foldkit-remote-server` 0.9.0 cannot load under rc.118 (`effect/unstable/rpc` moved to `effect/rpc`), so their narrow peer range is accurate.

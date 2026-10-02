@@ -22,7 +22,15 @@ import {
 } from "./kernel.ts";
 import type { AnyFn } from "./kernel.ts";
 import { Rs } from "./rust-emit.ts";
-import { ArrayType, Struct, TaggedUnion, rustFieldNames, rustVariantName } from "./records.ts";
+import {
+  ArrayType,
+  Struct,
+  TaggedUnion,
+  optional as optionalField,
+  optionalKey as optionalKeyField,
+  rustFieldNames,
+  rustVariantName,
+} from "./records.ts";
 import { NumberType, arrayItem, structLayout, unionCases } from "./kernel.ts";
 import type { RsExpr } from "./rust-emit.ts";
 import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
@@ -34,16 +42,28 @@ const U64Json = RpcCodecs.U64Json;
 const StringJson = RpcCodecs.StringJson;
 
 type Scalar = "u64" | "bool" | "unit" | "never" | "string";
+/** A struct field codec; optional fields decode by presence (OPT-003, OPT-004). */
+interface FieldCodec {
+  readonly name: string;
+  readonly codec: Codec;
+  readonly optional?: {
+    readonly kind: "optional" | "optionalKey";
+    /** JSON kinds the item accepts, and the verified `... | null` text for the others. */
+    readonly kinds: readonly JsonKind[];
+    readonly mismatch: string;
+  };
+}
+type JsonKind = "boolean" | "number" | "string" | "array" | "object";
 /** A struct or tagged union recognized structurally from the contract (REC-005). */
 interface Composite {
   /** Generated function stem, derived from the full codec structure (NUM-003). */
   readonly name: string;
   readonly type: IRType<unknown>;
   /** Fields per struct, or per union case keyed by tag; codecs in schema order. */
-  readonly fields: readonly { readonly name: string; readonly codec: Codec }[];
+  readonly fields: readonly FieldCodec[];
   readonly cases: readonly {
     readonly tag: string;
-    readonly fields: readonly { readonly name: string; readonly codec: Codec }[];
+    readonly fields: readonly FieldCodec[];
   }[];
   /** Official `defaultFormatter` text for a value that is not this shape at all. */
   readonly expected: string;
@@ -149,6 +169,105 @@ const expectedOf = (type: IRType<unknown>): string =>
         onSome: (error) => formatIssue(error.issue),
       }),
   });
+// Effect's union candidates for `optional(T)`: the JSON kinds T accepts, and T's own text for
+// a value of any other kind, to which the official decoder appends `| null` (OPT-004).
+const kindsOf = (
+  codec: Codec,
+  path: string,
+): { readonly kinds: readonly JsonKind[]; readonly expected: string } => {
+  if (isScalar(codec))
+    return Match.value(codec).pipe(
+      Match.when("bool", () => ({ kinds: ["boolean"] as const, expected: "Expected boolean" })),
+      Match.when("string", () => ({ kinds: ["string"] as const, expected: "Expected string" })),
+      Match.when("u64", () => ({ kinds: ["string"] as const, expected: "Expected string" })),
+      Match.when("never", () => ({ kinds: [] as const, expected: "Expected never" })),
+      Match.when("unit", () => {
+        throw unsupported(path, "Optional Undefined fields are not supported");
+      }),
+      Match.exhaustive,
+    );
+  if (codec.number)
+    return codec.number.finiteOnly
+      ? { kinds: ["number"], expected: "Expected number" }
+      : {
+          kinds: ["number", "string"],
+          expected: 'Expected number | "Infinity" | "-Infinity" | "NaN"',
+        };
+  if (codec.item) return { kinds: ["array"], expected: codec.expected };
+  if (codec.cases.length === 0 && codec.fields.length === 0)
+    throw unsupported(path, "optional(Struct({})) accepts any value in Effect and is refused");
+  return { kinds: ["object"], expected: codec.expected };
+};
+const kindProbes: readonly (readonly [JsonKind, unknown])[] = [
+  ["boolean", true],
+  ["number", 0],
+  ["string", "reffect"],
+  ["array", []],
+  ["object", {}],
+];
+// Runs Effect's own decoder on one probe per rejected JSON kind; the text must match exactly.
+const verifyOptional = (
+  property: SchemaAST.AST,
+  path: string,
+  kinds: readonly JsonKind[],
+  mismatch: string,
+) => {
+  const struct = Schema.toCodecJson(
+    Schema.make<Schema.Codec<unknown>>(
+      new SchemaAST.Objects([new SchemaAST.PropertySignature("f", property)], []),
+    ),
+  );
+  const decoded = (value: unknown) => Schema.decodeUnknownExit(struct)({ f: value });
+  if (!Exit.isSuccess(decoded(null)))
+    throw unsupported(path, "Effect refused null for an optional field");
+  for (const [kind, probe] of kindProbes) {
+    if (kinds.includes(kind)) continue;
+    const text = Exit.match(decoded(probe), {
+      onSuccess: () => undefined,
+      onFailure: (cause) =>
+        Option.match(Cause.findErrorOption(cause), {
+          onNone: () => undefined,
+          onSome: (error) => formatIssue(error.issue),
+        }),
+    });
+    if (text !== `${mismatch}\n  at ["f"]`)
+      throw unsupported(path, `Optional field text for ${kind} disagrees with Effect`);
+  }
+};
+const optionalOf = (
+  property: SchemaAST.AST,
+  path: string,
+): { readonly kind: "optional" | "optionalKey"; readonly item: SchemaAST.AST } | undefined => {
+  const context = property.context;
+  // Required keys may carry a context too (`Schema.tag` has a constructor default).
+  if (!context?.isOptional) return undefined;
+  if (context.isMutable || context.constructorDefault || context.annotations)
+    throw unsupported(path, "Only plain optional and optionalKey fields are supported");
+  // `optional(T)` keeps T's own AST as the first union member.
+  if (
+    SchemaAST.isUnion(property) &&
+    property.types.length === 2 &&
+    SchemaAST.isUndefined(property.types[1]) &&
+    !property.checks &&
+    !property.annotations &&
+    !property.encoding &&
+    !property.types[1].annotations &&
+    !property.types[1].checks
+  )
+    return { kind: "optional", item: property.types[0] };
+  return { kind: "optionalKey", item: withoutContext(property) };
+};
+// `optionalKey(T)` copies T's AST with a key context. Canonical codecs are recognized by their
+// shared checks; other shapes are inspected through a context-free view.
+const withoutContext = (ast: SchemaAST.AST): SchemaAST.AST => {
+  for (const canonical of [U64Json.ast, StringJson.ast])
+    if (ast._tag === canonical._tag && ast.checks === canonical.checks) return canonical;
+  return Object.freeze(
+    Object.assign(Object.create(Object.getPrototypeOf(ast) as object) as SchemaAST.AST, ast, {
+      context: undefined,
+    }),
+  );
+};
 const fieldsOf = (
   ast: SchemaAST.Objects,
   path: string,
@@ -169,12 +288,25 @@ const fieldsOf = (
       "Only plain required Struct shapes (with an optional identifier) are supported",
     );
   let tag: string | undefined;
-  const fields: { readonly name: string; readonly codec: Codec }[] = [];
+  const fields: FieldCodec[] = [];
   for (const property of ast.propertySignatures) {
     if (typeof property.name !== "string" || !wellFormed(property.name))
       throw unsupported(path, "Struct field names must be well-formed strings");
-    if (property.type.context?.isOptional)
-      throw unsupported(`${path}.${property.name}`, "Optional fields are not supported yet");
+    const at = `${path}.${property.name}`;
+    const optional = optionalOf(property.type, at);
+    if (optional) {
+      if (property.name === "_tag") throw unsupported(at, "`_tag` cannot be optional");
+      const item = codec(optional.item, at, false, registry, decodeOnly);
+      const { kinds, expected } = kindsOf(item, at);
+      const mismatch = optional.kind === "optional" ? `${expected} | null` : expected;
+      if (optional.kind === "optional") verifyOptional(property.type, at, kinds, mismatch);
+      fields.push({
+        name: property.name,
+        codec: item,
+        optional: { kind: optional.kind, kinds, mismatch },
+      });
+      continue;
+    }
     if (property.name === "_tag") {
       const literal = property.type;
       if (!tagged || !SchemaAST.isLiteral(literal) || typeof literal.literal !== "string")
@@ -192,7 +324,16 @@ const fieldsOf = (
   return { tag, fields };
 };
 const witnessFields = (fields: Composite["fields"]) =>
-  Object.fromEntries(fields.map((field) => [field.name, witnessOf(field.codec)]));
+  Object.fromEntries(
+    fields.map((field) => [
+      field.name,
+      field.optional === undefined
+        ? witnessOf(field.codec)
+        : field.optional.kind === "optional"
+          ? optionalField(witnessOf(field.codec))
+          : optionalKeyField(witnessOf(field.codec)),
+    ]),
+  );
 const composite = (
   ast: SchemaAST.AST,
   path: string,
@@ -266,8 +407,11 @@ const register = (registry: Registry, base: string, shape: Omit<Composite, "name
   const signature = JSON.stringify([
     base,
     shape.type.id,
-    shape.fields.map((f) => [f.name, codecKey(f.codec)]),
-    shape.cases.map((c) => [c.tag, c.fields.map((f) => [f.name, codecKey(f.codec)])]),
+    shape.fields.map((f) => [f.name, codecKey(f.codec), f.optional?.kind ?? null]),
+    shape.cases.map((c) => [
+      c.tag,
+      c.fields.map((f) => [f.name, codecKey(f.codec), f.optional?.kind ?? null]),
+    ]),
     shape.item === undefined ? null : codecKey(shape.item),
     shape.number ?? null,
   ]);
@@ -623,6 +767,11 @@ const compile = <Rpcs extends Rpc.Any>(
             inputs = binding.fields.map((name) => {
               const field = fields.find((field) => field.name === name);
               if (!field) throw unsupported(procedure, `Unknown payload field ${name}`);
+              if (field.type.context?.isOptional)
+                throw unsupported(
+                  `${procedure}.payload.${name}`,
+                  "Optional payload fields require binding the whole Struct",
+                );
               return {
                 name,
                 codec: codec(field.type, `${procedure}.payload.${name}`, true, registry, true),
@@ -1061,12 +1210,35 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
     const caseType =
       tag === undefined ? type : unionCases(type)!.find((c) => structLayout(c)?.tag === tag)!;
     const names = rustFieldNames(layout);
+    const kindTest: Record<JsonKind, string> = {
+      boolean: "value.is_boolean()",
+      number: "value.is_number()",
+      string: "value.is_string()",
+      array: "value.is_array()",
+      object: "value.is_object()",
+    };
     const decode = fields
-      .map(
-        (field, i) =>
-          `    let child_${i} = Path { parent: path, name: ${Rs.stringLiteral(field.name).text}, index: false };\n` +
-          `    let f${i} = match object.get(${Rs.stringLiteral(field.name).text}) { Some(value) => ${decodeField(field.codec, "value", `Some(&child_${i})`)}?, None => return Err(at("Missing key", Some(&child_${i}))) };\n`,
-      )
+      .map((field, i) => {
+        const key = Rs.stringLiteral(field.name).text;
+        const child = `    let child_${i} = Path { parent: path, name: ${key}, index: false };\n`;
+        const item = `${decodeField(field.codec, "value", `Some(&child_${i})`)}?`;
+        const optional = field.optional;
+        if (optional === undefined)
+          return (
+            child +
+            `    let f${i} = match object.get(${key}) { Some(value) => ${item}, None => return Err(at("Missing key", Some(&child_${i}))) };\n`
+          );
+        if (optional.kind === "optionalKey")
+          return (
+            child +
+            `    let f${i} = match object.get(${key}) { Some(value) => Some(${item}), None => None };\n`
+          );
+        const accepted = optional.kinds.map((kind) => kindTest[kind]).join(" || ") || "false";
+        return (
+          child +
+          `    let f${i} = match object.get(${key}) {\n        None => None,\n        Some(Value::Null) => Some(None),\n        Some(value) if !(${accepted}) => return Err(at(${Rs.stringLiteral(optional.mismatch).text}, Some(&child_${i}))),\n        Some(value) => Some(Some(${item})),\n    };\n`
+        );
+      })
       .join("");
     const build = `${rustType(caseType)} { ${fields.map((_, i) => `${names[i]}: f${i}, `).join("")}}`;
     const encode =
@@ -1074,10 +1246,16 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
         ? ""
         : `    map.insert("_tag".to_string(), Value::String(${Rs.stringLiteral(tag).text}.to_string()));\n`) +
       fields
-        .map(
-          (field, i) =>
-            `    map.insert(${Rs.stringLiteral(field.name).text}.to_string(), ${encodeField(field.codec, `value.${names[i]}`)});\n`,
-        )
+        .map((field, i) => {
+          const key = `${Rs.stringLiteral(field.name).text}.to_string()`;
+          const optional = field.optional;
+          if (optional === undefined)
+            return `    map.insert(${key}, ${encodeField(field.codec, `value.${names[i]}`)});\n`;
+          // Absent keys are omitted; a present `undefined` encodes as null (OPT-003).
+          if (optional.kind === "optionalKey")
+            return `    if let Some(item) = &value.${names[i]} { map.insert(${key}, ${encodeField(field.codec, "(*item)")}); }\n`;
+          return `    match &value.${names[i]} { None => {}, Some(None) => { map.insert(${key}, Value::Null); } Some(Some(item)) => { map.insert(${key}, ${encodeField(field.codec, "(*item)")}); } }\n`;
+        })
         .join("");
     return { decode: decode + `    Ok(${build})\n`, encode };
   };
@@ -1160,5 +1338,6 @@ fn u64_in(value: &Value, path: Option<&Path>) -> Result<u64, String> { u64_arg(v
 fn bool_in(value: &Value, path: Option<&Path>) -> Result<bool, String> { bool_arg(value, None).map_err(|message| at(&message, path)) }
 fn string_in(value: &Value, path: Option<&Path>) -> Result<String, String> { string_arg(value, None).map_err(|message| at(&message, path)) }
 fn unit_in(value: &Value, path: Option<&Path>) -> Result<(), String> { unit_arg(value, None).map_err(|message| at(&message, path)) }
+fn never_in(_value: &Value, path: Option<&Path>) -> Result<std::convert::Infallible, String> { Err(at("Expected never", path)) }
 ${items.join("")}`;
 };
