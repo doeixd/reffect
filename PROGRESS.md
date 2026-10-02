@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Well-formed strings at the RPC boundary
+
+- Consulted SCHEMA-001/003 and the unary-RPC record, then probed the pinned official `RpcServer`. Plain `Schema.String` accepts lone surrogates; a well-formed check refuses them per request. Added canonical `RpcCodecs.StringJson`/`NativeRpc.StringJson` (STR-006) with a shared `unicode.ts` check, a native `string_arg` decoder and JSON string encoding for payloads, fields, results and typed errors; plain `Schema.String` is refused. A lone-surrogate escape fails the whole native body (STR-007, documented divergence).
+- Validation: `vp test packages/reffect/tests/string-rpc.test.ts` passes 2/2. Nine raw requests give identical official/native response JSON, the divergence is asserted exactly, and stock-client round trips succeed; a mutated native message fails the test. `native-rpc`, `schema-rpc`, `string-profile`, `rpc` and `rpc-auth` pass 22/22 in 5 files. Strict package TypeScript and `vp check` pass.
+
 ## 2026-10-02 — AGENTS.md conformance cleanup and milestone 8 split
 
 - Re-read AGENTS.md in full and fixed deviations in this session's work: manual `_tag` comparisons in the literal-argument check, string rendering, launch-tuple collection and string boundary detection now use `Match`/`Option`, and test casts became Schema decoding or plain inference.

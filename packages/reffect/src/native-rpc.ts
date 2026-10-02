@@ -15,6 +15,7 @@ import {
   IRType,
   NeverType,
   Program,
+  StringType,
   U64Type,
   UnitType,
   fail,
@@ -28,9 +29,16 @@ import { rpcAuthRuntime } from "./rpc-auth-runtime.ts";
 import { rpcRuntime } from "./rpc-runtime.ts";
 
 const U64Json = RpcCodecs.U64Json;
+const StringJson = RpcCodecs.StringJson;
 
-type Codec = "u64" | "bool" | "unit" | "never";
-const witness = { u64: U64Type, bool: BoolType, unit: UnitType, never: NeverType };
+type Codec = "u64" | "bool" | "unit" | "never" | "string";
+const witness = {
+  u64: U64Type,
+  bool: BoolType,
+  unit: UnitType,
+  never: NeverType,
+  string: StringType,
+};
 export interface RpcBinding<F extends AnyFn = AnyFn> {
   readonly fn: F;
   readonly fields: readonly string[];
@@ -92,6 +100,7 @@ const codec = (ast: SchemaAST.AST, path: string, payload = false): Codec => {
     return "u64";
   }
   if (ast === U64Json.ast) return "u64";
+  if (ast === StringJson.ast) return "string";
   if (ast.checks || ast.encoding || ast.context || ast.annotations)
     throw unsupported(
       path,
@@ -100,7 +109,15 @@ const codec = (ast: SchemaAST.AST, path: string, payload = false): Codec => {
   if (SchemaAST.isBoolean(ast)) return "bool";
   if (SchemaAST.isUndefined(ast)) return "unit";
   if (SchemaAST.isNever(ast)) return "never";
-  throw unsupported(path, "Only Boolean, Undefined, Never and NativeRpc.U64Json are supported");
+  if (SchemaAST.isString(ast))
+    throw unsupported(
+      path,
+      "Plain Schema.String admits lone surrogates; use NativeRpc.StringJson for native strings",
+    );
+  throw unsupported(
+    path,
+    "Only Boolean, Undefined, Never, NativeRpc.U64Json and NativeRpc.StringJson are supported",
+  );
 };
 const local = (name: string) => Rs.identExpr(Rs.ident(name));
 const callLocal = (name: string, ...args: readonly RsExpr[]) => Rs.call(local(name), args);
@@ -111,6 +128,7 @@ const encode = (kind: Codec, value: RsExpr): RsExpr => {
       [Rs.letDiscard(Rs.unitType(), value)],
       Rs.pathExpr(Rs.path([Rs.ident("Value"), Rs.ident("Null")])),
     );
+  if (kind === "string") return Rs.pathCall([Rs.ident("Value")], Rs.ident("String"), [value]);
   return Rs.pathCall([Rs.ident("Value")], Rs.ident(kind === "u64" ? "String" : "Bool"), [
     kind === "u64" ? Rs.dotCall(value, Rs.ident("to_string"), []) : value,
   ]);
@@ -671,6 +689,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
 /** Generate a native unary JSON/HTTP server for the checked sync/async scalar profiles. */
 export const NativeRpc = Object.freeze({
   U64Json,
+  StringJson,
   bind,
   bindPrincipal,
   bindServices,

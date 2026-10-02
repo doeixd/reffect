@@ -1,6 +1,8 @@
 import { Effect, Match, Option, Pipeable, Schema } from "effect";
 import { dual } from "effect/Function";
 import { emptySource, snapshotSource, SourceLocation } from "./source.ts";
+import { isWellFormed, wellFormedMessage } from "./unicode.ts";
+export { isWellFormed } from "./unicode.ts";
 import type { SourceMetadata } from "./source.ts";
 import type { EffectFn } from "./effect-ir.ts";
 
@@ -623,18 +625,6 @@ export const NotBool = Operation.make(
   (a) => !a,
 ).pipe(Operation.withCapabilities([Capabilities.Bool]));
 
-/** ES2024 `String.prototype.isWellFormed`: no unpaired UTF-16 surrogates. */
-export const isWellFormed = (value: string): boolean => {
-  for (let i = 0; i < value.length; i++) {
-    const unit = value.charCodeAt(i);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(i + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
-      i++;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
-  }
-  return true;
-};
 /**
  * Well-formed Unicode text. Lone surrogates are refused at every decode boundary, so
  * equality, containment and literal replacement agree between JS UTF-16 and Rust UTF-8.
@@ -642,10 +632,7 @@ export const isWellFormed = (value: string): boolean => {
 class StringWitness extends IRType<string> {
   constructor() {
     const schema = Schema.String.check(
-      Schema.makeFilter(
-        (value: string) =>
-          isWellFormed(value) || "Expected well-formed Unicode without lone surrogates",
-      ),
+      Schema.makeFilter((value: string) => isWellFormed(value) || wellFormedMessage),
     );
     for (const check of schema.ast.checks ?? []) Object.freeze(check);
     if (schema.ast.checks) Object.freeze(schema.ast.checks);

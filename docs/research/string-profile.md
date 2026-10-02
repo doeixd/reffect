@@ -39,6 +39,21 @@ Delivered 2026-10-02 as decided. `StringType`, `EqString`, `IncludesString` and 
 
 Evidence: [string-profile.test.ts](../../packages/reffect/tests/string-profile.test.ts) passes 3/3. Reference results equal the vendored pinned upstream `escapeText`/`escapeAttributeValue` ([fixture](../../packages/reffect/tests/fixtures/foldkit-escape.ts)) on ten well-formed inputs, including astral, combining, CR/LF and `$` text. NUL inputs fail with `false` where upstream throws; four lone-surrogate inputs are refused with `INVALID_INPUT` where upstream throws. Refusal tests cover empty search, `$` replacement, lone-surrogate literals, hand-built non-literal or `$` applications and delayed string captures. Native debug/release under both frame policies agree with the reference for both escapers, `includes` (including astral and empty needles) and a branch that returns borrowed parameters; lone surrogates are refused before the process starts. Generated code is dependency-free. A follow-up removed the extra copy when returning a freshly computed local.
 
+## RPC boundary (2026-10-02)
+
+Prior work consulted: [schema profile](schema-profile.md) (SCHEMA-001 canonical codec identities; SCHEMA-003 exact invalid-input parity with the pinned server) and [unary RPC](unary-rpc.md) ("Native JSON strings require valid Unicode"). Probing the pinned RC.118 `RpcServer` with raw JSON bodies showed:
+
+- Plain `Schema.String` **accepts** a lone `\ud800` escape and echoes it back, so it cannot be a native boundary.
+- A `Schema.String` refined by the well-formed check refuses it per request: `Die` with `Expected well-formed Unicode without lone surrogates`, plus a `\n  at ["field"]` path inside Struct payloads. Other requests in the batch still run.
+- Non-string values yield `Expected string`; missing fields yield `Missing key`.
+
+Decisions:
+
+- **STR-006 — accepted: canonical `RpcCodecs.StringJson`.** This is the well-formed check on `Schema.String`, frozen like `U64Json` and exported as `NativeRpc.StringJson`; plain `Schema.String` is refused with a pointer to it. It is an ordinary Effect schema, so stock clients and servers enforce the same refusal. `unicode.ts` holds the check shared with the `R.String` witness, keeping `rpc-codecs` compiler-free. Payloads, Struct fields, success values and typed errors are admitted, decoded with `string_arg` (`Expected string`) and encoded as JSON strings.
+- **STR-007 — accepted divergence: lone-surrogate escapes in the body.** `serde_json` refuses them while parsing, so the native server answers the whole body with the existing `SyntaxError`/`Invalid JSON` defect instead of a per-request decode defect. Both sides refuse without invoking a handler; other requests in that batch are not run natively. A follow-up could parse the envelope with `serde_json::value::RawValue` to localize the refusal.
+
+Evidence: [string-rpc.test.ts](../../packages/reffect/tests/string-rpc.test.ts) passes 2/2. Nine raw requests produce response JSON identical to the official server: astral text, NUL, quotes and backslashes; surrogate-pair escapes; non-string payloads and fields; a missing field; success and typed string failure; a mixed batch. The divergence is asserted exactly, stock-client round trips succeed, and plain `Schema.String` is refused. Changing the native `Expected string` message makes the test fail.
+
 ## Deferred
 
 `length`/slicing with explicit UTF-16 semantics, ordering, concatenation and template building, case mapping, regular expressions, string RPC/JSON codecs, string service values and log attributes.

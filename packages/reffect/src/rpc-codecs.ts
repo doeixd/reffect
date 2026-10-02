@@ -1,4 +1,5 @@
 import { Schema, type SchemaAST } from "effect";
+import { isWellFormed, wellFormedMessage } from "./unicode.ts";
 
 const U64Json = Schema.BigIntFromString.check(
   Schema.isGreaterThanOrEqualToBigInt(0n),
@@ -43,5 +44,20 @@ const u64Range = (bounds: U64Range) => {
   return schema;
 };
 
+/**
+ * Well-formed string codec. Plain `Schema.String` accepts lone surrogates, which a native
+ * UTF-8 `String` cannot hold; this check makes the stock server refuse them as well.
+ */
+const StringJson = Schema.String.check(
+  Schema.makeFilter((value: string) => isWellFormed(value) || wellFormedMessage),
+);
+for (const check of StringJson.ast.checks ?? []) Object.freeze(check);
+if (StringJson.ast.checks) Object.freeze(StringJson.ast.checks);
+Object.freeze(StringJson.ast);
+void StringJson.make;
+void StringJson.makeEffect;
+void StringJson.makeOption;
+Object.freeze(StringJson);
+
 /** Ordinary Effect schemas shared by clients and the supported native boundary profile. */
-export const RpcCodecs = Object.freeze({ U64Json, u64Range });
+export const RpcCodecs = Object.freeze({ U64Json, u64Range, StringJson });

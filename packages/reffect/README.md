@@ -151,7 +151,7 @@ const escapeText = R.fn([R.String], R.String, R.Bool, (value) =>
 );
 ```
 
-`replaceAll` patterns must be literals: a non-empty search and a replacement without `$`. Hand-built `Expr.apply` calls are checked too. Native code uses owned `String` at function boundaries and `&str` inside helpers (`==`, `str::contains`, `str::replace`), with no crate. The native runner passes strings as `str:` plus hex of their UTF-8 bytes. Length, slicing, ordering, case mapping, regular expressions, string RPC codecs and string captures in delayed cleanup are not admitted yet. See [string decisions](../../docs/research/string-profile.md).
+`replaceAll` patterns must be literals: a non-empty search and a replacement without `$`. Hand-built `Expr.apply` calls are checked too. Native code uses owned `String` at function boundaries and `&str` inside helpers (`==`, `str::contains`, `str::replace`), with no crate. The native runner passes strings as `str:` plus hex of their UTF-8 bytes. Native RPC accepts `NativeRpc.StringJson` (an ordinary Effect schema that refuses lone surrogates) for payloads, fields, results and typed errors; plain `Schema.String` is refused because it admits lone surrogates. A lone-surrogate escape in a request body is refused for the whole body natively, while the stock server refuses that request only. Length, slicing, ordering, case mapping, regular expressions and string captures in delayed cleanup are not admitted yet. See [string decisions](../../docs/research/string-profile.md).
 
 ## Synchronous Effect profile
 

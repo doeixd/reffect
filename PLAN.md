@@ -88,7 +88,7 @@ first piece. [Server-lifetime RPC services](docs/research/server-layer.md)
 closed the current 3B workload. The [north-star review](docs/research/north-star-review.md)
 is context only; the roadmap order stands.
 
-1. Admit `Schema.String` payloads/results in `NativeRpc` and compare stock-client round trips, including astral text and refusals.
+1. Done: `NativeRpc.StringJson` payloads/results match the official server ([STR-006/007](docs/research/string-profile.md#rpc-boundary-2026-10-02)).
 2. Search existing designs first ([Foldkit Remote](docs/foldkit-remote.md), [RPC protocol](docs/rpc-protocol.md), [Foldkit IR](docs/foldkit-ir-design.md), [architecture](docs/architecture.md)), then record decisions for records/structs and explicit tagged unions as RemoteServer needs them.
 3. Derive the portable Schema subset and wire validation from the Remote contracts before admitting a RemoteServer path.
 

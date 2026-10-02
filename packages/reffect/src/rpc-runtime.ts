@@ -56,6 +56,10 @@ ${
 }`
     : ""
 }
+fn string_arg(value: &Value, name: Option<&str>) -> Result<String, String> {
+    // serde_json strings are always well-formed, so StringJson's check cannot fail here.
+    value.as_str().map(str::to_owned).ok_or_else(|| path_error("Expected string", name))
+}
 fn bool_arg(value: &Value, name: Option<&str>) -> Result<bool, String> {
     value.as_bool().ok_or_else(|| path_error("Expected boolean", name))
 }
