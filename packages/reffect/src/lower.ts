@@ -9,6 +9,8 @@ import {
   IRType,
   NeverType,
   NumberType,
+  UnknownType,
+  reachesUnknown,
   StringType,
   Traits,
   U64Type,
@@ -1186,12 +1188,18 @@ export const emitFunctions = (
     : undefined;
   const useAt = (path: string) => uses?.get(path);
   const writer = new SourceWriter("src/lib.rs", !SourceArtifacts.isNone(module.sourceArtifacts));
+  // Set when a reachable witness renders as serde_json::Value (UNK-003).
+  let usesJson = false;
   const rsTypeOf = (type: IRType<unknown>): RsType => {
     if (IRType.same(type, U64Type)) return Rs.namedType("u64");
     if (IRType.same(type, BoolType)) return Rs.namedType("bool");
     if (IRType.same(type, UnitType)) return Rs.unitType();
     if (IRType.same(type, StringType)) return Rs.stringType();
     if (IRType.same(type, NumberType)) return Rs.namedType("f64");
+    if (IRType.same(type, UnknownType)) {
+      usesJson = true;
+      return Rs.pathType([Rs.ident("serde_json"), Rs.ident("Value")]);
+    }
     if (type.layout)
       return Match.value(type.layout).pipe(
         Match.tag("Array", (array) => Rs.genericType(Rs.namedType("Vec"), [rsTypeOf(array.item)])),
@@ -2363,7 +2371,7 @@ export const emitFunctions = (
         Match.tagsExhaustive({ Pure: () => [], Effect: (n) => [n.error] }),
       ),
       ...f.input,
-    ].every((type) => type.layout === undefined);
+    ].every((type) => type.layout === undefined && !reachesUnknown(type));
   const arms = module.functions.filter(runnable).map((f) => ({
     pat: Rs.stringPat(f.name),
     guard: Rs.cmp(
@@ -2459,8 +2467,12 @@ export const emitFunctions = (
   const files = Object.freeze({
     "Cargo.toml":
       '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n' +
+      (hasAsync || usesJson ? "\n[dependencies]\n" : "") +
       (hasAsync
-        ? '\n[dependencies]\ntokio = { version = "=1.53.1", features = ["macros", "rt", "time", "sync"] }\n'
+        ? 'tokio = { version = "=1.53.1", features = ["macros", "rt", "time", "sync"] }\n'
+        : "") +
+      (usesJson
+        ? 'serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'
         : ""),
     "src/lib.rs": writer.text,
     "src/main.rs": `${usesStrings ? stringBoundary : ""}${

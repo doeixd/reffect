@@ -25,6 +25,8 @@ export {
   LtNumber,
   EqString,
   IncludesString,
+  UnknownType,
+  reachesUnknown,
   ReplaceAllString,
   isWellFormed,
   AddU64,

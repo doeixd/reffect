@@ -71,6 +71,8 @@ export const Capabilities = Object.freeze({
   AsyncResult: SemanticRef.capability("reffect/capability/async-result@1"),
   ScopedFiles: SemanticRef.capability("reffect/capability/scoped-files@1"),
   SyncResult: SemanticRef.capability("reffect/capability/sync-result@1"),
+  /** Opaque JSON data (`R.Unknown`), natively `serde_json::Value` (UNK-003). */
+  Json: SemanticRef.capability("reffect/capability/json@1"),
 });
 export const Targets = Object.freeze({ RustStd: SemanticRef.target("rust/std@1") });
 export const Traits = Object.freeze({
@@ -90,6 +92,10 @@ export const Native = Object.freeze({
   Unit: Object.freeze({ target: Targets.RustStd, type: "()" }) satisfies NativeRepresentation,
   String: Object.freeze({ target: Targets.RustStd, type: "String" }) satisfies NativeRepresentation,
   Number: Object.freeze({ target: Targets.RustStd, type: "f64" }) satisfies NativeRepresentation,
+  Unknown: Object.freeze({
+    target: Targets.RustStd,
+    type: "serde_json::Value",
+  }) satisfies NativeRepresentation,
   Never: Object.freeze({
     target: Targets.RustStd,
     type: "std::convert::Infallible",
@@ -1086,6 +1092,42 @@ class NumberWitness extends IRType<number> {
   } = dual(2, (a: Expr<number>, b: Expr<number>) => Expr.apply(LtNumber, a, b));
 }
 export const NumberType = new NumberWitness();
+
+/**
+ * `Schema.Unknown` restricted to decoded JSON data (UNK-001): carried, never inspected, by R.
+ * It has no literals; values come only from decoding.
+ */
+class UnknownWitness extends IRType<unknown> {
+  constructor() {
+    // A private node, so freezing never touches the shared Schema.Unknown singleton.
+    const schema = Schema.Unknown.check(Schema.makeFilter(() => true));
+    for (const check of schema.ast.checks ?? []) Object.freeze(check);
+    if (schema.ast.checks) Object.freeze(schema.ast.checks);
+    Object.freeze(schema.ast);
+    Object.freeze(schema);
+    super(
+      SemanticRef.type("reffect/unknown@1"),
+      schema,
+      Native.Unknown,
+      Object.freeze([Traits.Cloneable]),
+    );
+    Object.freeze(this);
+  }
+}
+export const UnknownType = new UnknownWitness();
+/** Whether a witness is, or structurally contains, `R.Unknown`. */
+export const reachesUnknown = (type: IRType<unknown>): boolean =>
+  IRType.same(type, UnknownType) ||
+  (type.layout !== undefined &&
+    Match.value(type.layout).pipe(
+      Match.tagsExhaustive({
+        Struct: (struct) => struct.fields.some((field) => reachesUnknown(field.type)),
+        Union: (union) => union.cases.some(reachesUnknown),
+        Array: (array) => reachesUnknown(array.item),
+        UndefinedOr: (option) => reachesUnknown(option.item),
+        Record: (record) => reachesUnknown(record.value),
+      }),
+    ));
 export const AddNumber = Operation.make(
   SemanticRef.operation("reffect/number.add@1"),
   [NumberType, NumberType],
@@ -1165,7 +1207,9 @@ export const checkExpression = (
           walk(n.onFalse, `${at}.onFalse`);
         },
         Literal: (n) => {
-          if (!Schema.is(e.type.schema)(n.value))
+          if (reachesUnknown(e.type))
+            add("INVALID_LITERAL", at, "R.Unknown values come only from decoded input");
+          else if (!Schema.is(e.type.schema)(n.value))
             add("INVALID_LITERAL", at, "Literal does not satisfy its IRType schema");
         },
         Make: (n) => {

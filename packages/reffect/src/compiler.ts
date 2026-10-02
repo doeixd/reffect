@@ -42,6 +42,8 @@ import {
   EqNumber,
   LtNumber,
   NumberType,
+  UnknownType,
+  reachesUnknown,
   IncludesString,
   ReplaceAllString,
   StringType,
@@ -163,6 +165,7 @@ export const Rust = Object.freeze({
       Capabilities.SyncResult,
       Capabilities.AsyncResult,
       Capabilities.ScopedFiles,
+      Capabilities.Json,
     ]),
   ),
   syncResult: syncResultAdapter,
@@ -174,6 +177,7 @@ export const Rust = Object.freeze({
       Capabilities.String,
       Capabilities.Number,
       Capabilities.SyncResult,
+      Capabilities.Json,
     ]),
   ),
 });
@@ -552,6 +556,7 @@ const derive = Effect.fn("Compile.derive")(function* (
                   ? [Capabilities.Number]
                   : [],
       ),
+      ...(Array.from(types).some(reachesUnknown) ? [Capabilities.Json] : []),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
       ...(Array.from(effectRefs).some((ref) =>
         Object.values(AsyncEffects).some((supported) => supported === ref),
@@ -646,7 +651,8 @@ const plan = Effect.fn("Compile.plan")(function* (
       new Set(
         selections
           .flatMap((s) => s.selected.crates)
-          .concat(derived.capabilities.includes(Capabilities.AsyncResult) ? ["tokio@1.53.1"] : []),
+          .concat(derived.capabilities.includes(Capabilities.AsyncResult) ? ["tokio@1.53.1"] : [])
+          .concat(derived.capabilities.includes(Capabilities.Json) ? ["serde_json@1.0.151"] : []),
       ),
     ).sort(),
   );
@@ -683,8 +689,8 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
   for (const type of expected.analysis.types) {
     if (
       type.layout === undefined &&
-      ![U64Type, BoolType, UnitType, NeverType, StringType, NumberType].some((builtin) =>
-        IRType.same(type, builtin),
+      ![U64Type, BoolType, UnitType, NeverType, StringType, NumberType, UnknownType].some(
+        (builtin) => IRType.same(type, builtin),
       )
     )
       return yield* fail(
