@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-02 — Native types research (proposed)
+
+- Searched the docs (architecture §9–10 already lists sized/tuple/fixed-array representations; no JS-type crate was recorded) and crates.io. Recorded the [native types proposal](docs/research/native-types.md):
+  - `ryu-js` is a candidate for byte-exact number encoding.
+  - Boa's `JsString` has the right UTF-16 semantics but is `!Send`, so it is limited to single-task helpers.
+  - Sized integers, tuples, fixed arrays and bytes become witnesses selected from verified Effect checks (`isInt32`, `isBetweenBigInt`, `isBetweenLength`, `Schema.Tuple`), with overflow behaviour named per operation.
+- The Remote wire order is unchanged: `Record`, then array length checks (as `[T; N]`). No code changed.
+
 ## 2026-10-02 — Optional struct fields
 
 - Recorded [optional-field decisions](docs/research/optional-fields.md) (OPT-001–005) after probing `Schema.optional`/`optionalKey` JSON codecs under rc.118. Findings: `null` decodes as a **present** `undefined`; a present `undefined` encodes as `null` while an absent key is omitted; type mismatches gain `| null` only for JSON kinds the item rejects; `optional(Struct({}))` accepts any value.
