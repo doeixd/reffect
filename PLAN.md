@@ -28,7 +28,7 @@ The destination is a native executable serving Foldkit rendering, Effect RPC, Re
 
 ## Current state
 
-Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar acquire/use/release, static Context/Layer wiring and constrained scalar Schema inputs are implemented bounded extensions. General Schema, dynamic services/resource Layers and resource Scope remain open.
+Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar brackets, static Context/Layer wiring, constrained scalar Schema inputs and bounded sequential resource Scope registration are implemented extensions. General Schema, dynamic services/resource Layers and general Scope services remain open.
 
 The active slice is [suspended scalar RPC](docs/research/async-rpc.md): literal delay, owned execution context, cooperative cancellation and non-failing awaited `ensuring` cleanup. The bounded slice has reference/native conformance, real-socket and stock-client cancellation coverage, and measured layout/construction costs. [PROGRESS.md](PROGRESS.md) records completed evidence; the [package README](packages/reffect/README.md) describes shipped APIs.
 
@@ -40,14 +40,14 @@ The [scoped heartbeat slice](docs/research/heartbeat.md) adds Unit spaced repeti
 
 These are roadmap names, **not implemented CLI target strings or a new public registry**. Profiles describe cumulative semantic commitments; dependencies still come from reachability. SQL and Query support must remain usable independently of HTTP where their workload permits.
 
-| Profile          | Required capability boundary                                                                                         | Status                                                                               |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `rust:core`      | Pure scalar functions, Match, Result and the bounded synchronous Effect subset                                       | `Rust.std`, typed recovery and static providers; Query is a separate checked adapter |
-| `rust:async`     | Core plus owned execution context, cancellation and the admitted finalization/resource subset                        | Sleep/Ensuring/scalar brackets through `Rust.tokio`; general Scope pending           |
-| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded HTTP/auth/input ranges and static service wiring; dynamic services pending   |
-| `rust:remote`    | RPC plus Foldkit Remote contracts, portable validation and authorization                                             | Planned                                                                              |
-| `rust:sql`       | Checked Query/storage semantics and SQLx; compose with Remote when needed                                            | Planned                                                                              |
-| `rust:fullstack` | Remote/SQL plus streaming, live data, SSR and resume                                                                 | Planned                                                                              |
+| Profile          | Required capability boundary                                                                                         | Status                                                                                                                    |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `rust:core`      | Pure scalar functions, Match, Result and the bounded synchronous Effect subset                                       | `Rust.std`, typed recovery and static providers; Query is a separate checked adapter                                      |
+| `rust:async`     | Core plus owned execution context, cancellation and the admitted finalization/resource subset                        | Sleep/Ensuring/scalar brackets/bounded sequential Scope registration through `Rust.tokio`; general Scope services pending |
+| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded HTTP/auth/input ranges and static service wiring; dynamic services pending                                        |
+| `rust:remote`    | RPC plus Foldkit Remote contracts, portable validation and authorization                                             | Planned                                                                                                                   |
+| `rust:sql`       | Checked Query/storage semantics and SQLx; compose with Remote when needed                                            | Planned                                                                                                                   |
+| `rust:fullstack` | Remote/SQL plus streaming, live data, SSR and resume                                                                 | Planned                                                                                                                   |
 
 Version each admitted subset against Effect/Foldkit and its Rust substrate. An explain report must show selected implementations, crates/features, rejected alternatives and unsupported semantic requirements. Capability admission never implies support for every operation in an upstream module.
 
@@ -75,20 +75,26 @@ Milestone numbers remain 0–15. Milestone 3 now owns the minimal async foundati
 | 14. Additional targets/codecs | Verified serializer/library and WASM profiles                                                               | Each target satisfies explicit semantic and compatibility gates                                                           |
 | 15. Syntax widening           | Additional producers for the same checked IR                                                                | New syntax preserves the already verified native subset                                                                   |
 
-Each gate can ship bounded subprofiles without claiming the whole milestone. Ensuring and structured scalar brackets prove awaited cleanup; they do not complete resource Scope, acquire/release registration or general fiber semantics. Static providers prove lexical wiring/sharing, independently of dynamic service or resource Layer support. Hybrid hosting follows established native semantics and reports its host requirement explicitly.
+Each gate can ship bounded subprofiles without claiming the whole milestone. Ensuring, structured scalar brackets and bounded sequential Scope registration prove awaited cleanup with compiler-proved capacity, registration-time context and masked LIFO close; they do not complete manual/child/parallel Scope, Exit-aware/fallible cleanup or general fiber semantics. Static providers prove lexical wiring/sharing, independently of dynamic service or resource Layer support. Hybrid hosting follows established native semantics and reports its host requirement explicitly.
 
 ## Current frontier
 
-**Next up after the current Schedule work: resource Scope/acquire-release registration.** The real read-only file adapter now satisfies the acquisition-masking, ownership, escaping-capture, reverse-close and cancellation gates; admitting a bounded dynamic `Scope`/`acquireRelease` registration profile (reverse release order, nested/closed scopes, interruption) is the immediate follow-on and the prerequisite for resource Layers. Do not let schedule/API-mirroring work displace it for long. Suspended handlers, structured scalar brackets, typed recovery, resource-free static providers and the scoped file handle are the established baseline.
+**Next: prepare a bounded resource-bearing Layer profile (milestone 3B).**
+The [sequential registration slice](docs/research/resource-scope-registration.md)
+now provides compiler-proved capacity, runtime LIFO registration, owned scalar
+captures, registration-time context and masked awaited closure. The real
+registered-file adapter proves delayed ownership through outer scope exit,
+including post-open cancellation. General manual/child/parallel Scope and
+Exit-aware cleanup remain separate gates.
 
-The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Resource Scope registration is now the immediate next workstream; schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
+The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 
 **Authoring composition:** `R.flow` composes `R.fn` values by build-time substitution ([design](docs/research/flow-composition.md)); plain composition stays in Effect's `flow`. This is ergonomics, not a new capability. A named IR call node (recursion, non-inlined shared helpers) is **deferred but likely**, with first-class function values explicitly out of scope; the [function-call decision record](docs/research/function-calls.md) lists the per-pass blast radius and the triggers that would justify it. `R.flow` is independent of that decision.
 
-1. Research and record acquisition masking, registration, reverse release order, nested closure, interruption and the supported Exit/Cause subset before choosing IR/API or an implementation plan.
-2. Select one real resource workload and establish handle ownership, escaping-capture refusals and exactly-once release on success, failure and cancellation, including cancellation during acquisition.
-3. Compare official Effect and native lifetime traces under both diagnostic policies. Measure scope/future growth and allocations; concrete async helpers alone do not establish efficient resource Scope.
-4. Admit the bounded Scope profile only after those gates pass. Extend static providers to service implementations and resource Layers with explicit registration, lifetime, sharing/freshness and failure evidence; defer general concurrent merge until fork/join semantics exist.
+1. Research resource Layer acquisition, memoization identity, sharing/freshness and release ownership against pinned Effect before choosing an API or implementation plan.
+2. Select a real service/file workload; decide whether the existing scalar service witnesses suffice or a new opaque service representation is required. Do not equate a registered file lifetime with a shipped resource Layer.
+3. Compare reference/native shared versus fresh acquisition, failed acquisition and interruption, teardown order and lifetime-safe service use under both diagnostic policies. Measure record/future/context growth and registration allocations.
+4. Admit one complete resource-bearing provider path after those gates pass; defer concurrent merge, dynamic registries and wider Scope services until their own lifetime/conformance work.
 
 Replace this section as the frontier moves. Detailed acceptance and unresolved limits belong in the task’s research record; completed history belongs in PROGRESS.md.
 

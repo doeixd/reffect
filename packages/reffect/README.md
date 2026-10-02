@@ -92,10 +92,11 @@ const Application = R.fn([], R.Unit, R.Never, () =>
 
 Compile with `Rust.tokio`. Spaced schedules admit positive integral 1–60000 ms
 durations; repetition admits Unit bodies and optional `times` (additional runs).
-Sequential registrations remain a separate `ScopedSequence` until `scoped`
-specializes them into masked brackets. This admits Exit-independent Unit/Never
-cleanup with LIFO release and preserves skipped registration after failure;
-dynamic Scope services and arbitrary schedules remain outside this profile.
+`addFinalizer` now constructs an ordinary computation, so conditional and finite
+repeated registrations compose inside `scoped`. The checker proves at most 16
+registrations per live lexical scope; delayed Unit/Never cleanup is awaited in
+LIFO order with registration-time log context. General Scope services and
+arbitrary schedules remain outside this profile.
 `R.Effect.logInfo` (mirroring Effect v4) uses structured logging rather than
 Console/stdout.
 
@@ -246,7 +247,55 @@ Acquisition is masked and awaited through Tokio's blocking executor. Generated h
 
 The official Effect reference uses `Effect.scoped`/`acquireRelease` and a Node FileHandle adapter. `ReferenceFiles` is an injectable reference service, and `FileLease` lets conformance adapters supply size/close Effects. Native plans explain the distinct `Rust.scopedFiles` service implementation and lexical ownership; unused programs acquire no file dependency or resource storage. Cancellation requires signaling and awaiting the generated future, including acquisition; dropping/aborting a future is outside the finalization guarantee.
 
-Run [the scoped-file stock RPC example](../../examples/rpc-files/README.md). This establishes real-resource ownership; dynamic Scope registration, manual/child scopes, resource Layers, fallible cleanup and cross-fiber handle transfer remain outside the profile.
+Run [the scoped-file stock RPC example](../../examples/rpc-files/README.md). This establishes lexical bracket ownership; the registered-file extension below retains ownership through the surrounding Scope. Manual/child scopes, resource Layers, fallible cleanup and cross-fiber handle transfer remain outside the profile.
+
+## Bounded sequential resource Scope
+
+`R.Effect.addFinalizer(() => cleanup)`, `R.Effect.acquireRelease(acquire,
+resource => cleanup)` and `R.Effect.scoped` mirror the admitted Effect v4
+signatures. Registrations are ordinary computations and can occur conditionally
+or repeatedly at runtime. Scalar acquisition returns its acquired value;
+acquisition and successful registration are masked together. Bare finalizer
+registration follows ordinary interruptibility. Release is delayed until the
+nearest enclosing `scoped` exits, then awaited once in reverse registration order.
+
+```ts
+const Session = R.fn([], R.U64, R.Bool, () =>
+  R.Effect.addFinalizer(() => R.Effect.logInfo("session released")).pipe(
+    R.Effect.andThen(
+      R.File.acquireReadOnly("input.txt", (file) => file.size, R.Effect.logInfo("file closed")),
+    ),
+    R.Effect.scoped,
+  ),
+);
+```
+
+`R.File.acquireReadOnly` is a specialized borrowed-use adapter: the callback
+returns a scalar computation, while the actual file remains owned until outer
+scope closure. This differs from `R.File.scoped`, which closes at the end of its
+use callback. File references cannot escape or be captured by delayed cleanup.
+Cleanup drops the owned file before awaiting its optional after-close effect.
+
+The checker requires an enclosing scope, proves execution multiplicity before
+IO (including branch maxima and finite repeat/retry bounds), and refuses unknown
+or greater-than-16 retained registration counts. This is an admission budget,
+not a new runtime error in the Never channel. Each accepted program emits a
+generated finalizer enum with pruned scalar captures, a fixed-capacity scope
+stack selected by reachable nesting, and concrete cleanup dispatch. Nonempty
+log annotation/span snapshots allocate independently of the plain scalar values.
+
+Finalizers retain registration-time annotations and original span starts, with
+close-time context restored after each invocation. Closure is masked; successful
+body completion becomes interruption if cancellation is pending, while a settled
+typed failure is preserved. Callers signal cancellation and await the future.
+Exit-aware/fallible cleanup, interruptible acquisition options, manual Scope
+values/close, children, parallel release, registration within cleanup and resource
+Layers remain outside this profile. Scope requirements are checked on IR
+reachability rather than a third Computation type parameter.
+
+Run [the registered-file example](../../examples/scope-registration/README.md).
+[The design and validation record](../../docs/research/resource-scope-registration.md)
+distinguishes the implemented profile from the superseded preparation.
 
 ## Source provenance and build diagnostics
 
@@ -349,8 +398,9 @@ body's channels. Finalizers run inside first, exactly once on each entered body
 exit, with cooperative cancellation masked while cleanup is awaited. A pending
 interruption after successful cleanup interrupts success; a typed failed body
 retains its failure if interruption arrives during masked cleanup, matching the
-pinned Effect oracle. General Scope/acquireRelease and fallible finalizers are
-not admitted.
+pinned Effect oracle. The sequential Scope/acquireRelease profile above adds
+delayed registration; Exit-aware/fallible cleanup, manual/child/parallel Scope
+services and resource Layers remain open.
 
 Default Rust.std refuses async nodes. Rust.tokio selects the same scalar backend
 with an explicit async capability and reachable Tokio 1.53.1 time/sync features;

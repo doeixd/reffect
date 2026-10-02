@@ -1,4 +1,5 @@
 import { Effect, Exit, Match, Pipeable, Schema, Schedule } from "effect";
+import type { Scope } from "effect";
 import { Schedule as ScheduleValue, validSchedulePlan, validTimes } from "./schedule.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { emptySource, snapshotSource } from "./source.ts";
@@ -20,6 +21,8 @@ import {
 import type { Diagnostic, Inputs, Symbols } from "./kernel.ts";
 import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
+import { analyzeScopes } from "./scope-analysis.ts";
+export { maxScopeFinalizers } from "./scope-analysis.ts";
 
 export const SyncEffects = Object.freeze({
   CatchAll: SemanticRef.effect("reffect/effect/catch-all@1"),
@@ -33,6 +36,10 @@ export const SyncEffects = Object.freeze({
   Span: SemanticRef.effect("reffect/effect/span@1"),
 });
 export const AsyncEffects = Object.freeze({
+  Scope: SemanticRef.effect("reffect/effect/scope@1"),
+  AddFinalizer: SemanticRef.effect("reffect/effect/add-finalizer@1"),
+  AcquireRelease: SemanticRef.effect("reffect/effect/acquire-release@1"),
+  RegisteredFile: SemanticRef.effect("reffect/effect/registered-file@1"),
   Repeat: SemanticRef.effect("reffect/effect/repeat-scheduled@1"),
   Retry: SemanticRef.effect("reffect/effect/retry-scheduled@1"),
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
@@ -71,6 +78,21 @@ const checkLogName = (kind: string, value: string): void => {
     );
 };
 export type ComputationNode =
+  | { readonly _tag: "Scope"; readonly body: Computation<unknown, unknown> }
+  | { readonly _tag: "AddFinalizer"; readonly finalizer: Computation<void, never> }
+  | {
+      readonly _tag: "AcquireRelease";
+      readonly acquire: Computation<unknown, unknown>;
+      readonly binder: symbol;
+      readonly release: Computation<void, never>;
+    }
+  | {
+      readonly _tag: "RegisteredFile";
+      readonly path: string;
+      readonly binder: symbol;
+      readonly body: Computation<unknown, unknown>;
+      readonly afterClose: Computation<void, never>;
+    }
   | {
       readonly _tag: "Repeat";
       readonly body: Computation<void, unknown>;
@@ -199,6 +221,28 @@ export const substituteComputation = (
       Computation.make(self.output, self.error, node).withSource(self.source);
     const result: Computation<unknown, unknown> = Match.value(self.node).pipe(
       Match.tagsExhaustive({
+        Scope: (n) => {
+          const body = walk(n.body);
+          return body === n.body ? self : rebuild({ _tag: "Scope", body });
+        },
+        AddFinalizer: (n) => {
+          const finalizer = walk(n.finalizer) as Computation<void, never>;
+          return finalizer === n.finalizer ? self : rebuild({ _tag: "AddFinalizer", finalizer });
+        },
+        AcquireRelease: (n) => {
+          const acquire = walk(n.acquire);
+          const release = walk(n.release) as Computation<void, never>;
+          return acquire === n.acquire && release === n.release
+            ? self
+            : rebuild({ _tag: "AcquireRelease", acquire, binder: n.binder, release });
+        },
+        RegisteredFile: (n) => {
+          const body = walk(n.body);
+          const afterClose = walk(n.afterClose) as Computation<void, never>;
+          return body === n.body && afterClose === n.afterClose
+            ? self
+            : rebuild({ _tag: "RegisteredFile", path: n.path, binder: n.binder, body, afterClose });
+        },
         Sleep: () => self,
         FileSize: () => self,
         Succeed: (n) => {
@@ -404,6 +448,23 @@ const acquireUseRelease = <Resource, E, A, E2>(
     release: release(resource),
   });
 };
+/** Acquire a scalar and register its Exit-independent release in the nearest lexical scope. */
+const acquireRelease = <Resource extends bigint | boolean | void, E>(
+  acquire: Computation<Resource, E>,
+  release: (resource: Expr<Resource>) => Computation<void, never>,
+): Computation<Resource, E> => {
+  const binder = Symbol("reffect/acquireRelease");
+  return Computation.make(acquire.output, acquire.error, {
+    _tag: "AcquireRelease",
+    acquire,
+    binder,
+    release: release(Expr.parameter(acquire.output, binder, 0)),
+  });
+};
+const addFinalizer = (finalizer: () => Computation<void, never>): Computation<void, never> =>
+  Computation.make(UnitType, NeverType, { _tag: "AddFinalizer", finalizer: finalizer() });
+const scoped = <A, E>(self: Computation<A, E>): Computation<A, E> =>
+  Computation.make(self.output, self.error, { _tag: "Scope", body: self });
 /** Reachability used for execution profiles, never a second semantic interpreter. */
 export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean => {
   const seen = new Set<Computation<unknown, unknown>>();
@@ -412,6 +473,10 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
     seen.add(c);
     return Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        Scope: () => true,
+        AddFinalizer: () => true,
+        AcquireRelease: () => true,
+        RegisteredFile: () => true,
         FileScope: () => true,
         FileSize: () => true,
         Sleep: () => true,
@@ -549,6 +614,57 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
       issues.push(...checkExpression(e, bindings, `${at}.${step}`));
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        Scope: (n) => {
+          if (!IRType.same(c.output, n.body.output) || !IRType.same(c.error, n.body.error))
+            add(at, "Scope preserves its body channels");
+          walk(n.body, bindings, `${at}.body`);
+        },
+        AddFinalizer: (n) => {
+          if (
+            !IRType.same(c.output, UnitType) ||
+            !IRType.same(c.error, NeverType) ||
+            !IRType.same(n.finalizer.output, UnitType) ||
+            !IRType.same(n.finalizer.error, NeverType)
+          )
+            add(at, "AddFinalizer requires Unit/Never registration and cleanup channels");
+          walk(n.finalizer, bindings, `${at}.finalizer`);
+        },
+        AcquireRelease: (n) => {
+          if (
+            !IRType.same(c.output, n.acquire.output) ||
+            !IRType.same(c.error, n.acquire.error) ||
+            !IRType.same(n.release.output, UnitType) ||
+            !IRType.same(n.release.error, NeverType) ||
+            ![BoolType, U64Type, UnitType, NeverType].some((type) =>
+              IRType.same(type, n.acquire.output),
+            )
+          )
+            add(
+              at,
+              "AcquireRelease preserves scalar acquisition channels and requires Unit/Never release",
+            );
+          walk(n.acquire, bindings, `${at}.acquire`);
+          const nested = new Map(bindings);
+          nested.set(n.binder, [n.acquire.output]);
+          walk(n.release, nested, `${at}.release`);
+        },
+        RegisteredFile: (n) => {
+          if (
+            !validFilePath(n.path) ||
+            !IRType.same(c.output, n.body.output) ||
+            !joined(c.error, BoolType, n.body.error) ||
+            !IRType.same(n.afterClose.output, UnitType) ||
+            !IRType.same(n.afterClose.error, NeverType)
+          )
+            add(
+              at,
+              "RegisteredFile requires a valid path, body channels joined with Boolean IO failure and Unit/Never cleanup",
+            );
+          const nested = new Map(bindings);
+          nested.set(n.binder, [FileHandleType]);
+          walk(n.body, nested, `${at}.body`);
+          walk(n.afterClose, bindings, `${at}.afterClose`);
+        },
         FileScope: (n) => {
           if (
             !validFilePath(n.path) ||
@@ -735,6 +851,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
   if (!agrees(f.body.output, f.output) || !agrees(f.body.error, f.error))
     add(path, "Effect function body differs from declared success/error witnesses");
   walk(f.body, new Map([[f.binder, f.input]]), `${path}.body`);
+  issues.push(...analyzeScopes(f.body, `${path}.body`).diagnostics);
   return issues;
 };
 
@@ -759,7 +876,7 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
   const evaluate = (
     c: Computation<unknown, unknown>,
     bindings: Bindings,
-  ): Effect.Effect<unknown, unknown> =>
+  ): Effect.Effect<unknown, unknown, Scope.Scope> =>
     Effect.suspend(() => {
       const expression = (e: Expr<unknown>) =>
         Effect.try({
@@ -768,21 +885,45 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
         });
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          Scope: (n) => Effect.scoped(evaluate(n.body, bindings)),
+          AddFinalizer: (n) =>
+            Effect.addFinalizer(() =>
+              evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie),
+            ),
+          AcquireRelease: (n) =>
+            Effect.acquireRelease(evaluate(n.acquire, bindings), (resource) => {
+              const nested = new Map(bindings);
+              nested.set(n.binder, [resource]);
+              return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
+            }),
+          RegisteredFile: (n) =>
+            Effect.acquireRelease(openReferenceFile(n.path), (file) =>
+              file.close.pipe(
+                Effect.flatMap(() => evaluate(n.afterClose, bindings)),
+                Effect.asVoid,
+                Effect.orDie,
+              ),
+            ).pipe(
+              Effect.flatMap((file) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [file]);
+                return evaluate(n.body, nested);
+              }),
+            ),
           FileScope: (n) =>
-            Effect.scoped(
-              Effect.acquireRelease(openReferenceFile(n.path), (file) =>
+            Effect.acquireUseRelease(
+              openReferenceFile(n.path),
+              (file) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [file]);
+                return evaluate(n.body, nested);
+              },
+              (file) =>
                 file.close.pipe(
                   Effect.flatMap(() => evaluate(n.afterClose, bindings)),
                   Effect.asVoid,
                   Effect.orDie,
                 ),
-              ).pipe(
-                Effect.flatMap((file) => {
-                  const nested = new Map(bindings);
-                  nested.set(n.binder, [file]);
-                  return evaluate(n.body, nested);
-                }),
-              ),
             ),
           FileSize: (n) => {
             const file = bindings.get(n.binder)?.[0];
@@ -898,6 +1039,10 @@ export interface LogicalFrame {
     | "retry"
     | "catchAll"
     | "ensuring"
+    | "scope"
+    | "addFinalizer"
+    | "acquireRelease"
+    | "registeredFile"
     | "acquireUseRelease"
     | "fileScope"
     | "fileSize"
@@ -954,6 +1099,16 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
     adapted.set(c, path);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        Scope: (n) => adaptNode(n.body, `${path}.body`),
+        AddFinalizer: (n) => adaptNode(n.finalizer, `${path}.finalizer`),
+        AcquireRelease: (n) => {
+          adaptNode(n.acquire, `${path}.acquire`);
+          adaptNode(n.release, `${path}.release`);
+        },
+        RegisteredFile: (n) => {
+          adaptNode(n.body, `${path}.body`);
+          adaptNode(n.afterClose, `${path}.afterClose`);
+        },
         FileScope: (n) => {
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.afterClose, `${path}.afterClose`);
@@ -1010,7 +1165,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
   const evaluate = (
     c: Computation<unknown, unknown>,
     bindings: Bindings,
-  ): Effect.Effect<unknown, FramedFailure> =>
+  ): Effect.Effect<unknown, FramedFailure, Scope.Scope> =>
     Effect.suspend(() => {
       const path = adapted.get(c) ?? basePath;
       const expression = (e: Expr<unknown>, step: string) =>
@@ -1035,30 +1190,65 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             };
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
-          FileScope: (n) =>
-            Effect.scoped(
-              Effect.acquireRelease(
-                openReferenceFile(n.path).pipe(
-                  Effect.mapError((error): FramedFailure => ({
-                    _tag: "Domain",
-                    error,
-                    frames: [],
-                    omitted: 0,
-                  })),
-                ),
-                (file) =>
-                  file.close.pipe(
-                    Effect.flatMap(() => evaluate(n.afterClose, bindings)),
-                    Effect.asVoid,
-                    Effect.orDie,
-                  ),
-              ).pipe(
-                Effect.flatMap((file) => {
-                  const nested = new Map(bindings);
-                  nested.set(n.binder, [file]);
-                  return evaluate(n.body, nested);
-                }),
+          Scope: (n) =>
+            Effect.scoped(evaluate(n.body, bindings)).pipe(
+              Effect.mapError((failure) => outward(failure, "scope")),
+            ),
+          AddFinalizer: (n) =>
+            Effect.addFinalizer(() =>
+              evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie),
+            ),
+          AcquireRelease: (n) =>
+            Effect.acquireRelease(evaluate(n.acquire, bindings), (resource) => {
+              const nested = new Map(bindings);
+              nested.set(n.binder, [resource]);
+              return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
+            }).pipe(Effect.mapError((failure) => outward(failure, "acquireRelease"))),
+          RegisteredFile: (n) =>
+            Effect.acquireRelease(
+              openReferenceFile(n.path).pipe(
+                Effect.mapError((error): FramedFailure => ({
+                  _tag: "Domain",
+                  error,
+                  frames: [],
+                  omitted: 0,
+                })),
               ),
+              (file) =>
+                file.close.pipe(
+                  Effect.flatMap(() => evaluate(n.afterClose, bindings)),
+                  Effect.asVoid,
+                  Effect.orDie,
+                ),
+            ).pipe(
+              Effect.flatMap((file) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [file]);
+                return evaluate(n.body, nested);
+              }),
+              Effect.mapError((failure) => outward(failure, "registeredFile")),
+            ),
+          FileScope: (n) =>
+            Effect.acquireUseRelease(
+              openReferenceFile(n.path).pipe(
+                Effect.mapError((error): FramedFailure => ({
+                  _tag: "Domain",
+                  error,
+                  frames: [],
+                  omitted: 0,
+                })),
+              ),
+              (file) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [file]);
+                return evaluate(n.body, nested);
+              },
+              (file) =>
+                file.close.pipe(
+                  Effect.flatMap(() => evaluate(n.afterClose, bindings)),
+                  Effect.asVoid,
+                  Effect.orDie,
+                ),
             ).pipe(Effect.mapError((failure) => outward(failure, "fileScope"))),
           FileSize: (n) => {
             const file = bindings.get(n.binder)?.[0];
@@ -1110,7 +1300,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             ),
           Retry: (n) => {
             let completed = 0;
-            const attempt = (): Effect.Effect<unknown, FramedFailure> =>
+            const attempt = (): Effect.Effect<unknown, FramedFailure, Scope.Scope> =>
               evaluate(n.body, bindings).pipe(
                 Effect.catch((failure: FramedFailure) => {
                   if (failure._tag === "Internal") return Effect.fail(failure);
@@ -1232,7 +1422,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
         }),
       );
     });
-  const outcome = yield* evaluate(f.body, new Map([[f.binder, values]])).pipe(
+  // The lexical checker proves that every registration is discharged by its own Scope node.
+  const checked = evaluate(f.body, new Map([[f.binder, values]])) as Effect.Effect<
+    unknown,
+    FramedFailure
+  >;
+  const outcome = yield* checked.pipe(
     Effect.map((value) => ({ _tag: "Ok", value }) as const),
     Effect.catch((failure: FramedFailure) =>
       failure._tag === "Internal"
@@ -1355,6 +1550,9 @@ export const EffectIR = Object.freeze({
   retry,
   ensuring,
   acquireUseRelease,
+  acquireRelease,
+  addFinalizer,
+  scoped,
   fail: failValue,
   map,
   flatMap,

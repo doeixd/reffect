@@ -50,7 +50,7 @@ For deterministic smoke runs, pass a shutdown delay in milliseconds, e.g. `reffe
 - Schedules: `R.Schedule.recurs`, `spaced`, `exponential` and `forever` (see the package README). This example uses positive integral 1–60000 ms spacing.
 - Repeat: Unit body, preserves its typed error, optional `times` counting additional runs; otherwise runs until failure/interruption.
 - `R.Effect.retry` is available for typed failures with the same schedules and `times` option.
-- Sequential `addFinalizer(() => Unit/Never computation)` registration and `andThen`, closed with `scoped`. Registration callbacks build IR once and receive no runtime Exit. Closed scopes compose with existing branching/recovery/brackets.
-- Pending scope sequences are a separate typed authoring value: close them before passing to functions, branching or repeating. This specializes reachable sequential registrations into the existing masked acquire/use/release adapter, with reverse-order awaited release. It does not implement dynamic Scope services, Exit-aware cleanup or arbitrary Schedule combinators.
+- `addFinalizer(() => Unit/Never computation)` now produces ordinary IR that can occur in conditional branches and finite repetition, discharged by `scoped`. Callbacks build cleanup IR once and receive no runtime Exit; closed scopes compose with recovery and brackets.
+- The checker proves at most 16 retained registrations per live scope before execution. Dynamic order is retained in generated finalizer records, with registration-time logging context and awaited masked LIFO release. An indefinite heartbeat is admitted because it repeats logging rather than registration. Manual Scope values/close, child/fork, parallel release, Exit-aware/fallible cleanup, registration within cleanup and resource Layers remain separate; arbitrary Schedule combinators remain outside this profile.
 
 See [design and conformance criteria](../../docs/research/heartbeat.md).

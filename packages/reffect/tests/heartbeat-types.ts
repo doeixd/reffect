@@ -1,11 +1,11 @@
 import { Effect, Schedule } from "effect";
 import { expectTypeOf } from "vite-plus/test";
-import { Computation, R, ScopedSequence } from "../src/index.ts";
+import { Computation, R } from "../src/index.ts";
 
-// Checked by strict TypeScript; these invalid authored programs are never executed.
+// Checked by strict TypeScript; these authored programs are never executed.
 export const heartbeatTypeChecks = () => {
   const pending = R.Effect.addFinalizer(() => R.Effect.void);
-  expectTypeOf(pending).toEqualTypeOf<ScopedSequence<void, never>>();
+  expectTypeOf(pending).toEqualTypeOf<Computation<void, never>>();
   const closed = pending.pipe(
     R.Effect.andThen(R.Effect.fail(R.Bool.literal(false))),
     R.Effect.scoped,
@@ -13,10 +13,9 @@ export const heartbeatTypeChecks = () => {
   expectTypeOf(closed).toEqualTypeOf<Computation<never, boolean>>();
   const next = R.Effect.andThen(R.Effect.succeed(R.U64.literal(1n)));
   expectTypeOf(R.Effect.void.pipe(next)).toEqualTypeOf<Computation<bigint, never>>();
-  expectTypeOf(pending.pipe(next)).toEqualTypeOf<ScopedSequence<bigint, never>>();
-  // @ts-expect-error pending registrations require scoped before becoming a function body
+  expectTypeOf(pending.pipe(next)).toEqualTypeOf<Computation<bigint, never>>();
+  // Scope requirements and unbounded registration counts are checked by Compile.check.
   R.fn([], R.Unit, R.Never, () => pending);
-  // @ts-expect-error repetition cannot dynamically register finalizers
   R.Effect.repeat(pending, { schedule: R.Schedule.spaced(1) });
   // @ts-expect-error finalizers cannot fail in the admitted scope profile
   R.Effect.addFinalizer(() => R.Effect.fail(R.Bool.literal(false)));

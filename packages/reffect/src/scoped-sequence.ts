@@ -64,7 +64,7 @@ const andThen = dual(
 ) as AndThen;
 
 const scoped = <A, E>(self: Computation<A, E> | ScopedSequence<A, E>): Computation<A, E> => {
-  if (self instanceof Computation) return self;
+  if (self instanceof Computation) return EffectIR.scoped(self);
   let tail: Computation<unknown, unknown> = EffectIR.void;
   for (let i = self.steps.length - 1; i >= 0; i--) {
     const rest = tail;
@@ -72,16 +72,15 @@ const scoped = <A, E>(self: Computation<A, E> | ScopedSequence<A, E>): Computati
     tail = Match.value(self.steps[i]).pipe(
       Match.tagsExhaustive({
         Register: (step) =>
-          EffectIR.acquireUseRelease(
-            EffectIR.void,
+          EffectIR.flatMap(
+            EffectIR.addFinalizer(() => step.finalizer),
             () => rest,
-            () => step.finalizer,
           ),
         Run: (step) => (last ? step.body : EffectIR.flatMap(step.body, () => rest)),
       }),
     );
   }
-  return tail as Computation<A, E>;
+  return EffectIR.scoped(tail) as Computation<A, E>;
 };
 
-export const ScopedIR = Object.freeze({ addFinalizer: ScopedSequence.register, andThen, scoped });
+export const ScopedIR = Object.freeze({ addFinalizer: EffectIR.addFinalizer, andThen, scoped });

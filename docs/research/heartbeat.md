@@ -1,5 +1,10 @@
 # Scoped heartbeat vertical slice
 
+**Current extension:** [bounded resource Scope](resource-scope-registration.md)
+supersedes the pending-sequence-only registration boundary below. `addFinalizer`
+now returns an ordinary computation and `scoped` is explicit lifetime IR with
+compiler-proved capacity. This original preparation remains historical context.
+
 Preparation checked 2026-10-02 against installed Effect 4.0.0-rc.118 and Tokio 1.53.1.
 
 ## Evidence and prior decisions

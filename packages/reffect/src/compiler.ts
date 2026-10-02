@@ -353,6 +353,24 @@ const derive = Effect.fn("Compile.derive")(function* (
     types.add(c.error);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        Scope: (n) => {
+          effectRefs.add(AsyncEffects.Scope);
+          walkComputation(n.body);
+        },
+        AddFinalizer: (n) => {
+          effectRefs.add(AsyncEffects.AddFinalizer);
+          walkComputation(n.finalizer);
+        },
+        AcquireRelease: (n) => {
+          effectRefs.add(AsyncEffects.AcquireRelease);
+          walkComputation(n.acquire);
+          walkComputation(n.release);
+        },
+        RegisteredFile: (n) => {
+          effectRefs.add(AsyncEffects.RegisteredFile);
+          walkComputation(n.body);
+          walkComputation(n.afterClose);
+        },
         Sleep: () => {
           effectRefs.add(AsyncEffects.Sleep);
         },
@@ -444,6 +462,10 @@ const derive = Effect.fn("Compile.derive")(function* (
   const operations = Object.freeze([...found.values()].sort((a, b) => a.id.localeCompare(b.id)));
   const collect = <A extends SemanticRef<string>>(refs: readonly A[]) =>
     Object.freeze(Array.from(new Set(refs)).sort((a, b) => a.id.localeCompare(b.id)));
+  const usesFiles =
+    effectRefs.has(AsyncEffects.FileScope) ||
+    effectRefs.has(AsyncEffects.RegisteredFile) ||
+    effectRefs.has(AsyncEffects.FileSize);
   return Object.freeze({
     program,
     operations,
@@ -464,19 +486,11 @@ const derive = Effect.fn("Compile.derive")(function* (
       )
         ? [Capabilities.AsyncResult]
         : []),
-      ...(effectRefs.has(AsyncEffects.FileScope) || effectRefs.has(AsyncEffects.FileSize)
-        ? [Capabilities.ScopedFiles]
-        : []),
+      ...(usesFiles ? [Capabilities.ScopedFiles] : []),
     ]),
     effects: collect([...operations.flatMap((op) => op.effects), ...effectRefs]),
     requirements: collect(
-      operations
-        .flatMap((op) => op.requirements)
-        .concat(
-          effectRefs.has(AsyncEffects.FileScope) || effectRefs.has(AsyncEffects.FileSize)
-            ? [FileRequirement]
-            : [],
-        ),
+      operations.flatMap((op) => op.requirements).concat(usesFiles ? [FileRequirement] : []),
     ),
     types: Object.freeze(Array.from(types)),
   });

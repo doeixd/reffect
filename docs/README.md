@@ -49,7 +49,9 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 - [Scoped heartbeat](research/heartbeat.md): bounded sequential finalizer specialization, spaced repetition and a standalone native lifecycle example.
 - [Bounded Schedule](research/schedule.md): `recurs`/`spaced`/`exponential`/`forever`, `repeat`/`retry`, frame handling and a concrete native loop.
 - [Scoped native files](research/scoped-files.md): real read-only handle ownership, borrowed use, acquisition masking and closure gates before general Scope registration.
-- [Dynamic resource Scope registration](research/resource-scope-registration.md): preparation for the current frontier — pinned v4 ordering/interruption semantics, bounded registered-finalizer options and acceptance gates before any implementation.
+- [Dynamic resource Scope registration](research/resource-scope-registration.md): implemented bounded lexical profile — lexical `scoped`/`addFinalizer`/scalar `acquireRelease` and `RegisteredFile` with compiler-proved capacity, registration-time context and masked LIFO close. Manual/child/parallel Scope, Exit-aware cleanup and resource Layers remain later gates; the provisional preparation is retained as archive within that record.
+- Scope preparation evidence: [pinned reference semantics](research/scope-reference-evidence.md), [native storage/lifetimes](research/scope-native-evidence.md), and [registered-file workload](research/scope-workload-evidence.md).
+- [Runnable registered-file Scope](../examples/scope-registration/README.md): bounded sequential registration with a real read-only file retained through outer scope exit.
 - [Runnable async example](../examples/rpc-async/README.md): unchanged stock authenticated client calling suspended native handlers.
 - [Runnable scoped-file RPC](../examples/rpc-files/README.md): a native handler owns a real read-only file across suspension and closes it before cleanup.
 - [Performance requirements](performance.md): workload measurements, structural growth/allocation gates and exploratory baselines.

@@ -1,6 +1,29 @@
 # Dynamic resource Scope registration
 
-Preparation for the [current frontier](../../PLAN.md#current-frontier), step 1: research and record acquisition masking, registration, reverse release order, nested closure, interruption and the supported Exit/Cause subset **before** choosing IR/API or an implementation. Checked 2026-10-02 against installed Effect **4.0.0-rc.118** and its pinned source; Tokio **1.53.1**.
+Status: **implemented bounded lexical profile**, using the corrected decisions
+below. Public contracts live in the package README and
+[registered-file example](../../examples/scope-registration/README.md).
+
+## 2026-10-02 preparation correction and implementation boundary
+
+The provisional decisions below are superseded where they conflict with this section. Parallel review checked RC.118 implementation, including context capture and mask flags, and Rust/Tokio lifetime contracts: [reference evidence](scope-reference-evidence.md), [native evidence](scope-native-evidence.md), and [real workload](scope-workload-evidence.md).
+
+- Capacity is proved **before execution** from reachable execution multiplicity (sequence sums, branch maxima, finite repeat/retry limits). The initial admission ceiling is 16 live registrations per lexical scope, a compiler budget rather than upstream semantics. Unknown or excessive multiplicity is a compiler diagnostic. No runtime error, fabricated domain payload or unsafe initialization is introduced into Never registration.
+- Admit lexical `Effect.scoped`, `Effect.addFinalizer` and scalar `Effect.acquireRelease` with Exit-independent Unit/Never cleanup. Bare registration follows ordinary interruption semantics; acquireRelease masks acquisition plus successful registration. High-level finalizers retain registration-time log annotations/span starts and restore close-time context after each invocation. Success/failure/interruption results are preserved after awaited sequential LIFO close.
+- Manual Scope values, explicit close, registration on a closed scope, parallel close and child scopes are not exposed. Therefore closed registration is **unrepresentable**, not a runtime behavior substituted for upstream's immediate cleanup. General Scope service values, Exit-aware/fallible cleanup, registration within cleanup and resource Layers remain later work.
+- Native records use generated enum variants with owned scalar captures, a statically bounded lexical scope stack, and concrete exhaustive cleanup dispatch; no boxed closures/futures or detached cleanup. Cleanup graphs cannot register additional scope resources in this first profile, avoiding recursive async close machinery.
+- Real workload: a specialized read-only file acquisition/use adapter registers deferred close in the surrounding scope. Registration reserves its LIFO position before use; during lexical borrowed use the acquired file remains an owned local, then transfers into the reserved record before body result propagation. No exposed manual close can race that transfer. Cleanup drops the file before awaited after-close effects. Escaping/delayed borrowed-file captures are refused. This is a real delayed scope lifetime, distinct from existing R.File.scoped brackets; its exact public spelling follows the adapter's typed boundary and is documented as narrower than generic acquireRelease.
+- Validation must cover conditional registration/order, finite repeated sites, capacity refusals before IO, registration-time context, real file lifetime through outer close, acquisition cancellation, failure and awaited masked cleanup, both frame policies/debug/release. Construction/layout probes distinguish record storage from logging/timer/filesystem allocations.
+
+The old runtime-overflow failure, runtime closed-scope refusal, token-only first workload and unsupported no-context-field claims are not accepted decisions.
+
+## Archived provisional preparation
+
+The following original preparation is retained for decision history only. Its status,
+runtime overflow, closed-scope refusal and token-only workload claims are
+superseded by the correction above and by [delivered implementation and validation](#delivered-implementation-and-validation) below. Do not implement from this archived section.
+
+Preparation for the frontier's first step: research and record acquisition masking, registration, reverse release order, nested closure, interruption and the supported Exit/Cause subset **before** choosing IR/API or an implementation. Checked 2026-10-02 against installed Effect **4.0.0-rc.118** and its pinned source; Tokio **1.53.1**.
 
 Status: **decision record only.** No IR, API or lowering changes are proposed for implementation here. This generalizes the existing structured [scalar bracket](resource-scope.md) and [real read-only file adapter](scoped-files.md) into a bounded _dynamic registration_ profile, the prerequisite for resource Layers.
 
@@ -65,6 +88,14 @@ Differential official-Effect vs reference vs native debug/release, both frame po
 - **First workload:** an in-process registry of **unit cleanup callbacks** (log/token finalizers) proving registration/order/cancellation. Real OS-handle registration stays behind [SCOPER-005](#proposed-bounded-decisions-for-review-not-yet-implemented); the read-only file adapter already proves one real handle, so the next real handle is deferred to the resource-Layer milestone.
 - **`fork`/child scopes:** deferred to milestone 12; this slice has one open scope per lexical `R.Effect.scoped` region plus nested scopes closing inner-first.
 
-## Recommendation
+## Archived recommendation
+
+The following recommendation is retained for decision history. The bounded lexical profile in the correction above is delivered; the runtime-overflow, runtime closed-scope-refusal and token-only workload points in that older resolution list are not the shipped boundary.
 
 Adopt **SR-1** as the bounded next slice after confirming the exact bound and closed-scope policy, keeping SR-2 (full Exit-aware Scope service) for the milestone that introduces Exit/Cause and resource Layers. This proceeds only after the current small slices are published and must not be conflated with Layer wiring. This record promotes [SCOPE-001](resource-scope.md) from "structured bracket only" toward a minimal registration profile; it does not yet admit native OS handles (SCOPER-005).
+
+## Delivered implementation and validation
+
+Delivered 2026-10-02: lexical `R.Effect.scoped`, ordinary-computation `R.Effect.addFinalizer`, scalar `R.Effect.acquireRelease` and `R.File.acquireReadOnly` (`RegisteredFile`) with compiler-proved execution multiplicity, a 16-registration admission ceiling per lexical scope, registration-time log annotation/span snapshots and masked sequential LIFO close. Public contracts are in the [package README](../../packages/reffect/README.md#bounded-sequential-resource-scope) and the [registered-file example](../../examples/scope-registration/README.md).
+
+Validation uses exact evidence. Full `vp test --maxWorkers=1` with `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_INCREMENTAL=0` passed 120/120 in 28 files (1063.68 seconds total, 1022.08 seconds tests), including the scope-registration fixture at 5/5 in 129018ms. After a test-only `FailureFramePolicy` warning fix with no runtime semantic change, the dedicated suite reran successfully at 5/5 (112.43 seconds tests, 114.32 seconds total). `vp exec tsc --noEmit -p packages/reffect/tsconfig.json` passed; `vp check packages apps tools examples docs PLAN.md PROGRESS.md AGENTS.md README.md package.json vite.config.ts tsconfig.json` passed (186 formatted files and 101 checked TypeScript files, zero warnings/errors). `vp run -r build` passed all four workspace tasks. Runnable `examples/scope-registration/main.ts` passed with reference/native `5n` and the required registration-returned, file-closed, cleanup-awaited, session-released order. Toolchain: installed Effect 4.0.0-rc.118, Tokio 1.53.1, Rust 1.90.0 x86_64-pc-windows-msvc, host Node v26.5.0.

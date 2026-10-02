@@ -29,6 +29,8 @@ export type { FlowResult } from "./flow.ts";
 export { Schedule } from "./schedule.ts";
 export type { SchedulePlan } from "./schedule.ts";
 export { ScopedSequence } from "./scoped-sequence.ts";
+export { analyzeScopes, maxScopeFinalizers } from "./scope-analysis.ts";
+export type { ScopeAnalysis } from "./scope-analysis.ts";
 export { Reference } from "./reference.ts";
 export {
   Computation,

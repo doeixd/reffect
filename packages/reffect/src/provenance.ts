@@ -56,6 +56,10 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       Log: (n) => n.attributes.map(([, value], index) => [`attributes[${index}]`, value] as const),
       Annotate: (n) => [edge("value", n.value), edge("body", n.body)],
       CatchAll: (n) => [edge("source", n.source), edge("body", n.body)],
+      Scope: (n) => [edge("body", n.body)],
+      AddFinalizer: (n) => [edge("finalizer", n.finalizer)],
+      AcquireRelease: (n) => [edge("acquire", n.acquire), edge("release", n.release)],
+      RegisteredFile: (n) => [edge("body", n.body), edge("afterClose", n.afterClose)],
       AcquireUseRelease: (n) => [
         edge("acquire", n.acquire),
         edge("use", n.use),

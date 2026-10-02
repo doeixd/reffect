@@ -11,7 +11,7 @@ import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
 import { frameTrailRuntime, syncFrameStorageRuntime } from "./frame-runtime.ts";
-import { EffectFn, maxLogicalFrames } from "./effect-ir.ts";
+import { EffectFn, maxLogicalFrames, maxScopeFinalizers } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
@@ -65,6 +65,21 @@ interface Parameter {
   readonly type: IRType<unknown>;
 }
 type HelperBody =
+  | { readonly _tag: "Scope"; readonly body: number }
+  | { readonly _tag: "AddFinalizer"; readonly finalizer: number }
+  | {
+      readonly _tag: "AcquireRelease";
+      readonly acquire: number;
+      readonly binder: string;
+      readonly release: number;
+    }
+  | {
+      readonly _tag: "RegisteredFile";
+      readonly path: string;
+      readonly file: string;
+      readonly body: number;
+      readonly afterClose: number;
+    }
   | {
       readonly _tag: "Repeat";
       readonly body: number;
@@ -250,6 +265,98 @@ export function lowerFunctions(
           fileInputs: scope.fileInputs,
         };
       };
+      // Only external parameters used by cleanup need to survive until scope close.
+      const delayedScope = (scope: Scope, finalizer: Computation<unknown, unknown>): Scope => {
+        const captures = new Set<Parameter>();
+        const expressions = new Set<Expr<unknown>["node"]>();
+        const computations = new Set<Computation<unknown, unknown>["node"]>();
+        const expression = (value: Expr<unknown>): void => {
+          if (expressions.has(value.node)) return;
+          expressions.add(value.node);
+          Match.value(value.node).pipe(
+            Match.tagsExhaustive({
+              Parameter: (n) => {
+                const parameter = scope.bindings.get(n.binder)?.[n.index];
+                if (parameter) captures.add(parameter);
+              },
+              Literal: () => {},
+              Apply: (n) => n.args.forEach(expression),
+              Match: (n) => {
+                expression(n.condition);
+                expression(n.onTrue);
+                expression(n.onFalse);
+              },
+            }),
+          );
+        };
+        const computation = (value: Computation<unknown, unknown>): void => {
+          if (computations.has(value.node)) return;
+          computations.add(value.node);
+          Match.value(value.node).pipe(
+            Match.tagsExhaustive({
+              Scope: (n) => computation(n.body),
+              AddFinalizer: (n) => computation(n.finalizer),
+              AcquireRelease: (n) => {
+                computation(n.acquire);
+                computation(n.release);
+              },
+              RegisteredFile: (n) => {
+                computation(n.body);
+                computation(n.afterClose);
+              },
+              FileScope: (n) => {
+                computation(n.body);
+                computation(n.afterClose);
+              },
+              FileSize: () => {},
+              AcquireUseRelease: (n) => {
+                computation(n.acquire);
+                computation(n.use);
+                computation(n.release);
+              },
+              Ensuring: (n) => {
+                computation(n.body);
+                computation(n.finalizer);
+              },
+              CatchAll: (n) => {
+                computation(n.source);
+                computation(n.body);
+              },
+              FlatMap: (n) => {
+                computation(n.source);
+                computation(n.body);
+              },
+              Map: (n) => {
+                computation(n.source);
+                expression(n.body);
+              },
+              Match: (n) => {
+                expression(n.condition);
+                computation(n.onTrue);
+                computation(n.onFalse);
+              },
+              Annotate: (n) => {
+                expression(n.value);
+                computation(n.body);
+              },
+              Span: (n) => computation(n.body),
+              Repeat: (n) => computation(n.body),
+              Retry: (n) => computation(n.body),
+              Succeed: (n) => expression(n.value),
+              Fail: (n) => expression(n.error),
+              Log: (n) => n.attributes.forEach(([, value]) => expression(value)),
+              Sleep: () => {},
+            }),
+          );
+        };
+        computation(finalizer);
+        return {
+          bindings: scope.bindings,
+          input: Object.freeze(scope.input.filter((parameter) => captures.has(parameter))),
+          files: new Map(),
+          fileInputs: [],
+        };
+      };
       const pureHelper = (e: Expr<unknown>, scope: Scope, path: string): number => {
         const cached = pureMemo.get(e.node)?.get(scope);
         if (cached !== undefined) return cached;
@@ -343,6 +450,52 @@ export function lowerFunctions(
         effectMemo.set(c.node, scopes);
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            Scope: (n): HelperBody => ({
+              _tag: "Scope",
+              body: effectHelper(n.body, scope, error, `${path}.body`),
+            }),
+            AddFinalizer: (n): HelperBody => ({
+              _tag: "AddFinalizer",
+              finalizer: effectHelper(
+                n.finalizer,
+                delayedScope(scope, n.finalizer),
+                NeverType,
+                `${path}.finalizer`,
+              ),
+            }),
+            AcquireRelease: (n): HelperBody => ({
+              _tag: "AcquireRelease",
+              acquire: effectHelper(n.acquire, scope, error, `${path}.acquire`),
+              binder: `b${index}`,
+              release: effectHelper(
+                n.release,
+                delayedScope(nestedScope(scope, n.binder, n.acquire.output, index), n.release),
+                NeverType,
+                `${path}.release`,
+              ),
+            }),
+            RegisteredFile: (n): HelperBody => {
+              const file = Rs.ident(`file${index}`).text;
+              const files = new Map(scope.files);
+              files.set(n.binder, file);
+              return {
+                _tag: "RegisteredFile",
+                path: n.path,
+                file,
+                body: effectHelper(
+                  n.body,
+                  { ...scope, files, fileInputs: scope.fileInputs.concat(file) },
+                  error,
+                  `${path}.body`,
+                ),
+                afterClose: effectHelper(
+                  n.afterClose,
+                  delayedScope(scope, n.afterClose),
+                  NeverType,
+                  `${path}.afterClose`,
+                ),
+              };
+            },
             CatchAll: (n): HelperBody => ({
               _tag: "CatchAll",
               source: effectHelper(n.source, scope, n.source.error, `${path}.source`),
@@ -478,6 +631,10 @@ export function lowerFunctions(
             files: scope.fileInputs,
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
+                Scope: () => true,
+                AddFinalizer: () => true,
+                AcquireRelease: () => true,
+                RegisteredFile: () => true,
                 Pure: () => false,
                 Succeed: () => false,
                 Fail: () => false,
@@ -718,8 +875,108 @@ export const emitFunctions = (
   );
   if (hasLogScopes) write(logPrelude);
   const hasAsync = module.functions.some((f) => f.asynchronous);
-  if (hasAsync) write(asyncRuntime(hasLogScopes, captureFrames));
+  const registrations = module.functions.flatMap((f, functionIndex) =>
+    f.helpers.flatMap((helper) => {
+      const cleanup = Match.value(helper.body).pipe(
+        Match.tags({
+          AddFinalizer: (n) => n.finalizer,
+          AcquireRelease: (n) => n.release,
+          RegisteredFile: (n) => n.afterClose,
+        }),
+        Match.orElse(() => undefined),
+      );
+      return cleanup === undefined
+        ? []
+        : [
+            {
+              f,
+              helper,
+              cleanup: f.helpers[cleanup],
+              variant: Rs.ident(`F${functionIndex}H${helper.index}`),
+              file: helper.body._tag === "RegisteredFile",
+            },
+          ];
+    }),
+  );
+  const registrationByHelper = new Map(
+    registrations.map((registration) => [registration.helper, registration]),
+  );
+  // Repetition reuses frames; only simultaneously nested lexical Scope nodes add depth.
+  const scopeDepth = Math.max(
+    0,
+    ...module.functions.map((f) => {
+      const memo = new Map<number, number>();
+      const depth = (index: number): number => {
+        const cached = memo.get(index);
+        if (cached !== undefined) return cached;
+        const child = (...children: number[]) => Math.max(0, ...children.map(depth));
+        const result = Match.value(f.helpers[index].body).pipe(
+          Match.tagsExhaustive({
+            Scope: (n) => 1 + depth(n.body),
+            AddFinalizer: () => 0,
+            AcquireRelease: (n) => depth(n.acquire),
+            RegisteredFile: (n) => depth(n.body),
+            FileScope: (n) => child(n.body, n.afterClose),
+            FileSize: () => 0,
+            AcquireUseRelease: (n) => child(n.acquire, n.use, n.release),
+            Ensuring: (n) => child(n.body, n.finalizer),
+            CatchAll: (n) => child(n.source, n.body),
+            FlatMap: (n) => child(n.source, n.body),
+            Map: (n) => depth(n.source),
+            Match: (n) => child(n.onTrue, n.onFalse),
+            Annotate: (n) => depth(n.body),
+            Span: (n) => depth(n.body),
+            Repeat: (n) => depth(n.body),
+            Retry: (n) => depth(n.body),
+            Pure: () => 0,
+            Succeed: () => 0,
+            Fail: () => 0,
+            Log: () => 0,
+            Sleep: () => 0,
+          }),
+        );
+        memo.set(index, result);
+        return result;
+      };
+      return f.node._tag === "Effect" ? depth(f.node.root) : 0;
+    }),
+  );
+  if (scopeDepth) {
+    write(
+      Rs.enumItem(
+        Rs.ident("ScopeFinalizer"),
+        registrations.length
+          ? registrations.map((r) => ({
+              name: r.variant,
+              fields: r.cleanup.input
+                .map((p) => rsTypeOf(p.type))
+                .concat(
+                  r.file
+                    ? [
+                        Rs.genericType(Rs.namedType("Option"), [
+                          Rs.pathType(rsSegments("std", "fs", "File")),
+                        ]),
+                      ]
+                    : [],
+                ),
+            }))
+          : [{ name: Rs.ident("Unreachable"), fields: [rsTypeOf(NeverType)] }],
+      ),
+    );
+    write("\n");
+  }
+  if (hasAsync) write(asyncRuntime(hasLogScopes, captureFrames, scopeDepth, maxScopeFinalizers));
   for (const f of module.functions) {
+    const record = (helper: Helper): string => {
+      const registration = registrationByHelper.get(helper)!;
+      return Rs.pathCall(
+        rsSegments("ScopeFinalizer"),
+        registration.variant,
+        registration.cleanup.input
+          .map((p) => identExpr(p.name))
+          .concat(registration.file ? [identExpr("None")] : []),
+      ).text;
+    };
     const callText = (index: number): string => {
       const helper = f.helpers[index];
       const call = Rs.call(
@@ -835,6 +1092,20 @@ export const emitFunctions = (
         : resultType(output, error);
     const frameOf = (helper: Helper, kind: string): RsExpr =>
       frameLiteral(f.name, helper.path, kind, helper.origin);
+    const entryFrameKind = (body: HelperBody): string =>
+      Match.value(body).pipe(
+        Match.tags({
+          FlatMap: () => "flatMap",
+          CatchAll: () => "catchAll",
+          AcquireUseRelease: () => "acquireUseRelease",
+          FileScope: () => "fileScope",
+          FileSize: () => "fileSize",
+          AddFinalizer: () => "addFinalizer",
+          AcquireRelease: () => "acquireRelease",
+          RegisteredFile: () => "registeredFile",
+        }),
+        Match.orElse((node) => node._tag.toLowerCase()),
+      );
     const failureArm = (helper: Helper, kind: string, cleanup = ""): string =>
       captureFrames
         ? `Err((error, mut frames)) => { ${cleanup}frames.push(${frameOf(helper, kind).text}); Err((error, frames)) }`
@@ -865,6 +1136,54 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          Scope: (n) =>
+            joinFragments([
+              "{ ctx.enter_scope(); let result = ",
+              adaptFrag(n.body, helper.output, use("body")),
+              "; let saved_interruptible = ctx.interruptible; ctx.interruptible = false; close_scope(ctx).await; ctx.interruptible = saved_interruptible; match result { Ok(value) => { if ctx.is_cancelled() { ",
+              captureFrames
+                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "scope").text})))`
+                : "Err(AsyncError::Interrupted)",
+              ` } else { Ok(value) } }, ${failureArm(helper, "scope")} } }`,
+            ]),
+          AddFinalizer: () => textFragment(`{ ctx.register_finalizer(${record(helper)}); Ok(()) }`),
+          AcquireRelease: (n) =>
+            joinFragments([
+              "{ let saved_interruptible = ctx.interruptible; ctx.interruptible = false; let acquired = ",
+              callFrag(n.acquire, use("acquire")),
+              `; match acquired { Ok(${Rs.ident(n.binder).text}) => { ctx.register_finalizer(${record(helper)}); ctx.interruptible = saved_interruptible; Ok(${Rs.ident(n.binder).text}) }, `,
+              failureArm(helper, "acquireRelease", "ctx.interruptible = saved_interruptible; "),
+              " } }",
+            ]),
+          RegisteredFile: (n) => {
+            // Reserve order before borrowed use, then transfer the still-local File before unwinding.
+            const registration = registrationByHelper.get(helper)!;
+            const open = Rs.await(
+              Rs.pathCall(rsSegments("tokio", "task"), Rs.ident("spawn_blocking"), [
+                Rs.closure0(
+                  Rs.pathCall(rsSegments("std", "fs", "File"), Rs.ident("open"), [
+                    rustString(n.path),
+                  ]),
+                ),
+              ]),
+            );
+            const failure = captureFrames
+              ? `Err((AsyncError::Fail(false), FrameTrail::new(${frameOf(helper, "registeredFile").text})))`
+              : "Err(AsyncError::Fail(false))";
+            return joinFragments([
+              "{ let saved_interruptible = ctx.interruptible; ctx.interruptible = false; let acquired = ",
+              Rs.dotCall(open, Rs.ident("expect"), [rustString("File acquisition task failed")])
+                .text,
+              `; match acquired { Ok(${Rs.ident(n.file).text}) => { let (scope_index, record_index) = ctx.register_finalizer(${record(helper)}); ctx.interruptible = saved_interruptible; let result = `,
+              adaptFrag(n.body, helper.output, use("body")),
+              `; match &mut ctx.scopes[scope_index].as_mut().expect("Reserved scope remains open").entries[record_index].as_mut().expect("Reserved file slot remains occupied").finalizer { ScopeFinalizer::${registration.variant.text}(${registration.cleanup.input
+                .map(() => "_")
+                .concat("owned_file")
+                .join(
+                  ", ",
+                )}) => { *owned_file = Some(${Rs.ident(n.file).text}); }, _ => unreachable!("Reserved file variant is unchanged") } match result { Ok(value) => Ok(value), ${failureArm(helper, "registeredFile")} } }, Err(_) => { ctx.interruptible = saved_interruptible; ${failure} } } }`,
+            ]);
+          },
           FileScope: (n) => {
             const open = Rs.dotCall(
               Rs.await(
@@ -1187,9 +1506,9 @@ export const emitFunctions = (
             .join(", ")}) -> `,
           mapFragment(helper.origin, useAt(helper.path), textFragment(signature), "definition"),
           " ",
-          ...(f.asynchronous && helper.error && helper.body._tag !== "Ensuring"
+          ...(f.asynchronous && helper.error
             ? [
-                `{ if ctx.is_cancelled() { return ${captureFrames ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, helper.body._tag === "FlatMap" ? "flatMap" : helper.body._tag === "CatchAll" ? "catchAll" : helper.body._tag === "AcquireUseRelease" ? "acquireUseRelease" : helper.body._tag === "FileScope" ? "fileScope" : helper.body._tag === "FileSize" ? "fileSize" : helper.body._tag.toLowerCase()).text})))` : "Err(AsyncError::Interrupted)"}; } `,
+                `{ if ctx.is_cancelled() { return ${captureFrames ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, entryFrameKind(helper.body)).text})))` : "Err(AsyncError::Interrupted)"}; } `,
                 helperBody,
                 " }",
               ]
@@ -1246,6 +1565,50 @@ export const emitFunctions = (
         "\n\n",
       ]),
     );
+  }
+  if (scopeDepth) {
+    write(
+      "async fn close_scope(ctx: &mut AsyncContext) {\n    while let Some(entry) = ctx.pop_finalizer() {\n",
+    );
+    if (hasLogScopes)
+      write(
+        "        let saved_annos = std::mem::replace(&mut ctx.annos, entry.annos);\n        let saved_spans = std::mem::replace(&mut ctx.spans, entry.spans);\n",
+      );
+    write("        match entry.finalizer {\n");
+    for (const registration of registrations) {
+      const { f, cleanup, variant, file } = registration;
+      const captures = cleanup.input.map((p) => Rs.ident(p.name).text);
+      write(
+        `            ScopeFinalizer::${variant.text}(${captures.concat(file ? ["owned_file"] : []).join(", ")}) => {\n`,
+      );
+      if (file)
+        write(
+          '                drop(owned_file.expect("Reserved file ownership was transferred before scope close"));\n',
+        );
+      const call = Rs.call(
+        Rs.identExpr(Rs.ident(`h_${f.name}_${cleanup.index}`)),
+        [identExpr("ctx")].concat(cleanup.input.map((p) => identExpr(p.name))),
+      );
+      writer.writeFragment(
+        joinFragments([
+          "                match ",
+          mapFragment(
+            cleanup.origin,
+            useAt(cleanup.path),
+            textFragment(cleanup.asynchronous ? Rs.await(call).text : call.text),
+          ),
+          captureFrames
+            ? ' { Ok(()) => {}, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => panic!("Masked non-failing scope finalizer was interrupted") }\n'
+            : ' { Ok(()) => {}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => panic!("Masked non-failing scope finalizer was interrupted") }\n',
+        ]),
+      );
+      write("            },\n");
+    }
+    if (!registrations.length)
+      write("            ScopeFinalizer::Unreachable(never) => match never {},\n");
+    write("        }\n");
+    if (hasLogScopes) write("        ctx.annos = saved_annos;\n        ctx.spans = saved_spans;\n");
+    write("    }\n    ctx.leave_scope();\n}\n\n");
   }
   const print = (type: IRType<unknown>, value: RsExpr, channel?: "ok" | "err"): RsExpr => {
     if (IRType.same(type, NeverType)) return Rs.unreachableMatch(value);
