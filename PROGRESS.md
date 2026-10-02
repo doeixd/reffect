@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-02 — Oracle moved to Effect 4.0.0 stable
+
+- Pinned `effect` and `@effect/platform-node` to **4.0.0**, replacing rc.118, ahead of the Remote harness (NR-007). One Effect copy is installed. I compared the rc.118 and 4.0.0 sources for the modules reffect uses (Schema/SchemaAST, union codecs and formatter, Record, HttpEffect, RpcClient). The changes are internal: candidate indexing, codec member ordering, and request scopes closing with the failure cause. None changes a pinned message.
+- Validation (full suite, needed for an oracle change):
+  - `vp check` passes.
+  - `vp test`: 146/152 pass.
+  - Six heavy native suites stopped exactly at their 120/240/360 s budgets under parallel Cargo builds: arrays, async-effect, async-rpc, error-recovery, records and scope-registration.
+  - Rerun serially (`vp test --fileParallelism=false` on those six files), they pass 17/17 in 409 s. No semantic differences were found.
+
 ## 2026-10-02 — String-keyed records in JS key order
 
 - Recorded [record decisions](docs/research/records-js-order.md) (RECJS-001–005) after probing `Schema.Record(Schema.String, V)` under rc.118:

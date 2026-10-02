@@ -47,7 +47,7 @@ Order is observable. Read order and the order of returned `entities` follow JS o
 
 Checked 2026-10-02 with `npm view` and a scratch install:
 
-- Effect **4.0.0** stable was published on 2026-10-01 and is npm `latest`. rc.118 was published on 2026-09-28. reffect pins rc.118.
+- Effect **4.0.0** stable was published on 2026-10-01 and is npm `latest`. rc.118 was published on 2026-09-28. reffect pinned rc.118 and moved to 4.0.0 on 2026-10-02 (see below).
 - `foldkit` 0.165.0 already declares the peer `effect: 4.0.0`.
 - `foldkit-remote`/`foldkit-remote-server` 0.9.0 declare `effect >=4.0.0-rc.116 <4.0.0-rc.118`. The range is accurate: rc.118 moved `effect/unstable/rpc`, `effect/unstable/http` and `effect/unstable/httpapi` to `effect/rpc`, `effect/http` and `effect/http-api` (4.0.0 matches rc.118). Importing Remote 0.9.0 under rc.118 fails with `ERR_MODULE_NOT_FOUND …/effect/dist/unstable/rpc.js`. Running it under rc.118 is not an option.
 - Remote 0.9.0 depends on `foldkit-entity` 0.5.0, while reffect pins 0.4.0. The published `dist` differs between the two versions, and the differences have not been reviewed yet.
@@ -59,6 +59,11 @@ Checked 2026-10-02 with `npm view` and a scratch install:
 - Before the differential harness (step 2), reffect moves its pin from rc.118 to 4.0.0 in a focused commit and reruns the Effect-sensitive suites: Schema formatter messages, RPC, and Layer/Scope. It then adds the upgraded foldkit-plus releases as dev dependencies.
 - The Query adapter's conformance is rechecked against the `foldkit-entity` release that the upgraded Remote depends on (0.5.0 or later), not against 0.4.0.
 - If the upgraded releases are not available when step 2 starts, the harness waits; the wire slices continue.
+- **Done 2026-10-02:** the oracle pin moved to Effect 4.0.0 (and `@effect/platform-node` 4.0.0), ahead of step 2, so the remaining wire slices are checked against the release Remote will use. Comparing the rc.118 and 4.0.0 sources showed only internal changes in the modules reffect uses:
+  - union candidate indexing and codec member ordering;
+  - HTTP request scopes now close with the failure cause.
+
+  The full suite passes; six heavy native suites timed out under parallel Cargo builds and pass 17/17 when run serially.
 
 ## Open questions
 

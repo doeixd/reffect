@@ -1,6 +1,6 @@
 # Parallel Effect module implementation
 
-The 2026-10-02 implementation batch follows the user's request to develop important Effect modules in parallel and retain decisions for later review. The shared oracle is Effect 4.0.0-rc.118. Each track admits a bounded semantic profile; an implemented subset never establishes complete support for an upstream module.
+The 2026-10-02 implementation batch follows the user's request to develop important Effect modules in parallel and retain decisions for later review. The shared oracle was Effect 4.0.0-rc.118; it moved to 4.0.0 stable on 2026-10-02 with the full suite passing (see PROGRESS). Each track admits a bounded semantic profile; an implemented subset never establishes complete support for an upstream module.
 
 ## Priorities and integration
 
