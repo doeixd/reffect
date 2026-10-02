@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — JS numbers, part B (RPC codec)
+
+- `NativeRpc` admits `Schema.Number` (plain, and checked with `isInt`/`isFinite`/range filters recognized by representation id and verified by running them) at top level, in fields, in structs and in arrays. Generated codecs follow `toCodecJson`'s finite rule and encode like `JSON.stringify`. Codec names now derive from the full codec structure. Verification found that Effect range filters order NaN below every number (upper bounds accept NaN); native predicates match.
+- Validation (focused): `numbers-rpc.test.ts` 2/2 (about 70 raw requests strictly equal to the official server; stock-client round trips; refusals); dropping the native safe-integer bound fails it. `records-rpc`, `arrays-rpc`, `string-rpc`, `native-rpc`, `schema-rpc`, `rpc-auth`, `server-layer` and `async-rpc` pass 18/18 in 8 files. TypeScript and `vp check` pass.
+
 ## 2026-10-02 — JS numbers, part A (witness and operations)
 
 - Recorded [number decisions](docs/research/number-profile.md) (NUM-001–005) after reading `SchemaAST.Number.toCodecJson` and probing plain and checked codecs. Added `R.Number` (f64; Copyable, not Eq/ordered) with `literal` (bit-exact native literals), `add`, `eq` and `lt`; the runner passes doubles as their hex bits.
