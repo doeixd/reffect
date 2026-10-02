@@ -8,6 +8,8 @@ The roadmap governs current sequencing and the active frontier. The [design revi
 
 [North-star acceptance input](north_star.md) preserves the proposed Foldkit SSR corpus/migration acceptance test. It is design input; verify its external claims before using it as roadmap direction.
 
+[Qwik optimizer closure-conversion research](research/qwik-closure-conversion.md) studies Qwik v2's Oxc/SWC capture analysis as prior art for milestone 8B. It recommends boundary-driven free-variable analysis and explicit reffect CapturePlans while normally erasing, rather than serializing, runtime closures.
+
 ## Revised design and implementation references
 
 The later [runtime lowering reference](runtime-lowering.md) integrates the supplied Rust-substrate conversation once. It extends implementation selection and registry guidance while retaining the revised milestone sequence.
