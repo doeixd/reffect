@@ -243,7 +243,7 @@ test("resource Layers match official provide/memo/release traces in the referenc
   await Effect.runPromise(
     Effect.gen(function* () {
       for (const item of cases) {
-        const oracle = yield* capture(item.official as Effect.Effect<bigint>);
+        const oracle = yield* capture(item.official);
         expect(oracle.logs, item.name).toEqual(item.expected);
         expect(yield* capture(Reference.run(item.fn, [])), item.name).toEqual(oracle);
       }

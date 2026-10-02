@@ -1,4 +1,4 @@
-import { Effect, Match, Pipeable, Schema } from "effect";
+import { Effect, Match, Option, Pipeable, Schema } from "effect";
 import { dual } from "effect/Function";
 import { emptySource, snapshotSource, SourceLocation } from "./source.ts";
 import type { SourceMetadata } from "./source.ts";
@@ -785,13 +785,19 @@ export const checkExpression = (
                 "Law evidence must name this operation reference and an artifact",
               );
           if (op.literalArguments) {
-            const literals = op.literalArguments.positions.map((i) => n.args[i]?.node);
-            if (literals.some((node) => node?._tag !== "Literal"))
+            const literals = op.literalArguments.positions.map((i) =>
+              n.args[i] === undefined
+                ? Option.none()
+                : Match.value(n.args[i].node).pipe(
+                    Match.tag("Literal", (literal) => Option.some(literal.value)),
+                    Match.orElse(() => Option.none()),
+                  ),
+            );
+            const values = Option.all(literals);
+            if (Option.isNone(values))
               add("LITERAL_ARGUMENT", at, `${op.id} requires literal operands`);
             else {
-              const problem = op.literalArguments.check(
-                literals.map((node) => (node as { readonly value: unknown }).value),
-              );
+              const problem = op.literalArguments.check(values.value);
               if (problem) add("LITERAL_ARGUMENT", at, problem);
             }
           }

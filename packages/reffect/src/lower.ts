@@ -999,7 +999,12 @@ export const emitFunctions = (
   }
   // One server-lifetime hold per module; its values cross to the host as one owned tuple.
   const launches = module.functions.flatMap((f) =>
-    f.helpers.flatMap((helper) => (helper.body._tag === "Launch" ? [helper.body.types] : [])),
+    f.helpers.flatMap((helper) =>
+      Match.value(helper.body).pipe(
+        Match.tag("Launch", (n) => [n.types]),
+        Match.orElse(() => []),
+      ),
+    ),
   );
   const launchTypes = launches[0];
   if (
@@ -1048,30 +1053,41 @@ export const emitFunctions = (
         ]);
       return callFrag(index, occurrence);
     };
-    const operand = (e: RustExpr): MappedFragment => {
-      if (!e.text || e._tag === "Call" || e._tag === "Match") return render(e);
-      if (e._tag === "Literal")
-        return mapFragment(
-          e.origin,
-          e.occurrence,
-          textFragment(Rs.stringLiteral(e.value as string).text),
-        );
-      return joinFragments(["&*", render(e, undefined, true)]);
-    };
+    // Strings (STR-002): named values are borrowed as operands and copied into value
+    // positions; literals render as `&'static str`; calls and matches already yield owned values.
+    const borrowedName = (e: RustExpr): boolean =>
+      Match.value(e).pipe(
+        Match.tagsExhaustive({
+          Parameter: () => true,
+          Bound: () => true,
+          Local: () => true,
+          Literal: () => false,
+          Call: () => false,
+          Match: () => false,
+        }),
+      );
+    const operand = (e: RustExpr): MappedFragment =>
+      !e.text
+        ? render(e)
+        : borrowedName(e)
+          ? joinFragments(["&*", render(e, undefined, true)])
+          : render(e, undefined, true);
     const render = (
       e: RustExpr,
       role?: GeneratedRange["role"],
       borrowed = false,
     ): MappedFragment =>
-      e.text && !borrowed && e._tag !== "Call" && e._tag !== "Match"
-        ? e._tag === "Literal"
-          ? mapFragment(
-              e.origin,
-              e.occurrence,
-              textFragment(`String::from(${Rs.stringLiteral(e.value as string).text})`),
-              role,
-            )
-          : joinFragments(["(&*", render(e, role, true), ").to_owned()"])
+      e.text && !borrowed
+        ? Match.value(e).pipe(
+            Match.tag("Literal", (n) =>
+              joinFragments(["String::from(", render(n, role, true), ")"]),
+            ),
+            Match.orElse((n) =>
+              borrowedName(n)
+                ? joinFragments(["(&*", render(n, role, true), ").to_owned()"])
+                : render(n, role, true),
+            ),
+          )
         : mapFragment(
             e.origin,
             e.occurrence,
@@ -1145,7 +1161,16 @@ export const emitFunctions = (
       }
       parts.push("    ");
       // A block's final expression runs after every operand borrow, so an owned local moves (§17).
-      parts.push(render(block.body, undefined, block.body._tag === "Local"));
+      parts.push(
+        render(
+          block.body,
+          undefined,
+          Match.value(block.body).pipe(
+            Match.tag("Local", () => true),
+            Match.orElse(() => false),
+          ),
+        ),
+      );
       parts.push("\n}");
       return joinFragments(parts);
     };
@@ -1869,9 +1894,13 @@ export const emitFunctions = (
     Rs.ok(Rs.litUnit()),
   );
   const usesStrings = module.functions.some((f) =>
-    [f.output, ...(f.node._tag === "Effect" ? [f.node.error] : []), ...f.input].some((type) =>
-      IRType.same(type, StringType),
-    ),
+    [
+      f.output,
+      ...Match.value(f.node).pipe(
+        Match.tagsExhaustive({ Pure: () => [], Effect: (n) => [n.error] }),
+      ),
+      ...f.input,
+    ].some((type) => IRType.same(type, StringType)),
   );
   const files = Object.freeze({
     "Cargo.toml":

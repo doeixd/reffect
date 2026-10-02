@@ -539,6 +539,8 @@ Dropping a browser subscription should cancel and finalize the native subscripti
 
 # 26. Milestone 8 — native Foldkit SSR
 
+> **Later update (2026-10-02):** Milestone 8 splits like 3A/3B. **8A** is fully native SSR authored by hand in R, with no JS host fallback; it must agree with upstream `renderToString` on the corpus and hydrate with the stock client. **8B** mechanically transforms the pinned, unmodified upstream SSR source into R builders through the [migration track](migration-tooling.md#delivery-and-acceptance); the output must compile to the 8A profile and pass the same checks. 8B is not [syntax widening](#39-milestone-15--source-syntax-widening), which stays at milestone 15. Upstream SSR does not depend on milestone 9's `Data.satisfy`/resume, so 8B can follow 8A directly.
+
 Compile only the server-reachable Foldkit graph:
 
 ```text

@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-02 — AGENTS.md conformance cleanup and milestone 8 split
+
+- Re-read AGENTS.md in full and fixed deviations in this session's work: manual `_tag` comparisons in the literal-argument check, string rendering, launch-tuple collection and string boundary detection now use `Match`/`Option`, and test casts became Schema decoding or plain inference.
+- Per user direction, split milestone 8 like 3A/3B. 8A is fully native SSR authored in R; 8B mechanically transforms pinned upstream SSR into R builders under the same acceptance, as the migration track's first milestone-level target. Recorded in PLAN.md, implementation milestones, migration tooling and AGENTS.md.
+- Validation: strict package TypeScript and `vp check` pass. `server-layer`, `resource-layer`, `rust-emission-output` and `effect` pass 14/14. The native `string-profile` test caught a refactor regression (string literal operands rendered as owned `String`); after the fix it passes 3/3.
+
 ## 2026-10-02 — Prior-design reconciliation for strings and roadmap
 
 - Per user direction, the existing PLAN sequence stands: the north-star review now records that its inputs are context only, and the frontier returns to milestone 4 preparation (portable Schema, owned strings/records, explicit unions, wire validation).

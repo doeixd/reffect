@@ -53,7 +53,7 @@ Version each admitted subset against Effect/Foldkit and its Rust substrate. An e
 
 ## Implementation sequence
 
-Milestone numbers remain 0–15. Milestone 3 now owns the minimal async foundation; milestone 6 extends its lifetime semantics to streaming.
+Milestone numbers remain 0–15. Milestone 3 now owns the minimal async foundation; milestone 6 extends its lifetime semantics to streaming. Milestone 8 splits like 3A/3B: 8A is fully native SSR authored in R, and 8B mechanically transforms the pinned upstream SSR source into R builders that must meet the same acceptance.
 
 | Milestone                     | Semantic capability gate                                                                                    | Acceptance evidence                                                                                                       |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -66,7 +66,8 @@ Milestone numbers remain 0–15. Milestone 3 now owns the minimal async foundati
 | 5. Query → SQLx               | Native/wire/storage separation and checked SQL operation semantics                                          | JS, Drizzle and Rust/SQLx agree; unsupported callbacks are refused                                                        |
 | 6. Streaming                  | Chunking, acknowledgement/backpressure and stream lifetime over the async foundation                        | Interruption releases stream resources; protocol, finalizer and teardown traces agree                                     |
 | 7. Remote live                | Interest, cursors, changes/deletes, reauthorization and minimal reads                                       | Stock subscriptions receive equivalent changes and finalize on cancellation                                               |
-| 8. Foldkit SSR                | Server-reachable flags/routing/init/view and HTML serialization                                             | Stock hydration adopts native HTML through the established handoff                                                        |
+| 8A. Native Foldkit SSR        | Server-reachable flags/routing/init/view and HTML serialization, authored in R and fully native             | Native HTML, Flags and refusals match upstream `renderToString` on the corpus; stock hydration adopts the native HTML     |
+| 8B. SSR codemod               | Pinned upstream SSR source mechanically transformed into R builders (migration track, not syntax widening)  | Transformed source compiles to the 8A profile and passes the same corpus and hydration checks                             |
 | 9. SSR data and resume        | Data.satisfy, in-process Remote and minimal resume payload                                                  | Browser avoids duplicate initial fetches; combined fullstack demo works                                                   |
 | 10. SchemaBinary              | Specialized codecs and framing                                                                              | Effect↔Rust round trips and required canonical bytes agree                                                                |
 | 11. Persistent RPC            | Sessions, WebSocket, notifications and bidirectional cancellation                                           | Stock clients and session/resource cleanup agree                                                                          |

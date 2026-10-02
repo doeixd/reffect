@@ -1,4 +1,4 @@
-import { Effect, Exit, Match, Pipeable, Schema, Schedule } from "effect";
+import { Effect, Exit, Match, Option, Pipeable, Schema, Schedule } from "effect";
 import type { Scope } from "effect";
 import { Schedule as ScheduleValue, validSchedulePlan, validTimes } from "./schedule.ts";
 import type { SchedulePlan } from "./schedule.ts";
@@ -381,10 +381,11 @@ export const launch = (values: readonly Expr<unknown>[]): Computation<never, nev
   Computation.make(NeverType, NeverType, { _tag: "Launch", values: Object.freeze([...values]) });
 const launchReference = (values: readonly unknown[]): Effect.Effect<never> =>
   Effect.serviceOption(LaunchHost).pipe(
-    Effect.flatMap((host) =>
-      host._tag === "Some"
-        ? host.value.publish(values)
-        : Effect.die(new Error("Launch requires a LaunchHost in the reference")),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.die(new Error("Launch requires a LaunchHost in the reference")),
+        onSome: (host) => host.publish(values),
+      }),
     ),
     Effect.andThen(Effect.never),
   );

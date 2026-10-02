@@ -102,7 +102,9 @@ test("server-lifetime services acquire once and release after the server, as Rpc
           }),
           Effect.forkScoped,
         );
-        const [base] = (yield* Deferred.await(published)) as [bigint, boolean];
+        const [base] = Schema.decodeUnknownSync(Schema.Tuple([Schema.BigInt, Schema.Boolean]))(
+          yield* Deferred.await(published),
+        );
         const results = yield* Effect.forEach([1n, 2n, 3n], (step) =>
           Reference.run(add, [base, step]),
         );
@@ -188,7 +190,9 @@ const serve = (directory: string, profile: "debug" | "release") =>
         Effect.timeout("10 seconds"),
       );
       if (!Option.isSome(ready)) throw new Error("Missing ready record");
-      const { address } = JSON.parse(ready.value) as { address: string };
+      const { address } = Schema.decodeUnknownSync(
+        Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
+      )(JSON.parse(ready.value));
       const client = yield* RpcClient.make(Group, { disableTracing: true }).pipe(
         Effect.provide(
           RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
