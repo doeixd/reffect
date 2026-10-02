@@ -4,6 +4,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 The roadmap governs current sequencing and the active frontier. The [design revision overview](op-expr-revision-convo.md) explains historical changes; use it as architecture background, not a prerequisite archaeology exercise.
 
+[Parallel Effect module work](effect-modules.md) tracks the resource lifetime, Context/Layer, error recovery and Schema implementation batch, with per-module decision records for later review.
+
 ## Revised design and implementation references
 
 The later [runtime lowering reference](runtime-lowering.md) integrates the supplied Rust-substrate conversation once. It extends implementation selection and registry guidance while retaining the revised milestone sequence.

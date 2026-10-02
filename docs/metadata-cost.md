@@ -229,3 +229,11 @@ whole request.
 Run `vp exec node --experimental-transform-types packages/reffect/scripts/async-cost.ts`
 with Rust on PATH to reproduce. General performance evidence/gates are described
 in [performance requirements](performance.md).
+
+## Resource, recovery and static service costs
+
+The [parallel module decisions](effect-modules.md) preserve the same native scalar/context representation. Structured brackets use generated control flow and a scalar binder rather than a heap finalizer registry. Static Context/Layer maps and Schema range registration exist during TypeScript authoring/boundary compilation; native programs contain ordinary scalar bindings and range comparisons. Pure providers add no crate or async context.
+
+The [resource conformance probe](../packages/reffect/tests/resource-scope.test.ts), Rust 1.98.1 release/x86-64, observes logging context/bracket/nested-future sizes of 104/448/96 bytes with bounded frames and 96/408/72 with frames disabled. After creating the watch channel, constructing those contexts and unpolled futures adds zero allocations. These are layouts of specified test programs, not a universal nesting budget or a claim about polling, logging, failure or HTTP allocations.
+
+Typed recovery explicitly drops a handled failure capsule before running a possibly suspended handler. A subsequently failed handler constructs a new bounded trail. Compiler helper memoization now includes the instantiated error witness as well as node and lexical scope; this adds a build-owned index and can produce distinct typed helpers when a shared node is used under different error representations. No native type erasure or per-value metadata is added. Compiler heap and generated growth should be remeasured for workloads exercising many distinct error representations before broad union/error support.

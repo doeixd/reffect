@@ -28,22 +28,24 @@ The destination is a native executable serving Foldkit rendering, Effect RPC, Re
 
 ## Current state
 
-Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and synchronous Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. General Schema, Context/Layer lowering and resource Scope remain open.
+Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar acquire/use/release, static Context/Layer wiring and constrained scalar Schema inputs are implemented bounded extensions. General Schema, dynamic services/resource Layers and resource Scope remain open.
 
 The active slice is [suspended scalar RPC](docs/research/async-rpc.md): literal delay, owned execution context, cooperative cancellation and non-failing awaited `ensuring` cleanup. The bounded slice has reference/native conformance, real-socket and stock-client cancellation coverage, and measured layout/construction costs. [PROGRESS.md](PROGRESS.md) records completed evidence; the [package README](packages/reffect/README.md) describes shipped APIs.
+
+The [parallel module batch](docs/effect-modules.md) records the latest admitted subsets and the agents' decision ledgers. Parallel development changes execution organization, while semantic gates still govern admission.
 
 ## Compatibility profiles
 
 These are roadmap names, **not implemented CLI target strings or a new public registry**. Profiles describe cumulative semantic commitments; dependencies still come from reachability. SQL and Query support must remain usable independently of HTTP where their workload permits.
 
-| Profile          | Required capability boundary                                                                                         | Status                                                                    |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `rust:core`      | Pure scalar functions, Match, Result and the bounded synchronous Effect subset                                       | Implemented through `Rust.std`; Query is a separate checked adapter       |
-| `rust:async`     | Core plus owned execution context, cancellation and the admitted finalization/resource subset                        | Sleep/Ensuring slice through `Rust.tokio`; general Scope pending          |
-| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded sync/async HTTP/auth subset implemented; general services pending |
-| `rust:remote`    | RPC plus Foldkit Remote contracts, portable validation and authorization                                             | Planned                                                                   |
-| `rust:sql`       | Checked Query/storage semantics and SQLx; compose with Remote when needed                                            | Planned                                                                   |
-| `rust:fullstack` | Remote/SQL plus streaming, live data, SSR and resume                                                                 | Planned                                                                   |
+| Profile          | Required capability boundary                                                                                         | Status                                                                               |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `rust:core`      | Pure scalar functions, Match, Result and the bounded synchronous Effect subset                                       | `Rust.std`, typed recovery and static providers; Query is a separate checked adapter |
+| `rust:async`     | Core plus owned execution context, cancellation and the admitted finalization/resource subset                        | Sleep/Ensuring/scalar brackets through `Rust.tokio`; general Scope pending           |
+| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded HTTP/auth/input ranges and static service wiring; dynamic services pending   |
+| `rust:remote`    | RPC plus Foldkit Remote contracts, portable validation and authorization                                             | Planned                                                                              |
+| `rust:sql`       | Checked Query/storage semantics and SQLx; compose with Remote when needed                                            | Planned                                                                              |
+| `rust:fullstack` | Remote/SQL plus streaming, live data, SSR and resume                                                                 | Planned                                                                              |
 
 Version each admitted subset against Effect/Foldkit and its Rust substrate. An explain report must show selected implementations, crates/features, rejected alternatives and unsupported semantic requirements. Capability admission never implies support for every operation in an upstream module.
 
@@ -71,16 +73,16 @@ Milestone numbers remain 0–15. Milestone 3 now owns the minimal async foundati
 | 14. Additional targets/codecs | Verified serializer/library and WASM profiles                                                               | Each target satisfies explicit semantic and compatibility gates                                                           |
 | 15. Syntax widening           | Additional producers for the same checked IR                                                                | New syntax preserves the already verified native subset                                                                   |
 
-Each gate can ship bounded subprofiles without claiming the whole milestone. The first `ensuring` slice proves awaited cleanup; it does not complete resource Scope, acquire/release registration or general fiber semantics. Hybrid hosting follows established native semantics and reports its host requirement explicitly.
+Each gate can ship bounded subprofiles without claiming the whole milestone. Ensuring and structured scalar brackets prove awaited cleanup; they do not complete resource Scope, acquire/release registration or general fiber semantics. Static providers prove lexical wiring/sharing, independently of dynamic service or resource Layer support. Hybrid hosting follows established native semantics and reports its host requirement explicitly.
 
 ## Current frontier
 
-Next: prepare and prove a minimal **resource Scope/acquire-release** profile. The suspended authenticated handler, owned contexts and awaited non-failing cleanup are the established baseline.
+Next: choose a real native resource adapter and prepare a minimal **resource Scope/acquire-release registration** profile. Suspended handlers, structured scalar brackets, typed recovery and resource-free static providers are the established baseline.
 
 1. Research and record acquisition masking, registration, reverse release order, nested closure, interruption and the supported Exit/Cause subset before choosing IR/API or an implementation plan.
 2. Select one real resource workload and establish handle ownership, escaping-capture refusals and exactly-once release on success, failure and cancellation, including cancellation during acquisition.
 3. Compare official Effect and native lifetime traces under both diagnostic policies. Measure scope/future growth and allocations; concrete async helpers alone do not establish efficient resource Scope.
-4. Admit the bounded Scope profile only after those gates pass, then prepare basic Services/Layers with explicit implementation registration and sharing/freshness evidence.
+4. Admit the bounded Scope profile only after those gates pass. Extend static providers to service implementations and resource Layers with explicit registration, lifetime, sharing/freshness and failure evidence; defer general concurrent merge until fork/join semantics exist.
 
 Replace this section as the frontier moves. Detailed acceptance and unresolved limits belong in the task’s research record; completed history belongs in PROGRESS.md.
 

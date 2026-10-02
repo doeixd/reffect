@@ -204,7 +204,9 @@ const decodeFrames = (name: string, stderr: string) =>
           "annotate",
           "span",
           "sleep",
+          "catchAll",
           "ensuring",
+          "acquireUseRelease",
           "log",
         ].includes(frame.kind)
       )

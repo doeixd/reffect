@@ -64,6 +64,19 @@ interface Parameter {
   readonly type: IRType<unknown>;
 }
 type HelperBody =
+  | {
+      readonly _tag: "CatchAll";
+      readonly source: number;
+      readonly binder: string;
+      readonly body: number;
+    }
+  | {
+      readonly _tag: "AcquireUseRelease";
+      readonly acquire: number;
+      readonly binder: string;
+      readonly use: number;
+      readonly release: number;
+    }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
   | { readonly _tag: "Ensuring"; readonly body: number; readonly finalizer: number }
   | { readonly _tag: "Pure"; readonly block: RustBlock }
@@ -186,7 +199,10 @@ export function lowerFunctions(
       let next = 0;
       const helpers = new Map<number, Helper>();
       const pureMemo = new Map<Expr<unknown>["node"], Map<Scope, number>>();
-      const effectMemo = new Map<Computation<unknown, unknown>["node"], Map<Scope, number>>();
+      const effectMemo = new Map<
+        Computation<unknown, unknown>["node"],
+        Map<Scope, Map<IRType<unknown>, number>>
+      >();
       const input = Object.freeze(f.input.map((type, i) => Object.freeze({ name: `p${i}`, type })));
       const rootScope: Scope = { bindings: new Map([[f.binder, input]]), input };
       const nestedScope = (
@@ -282,14 +298,44 @@ export function lowerFunctions(
         error: IRType<unknown>,
         path: string,
       ): number => {
-        const cached = effectMemo.get(c.node)?.get(scope);
+        const cached = effectMemo.get(c.node)?.get(scope)?.get(error);
         if (cached !== undefined) return cached;
         const index = next++;
-        const scopes = effectMemo.get(c.node) ?? new Map<Scope, number>();
-        scopes.set(scope, index);
+        const scopes = effectMemo.get(c.node) ?? new Map<Scope, Map<IRType<unknown>, number>>();
+        const channels = scopes.get(scope) ?? new Map<IRType<unknown>, number>();
+        channels.set(error, index);
+        scopes.set(scope, channels);
         effectMemo.set(c.node, scopes);
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            CatchAll: (n): HelperBody => ({
+              _tag: "CatchAll",
+              source: effectHelper(n.source, scope, n.source.error, `${path}.source`),
+              binder: `b${index}`,
+              body: effectHelper(
+                n.body,
+                nestedScope(scope, n.binder, n.source.error, index),
+                error,
+                `${path}.body`,
+              ),
+            }),
+            AcquireUseRelease: (n): HelperBody => ({
+              _tag: "AcquireUseRelease",
+              acquire: effectHelper(n.acquire, scope, error, `${path}.acquire`),
+              binder: `b${index}`,
+              use: effectHelper(
+                n.use,
+                nestedScope(scope, n.binder, n.acquire.output, index),
+                error,
+                `${path}.use`,
+              ),
+              release: effectHelper(
+                n.release,
+                nestedScope(scope, n.binder, n.acquire.output, index),
+                error,
+                `${path}.release`,
+              ),
+            }),
             Sleep: (n): HelperBody => ({ _tag: "Sleep", milliseconds: n.milliseconds }),
             Ensuring: (n): HelperBody => ({
               _tag: "Ensuring",
@@ -371,7 +417,10 @@ export function lowerFunctions(
                 Log: () => false,
                 Sleep: () => true,
                 Ensuring: () => true,
+                AcquireUseRelease: () => true,
                 Map: (n) => helpers.get(n.source)?.asynchronous ?? false,
+                CatchAll: (n) =>
+                  !!(helpers.get(n.source)?.asynchronous || helpers.get(n.body)?.asynchronous),
                 FlatMap: (n) =>
                   !!(helpers.get(n.source)?.asynchronous || helpers.get(n.body)?.asynchronous),
                 Match: (n) =>
@@ -736,6 +785,48 @@ export const emitFunctions = (
                 : "Err(error) => Err(error)",
               " } }",
             ]),
+          CatchAll: (n) => {
+            const source = f.helpers[n.source];
+            const binder = Rs.ident(n.binder).text;
+            const sourceSuccess = IRType.same(source.output, NeverType)
+              ? "Ok(value) => match value {}, "
+              : "Ok(value) => Ok(value), ";
+            const domainPattern = f.asynchronous
+              ? captureFrames
+                ? `Err((AsyncError::Fail(${binder}), _handled_frames))`
+                : `Err(AsyncError::Fail(${binder}))`
+              : captureFrames
+                ? `Err((${binder}, _handled_frames))`
+                : `Err(${binder})`;
+            const interrupted = f.asynchronous
+              ? captureFrames
+                ? `, Err((AsyncError::Interrupted, mut frames)) => { frames.push(${frameOf(helper, "catchAll").text}); Err((AsyncError::Interrupted, frames)) }`
+                : ", Err(AsyncError::Interrupted) => Err(AsyncError::Interrupted)"
+              : "";
+            return joinFragments([
+              "{ match ",
+              callFrag(n.source, use("source")),
+              ` { ${sourceSuccess}${domainPattern} => { ${captureFrames ? "drop(_handled_frames); " : ""}match `,
+              adaptFrag(n.body, helper.output, use("body")),
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "catchAll")} } }${interrupted} } }`,
+            ]);
+          },
+          AcquireUseRelease: (n) =>
+            joinFragments([
+              "{ let saved_interruptible = ctx.interruptible; ctx.interruptible = false; let acquired = ",
+              callFrag(n.acquire, use("acquire")),
+              "; ctx.interruptible = saved_interruptible; match acquired { Ok(",
+              Rs.ident(n.binder).text,
+              ") => { let result = ",
+              adaptFrag(n.use, helper.output, use("use")),
+              "; ctx.interruptible = false; let cleanup = ",
+              callFrag(n.release, use("release")),
+              '; ctx.interruptible = saved_interruptible; if cleanup.is_err() { panic!("Non-failing masked release returned an error"); } match result { Ok(value) => { if ctx.is_cancelled() { ',
+              captureFrames
+                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "acquireUseRelease").text})))`
+                : "Err(AsyncError::Interrupted)",
+              ` } else { Ok(value) } }, ${failureArm(helper, "acquireUseRelease")} } }, ${failureArm(helper, "acquireUseRelease")} } }`,
+            ]),
           Ensuring: (n) =>
             joinFragments([
               "{ let result = ",
@@ -887,7 +978,7 @@ export const emitFunctions = (
           " ",
           ...(f.asynchronous && helper.error && helper.body._tag !== "Ensuring"
             ? [
-                `{ if ctx.is_cancelled() { return ${captureFrames ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, helper.body._tag === "FlatMap" ? "flatMap" : helper.body._tag.toLowerCase()).text})))` : "Err(AsyncError::Interrupted)"}; } `,
+                `{ if ctx.is_cancelled() { return ${captureFrames ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, helper.body._tag === "FlatMap" ? "flatMap" : helper.body._tag === "CatchAll" ? "catchAll" : helper.body._tag === "AcquireUseRelease" ? "acquireUseRelease" : helper.body._tag.toLowerCase()).text})))` : "Err(AsyncError::Interrupted)"}; } `,
                 helperBody,
                 " }",
               ]

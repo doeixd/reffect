@@ -10,9 +10,11 @@ The milestone 0 kernel is implemented in [packages/reffect](packages/reffect/REA
 
 The milestone 1 Foldkit adapter consumes published Entity Expr/Query IR, generates a dependency-free Rust evaluator, and preserves ordered structured rows. All 27 published conformance cases agree across evaluate, upstream Drizzle/SQLite, and fresh Rust debug/release executables. The encoded primitive profile and explicit refusal boundaries are documented in the package README.
 
-The initial milestone 2 profile adds Boolean predicates/Match and synchronous succeed/fail/map/flatMap computations. Official Effect success/error values agree with dependency-free Rust Result in debug and release. Scalar unary HTTP RPC and checked bearer/principal projection are implemented. The bounded async profile adds literal delay, owned request/log context and cooperative cancellation with awaited non-failing cleanup. General resource Scope, Services/Layers, owned/union representations and migration tooling remain roadmap targets. The workspace also contains the original starter website and utilities.
+The initial milestone 2 profile adds Boolean predicates/Match and synchronous succeed/fail/map/flatMap computations. Official Effect success/error values agree with dependency-free Rust Result in debug and release. Scalar unary HTTP RPC and checked bearer/principal projection are implemented. The bounded async profile adds literal delay, owned request/log context and cooperative cancellation with awaited non-failing cleanup. General resource Scope, dynamic services/resource Layers, owned/union representations and migration tooling remain roadmap targets. The workspace also contains the original starter website and utilities.
 
 The first meaningful target is Foldkit Entity Expr/Query conformance through generated Rust. The first major public demo is a stock Effect RPC client talking to a native server. The fullstack showcase aims to combine Foldkit SSR, Remote data/live updates, Effect RPC, and SQLx/Postgres in one Rust executable.
+
+[The latest module batch](docs/effect-modules.md) adds typed recovery, structured scalar resource lifetimes, static Context/Layer wiring and constrained scalar RPC inputs. Each subset has a decision record, explicit limits and official Effect/native conformance.
 
 ## Design
 

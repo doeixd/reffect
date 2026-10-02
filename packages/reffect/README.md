@@ -279,3 +279,35 @@ bounded diagnostics, without a claimed official interruption-frame oracle.
 See [the runnable example](../../examples/rpc-async/README.md),
 [design/evidence](../../docs/research/async-rpc.md) and
 [measured costs](../../docs/metadata-cost.md#async-context-and-future-costs).
+
+## Typed recovery and structured resource lifetimes
+
+`R.Effect.catchAll` builds a symbolic typed-error handler; `mapError` transforms that channel and `orElse` runs a fallback after a typed failure. They preserve successful values and bypass interruption/compiler failures. Success channels follow the existing same-witness-or-Never rule. Recovery discards handled failure frames before executing its handler; a failed handler starts its own trail. These operations work in synchronous and async profiles. See [decisions and conformance](../../docs/research/error-recovery.md).
+
+```ts
+const released = R.Effect.acquireUseRelease(
+  R.Effect.succeed(R.U64.literal(7n)),
+  (token) => R.Effect.succeed(token),
+  (token) => R.Log.info("release", [["token", token]]),
+);
+```
+
+Structured acquisition and release mask cooperative cancellation; use restores the inherited policy. Failed acquisition skips release. Successful acquisition releases once, including cancellation during acquisition/use/release. Release must return Unit/Never; callbacks receive a lexical symbolic scalar. This profile requires `Rust.tokio`, including a bracket without timers. It establishes bracket lifetimes, rather than general Scope registration, opaque OS handles or Exit-aware/fallible release. Direct native callers still signal cancellation and await completion. See [resource decisions](../../docs/research/resource-scope.md).
+
+## Static Context and Layer wiring
+
+```ts
+const Count = R.Context.service("app/Count@1", R.U64);
+const base = R.Layer.succeed(Count, R.U64.literal(10n));
+const computation = R.Layer.provide(base, (context) => R.Effect.succeed(context.get(Count)));
+```
+
+Contexts are immutable build-time environments containing symbolic values. Compatible IDs share a slot; witnesses must agree. `R.Layer.effect` admits non-failing scalar acquisition, `sequence` builds providers sequentially with per-provide sharing and right override, and `fresh` gives each occurrence an independent memo boundary. `merge` admits only pure providers; effectful concurrent merge is refused. Expansion produces existing checked IR, with no native service map or scalar metadata. Pure providers retain the dependency-free profile; suspending acquisition selects Tokio through reachability.
+
+This is lexical service wiring. Dynamic Effect requirements, arbitrary service objects/methods, fallible/resource Layers and shared acquisition across separate invocations remain pending. See [Context/Layer decisions](../../docs/research/context-layer.md) and [the module decision index](../../docs/effect-modules.md).
+
+## Constrained scalar RPC payloads
+
+`RpcCodecs.u64Range({ minimum: 1n, maximum: 100n })` returns an ordinary shared Effect Schema with inclusive bounds on the canonical decimal-string u64 codec. Native RPC supports it as a scalar or required flat-field payload, validating before authentication/handler execution. Bounds must satisfy `0 <= minimum <= maximum <= u64::MAX`. Handler values stay plain u64. Exact factory-created schema identities are admitted; derived checks/annotations and constrained success/error schemas are refused.
+
+Schema registration belongs to the TypeScript boundary/compiler, with no native runtime map or additional crate. Stock clients can use the frozen scalar schemas' parser accessors. See [Schema decisions and native/reference corpus](../../docs/research/schema-profile.md).

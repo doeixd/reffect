@@ -18,6 +18,7 @@ import {
 import type { Diagnostic, Inputs, Symbols } from "./kernel.ts";
 
 export const SyncEffects = Object.freeze({
+  CatchAll: SemanticRef.effect("reffect/effect/catch-all@1"),
   Succeed: SemanticRef.effect("reffect/effect/succeed@1"),
   Fail: SemanticRef.effect("reffect/effect/fail@1"),
   Map: SemanticRef.effect("reffect/effect/map@1"),
@@ -30,6 +31,7 @@ export const SyncEffects = Object.freeze({
 export const AsyncEffects = Object.freeze({
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
+  AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
 });
 const validDelay = (milliseconds: number): boolean =>
   Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60_000;
@@ -61,6 +63,19 @@ const checkLogName = (kind: string, value: string): void => {
     );
 };
 export type ComputationNode =
+  | {
+      readonly _tag: "CatchAll";
+      readonly source: Computation<unknown, unknown>;
+      readonly binder: symbol;
+      readonly body: Computation<unknown, unknown>;
+    }
+  | {
+      readonly _tag: "AcquireUseRelease";
+      readonly acquire: Computation<unknown, unknown>;
+      readonly binder: symbol;
+      readonly use: Computation<unknown, unknown>;
+      readonly release: Computation<void, never>;
+    }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
   | {
       readonly _tag: "Ensuring";
@@ -152,6 +167,22 @@ const ensuring: {
 } = dual(2, <A, E>(self: Computation<A, E>, finalizer: Computation<void, never>) =>
   Computation.make(self.output, self.error, { _tag: "Ensuring", body: self, finalizer }),
 );
+const acquireUseRelease = <Resource, E, A, E2>(
+  acquire: Computation<Resource, E>,
+  use: (resource: Expr<Resource>) => Computation<A, E2>,
+  release: (resource: Expr<Resource>) => Computation<void, never>,
+): Computation<A, E | E2> => {
+  const binder = Symbol("reffect/acquireUseRelease");
+  const resource = Expr.parameter(acquire.output, binder, 0);
+  const body = use(resource);
+  return Computation.make(body.output, joinType(acquire.error, body.error) as IRType<E | E2>, {
+    _tag: "AcquireUseRelease",
+    acquire,
+    binder,
+    use: body,
+    release: release(resource),
+  });
+};
 /** Reachability used for execution profiles, never a second semantic interpreter. */
 export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean => {
   const seen = new Set<Computation<unknown, unknown>>();
@@ -162,11 +193,13 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
       Match.tagsExhaustive({
         Sleep: () => true,
         Ensuring: () => true,
+        AcquireUseRelease: () => true,
         Succeed: () => false,
         Fail: () => false,
         Log: () => false,
         Map: (n) => walk(n.source),
         FlatMap: (n) => walk(n.source) || walk(n.body),
+        CatchAll: (n) => walk(n.source) || walk(n.body),
         Match: (n) => walk(n.onTrue) || walk(n.onFalse),
         Annotate: (n) => walk(n.body),
         Span: (n) => walk(n.body),
@@ -302,6 +335,34 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
               "Sleep requires Unit/Never channels and an integer delay from 0 to 60000 milliseconds",
             );
         },
+        CatchAll: (n) => {
+          if (
+            !joined(c.output, n.source.output, n.body.output) ||
+            !IRType.same(c.error, n.body.error)
+          )
+            add(at, "CatchAll channel witnesses are inconsistent");
+          walk(n.source, bindings, `${at}.source`);
+          const nested = new Map(bindings);
+          nested.set(n.binder, [n.source.error]);
+          walk(n.body, nested, `${at}.body`);
+        },
+        AcquireUseRelease: (n) => {
+          if (
+            !IRType.same(c.output, n.use.output) ||
+            !joined(c.error, n.acquire.error, n.use.error) ||
+            !IRType.same(n.release.output, UnitType) ||
+            !IRType.same(n.release.error, NeverType)
+          )
+            add(
+              at,
+              "AcquireUseRelease preserves use output, joins acquisition/use errors, and requires Unit/Never release",
+            );
+          walk(n.acquire, bindings, `${at}.acquire`);
+          const nested = new Map(bindings);
+          nested.set(n.binder, [n.acquire.output]);
+          walk(n.use, nested, `${at}.use`);
+          walk(n.release, nested, `${at}.release`);
+        },
         Ensuring: (n) => {
           if (
             !IRType.same(c.output, n.body.output) ||
@@ -427,6 +488,29 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
         });
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          CatchAll: (n) =>
+            evaluate(n.source, bindings).pipe(
+              Effect.catch((error) => {
+                if (error instanceof CompileError) return Effect.fail(error);
+                const nested = new Map(bindings);
+                nested.set(n.binder, [error]);
+                return evaluate(n.body, nested);
+              }),
+            ),
+          AcquireUseRelease: (n) =>
+            Effect.acquireUseRelease(
+              evaluate(n.acquire, bindings),
+              (resource) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [resource]);
+                return evaluate(n.use, nested);
+              },
+              (resource) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [resource]);
+                return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
+              },
+            ),
           Sleep: (n) => Effect.sleep(n.milliseconds),
           Ensuring: (n) =>
             evaluate(n.body, bindings).pipe(
@@ -499,7 +583,9 @@ export interface LogicalFrame {
     | "annotate"
     | "span"
     | "sleep"
+    | "catchAll"
     | "ensuring"
+    | "acquireUseRelease"
     | "log";
 }
 export const maxLogicalFrames = 32;
@@ -553,6 +639,15 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
     adapted.set(c, path);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        CatchAll: (n) => {
+          adaptNode(n.source, `${path}.source`);
+          adaptNode(n.body, `${path}.body`);
+        },
+        AcquireUseRelease: (n) => {
+          adaptNode(n.acquire, `${path}.acquire`);
+          adaptNode(n.use, `${path}.use`);
+          adaptNode(n.release, `${path}.release`);
+        },
         Sleep: () => {},
         Ensuring: (n) => {
           adaptNode(n.body, `${path}.body`);
@@ -618,6 +713,31 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             };
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          CatchAll: (n) =>
+            evaluate(n.source, bindings).pipe(
+              Effect.catch((failure) => {
+                if (failure._tag === "Internal") return Effect.fail(failure);
+                const nested = new Map(bindings);
+                nested.set(n.binder, [failure.error]);
+                return evaluate(n.body, nested).pipe(
+                  Effect.mapError((error) => outward(error, "catchAll")),
+                );
+              }),
+            ),
+          AcquireUseRelease: (n) =>
+            Effect.acquireUseRelease(
+              evaluate(n.acquire, bindings),
+              (resource) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [resource]);
+                return evaluate(n.use, nested);
+              },
+              (resource) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [resource]);
+                return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
+              },
+            ).pipe(Effect.mapError((failure) => outward(failure, "acquireUseRelease"))),
           Sleep: (n) => Effect.sleep(n.milliseconds),
           Ensuring: (n) =>
             evaluate(n.body, bindings).pipe(
@@ -843,6 +963,7 @@ export const EffectIR = Object.freeze({
   succeed,
   sleep,
   ensuring,
+  acquireUseRelease,
   fail: failValue,
   map,
   flatMap,

@@ -20,7 +20,7 @@ import {
 import type { AnyFn } from "./kernel.ts";
 import { Rs } from "./rust-emit.ts";
 import type { RsExpr } from "./rust-emit.ts";
-import { RpcCodecs } from "./rpc-codecs.ts";
+import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
 import { rpcAuthRuntime } from "./rpc-auth-runtime.ts";
 import { rpcRuntime } from "./rpc-runtime.ts";
@@ -80,7 +80,11 @@ export interface RpcArtifact extends GeneratedFiles {
 }
 const unsupported = (path: string, message: string) =>
   fail("RPC_UNSUPPORTED", "rpc", path, message);
-const codec = (ast: SchemaAST.AST, path: string): Codec => {
+const codec = (ast: SchemaAST.AST, path: string, payload = false): Codec => {
+  if (u64RangeOf(ast)) {
+    if (!payload) throw unsupported(path, "u64Range schemas are supported for payloads only");
+    return "u64";
+  }
   if (ast === U64Json.ast) return "u64";
   if (ast.checks || ast.encoding || ast.context || ast.annotations)
     throw unsupported(
@@ -166,6 +170,7 @@ const compile = <Rpcs extends Rpc.Any>(
         )
           throw unsupported("auth", "Middleware denial schema changed after adapter creation");
         let protectedCount = 0;
+        let ranges = false;
         const functions: Record<string, AnyFn> = {};
         const arms = entries.map((definition, index) => {
           if (!Rpc.isRpc(definition)) throw unsupported("group", "Expected a stock RPC definition");
@@ -205,7 +210,11 @@ const compile = <Rpcs extends Rpc.Any>(
               "Handler success/error witnesses disagree with RPC schemas",
             );
           const payload = rpc.payloadSchema.ast;
-          let inputs: readonly { readonly name: string; readonly codec: Codec }[];
+          let inputs: readonly {
+            readonly name: string;
+            readonly codec: Codec;
+            readonly range?: ReturnType<typeof u64RangeOf>;
+          }[];
           if (SchemaAST.isObjects(payload)) {
             if (
               payload.encoding ||
@@ -232,17 +241,22 @@ const compile = <Rpcs extends Rpc.Any>(
             inputs = binding.fields.map((name) => {
               const field = fields.find((field) => field.name === name);
               if (!field) throw unsupported(procedure, `Unknown payload field ${name}`);
-              return { name, codec: codec(field.type, `${procedure}.payload.${name}`) };
+              return {
+                name,
+                codec: codec(field.type, `${procedure}.payload.${name}`, true),
+                range: u64RangeOf(field.type),
+              };
             });
           } else {
-            const kind = codec(payload, `${procedure}.payload`);
+            const kind = codec(payload, `${procedure}.payload`, true);
             if (binding.fields.length)
               throw unsupported(procedure, "Scalar payload bindings have no named fields");
             inputs =
               kind === "unit" && fn.input.length === (protectedRpc ? 1 : 0)
                 ? []
-                : [{ name: "", codec: kind }];
+                : [{ name: "", codec: kind, range: u64RangeOf(payload) }];
           }
+          if (inputs.some((input) => input.range !== undefined)) ranges = true;
           const offset = protectedRpc ? 1 : 0;
           if (
             (protectedRpc && !IRType.same(fn.input[0], U64Type)) ||
@@ -259,11 +273,14 @@ const compile = <Rpcs extends Rpc.Any>(
           const args = inputs.map((input) =>
             Rs.try_(
               callLocal(
-                `${input.codec}_arg`,
+                input.range ? "u64_range_arg" : `${input.codec}_arg`,
                 isRecord
                   ? Rs.try_(callLocal("field", local("payload"), Rs.stringLiteral(input.name)))
                   : local("payload"),
                 isRecord ? Rs.some(Rs.stringLiteral(input.name)) : Rs.none(),
+                ...(input.range
+                  ? [Rs.litU64(input.range.minimum), Rs.litU64(input.range.maximum)]
+                  : []),
               ),
             ),
           );
@@ -378,6 +395,7 @@ const compile = <Rpcs extends Rpc.Any>(
         return {
           path,
           auth,
+          ranges,
           program: Program.make(functions),
           arms,
           asynchronous: Object.values(functions).some(
@@ -514,6 +532,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
           rpcRuntime(
             clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined,
             prepared.asynchronous,
+            prepared.ranges,
           ),
         ),
       ],

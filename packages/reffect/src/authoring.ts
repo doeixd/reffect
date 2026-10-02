@@ -2,6 +2,9 @@ import { Source } from "./source.ts";
 import { Fn, Program, Expr, BoolType, U64Type, UnitType, NeverType } from "./kernel.ts";
 import type { IRType, Symbols } from "./kernel.ts";
 import { Computation, EffectFn, EffectIR, LogIR, matchComputation } from "./effect-ir.ts";
+import { catchAll, mapError, orElse } from "./error-recovery.ts";
+import { ContextIR } from "./context.ts";
+import { LayerIR } from "./layer.ts";
 
 function fn<const I extends readonly IRType<unknown>[], A>(
   input: I,
@@ -57,6 +60,8 @@ export const R = Object.freeze({
     ltU64: U64Type.lt,
     eqBool: BoolType.eq,
   }),
-  Effect: EffectIR,
+  Effect: Object.freeze({ ...EffectIR, catchAll, mapError, orElse }),
   Log: LogIR,
+  Context: ContextIR,
+  Layer: LayerIR,
 });

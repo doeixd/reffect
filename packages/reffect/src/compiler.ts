@@ -340,6 +340,17 @@ const derive = Effect.fn("Compile.derive")(function* (
         Sleep: () => {
           effectRefs.add(AsyncEffects.Sleep);
         },
+        CatchAll: (n) => {
+          effectRefs.add(SyncEffects.CatchAll);
+          walkComputation(n.source);
+          walkComputation(n.body);
+        },
+        AcquireUseRelease: (n) => {
+          effectRefs.add(AsyncEffects.AcquireUseRelease);
+          walkComputation(n.acquire);
+          walkComputation(n.use);
+          walkComputation(n.release);
+        },
         Ensuring: (n) => {
           effectRefs.add(AsyncEffects.Ensuring);
           walkComputation(n.body);

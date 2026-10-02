@@ -98,3 +98,7 @@ export { RpcCodecs } from "./rpc-codecs.ts";
 export { RpcBearer } from "./rpc-auth.ts";
 
 export { FailureFrames, FailureFramePolicy } from "./frame-policy.ts";
+
+export { Service, StaticContext, ContextIR } from "./context.ts";
+export type { ServiceValue } from "./context.ts";
+export { StaticLayer, LayerIR } from "./layer.ts";

@@ -1,7 +1,11 @@
 import type { RsStmt } from "./rust-emit.ts";
 
 /** Audited HTTP substrate; dynamic tags/fields/calls are emitted separately through Rs. */
-export const rpcRuntime = (frameCleanup?: RsStmt, asynchronous = false): string => String.raw`
+export const rpcRuntime = (
+  frameCleanup?: RsStmt,
+  asynchronous = false,
+  ranges = false,
+): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use serde_json::{json, Value};
 
@@ -17,13 +21,13 @@ fn invalid(message: &str) -> Value {
     json!({"_tag":"Defect", "defect":{"name":"ProtocolError", "message":message}})
 }
 fn field<'a>(payload: &'a Value, name: &str) -> Result<&'a Value, String> {
-    payload.as_object().and_then(|o| o.get(name)).ok_or_else(|| format!("Missing required field {:?}", name))
+    payload.as_object().and_then(|o| o.get(name)).ok_or_else(|| path_error("Missing key", Some(name)))
 }
 fn path_error(message: &str, name: Option<&str>) -> String {
     match name { None => message.to_string(), Some(name) => format!("{}\n  at [{}]", message, serde_json::to_string(name).unwrap()) }
 }
 fn u64_arg(value: &Value, name: Option<&str>) -> Result<u64, String> {
-    let text = value.as_str().ok_or_else(|| path_error("Expected a decimal string", name))?;
+    let text = value.as_str().ok_or_else(|| path_error("Expected string", name))?;
     let digits = text.strip_prefix('-').unwrap_or(text);
     if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
         return Err(path_error("Expected a string representing a bigint", name));
@@ -36,6 +40,20 @@ fn u64_arg(value: &Value, name: Option<&str>) -> Result<u64, String> {
         return Err(path_error("Expected a value less than or equal to 18446744073709551615n", name));
     }
     if significant.is_empty() { Ok(0) } else { significant.parse().map_err(|_| path_error("Invalid u64", name)) }
+}
+${
+  ranges
+    ? String.raw`fn u64_range_arg(value: &Value, name: Option<&str>, minimum: u64, maximum: u64) -> Result<u64, String> {
+    let decoded = u64_arg(value, name)?;
+    if decoded < minimum {
+        return Err(path_error(&format!("Expected a value greater than or equal to {}n", minimum), name));
+    }
+    if decoded > maximum {
+        return Err(path_error(&format!("Expected a value less than or equal to {}n", maximum), name));
+    }
+    Ok(decoded)
+}`
+    : ""
 }
 fn bool_arg(value: &Value, name: Option<&str>) -> Result<bool, String> {
     value.as_bool().ok_or_else(|| path_error("Expected boolean", name))
