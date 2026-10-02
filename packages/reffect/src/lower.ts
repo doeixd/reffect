@@ -65,6 +65,20 @@ interface Parameter {
 }
 type HelperBody =
   | {
+      readonly _tag: "Repeat";
+      readonly body: number;
+      readonly milliseconds: number;
+      readonly times: number | undefined;
+    }
+  | {
+      readonly _tag: "FileScope";
+      readonly path: string;
+      readonly file: string;
+      readonly body: number;
+      readonly afterClose: number;
+    }
+  | { readonly _tag: "FileSize"; readonly file: string }
+  | {
       readonly _tag: "CatchAll";
       readonly source: number;
       readonly binder: string;
@@ -123,6 +137,7 @@ type HelperBody =
       readonly body: number;
     };
 interface Helper {
+  readonly files: readonly string[];
   readonly asynchronous?: boolean;
   readonly origin?: string;
   readonly path: string;
@@ -158,6 +173,8 @@ export interface UnmappedRustModule {
 }
 export type LoweredModule = RustModule | UnmappedRustModule;
 interface Scope {
+  readonly files: ReadonlyMap<symbol, string>;
+  readonly fileInputs: readonly string[];
   readonly bindings: ReadonlyMap<symbol, readonly Parameter[]>;
   readonly input: readonly Parameter[];
 }
@@ -204,7 +221,12 @@ export function lowerFunctions(
         Map<Scope, Map<IRType<unknown>, number>>
       >();
       const input = Object.freeze(f.input.map((type, i) => Object.freeze({ name: `p${i}`, type })));
-      const rootScope: Scope = { bindings: new Map([[f.binder, input]]), input };
+      const rootScope: Scope = {
+        bindings: new Map([[f.binder, input]]),
+        input,
+        files: new Map(),
+        fileInputs: [],
+      };
       const nestedScope = (
         scope: Scope,
         binder: symbol,
@@ -214,7 +236,12 @@ export function lowerFunctions(
         const parameter = Object.freeze({ name: `b${id}`, type });
         const bindings = new Map(scope.bindings);
         bindings.set(binder, [parameter]);
-        return { bindings, input: Object.freeze(scope.input.concat([parameter])) };
+        return {
+          bindings,
+          input: Object.freeze(scope.input.concat([parameter])),
+          files: scope.files,
+          fileInputs: scope.fileInputs,
+        };
       };
       const pureHelper = (e: Expr<unknown>, scope: Scope, path: string): number => {
         const cached = pureMemo.get(e.node)?.get(scope);
@@ -228,6 +255,7 @@ export function lowerFunctions(
           index,
           Object.freeze({
             index,
+            files: [],
             input: scope.input,
             output: e.type,
             body,
@@ -319,6 +347,25 @@ export function lowerFunctions(
                 `${path}.body`,
               ),
             }),
+            FileScope: (n): HelperBody => {
+              const file = Rs.ident(`file${index}`).text;
+              const files = new Map(scope.files);
+              files.set(n.binder, file);
+              const nested: Scope = {
+                bindings: scope.bindings,
+                input: scope.input,
+                files,
+                fileInputs: scope.fileInputs.concat(file),
+              };
+              return {
+                _tag: "FileScope",
+                path: n.path,
+                file,
+                body: effectHelper(n.body, nested, error, `${path}.body`),
+                afterClose: effectHelper(n.afterClose, scope, error, `${path}.afterClose`),
+              };
+            },
+            FileSize: (n): HelperBody => ({ _tag: "FileSize", file: scope.files.get(n.binder)! }),
             AcquireUseRelease: (n): HelperBody => ({
               _tag: "AcquireUseRelease",
               acquire: effectHelper(n.acquire, scope, error, `${path}.acquire`),
@@ -337,6 +384,12 @@ export function lowerFunctions(
               ),
             }),
             Sleep: (n): HelperBody => ({ _tag: "Sleep", milliseconds: n.milliseconds }),
+            Repeat: (n): HelperBody => ({
+              _tag: "Repeat",
+              body: effectHelper(n.body, scope, error, `${path}.body`),
+              milliseconds: n.milliseconds,
+              times: n.times,
+            }),
             Ensuring: (n): HelperBody => ({
               _tag: "Ensuring",
               body: effectHelper(n.body, scope, error, `${path}.body`),
@@ -409,6 +462,7 @@ export function lowerFunctions(
           index,
           Object.freeze({
             index,
+            files: scope.fileInputs,
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
                 Pure: () => false,
@@ -416,6 +470,9 @@ export function lowerFunctions(
                 Fail: () => false,
                 Log: () => false,
                 Sleep: () => true,
+                Repeat: () => true,
+                FileScope: () => true,
+                FileSize: () => false,
                 Ensuring: () => true,
                 AcquireUseRelease: () => true,
                 Map: (n) => helpers.get(n.source)?.asynchronous ?? false,
@@ -655,6 +712,7 @@ export const emitFunctions = (
         Rs.identExpr(Rs.ident(`h_${f.name}_${helper.index}`)),
         (f.asynchronous && helper.error ? [identExpr("ctx")] : []).concat(
           helper.input.map((p) => Rs.identExpr(Rs.ident(p.name))),
+          helper.files.map((name) => Rs.refExpr(identExpr(name))),
         ),
       );
       return helper.asynchronous ? Rs.await(call).text : call.text;
@@ -777,6 +835,87 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          FileScope: (n) => {
+            const open = Rs.dotCall(
+              Rs.await(
+                Rs.pathCall(rsSegments("tokio", "task"), Rs.ident("spawn_blocking"), [
+                  Rs.closure0(
+                    Rs.pathCall(rsSegments("std", "fs", "File"), Rs.ident("open"), [
+                      rustString(n.path),
+                    ]),
+                  ),
+                ]),
+              ),
+              Rs.ident("expect"),
+              [rustString("File acquisition task failed")],
+            );
+            const ioFailure = captureFrames
+              ? Rs.err(
+                  Rs.tuple(
+                    Rs.pathCall(rsSegments("AsyncError"), Rs.ident("Fail"), [Rs.litBool(false)]),
+                    Rs.pathCall(rsSegments("FrameTrail"), Rs.ident("new"), [
+                      frameOf(helper, "fileScope"),
+                    ]),
+                  ),
+                )
+              : Rs.err(
+                  Rs.pathCall(rsSegments("AsyncError"), Rs.ident("Fail"), [Rs.litBool(false)]),
+                );
+            return joinFragments([
+              "{ ",
+              Rs.let_(
+                Rs.ident("saved_interruptible"),
+                undefined,
+                Rs.exprTemplate`${identExpr("ctx")}.interruptible`,
+              ).text,
+              " ctx.interruptible = false; ",
+              Rs.let_(Rs.ident("acquired"), undefined, open).text,
+              " ctx.interruptible = saved_interruptible; match acquired { Ok(",
+              n.file,
+              ") => { let result = ",
+              adaptFrag(n.body, helper.output, use("body")),
+              "; ctx.interruptible = false; ",
+              Rs.stmt(Rs.call(identExpr("drop"), [identExpr(n.file)])).text,
+              " let cleanup = ",
+              callFrag(n.afterClose, use("afterClose")),
+              '; ctx.interruptible = saved_interruptible; if cleanup.is_err() { panic!("Non-failing after-close effect returned an error"); } match result { Ok(value) => { if ctx.is_cancelled() { ',
+              captureFrames
+                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "fileScope").text})))`
+                : "Err(AsyncError::Interrupted)",
+              ` } else { Ok(value) } }, ${failureArm(helper, "fileScope")} } }, Err(_) => `,
+              ioFailure.text,
+              " } }",
+            ]);
+          },
+          FileSize: (n) => {
+            const metadata = Rs.dotCall(identExpr(n.file), Rs.ident("metadata"), []);
+            const error = Rs.pathCall(rsSegments("AsyncError"), Rs.ident("Fail"), [
+              Rs.litBool(false),
+            ]);
+            return textFragment(
+              Rs.inlineBlock(
+                Rs.match_(metadata, [
+                  {
+                    pat: Rs.pat("Ok(metadata)"),
+                    body: Rs.ok(Rs.dotCall(identExpr("metadata"), Rs.ident("len"), [])),
+                  },
+                  {
+                    pat: Rs.pat("Err(_)"),
+                    body: Rs.err(
+                      captureFrames
+                        ? Rs.tuple(
+                            error,
+                            Rs.pathCall(rsSegments("FrameTrail"), Rs.ident("new"), [
+                              frameOf(helper, "fileSize"),
+                            ]),
+                          )
+                        : error,
+                    ),
+                  },
+                ]),
+              ).text,
+            );
+          },
           Sleep: (n) =>
             joinFragments([
               `{ match ctx.sleep(${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
@@ -784,6 +923,26 @@ export const emitFunctions = (
                 ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
                 : "Err(error) => Err(error)",
               " } }",
+            ]),
+          Repeat: (n) =>
+            joinFragments([
+              "{ ",
+              n.times === undefined
+                ? ""
+                : "let mut remaining = " + Rs.litU64(BigInt(n.times)).text + "; ",
+              "loop { match ",
+              callFrag(n.body, use("body")),
+              " { Ok(()) => {}, ",
+              captureFrames
+                ? `Err((error, mut frames)) => { frames.push(${frameOf(helper, "repeat").text}); return Err((error, frames)); }`
+                : "Err(error) => return Err(error),",
+              " } ",
+              n.times === undefined ? "" : "if remaining == 0 { break Ok(()); } remaining -= 1; ",
+              `match ctx.sleep(${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => {}, `,
+              captureFrames
+                ? `Err(error) => return Err((error, FrameTrail::new(${frameOf(helper, "repeat").text}))),`
+                : "Err(error) => return Err(error),",
+              " } } }",
             ]),
           CatchAll: (n) => {
             const source = f.helpers[n.source];
@@ -973,12 +1132,20 @@ export const emitFunctions = (
             textFragment(Rs.ident(`h_${f.name}_${helper.index}`).text),
             "definition",
           ),
-          `(${(f.asynchronous && helper.error ? ["ctx: &mut AsyncContext"] : []).concat(helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`)).join(", ")}) -> `,
+          `(${(f.asynchronous && helper.error ? ["ctx: &mut AsyncContext"] : [])
+            .concat(
+              helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`),
+              helper.files.map(
+                (name) =>
+                  `${Rs.ident(name).text}: ${Rs.refType(Rs.pathType(rsSegments("std", "fs", "File"))).text}`,
+              ),
+            )
+            .join(", ")}) -> `,
           mapFragment(helper.origin, useAt(helper.path), textFragment(signature), "definition"),
           " ",
           ...(f.asynchronous && helper.error && helper.body._tag !== "Ensuring"
             ? [
-                `{ if ctx.is_cancelled() { return ${captureFrames ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, helper.body._tag === "FlatMap" ? "flatMap" : helper.body._tag === "CatchAll" ? "catchAll" : helper.body._tag === "AcquireUseRelease" ? "acquireUseRelease" : helper.body._tag.toLowerCase()).text})))` : "Err(AsyncError::Interrupted)"}; } `,
+                `{ if ctx.is_cancelled() { return ${captureFrames ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, helper.body._tag === "FlatMap" ? "flatMap" : helper.body._tag === "CatchAll" ? "catchAll" : helper.body._tag === "AcquireUseRelease" ? "acquireUseRelease" : helper.body._tag === "FileScope" ? "fileScope" : helper.body._tag === "FileSize" ? "fileSize" : helper.body._tag.toLowerCase()).text})))` : "Err(AsyncError::Interrupted)"}; } `,
                 helperBody,
                 " }",
               ]

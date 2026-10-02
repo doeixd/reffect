@@ -207,6 +207,9 @@ const decodeFrames = (name: string, stderr: string) =>
           "catchAll",
           "ensuring",
           "acquireUseRelease",
+          "repeat",
+          "fileScope",
+          "fileSize",
           "log",
         ].includes(frame.kind)
       )

@@ -1,4 +1,5 @@
-import { Effect, Exit, Match, Pipeable, Schema } from "effect";
+import { Effect, Exit, Match, Pipeable, Schema, Schedule } from "effect";
+import { SpacedSchedule, validRepeatCount } from "./schedule.ts";
 import { emptySource, snapshotSource } from "./source.ts";
 import type { SourceMetadata } from "./source.ts";
 import { dual } from "effect/Function";
@@ -16,6 +17,8 @@ import {
   fail,
 } from "./kernel.ts";
 import type { Diagnostic, Inputs, Symbols } from "./kernel.ts";
+import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
+import { openReferenceFile } from "./reference-files.ts";
 
 export const SyncEffects = Object.freeze({
   CatchAll: SemanticRef.effect("reffect/effect/catch-all@1"),
@@ -29,9 +32,12 @@ export const SyncEffects = Object.freeze({
   Span: SemanticRef.effect("reffect/effect/span@1"),
 });
 export const AsyncEffects = Object.freeze({
+  Repeat: SemanticRef.effect("reffect/effect/repeat-spaced@1"),
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
   AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
+  FileScope: SemanticRef.effect("reffect/effect/scoped-file@1"),
+  FileSize: SemanticRef.effect("reffect/effect/file-size@1"),
 });
 const validDelay = (milliseconds: number): boolean =>
   Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60_000;
@@ -63,6 +69,20 @@ const checkLogName = (kind: string, value: string): void => {
     );
 };
 export type ComputationNode =
+  | {
+      readonly _tag: "Repeat";
+      readonly body: Computation<void, unknown>;
+      readonly milliseconds: number;
+      readonly times: number | undefined;
+    }
+  | {
+      readonly _tag: "FileScope";
+      readonly path: string;
+      readonly binder: symbol;
+      readonly body: Computation<unknown, unknown>;
+      readonly afterClose: Computation<void, never>;
+    }
+  | { readonly _tag: "FileSize"; readonly binder: symbol }
   | {
       readonly _tag: "CatchAll";
       readonly source: Computation<unknown, unknown>;
@@ -161,6 +181,36 @@ const sleep = (milliseconds: number): Computation<void> => {
     );
   return Computation.make(UnitType, NeverType, { _tag: "Sleep", milliseconds });
 };
+const repeat: {
+  (options: {
+    readonly schedule: SpacedSchedule;
+    readonly times?: number;
+  }): <E>(self: Computation<void, E>) => Computation<void, E>;
+  <E>(
+    self: Computation<void, E>,
+    options: { readonly schedule: SpacedSchedule; readonly times?: number },
+  ): Computation<void, E>;
+} = dual(
+  2,
+  <E>(
+    self: Computation<void, E>,
+    options: { readonly schedule: SpacedSchedule; readonly times?: number },
+  ) => {
+    if (!(options.schedule instanceof SpacedSchedule) || !validRepeatCount(options.times))
+      throw fail(
+        "INVALID_SCHEDULE",
+        "authoring",
+        "repeat",
+        "Repeat requires a spaced schedule and 0–1000000 additional runs",
+      );
+    return Computation.make(UnitType, self.error, {
+      _tag: "Repeat",
+      body: self,
+      milliseconds: options.schedule.milliseconds,
+      times: options.times,
+    });
+  },
+);
 const ensuring: {
   (finalizer: Computation<void, never>): <A, E>(self: Computation<A, E>) => Computation<A, E>;
   <A, E>(self: Computation<A, E>, finalizer: Computation<void, never>): Computation<A, E>;
@@ -191,7 +241,10 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
     seen.add(c);
     return Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        FileScope: () => true,
+        FileSize: () => true,
         Sleep: () => true,
+        Repeat: () => true,
         Ensuring: () => true,
         AcquireUseRelease: () => true,
         Succeed: () => false,
@@ -324,6 +377,34 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
       issues.push(...checkExpression(e, bindings, `${at}.${step}`));
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        FileScope: (n) => {
+          if (
+            !validFilePath(n.path) ||
+            !IRType.same(c.output, n.body.output) ||
+            !joined(c.error, BoolType, n.body.error) ||
+            !IRType.same(n.afterClose.output, UnitType) ||
+            !IRType.same(n.afterClose.error, NeverType)
+          )
+            add(
+              at,
+              "FileScope requires a valid path, body channels joined with Boolean IO failure and Unit/Never cleanup",
+            );
+          const nested = new Map(bindings);
+          nested.set(n.binder, [FileHandleType]);
+          walk(n.body, nested, `${at}.body`);
+          walk(n.afterClose, bindings, `${at}.afterClose`);
+        },
+        FileSize: (n) => {
+          if (!IRType.same(c.output, U64Type) || !IRType.same(c.error, BoolType))
+            add(at, "FileSize requires u64/Boolean channels");
+          if (!bindings.get(n.binder)?.some((type) => IRType.same(type, FileHandleType)))
+            issues.push({
+              code: "RESOURCE_ESCAPE",
+              stage: "check",
+              path: at,
+              message: "File operations require an active lexical file scope",
+            });
+        },
         Sleep: (n) => {
           if (
             !validDelay(n.milliseconds) ||
@@ -334,6 +415,21 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
               at,
               "Sleep requires Unit/Never channels and an integer delay from 0 to 60000 milliseconds",
             );
+        },
+        Repeat: (n) => {
+          if (
+            !validDelay(n.milliseconds) ||
+            n.milliseconds === 0 ||
+            !validRepeatCount(n.times) ||
+            !IRType.same(c.output, UnitType) ||
+            !IRType.same(n.body.output, UnitType) ||
+            !IRType.same(c.error, n.body.error)
+          )
+            add(
+              at,
+              "Repeat requires Unit output, matching body errors, positive bounded spacing and a valid additional-run count",
+            );
+          walk(n.body, bindings, `${at}.body`);
         },
         CatchAll: (n) => {
           if (
@@ -488,6 +584,28 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
         });
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          FileScope: (n) =>
+            Effect.scoped(
+              Effect.acquireRelease(openReferenceFile(n.path), (file) =>
+                file.close.pipe(
+                  Effect.flatMap(() => evaluate(n.afterClose, bindings)),
+                  Effect.asVoid,
+                  Effect.orDie,
+                ),
+              ).pipe(
+                Effect.flatMap((file) => {
+                  const nested = new Map(bindings);
+                  nested.set(n.binder, [file]);
+                  return evaluate(n.body, nested);
+                }),
+              ),
+            ),
+          FileSize: (n) => {
+            const file = bindings.get(n.binder)?.[0];
+            return file instanceof FileLease
+              ? file.size
+              : Effect.fail(fail("RESOURCE_ESCAPE", "reference", "file", "Missing file lease"));
+          },
           CatchAll: (n) =>
             evaluate(n.source, bindings).pipe(
               Effect.catch((error) => {
@@ -512,6 +630,11 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
               },
             ),
           Sleep: (n) => Effect.sleep(n.milliseconds),
+          Repeat: (n) =>
+            evaluate(n.body, bindings).pipe(
+              Effect.repeat({ schedule: Schedule.spaced(n.milliseconds), times: n.times }),
+              Effect.asVoid,
+            ),
           Ensuring: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
@@ -583,9 +706,12 @@ export interface LogicalFrame {
     | "annotate"
     | "span"
     | "sleep"
+    | "repeat"
     | "catchAll"
     | "ensuring"
     | "acquireUseRelease"
+    | "fileScope"
+    | "fileSize"
     | "log";
 }
 export const maxLogicalFrames = 32;
@@ -639,6 +765,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
     adapted.set(c, path);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        FileScope: (n) => {
+          adaptNode(n.body, `${path}.body`);
+          adaptNode(n.afterClose, `${path}.afterClose`);
+        },
+        FileSize: () => {},
         CatchAll: (n) => {
           adaptNode(n.source, `${path}.source`);
           adaptNode(n.body, `${path}.body`);
@@ -649,6 +780,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.release, `${path}.release`);
         },
         Sleep: () => {},
+        Repeat: (n) => adaptNode(n.body, `${path}.body`),
         Ensuring: (n) => {
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.finalizer, `${path}.finalizer`);
@@ -713,6 +845,47 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             };
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          FileScope: (n) =>
+            Effect.scoped(
+              Effect.acquireRelease(
+                openReferenceFile(n.path).pipe(
+                  Effect.mapError((error): FramedFailure => ({
+                    _tag: "Domain",
+                    error,
+                    frames: [],
+                    omitted: 0,
+                  })),
+                ),
+                (file) =>
+                  file.close.pipe(
+                    Effect.flatMap(() => evaluate(n.afterClose, bindings)),
+                    Effect.asVoid,
+                    Effect.orDie,
+                  ),
+              ).pipe(
+                Effect.flatMap((file) => {
+                  const nested = new Map(bindings);
+                  nested.set(n.binder, [file]);
+                  return evaluate(n.body, nested);
+                }),
+              ),
+            ).pipe(Effect.mapError((failure) => outward(failure, "fileScope"))),
+          FileSize: (n) => {
+            const file = bindings.get(n.binder)?.[0];
+            return file instanceof FileLease
+              ? file.size.pipe(
+                  Effect.mapError((error): FramedFailure => ({
+                    _tag: "Domain",
+                    error,
+                    frames: [frame(path, "fileSize")],
+                    omitted: 0,
+                  })),
+                )
+              : Effect.fail({
+                  _tag: "Internal",
+                  cause: fail("RESOURCE_ESCAPE", "reference", "file", "Missing file lease"),
+                } as const);
+          },
           CatchAll: (n) =>
             evaluate(n.source, bindings).pipe(
               Effect.catch((failure) => {
@@ -739,6 +912,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               },
             ).pipe(Effect.mapError((failure) => outward(failure, "acquireUseRelease"))),
           Sleep: (n) => Effect.sleep(n.milliseconds),
+          Repeat: (n) =>
+            evaluate(n.body, bindings).pipe(
+              Effect.repeat({ schedule: Schedule.spaced(n.milliseconds), times: n.times }),
+              Effect.asVoid,
+              Effect.mapError((failure) => outward(failure, "repeat")),
+            ),
           Ensuring: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
@@ -956,16 +1135,31 @@ export const LogIR = Object.freeze({
   annotate,
   span,
 });
+/** Effect v4-mirrored log helpers; all delegate to the single `Log` computation node. */
+const logAt =
+  (level: LogLevel) =>
+  (message: string, attributes: readonly LogAttribute[] = []) =>
+    logMessage(level, message, attributes);
 export const EffectIR = Object.freeze({
   void: succeed(UnitType.literal()),
   asVoid: <A, E>(self: Computation<A, E>): Computation<void, E> =>
     map(self, () => UnitType.literal()),
   succeed,
   sleep,
+  repeat,
   ensuring,
   acquireUseRelease,
   fail: failValue,
   map,
   flatMap,
   fn: EffectFn.make,
+  log: logAt("Info"),
+  logTrace: logAt("Trace"),
+  logDebug: logAt("Debug"),
+  logInfo: logAt("Info"),
+  logWarning: logAt("Warn"),
+  logError: logAt("Error"),
+  logFatal: logAt("Fatal"),
+  annotateLogs: annotate,
+  withLogSpan: span,
 });

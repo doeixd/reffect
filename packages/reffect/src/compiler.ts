@@ -7,6 +7,7 @@ import { Cargo } from "./cargo.ts";
 import { Foldkit } from "./foldkit.ts";
 import { EffectFn, SyncEffects, AsyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
+import { FileHandleType, FileRequirement } from "./file-model.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
@@ -117,7 +118,17 @@ const asyncResultAdapter = Object.freeze({
   rationale:
     "Concrete async futures with owned execution context, cooperative cancellation and masked awaited finalizers on Tokio",
 });
+const scopedFileAdapter = Object.freeze({
+  requirement: FileRequirement,
+  representation: FileHandleType,
+  target: Targets.RustStd,
+  strategy: "generated" as const,
+  rationale:
+    "Read-only std::fs::File ownership, spawn_blocking masked acquisition, borrowed metadata helpers and explicit close before awaited cleanup; no runtime handle map or clones",
+  crates: Object.freeze(["tokio@1.53.1"]),
+});
 export const Rust = Object.freeze({
+  scopedFiles: scopedFileAdapter,
   asyncResult: asyncResultAdapter,
   tokio: Target.make(Targets.RustStd, implementations).pipe(
     Target.withCapabilities([
@@ -126,6 +137,7 @@ export const Rust = Object.freeze({
       Capabilities.Unit,
       Capabilities.SyncResult,
       Capabilities.AsyncResult,
+      Capabilities.ScopedFiles,
     ]),
   ),
   syncResult: syncResultAdapter,
@@ -153,6 +165,7 @@ export interface Selection {
   readonly rejected: readonly { readonly id: string; readonly reason: string }[];
 }
 export class Plan extends Pipeable.Class {
+  readonly services: readonly (typeof scopedFileAdapter)[];
   readonly runtime: typeof syncResultAdapter | typeof asyncResultAdapter | undefined;
   private constructor(
     readonly analysis: Analysis,
@@ -162,6 +175,9 @@ export class Plan extends Pipeable.Class {
     readonly failureFrames: FailureFramePolicy,
   ) {
     super();
+    this.services = Object.freeze(
+      analysis.requirements.includes(FileRequirement) ? [scopedFileAdapter] : [],
+    );
     this.runtime =
       analysis.effects.length === 0
         ? undefined
@@ -200,7 +216,7 @@ export class Plan extends Pipeable.Class {
 }
 export interface Ownership {
   readonly plan: Plan;
-  readonly mode: "primitive-copy";
+  readonly mode: "primitive-copy" | "lexical-files";
   readonly rationale: string;
 }
 interface ArtifactBase extends GeneratedFiles {
@@ -340,6 +356,18 @@ const derive = Effect.fn("Compile.derive")(function* (
         Sleep: () => {
           effectRefs.add(AsyncEffects.Sleep);
         },
+        Repeat: (n) => {
+          effectRefs.add(AsyncEffects.Repeat);
+          walkComputation(n.body);
+        },
+        FileScope: (n) => {
+          effectRefs.add(AsyncEffects.FileScope);
+          walkComputation(n.body);
+          walkComputation(n.afterClose);
+        },
+        FileSize: () => {
+          effectRefs.add(AsyncEffects.FileSize);
+        },
         CatchAll: (n) => {
           effectRefs.add(SyncEffects.CatchAll);
           walkComputation(n.source);
@@ -432,9 +460,20 @@ const derive = Effect.fn("Compile.derive")(function* (
       )
         ? [Capabilities.AsyncResult]
         : []),
+      ...(effectRefs.has(AsyncEffects.FileScope) || effectRefs.has(AsyncEffects.FileSize)
+        ? [Capabilities.ScopedFiles]
+        : []),
     ]),
     effects: collect([...operations.flatMap((op) => op.effects), ...effectRefs]),
-    requirements: collect(operations.flatMap((op) => op.requirements)),
+    requirements: collect(
+      operations
+        .flatMap((op) => op.requirements)
+        .concat(
+          effectRefs.has(AsyncEffects.FileScope) || effectRefs.has(AsyncEffects.FileSize)
+            ? [FileRequirement]
+            : [],
+        ),
+    ),
     types: Object.freeze(Array.from(types)),
   });
 });
@@ -535,6 +574,8 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
   );
   if (
     p.runtime !== expected.runtime ||
+    p.services.length !== expected.services.length ||
+    p.services.some((service, i) => service !== expected.services[i]) ||
     p.selections.length !== expected.selections.length ||
     p.selections.some(
       (s, i) =>
@@ -576,11 +617,15 @@ const optimize = Effect.fn("Compile.optimize")(function* (p: Plan) {
 const analyzeOwnership = Effect.fn("Compile.ownership")(function* (
   p: Plan,
 ): Effect.fn.Return<Ownership, CompileError> {
+  const verified = yield* verify(p);
   return Object.freeze({
-    plan: yield* verify(p),
-    mode: "primitive-copy",
-    rationale:
-      "Boolean/u64/Unit are Copy; Never is uninhabited. Branch and continuation scopes keep values local.",
+    plan: verified,
+    mode: verified.analysis.requirements.includes(FileRequirement)
+      ? "lexical-files"
+      : "primitive-copy",
+    rationale: verified.analysis.requirements.includes(FileRequirement)
+      ? "Scalar values are Copy; each lexical file scope owns one plain File and lends immutable helper borrows, then drops it before cleanup. Resource references cannot escape."
+      : "Boolean/u64/Unit are Copy; Never is uninhabited. Branch and continuation scopes keep values local.",
   });
 });
 const lower = Effect.fn("Compile.lower")(function* (
@@ -588,7 +633,10 @@ const lower = Effect.fn("Compile.lower")(function* (
   policy: ArtifactPolicy = SourceArtifacts.Full,
 ): Effect.fn.Return<LoweredModule, CompileError> {
   const p = yield* verify(ownership.plan);
-  if (ownership.mode !== "primitive-copy")
+  if (
+    ownership.mode !==
+    (p.analysis.requirements.includes(FileRequirement) ? "lexical-files" : "primitive-copy")
+  )
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
   return yield* Effect.try({
     try: () =>

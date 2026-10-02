@@ -24,6 +24,8 @@ export {
   apply,
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
+export { SpacedSchedule } from "./schedule.ts";
+export { ScopedSequence } from "./scoped-sequence.ts";
 export { Reference } from "./reference.ts";
 export {
   Computation,
@@ -102,3 +104,6 @@ export { FailureFrames, FailureFramePolicy } from "./frame-policy.ts";
 export { Service, StaticContext, ContextIR } from "./context.ts";
 export type { ServiceValue } from "./context.ts";
 export { StaticLayer, LayerIR } from "./layer.ts";
+export { ScopedFile, FileIR } from "./file-resource.ts";
+export { ReferenceFiles } from "./reference-files.ts";
+export { FileLease } from "./file-model.ts";

@@ -507,6 +507,7 @@ export const Rs = Object.freeze({
   lt: (left: RsExpr, right: RsExpr): RsExpr => expr(`(${left.text}) < (${right.text})`),
   not: (value: RsExpr): RsExpr => expr(`!(${value.text})`),
   closure: (params: RsPat, body: RsExpr): RsExpr => expr(`|${params.text}| ${body.text}`),
+  closure0: (body: RsExpr): RsExpr => expr(`|| ${body.text}`),
   closureTyped: (params: ReadonlyArray<RsParam>, ret: RsType | undefined, body: RsExpr): RsExpr =>
     expr(
       `|${params.map((p) => `${p.name.text}: ${p.type.text}`).join(", ")}|${ret ? ` -> ${ret.text}` : ""} ${body.text}`,

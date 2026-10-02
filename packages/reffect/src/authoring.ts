@@ -5,6 +5,9 @@ import { Computation, EffectFn, EffectIR, LogIR, matchComputation } from "./effe
 import { catchAll, mapError, orElse } from "./error-recovery.ts";
 import { ContextIR } from "./context.ts";
 import { LayerIR } from "./layer.ts";
+import { FileIR } from "./file-resource.ts";
+import { ScheduleIR } from "./schedule.ts";
+import { ScopedIR } from "./scoped-sequence.ts";
 
 function fn<const I extends readonly IRType<unknown>[], A>(
   input: I,
@@ -60,8 +63,10 @@ export const R = Object.freeze({
     ltU64: U64Type.lt,
     eqBool: BoolType.eq,
   }),
-  Effect: Object.freeze({ ...EffectIR, catchAll, mapError, orElse }),
+  Effect: Object.freeze({ ...EffectIR, ...ScopedIR, catchAll, mapError, orElse }),
+  Schedule: ScheduleIR,
   Log: LogIR,
   Context: ContextIR,
   Layer: LayerIR,
+  File: FileIR,
 });

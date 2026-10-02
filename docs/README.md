@@ -46,7 +46,10 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 ## Async execution and performance
 
 - [Suspended RPC research](research/async-rpc.md): owned context, cooperative interruption and awaited non-failing finalization, with reference/native/socket evidence.
+- [Scoped heartbeat](research/heartbeat.md): bounded sequential finalizer specialization, spaced repetition and a standalone native lifecycle example.
+- [Scoped native files](research/scoped-files.md): real read-only handle ownership, borrowed use, acquisition masking and closure gates before general Scope registration.
 - [Runnable async example](../examples/rpc-async/README.md): unchanged stock authenticated client calling suspended native handlers.
+- [Runnable scoped-file RPC](../examples/rpc-files/README.md): a native handler owns a real read-only file across suspension and closes it before cleanup.
 - [Performance requirements](performance.md): workload measurements, structural growth/allocation gates and exploratory baselines.
 - [Async cost probe](../packages/reffect/scripts/async-cost.ts) and [raw results](research/async-cost-results.json): release future/context layouts and construction allocations.
 

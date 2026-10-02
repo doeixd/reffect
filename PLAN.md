@@ -34,6 +34,8 @@ The active slice is [suspended scalar RPC](docs/research/async-rpc.md): literal 
 
 The [parallel module batch](docs/effect-modules.md) records the latest admitted subsets and the agents' decision ledgers. Parallel development changes execution organization, while semantic gates still govern admission.
 
+The [scoped heartbeat slice](docs/research/heartbeat.md) adds Unit spaced repetition and sequential Exit-independent finalizer authoring, specialized into existing masked brackets. [The standalone example](examples/heartbeat/README.md) builds a Rust lifecycle executable with cooperative shutdown; this bounded specialization does not establish dynamic resource Scope registration.
+
 ## Compatibility profiles
 
 These are roadmap names, **not implemented CLI target strings or a new public registry**. Profiles describe cumulative semantic commitments; dependencies still come from reachability. SQL and Query support must remain usable independently of HTTP where their workload permits.

@@ -65,6 +65,7 @@ export const Capabilities = Object.freeze({
   Bool: SemanticRef.capability("reffect/capability/bool@1"),
   Unit: SemanticRef.capability("reffect/capability/unit@1"),
   AsyncResult: SemanticRef.capability("reffect/capability/async-result@1"),
+  ScopedFiles: SemanticRef.capability("reffect/capability/scoped-files@1"),
   SyncResult: SemanticRef.capability("reffect/capability/sync-result@1"),
 });
 export const Targets = Object.freeze({ RustStd: SemanticRef.target("rust/std@1") });

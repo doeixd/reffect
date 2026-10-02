@@ -86,6 +86,7 @@ Keep the record proportional to the work: concise evidence and design decisions 
 
 ## Effect v4 and reference semantics
 
+- Match the Effect v4 API as closely as possible. Mirror upstream module, function and option names, argument order and data-first/data-last conventions, and pipeability so authored `R` code reads like the equivalent Effect v4 program. Where the admitted subset cannot represent a v4 signature, keep the name and shape aligned and document the narrower boundary rather than inventing a divergent API. Prefer exposing a shared underlying node over duplicating behavior under two names.
 - Use the Effect best-practices skill and the available Effect API reference when writing or reviewing Effect code. Check every applicable pattern against v4; examples from other versions may differ. Prefer installed types/source and public APIs, then authoritative upstream docs when needed.
 - Build the compiler itself with Effect Services/Layers, typed errors, and scoped filesystem/process dependencies. Keep CLI functionality available through the same library API.
 - Interpret compiled Effect IR through official Effect. Preserve Schema and shared RPC/HTTP contracts; avoid a second JS runtime or wholesale scheduler port.

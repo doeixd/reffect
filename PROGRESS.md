@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-10-02 — Effect v4 scoped heartbeat vertical slice
+
+- Added `R.Schedule.spaced`, Unit `R.Effect.repeat` with optional additional-run count, and the pinned v4 `addFinalizer → andThen → scoped` authoring shape. Pending sequential registrations are typed `ScopedSequence` values and specialize into existing masked scalar brackets; native repetition emits a concrete loop. Dynamic Scope services, Exit-aware cleanup and general Schedule remain separate. [Decisions and supported boundaries](docs/research/heartbeat.md) precede implementation.
+- [examples/heartbeat](examples/heartbeat/README.md) contains the authored application, independently authored v4 equivalent, reference runner and standalone Rust build with executable-owned Tokio Ctrl-C/timed shutdown. The release binary's 2200ms smoke run prints startup, three heartbeats and exactly one exit record. `R.Log.info` intentionally uses Effect logging/structured stderr in place of Console/stdout.
+- Differential tests compare official Effect 4.0.0-rc.118, reference and native debug/release with both frame policies: immediate first run, times+1 executions, failure short-circuit/skipped registration, nested LIFO awaited cleanup, cancellation during spacing and pre-entry cancellation. Failure-frame chains agree. Strict type contracts cover inference, unclosed scope sequences, fallible/Exit-aware finalizers and unrepresentable repeat inputs.
+- Mirrored the Effect v4 logging surface on `R.Effect` (`log`, `logTrace`, `logDebug`, `logInfo`, `logWarning`, `logError`, `logFatal`, `annotateLogs`, `withLogSpan`) as aliases of the single `Log` node; `R.Log` remains the equivalent lower-level namespace. The example, tests and type contracts use the v4 names, so native logging continues to compare against the official `Effect.logInfo` oracle.
+- Validation: `vp test packages/reffect/tests/heartbeat.test.ts` passes 2/2 (58.82s); final `vp test --maxWorkers=2` passes all 110 tests in 25 files (678.17s). The initial unrestricted `vp test` passed 103/110 but exhausted disk in concurrent native builds and hit two fixture timeouts; the lower-worker rerun passes without weakening assertions. Strict `vp exec tsc --noEmit -p packages/reffect/tsconfig.json`, explicit-workspace `vp check packages apps tools examples docs PLAN.md PROGRESS.md AGENTS.md README.md package.json vite.config.ts tsconfig.json` (168 formatted files, 91 TypeScript files), fresh `vp run -r build` and `git diff --check` pass. Packaging review fixed an unexported AndThen helper type. Bare `vp check` also encountered formatting in preserved root native-fixture directories; actual workspace source/docs checks pass. In-progress file-resource changes are preserved.
+
+## 2026-10-02 — Scoped heartbeat preparation
+
+- Reviewed existing async/bracket lowering and the in-progress file-resource work; verified pinned Effect repeat/spaced behavior and Tokio signal requirements. Recorded [heartbeat decisions](docs/research/heartbeat.md) before implementation: concrete repetition and bounded sequential registrations specialized into existing masked brackets.
+
+## 2026-10-02 — Native file ownership preparation
+
+- Reviewed the roadmap, scalar bracket/static Layer decisions and actual IR/lowering/reference paths. Checked pinned Effect Scope, Node 24 FileHandle and Rust File primary sources online; recorded [scoped file decisions](docs/research/scoped-files.md) before implementation. The chosen slice owns a real read-only handle, checks lexical resource captures and generates borrowed helpers plus awaited cleanup. It establishes the real-resource gate; dynamic Scope registration/resource Layers remain subsequent work.
+
 ## 2026-10-02 — Schema boundary review corrections
 
 - Integrated review found three admitted-profile mismatches: reordered handler arguments changed first-error order, nonempty Struct shape failures used different wording, and empty Struct incorrectly rejected scalar/array inputs. The correction decodes in contract field order while retaining handler argument positions, and mirrors the pinned empty/nonempty Struct acceptance rules. [SCHEMA-005/006](docs/research/schema-profile.md#follow-up-boundary-review-preparation) record alternatives, costs and revisit triggers; the module index now covers 21 decisions.

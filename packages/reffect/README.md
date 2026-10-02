@@ -58,6 +58,35 @@ Normalization and optimization are identity stages for this subset. Ownership us
 
 ## Run
 
+### Scoped heartbeat vertical slice
+
+[examples/heartbeat](../../examples/heartbeat/README.md) builds a standalone Rust
+heartbeat with Ctrl-C shutdown and awaited cleanup, using the pinned Effect v4
+`addFinalizer → andThen → repeat({ schedule }) → scoped` shape:
+
+```ts
+const Application = R.fn([], R.Unit, R.Never, () =>
+  R.Effect.addFinalizer(() => R.Effect.logInfo("Application is about to exit!")).pipe(
+    R.Effect.andThen(R.Effect.logInfo("Application started!")),
+    R.Effect.andThen(
+      R.Effect.repeat(R.Effect.logInfo("still alive..."), {
+        schedule: R.Schedule.spaced("1 second"),
+      }),
+    ),
+    R.Effect.scoped,
+  ),
+);
+```
+
+Compile with `Rust.tokio`. Spaced schedules admit positive integral 1–60000 ms
+durations; repetition admits Unit bodies and optional `times` (additional runs).
+Sequential registrations remain a separate `ScopedSequence` until `scoped`
+specializes them into masked brackets. This admits Exit-independent Unit/Never
+cleanup with LIFO release and preserves skipped registration after failure;
+dynamic Scope services and arbitrary schedules remain outside this profile.
+`R.Effect.logInfo` (mirroring Effect v4) uses structured logging rather than
+Console/stdout.
+
 From the repository root:
 
 ```sh
@@ -116,15 +145,19 @@ The native binary keeps its stdout payload protocol byte-identical and prints on
 
 ### Scoped logging
 
-`R.Log.info/warn/...` (plus `R.Log.log` over the six-severity witness) emits
-typed log records as effect nodes returning `Unit`; `R.Log.annotate(key,
-value)` and `R.Log.span(label)` wrap computations with lexical scopes.
+`R.Effect.log`, `logTrace`, `logDebug`, `logInfo`, `logWarning`, `logError` and
+`logFatal` mirror the Effect v4 names and emit typed log records as effect nodes
+returning `Unit`; `R.Effect.annotateLogs(key, value)` and
+`R.Effect.withLogSpan(label)` wrap computations with lexical scopes. `R.Log`
+exposes the same records over the six-severity witness plus `R.Log.log(level, …)`.
 Reference execution delegates filtering, shadowing, restoration and span
 stacking to the official Effect combinators. Native code prints one versioned
 `reffect.log@1` JSON object per record to stderr — level, static message,
 `annotations` object (Booleans as JSON, u64 as decimal strings), innermost-first
 `spans` with elapsed millis — under a default Info minimum checked before
 formatting. Static call-site attributes shadow scope annotations per key.
+Messages are static strings and annotation values are typed Boolean/u64
+expressions, so structured v4 message arguments are not yet admitted.
 Machine stdout carries only evaluator payloads. No new Cargo dependencies;
 scopes save/restore bounded thread-local context on both success and failure
 paths.
@@ -149,6 +182,27 @@ After writing/building the artifact, `NativeRunner.run(artifact, directory, "Dif
 The legacy pure-u64 decimal CLI stays compatible. Pure Boolean output is `bool:true/false`; Result output is `ok:u64:10`, `err:u64:7`, or the analogous Boolean token. The runner validates those tokens against the declared channel Schema.
 
 Run `vp exec node --experimental-transform-types examples/effect/main.ts` for fresh reference/native success and failure checks in debug and release. See [the design record](../../docs/research/basic-effect-ir.md) for boundaries and remaining milestone 2 work.
+
+## Scoped read-only native files
+
+`R.File.scoped(path, use, afterClose?)` owns one real read-only file for its callback's computation. The callback receives a symbolic resource reference with `file.size: Computation<bigint, boolean>`; it is not an Expr or an exportable descriptor. Paths are build-time Unicode scalar strings without NUL, bounded to 4096 UTF-16 code units. Open/metadata failures deliberately project to Boolean `false`.
+
+```ts
+const Size = R.fn([], R.U64, R.Bool, () =>
+  R.File.scoped(
+    "input.txt",
+    (file) => R.Effect.sleep(10).pipe(R.Effect.flatMap(() => file.size)),
+    R.Log.info("closed"),
+  ),
+);
+const artifact = await Effect.runPromise(Compile.run(R.program({ Size }), Rust.tokio));
+```
+
+Acquisition is masked and awaited through Tokio's blocking executor. Generated helpers borrow a plain `std::fs::File`; the owning lexical scope drops it before running optional non-failing Unit/Never after-close cleanup, with cleanup masked and awaited. Nested scopes close inside-out and can borrow outer handles. Captured file operations used outside their owning scope are refused. Read-only close errors are ignored on both adapters; writable/durable files need a separate error contract. Metadata is a synchronous syscall, not a general asynchronous filesystem profile.
+
+The official Effect reference uses `Effect.scoped`/`acquireRelease` and a Node FileHandle adapter. `ReferenceFiles` is an injectable reference service, and `FileLease` lets conformance adapters supply size/close Effects. Native plans explain the distinct `Rust.scopedFiles` service implementation and lexical ownership; unused programs acquire no file dependency or resource storage. Cancellation requires signaling and awaiting the generated future, including acquisition; dropping/aborting a future is outside the finalization guarantee.
+
+Run [the scoped-file stock RPC example](../../examples/rpc-files/README.md). This establishes real-resource ownership; dynamic Scope registration, manual/child scopes, resource Layers, fallible cleanup and cross-fiber handle transfer remain outside the profile.
 
 ## Source provenance and build diagnostics
 
