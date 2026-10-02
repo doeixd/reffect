@@ -1,5 +1,9 @@
 # Progress
 
+## 2026-10-02 — Records and tagged unions proposal
+
+- Searched existing designs (architecture §7–§13, compiler design §5, basic Effect IR, schema/unary-RPC/string records, Foldkit Remote) and the `foldkit-plus` Remote wire schemas, then drafted [records and tagged unions](docs/research/records-unions.md) (REC-001–005, proposed). Upstream `foldkit/foldkit` has no Remote packages; they exist only in the fork, which makes the fork milestone 4's practical target. Implementation waits for review.
+
 ## 2026-10-02 — Well-formed strings at the RPC boundary
 
 - Consulted SCHEMA-001/003 and the unary-RPC record, then probed the pinned official `RpcServer`. Plain `Schema.String` accepts lone surrogates; a well-formed check refuses them per request. Added canonical `RpcCodecs.StringJson`/`NativeRpc.StringJson` (STR-006) with a shared `unicode.ts` check, a native `string_arg` decoder and JSON string encoding for payloads, fields, results and typed errors; plain `Schema.String` is refused. A lone-surrogate escape fails the whole native body (STR-007, documented divergence).
