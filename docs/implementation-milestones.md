@@ -1,3 +1,5 @@
+> Current sequencing: [PLAN.md](../PLAN.md#implementation-sequence) promotes owned async execution, cancellation/finalizers and minimal resource Scope into milestone 3A, before 3B unary RPC/services. Milestone 6 extends those lifetimes to streams. The historical detailed bodies below remain architecture context; the current roadmap and PROGRESS.md govern admission/status.
+
 # Revised implementation milestones
 
 [Roadmap](../PLAN.md) · [Documentation index](README.md) · [Revision overview](op-expr-revision-convo.md)

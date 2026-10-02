@@ -1,7 +1,7 @@
 import type { RsStmt } from "./rust-emit.ts";
 
 /** Audited HTTP substrate; dynamic tags/fields/calls are emitted separately through Rs. */
-export const rpcRuntime = (frameCleanup?: RsStmt): string => String.raw`
+export const rpcRuntime = (frameCleanup?: RsStmt, asynchronous = false): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use serde_json::{json, Value};
 
@@ -44,7 +44,7 @@ fn unit_arg(value: &Value, name: Option<&str>) -> Result<(), String> {
     if value.is_null() { Ok(()) } else { Err(path_error("Expected null", name)) }
 }
 struct RequestContext<'a> { id: &'a Value, tag: &'a str, principal: Option<u64> }
-fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState) -> Value {
+${asynchronous ? "async " : ""}fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState${asynchronous ? ", cancellation: &tokio::sync::watch::Receiver<bool>" : ""}) -> Value {
     let Some(object) = message.as_object() else { return invalid("Expected Request object") };
     let Some(id) = object.get("id").filter(|v| v.is_string() || v.is_number()) else { return invalid("Invalid request id") };
     let Some(tag) = object.get("tag").and_then(Value::as_str) else { return invalid("Invalid request tag") };
@@ -60,17 +60,20 @@ fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState) -> Value 
         if object.get(name).map(|v| !v.is_string()).unwrap_or(false) { return invalid("Invalid trace context") }
     }
     if object.get("sampled").map(|v| !v.is_boolean()).unwrap_or(false) { return invalid("Invalid trace context") }
-    // Synchronous generated calls never suspend; no thread-local diagnostic state escapes a dispatch.
+    // TLS cleanup applies to synchronous calls; suspended handlers own their diagnostic state.
     ${frameCleanup?.text ?? ""}
     let mut context = RequestContext { id, tag, principal: None };
-    let result = dispatch(tag, payload, headers, message, state, &mut context);
+    let result = dispatch(tag, payload, headers, message, state, &mut context${asynchronous ? ", cancellation).await" : ")"};
     ${frameCleanup?.text ?? ""}
     match result { Ok(value) => exit(id, value), Err(error) => die(id, error) }
 }
 fn same_id(a: &Value, b: &Value) -> bool {
     match (a.as_f64(), b.as_f64()) { (Some(a), Some(b)) => a == b, _ => a == b }
 }
-async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Value>) {
+${
+  asynchronous
+    ? asyncHttpRuntime
+    : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Value>) {
     let messages: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(_) => return (StatusCode::OK, Json(json!([{"_tag":"Defect", "defect":{"name":"SyntaxError", "message":"Invalid JSON"}}]))),
@@ -89,6 +92,8 @@ async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes)
         batch.iter().map(|message| request(message, &headers, &state)).collect::<Vec<_>>()
     } else { vec![request(&messages, &headers, &state)] };
     (StatusCode::OK, Json(Value::Array(responses)))
+}
+`
 }
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -111,5 +116,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
     axum::serve(listener, app).await?;
     Ok(())
+}
+`;
+
+/** A pending response owns cancellation; its worker is never aborted on body drop. */
+const asyncHttpRuntime = String.raw`
+use axum::response::{Response, IntoResponse};
+use std::{pin::Pin, task::{Context, Poll}, future::Future};
+struct PendingResponse {
+    response: tokio::sync::oneshot::Receiver<Value>,
+    cancellation: Option<tokio::sync::watch::Sender<bool>>,
+}
+impl http_body::Body for PendingResponse {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        if self.cancellation.is_none() { return Poll::Ready(None); }
+        match Pin::new(&mut self.response).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(result) => {
+                self.cancellation.take();
+                let value = result.unwrap_or_else(|_| json!([invalid("Handler worker failed")]));
+                Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(value.to_string())))))
+            }
+        }
+    }
+}
+impl Drop for PendingResponse {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.cancellation.take() { let _ = cancellation.send(true); }
+    }
+}
+async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> Response {
+    let messages: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return (StatusCode::OK, Json(json!([{"_tag":"Defect", "defect":{"name":"SyntaxError", "message":"Invalid JSON"}}]))).into_response(),
+    };
+    if let Some(batch) = messages.as_array() {
+        if batch.len() > MAX_BATCH { return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!([invalid("Batch limit exceeded")]))).into_response(); }
+        let mut ids: Vec<&Value> = Vec::with_capacity(batch.len());
+        for message in batch {
+            if let Some(id) = message.get("id") {
+                if ids.iter().any(|prior| same_id(prior, id)) {
+                    return (StatusCode::OK, Json(json!([invalid("Duplicate request id")]))).into_response();
+                }
+                ids.push(id);
+            }
+        }
+    }
+    let (cancellation, receiver) = tokio::sync::watch::channel(false);
+    let (sender, response) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let mut responses = Vec::new();
+        if let Some(batch) = messages.as_array() {
+            for message in batch {
+                if *receiver.borrow() || receiver.has_changed().is_err() { break; }
+                responses.push(request(message, &headers, &state, &receiver).await);
+            }
+        } else {
+            responses.push(request(&messages, &headers, &state, &receiver).await);
+        }
+        let _ = sender.send(Value::Array(responses));
+    });
+    let mut response = Response::new(axum::body::Body::new(PendingResponse { response, cancellation: Some(cancellation) }));
+    response.headers_mut().insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"));
+    response
 }
 `;

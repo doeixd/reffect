@@ -1,5 +1,5 @@
-/** Audited synchronous scaffold. Capacity is emitted separately from the shared IR bound. */
-export const frameRuntime = `struct FrameTrail {
+/** Audited bounded trail scaffold shared by synchronous and async owners. Capacity is emitted separately from the shared IR bound. */
+export const frameTrailRuntime = `struct FrameTrail {
     frames: [&'static str; MAX_LOGICAL_FRAMES],
     len: usize,
     omitted: usize,
@@ -19,7 +19,8 @@ impl FrameTrail {
         }
     }
 }
-thread_local! {
+`;
+export const syncFrameStorageRuntime = `thread_local! {
     static LAST_FRAMES: std::cell::RefCell<Option<Box<FrameTrail>>> = const { std::cell::RefCell::new(None) };
 }
 fn store_frames(frames: Box<FrameTrail>) {

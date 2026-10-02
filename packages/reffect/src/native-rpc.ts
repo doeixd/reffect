@@ -1,11 +1,11 @@
 import { Effect, Schema, SchemaAST } from "effect";
 import { Rpc, type RpcGroup } from "effect/rpc";
-import { Compile, type Plan } from "./compiler.ts";
+import { Compile, Rust, type Plan } from "./compiler.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
 import type { GeneratedFiles } from "./cargo.ts";
-import { EffectFn, SyncEffects } from "./effect-ir.ts";
+import { EffectFn, SyncEffects, isAsyncComputation } from "./effect-ir.ts";
 import {
   CompileError,
   BoolType,
@@ -68,7 +68,7 @@ export interface RpcArtifact extends GeneratedFiles {
   readonly runtime: {
     readonly id: "rust/axum-unary-json@1";
     readonly crates: readonly string[];
-    readonly handlerProfile: "synchronous-scalars";
+    readonly handlerProfile: "synchronous-scalars" | "suspended-scalars";
     readonly auth:
       | {
           readonly middleware: string;
@@ -324,21 +324,28 @@ const compile = <Rpcs extends Rpc.Any>(
               ),
             );
           }
-          const call = callLocal(
-            "in_context",
-            local("context"),
-            Rs.closureTyped(
-              [],
-              undefined,
-              Rs.pathCall(
-                [Rs.ident("reffect_generated")],
-                Rs.ident(`r_${name}`),
-                (protectedRpc ? [local("principal")] : []).concat(
-                  inputs.map((_input, i) => local(`arg_${i}`)),
-                ),
-              ),
-            ),
+          const asynchronous = fn instanceof EffectFn && isAsyncComputation(fn.body);
+          const arguments_ = (protectedRpc ? [local("principal")] : []).concat(
+            inputs.map((_input, i) => local(`arg_${i}`)),
           );
+          if (asynchronous)
+            statements.push(
+              Rs.verbatimStmt(
+                "let mut execution = execution_context(cancellation.clone(), context);",
+              ),
+            );
+          const compiledCall = Rs.pathCall(
+            [Rs.ident("reffect_generated")],
+            Rs.ident(`r_${name}`),
+            (asynchronous ? [Rs.mutRefExpr(local("execution"))] : []).concat(arguments_),
+          );
+          const call = asynchronous
+            ? Rs.await(compiledCall)
+            : callLocal(
+                "in_context",
+                local("context"),
+                Rs.closureTyped([], undefined, compiledCall),
+              );
           const result =
             fn instanceof EffectFn
               ? Rs.match_(call, [
@@ -347,12 +354,22 @@ const compile = <Rpcs extends Rpc.Any>(
                     body: callLocal("success", encode(success, local("value"))),
                   },
                   {
-                    pat: Rs.variantPat([Rs.ident("Err")], [Rs.identPat(Rs.ident("error"))]),
+                    pat: asynchronous
+                      ? Rs.pat("Err(reffect_generated::AsyncError::Fail(error))")
+                      : Rs.variantPat([Rs.ident("Err")], [Rs.identPat(Rs.ident("error"))]),
                     body:
                       error === "never"
                         ? Rs.unreachableMatch(local("error"))
                         : callLocal("failure", encode(error, local("error"))),
                   },
+                  ...(asynchronous
+                    ? [
+                        {
+                          pat: Rs.pat("Err(reffect_generated::AsyncError::Interrupted)"),
+                          body: callLocal("interrupted"),
+                        },
+                      ]
+                    : []),
                 ])
               : callLocal("success", encode(success, call));
           return { pat: Rs.stringPat(rpc._tag), body: Rs.block(statements, Rs.ok(result)) };
@@ -363,7 +380,12 @@ const compile = <Rpcs extends Rpc.Any>(
           auth,
           program: Program.make(functions),
           arms,
-          hasFrames: Object.values(functions).some((fn) => fn instanceof EffectFn),
+          asynchronous: Object.values(functions).some(
+            (fn) => fn instanceof EffectFn && isAsyncComputation(fn.body),
+          ),
+          hasSynchronousEffects: Object.values(functions).some(
+            (fn) => fn instanceof EffectFn && !isAsyncComputation(fn.body),
+          ),
         };
       },
       catch: (cause) =>
@@ -371,12 +393,20 @@ const compile = <Rpcs extends Rpc.Any>(
     });
     const core = yield* Compile.run(
       Compile.make(prepared.program).pipe(
+        Compile.withTarget(prepared.asynchronous ? Rust.tokio : Rust.std),
         Compile.withSourceArtifacts(SourceArtifacts.None),
         Compile.withFailureFrames(options.failureFrames ?? FailureFrames.Bounded),
       ),
     );
+    // This checked scalar HTTP profile only composes the selected Tokio core dependency.
+    // Refuse new core crate requirements until manifest composition supports them explicitly.
+    if (core.explanation.crates.some((crate) => crate !== "tokio@1.53.1"))
+      return yield* unsupported(
+        "crates",
+        "HTTP manifest composition does not support selected core crates",
+      );
     const clear =
-      prepared.hasFrames && !FailureFrames.isNone(core.failureFrames)
+      prepared.hasSynchronousEffects && !FailureFrames.isNone(core.failureFrames)
         ? [
             Rs.letDiscard(
               Rs.unitType(),
@@ -384,7 +414,7 @@ const compile = <Rpcs extends Rpc.Any>(
             ),
           ]
         : [];
-    const dispatch = Rs.fnItem(
+    const dispatch = (prepared.asynchronous ? Rs.asyncFnItem : Rs.fnItem)(
       Rs.ident("dispatch"),
       [
         { name: Rs.ident("tag"), type: Rs.refType(Rs.strType()) },
@@ -392,7 +422,32 @@ const compile = <Rpcs extends Rpc.Any>(
         { name: Rs.ident("headers"), type: Rs.refType(Rs.namedType("HeaderMap")) },
         { name: Rs.ident("message"), type: Rs.refType(Rs.namedType("Value")) },
         { name: Rs.ident("state"), type: Rs.refType(Rs.namedType("RuntimeState")) },
-        { name: Rs.ident("context"), type: Rs.mutRefType(Rs.namedType("RequestContext")) },
+        {
+          name: Rs.ident("context"),
+          type: Rs.mutRefType(
+            prepared.asynchronous
+              ? Rs.verbatimType("RequestContext<'_>")
+              : Rs.namedType("RequestContext"),
+          ),
+        },
+        ...(prepared.asynchronous
+          ? [
+              {
+                name: Rs.ident("cancellation"),
+                type: Rs.refType(
+                  Rs.genericType(
+                    Rs.pathType([
+                      Rs.ident("tokio"),
+                      Rs.ident("sync"),
+                      Rs.ident("watch"),
+                      Rs.ident("Receiver"),
+                    ]),
+                    [Rs.boolType()],
+                  ),
+                ),
+              },
+            ]
+          : []),
       ],
       Rs.resultType(Rs.namedType("Value"), Rs.stringType()),
       Rs.block(
@@ -421,6 +476,16 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
     reffect_generated::with_log_context(metadata.to_string(), f)
 }`
       : "fn in_context<T>(_context: &RequestContext, f: impl FnOnce() -> T) -> T { f() }";
+    const executionRuntime = prepared.asynchronous
+      ? `
+fn execution_context(cancellation: tokio::sync::watch::Receiver<bool>, context: &RequestContext) -> reffect_generated::AsyncContext {
+    let mut execution = reffect_generated::AsyncContext::new(cancellation);
+    ${hasLogs ? 'execution.set_request(json!({"id":context.id, "tag":context.tag, "principal":context.principal.map(|p| p.to_string())}).to_string());' : "let _ = context;"}
+    execution
+}
+fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt"}]}) }
+`
+      : "";
     const authRuntime = prepared.auth
       ? rpcAuthRuntime
       : "#[derive(Clone)] struct RuntimeState; fn load_state() -> Result<RuntimeState, &'static str> { Ok(RuntimeState) }";
@@ -443,8 +508,14 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
           : []),
         dispatch,
         Rs.verbatimItem(contextRuntime),
+        ...(executionRuntime ? [Rs.verbatimItem(executionRuntime)] : []),
         Rs.verbatimItem(authRuntime),
-        Rs.verbatimItem(rpcRuntime(clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined)),
+        Rs.verbatimItem(
+          rpcRuntime(
+            clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined,
+            prepared.asynchronous,
+          ),
+        ),
       ],
       "\n",
     ).text;
@@ -455,8 +526,14 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
       stages: Object.freeze(core.stages.concat("rpc-http")),
       files: Object.freeze({
         "Cargo.toml":
-          core.files["Cargo.toml"] +
-          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n' +
+          core.files["Cargo.toml"].split("\n[dependencies]")[0] +
+          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n'.replace(
+            '["macros", "rt", "net", "time", "sync"]',
+            prepared.asynchronous
+              ? '["macros", "rt", "net", "time", "sync"]'
+              : '["macros", "rt", "net"]',
+          ) +
+          (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : ""),
         "src/lib.rs": core.files["src/lib.rs"],
         "src/main.rs": main,
@@ -466,9 +543,10 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
         crates: Object.freeze(
           ["axum@0.8.9", "tokio@1.53.1", "serde_json@1.0.151"].concat(
             prepared.auth ? ["subtle@2.6.1"] : [],
+            prepared.asynchronous ? ["http-body@1.0.1"] : [],
           ),
         ),
-        handlerProfile: "synchronous-scalars",
+        handlerProfile: prepared.asynchronous ? "suspended-scalars" : "synchronous-scalars",
         auth: prepared.auth
           ? Object.freeze({
               middleware: prepared.auth.middleware.key,
@@ -480,7 +558,7 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
     });
   });
 
-/** Generate a native unary JSON/HTTP server for the checked synchronous scalar profile. */
+/** Generate a native unary JSON/HTTP server for the checked sync/async scalar profiles. */
 export const NativeRpc = Object.freeze({
   U64Json,
   bind,

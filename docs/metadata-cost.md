@@ -185,3 +185,47 @@ Frame-off code uses plain Result helpers and emits no frame descriptors, propaga
 Measure authoring, check/lower/emit/hash/serialization, retained and peak heap, map/binary bytes, native allocations, throughput and latency separately. Compare ordinary success, frequent failure, local logs, disabled sinks and enabled exporters in release builds; use debug for diagnosis. Test deep/shared graphs and repeated editor rebuild/disposal, not only small leaf nodes. Add complexity limits independent of performance goals.
 
 For no-instrumentation native code, require identical emitted value layouts and no metadata-derived calls/maps/allocations; the current probe checks generated-source identity. For failure instrumentation, measure Result/future/frame sizes and common success-path changes. For enabled context/export, report costs and chosen bounds rather than advertise zero overhead. Source-map generation never justifies disabling optimizations globally; existing helper sharing and future instrumentation boundaries need separate evidence.
+
+## Async context and future costs
+
+The bounded Tokio profile keeps execution state in an explicit AsyncContext,
+not in native numbers or a global value registry. Scalars remain bool/u64/Unit.
+Without log scopes the context owns a watch receiver, mask flag and optional
+failure handle. Reachable log scopes add two Vec handles and optional request
+String. Frame None removes the handle, FrameTrail and propagation. Async-only
+modules omit the synchronous failure TLS stash; mixed groups retain it for
+synchronous handlers. No TLS guard is held across an await.
+
+[Reproducible release probe](../packages/reffect/scripts/async-cost.ts) and
+[raw results](research/async-cost-results.json), Rust 1.98.1/x86-64, Tokio 1.53.1:
+
+| Profile                    | Context bytes | Delay future bytes | Shared depth 4 / 8 future bytes | Scoped future bytes |
+| -------------------------- | ------------: | -----------------: | ------------------------------: | ------------------: |
+| Bare, bounded frames       |            32 |                304 |                       368 / 432 |                   — |
+| Bare, frame None           |            24 |                296 |                       360 / 424 |                   — |
+| Log scopes, bounded frames |           104 |                304 |                       368 / 432 |                 400 |
+| Log scopes, frame None     |            96 |                296 |                       360 / 424 |                 392 |
+
+Creating the cancellation watch channel allocated once. Constructing each
+context and these unpolled concrete futures allocated zero additional times.
+The shared branch probes emit one helper per shared node (15 across three
+functions); future size grew 16 bytes per tested Match boundary, without
+exponential expansion in this corpus. This is a compiler/workload observation,
+not a stable Rust ABI or a universal future-size bound. Log scope fields are
+selected per generated module; a non-logging function in a module with scoped
+logging uses that module's larger context. There is no per-helper future boxing.
+
+Polling a timer, logging, annotation Vec growth/cloning, request JSON, Tokio
+worker/channel state and HTTP/Serde inputs have separate costs. The construction
+probe deliberately excludes those allocations and does not establish throughput,
+RSS or complete request allocation counts. Nested annotation snapshots can own
+heap storage across suspension; they belong to explicitly authored execution
+scopes, never every scalar. Each HTTP batch owns a worker and cancellation
+channel; each invocation owns its request/log state and failure storage. Existing
+failure-trail bounds still apply. Future HTTP measurements should include detached
+cleanup workers and concurrency rather than treating the library future as the
+whole request.
+
+Run `vp exec node --experimental-transform-types packages/reffect/scripts/async-cost.ts`
+with Rust on PATH to reproduce. General performance evidence/gates are described
+in [performance requirements](performance.md).

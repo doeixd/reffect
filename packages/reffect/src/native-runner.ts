@@ -1,7 +1,7 @@
 import { Effect, Exit, Predicate, Schema } from "effect";
 import { CargoApi } from "./cargo.ts";
 import { FailureFrames } from "./frame-policy.ts";
-import { EffectFn, maxLogicalFrames } from "./effect-ir.ts";
+import { EffectFn, isAsyncComputation, maxLogicalFrames } from "./effect-ir.ts";
 import { BoolType, IRType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Fn, Inputs } from "./kernel.ts";
 import type { Artifact } from "./compiler.ts";
@@ -84,6 +84,8 @@ const exitOf = <I extends readonly IRType<unknown>[], A, E>(
 ) =>
   Effect.gen(function* () {
     if (fn instanceof EffectFn) {
+      if (output === "interrupt" && isAsyncComputation(fn.body))
+        return Exit.interrupt() as Exit.Exit<A, E>;
       if (output.startsWith("ok:"))
         return Exit.succeed(yield* decodeScalar(fn.output, name, output.slice(3))) as Exit.Exit<
           A,
@@ -192,9 +194,19 @@ const decodeFrames = (name: string, stderr: string) =>
           "Frame envelope carries an empty identity",
         );
       if (
-        !["function", "succeed", "fail", "map", "flatMap", "match", "annotate", "span"].includes(
-          frame.kind,
-        )
+        ![
+          "function",
+          "succeed",
+          "fail",
+          "map",
+          "flatMap",
+          "match",
+          "annotate",
+          "span",
+          "sleep",
+          "ensuring",
+          "log",
+        ].includes(frame.kind)
       )
         return yield* fail(
           "INVALID_NATIVE_FRAMES",

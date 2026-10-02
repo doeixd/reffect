@@ -5,7 +5,7 @@ import type { GeneratedFiles } from "./cargo.ts";
 import { locateCompileError } from "./provenance.ts";
 import { Cargo } from "./cargo.ts";
 import { Foldkit } from "./foldkit.ts";
-import { EffectFn, SyncEffects, checkEffectFunction } from "./effect-ir.ts";
+import { EffectFn, SyncEffects, AsyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -110,7 +110,24 @@ const syncResultAdapter = Object.freeze({
   rationale:
     "Synchronous typed success/failure lowers to std::result::Result; Boolean branches and continuations remain lazy",
 });
+const asyncResultAdapter = Object.freeze({
+  ref: SemanticRef.runtime("rust/tokio-result@1"),
+  target: Targets.RustStd,
+  strategy: "generated" as const,
+  rationale:
+    "Concrete async futures with owned execution context, cooperative cancellation and masked awaited finalizers on Tokio",
+});
 export const Rust = Object.freeze({
+  asyncResult: asyncResultAdapter,
+  tokio: Target.make(Targets.RustStd, implementations).pipe(
+    Target.withCapabilities([
+      Capabilities.U64,
+      Capabilities.Bool,
+      Capabilities.Unit,
+      Capabilities.SyncResult,
+      Capabilities.AsyncResult,
+    ]),
+  ),
   syncResult: syncResultAdapter,
   std: Target.make(Targets.RustStd, implementations).pipe(
     Target.withCapabilities([
@@ -136,7 +153,7 @@ export interface Selection {
   readonly rejected: readonly { readonly id: string; readonly reason: string }[];
 }
 export class Plan extends Pipeable.Class {
-  readonly runtime: typeof syncResultAdapter | undefined;
+  readonly runtime: typeof syncResultAdapter | typeof asyncResultAdapter | undefined;
   private constructor(
     readonly analysis: Analysis,
     readonly target: Target,
@@ -145,7 +162,12 @@ export class Plan extends Pipeable.Class {
     readonly failureFrames: FailureFramePolicy,
   ) {
     super();
-    this.runtime = analysis.effects.length === 0 ? undefined : syncResultAdapter;
+    this.runtime =
+      analysis.effects.length === 0
+        ? undefined
+        : analysis.capabilities.includes(Capabilities.AsyncResult)
+          ? asyncResultAdapter
+          : syncResultAdapter;
     Object.freeze(this);
   }
   static make(
@@ -315,6 +337,14 @@ const derive = Effect.fn("Compile.derive")(function* (
     types.add(c.error);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        Sleep: () => {
+          effectRefs.add(AsyncEffects.Sleep);
+        },
+        Ensuring: (n) => {
+          effectRefs.add(AsyncEffects.Ensuring);
+          walkComputation(n.body);
+          walkComputation(n.finalizer);
+        },
         Succeed: (n) => {
           effectRefs.add(SyncEffects.Succeed);
           walk(n.value);
@@ -386,6 +416,11 @@ const derive = Effect.fn("Compile.derive")(function* (
               : [],
       ),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
+      ...(Array.from(effectRefs).some((ref) =>
+        Object.values(AsyncEffects).some((supported) => supported === ref),
+      )
+        ? [Capabilities.AsyncResult]
+        : []),
     ]),
     effects: collect([...operations.flatMap((op) => op.effects), ...effectRefs]),
     requirements: collect(operations.flatMap((op) => op.requirements)),
@@ -451,20 +486,29 @@ const plan = Effect.fn("Compile.plan")(function* (
   }
   if (
     derived.effects.some(
-      (ref) => !Object.values(SyncEffects).some((supported) => supported === ref),
+      (ref) =>
+        ![...Object.values(SyncEffects), ...Object.values(AsyncEffects)].some(
+          (supported) => supported === ref,
+        ),
     )
   )
     return yield* fail(
       "UNSUPPORTED_EFFECT",
       "plan",
       "effects",
-      "No verified synchronous Result adapter for this effect",
+      "No verified Result/async adapter for this effect",
     );
   return Plan.make(
     derived,
     target,
     selections,
-    Array.from(new Set(selections.flatMap((s) => s.selected.crates))).sort(),
+    Array.from(
+      new Set(
+        selections
+          .flatMap((s) => s.selected.crates)
+          .concat(derived.capabilities.includes(Capabilities.AsyncResult) ? ["tokio@1.53.1"] : []),
+      ),
+    ).sort(),
   );
 });
 const verify = Effect.fn("Compile.verify")(function* (p: Plan) {

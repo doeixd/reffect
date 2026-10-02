@@ -243,6 +243,14 @@ export const typeChecks = () => {
     ),
   );
   Reference.run(effect, [true, 1n]);
+  const suspended = R.Effect.sleep(1).pipe(R.Effect.ensuring(R.Effect.void));
+  R.fn([], R.Unit, R.Never, () => suspended);
+  // @ts-expect-error sleep takes a build-time numeric literal, not an expression
+  R.Effect.sleep(R.U64.literal(1n));
+  // @ts-expect-error finalizers must return Unit
+  suspended.pipe(R.Effect.ensuring(R.Effect.succeed(R.U64.literal(1n))));
+  // @ts-expect-error finalizers must have a Never error channel
+  suspended.pipe(R.Effect.ensuring(R.Effect.fail(R.Bool.literal(false))));
   // @ts-expect-error Boolean inputs are not bigint
   Reference.run(effect, [1n, 1n]);
   // @ts-expect-error error payload must match the declared channel

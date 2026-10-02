@@ -324,6 +324,7 @@ export const Rs = Object.freeze({
     return type_(`${path.text}<${args.map((arg) => arg.text).join(", ")}>`);
   },
   pathExpr: (path: RsPath): RsExpr => expr(path.text),
+  tokioMainAttribute: (): RsAttribute => attribute('#[tokio::main(flavor = "current_thread")]'),
   attribute: (name: RustIdent): RsAttribute => attribute(`#[${name.text}]`),
   deriveAttribute: (...traits: ReadonlyArray<RustIdent>): RsAttribute => {
     if (traits.length === 0) throw new TypeError("derive attributes need at least one trait");
@@ -582,6 +583,15 @@ export const Rs = Object.freeze({
   fnItem: (name: RustIdent, params: ReadonlyArray<RsParam>, ret: RsType, body: RsExpr): RsItem =>
     item(
       `fn ${name.text}(${params.map((p) => `${p.name.text}: ${p.type.text}`).join(", ")})${ret.text === "()" ? "" : ` -> ${ret.text}`} ${body.text}`,
+    ),
+  asyncFnItem: (
+    name: RustIdent,
+    params: ReadonlyArray<RsParam>,
+    ret: RsType,
+    body: RsExpr,
+  ): RsItem =>
+    item(
+      `async fn ${name.text}(${params.map((p) => `${p.name.text}: ${p.type.text}`).join(", ")})${ret.text === "()" ? "" : ` -> ${ret.text}`} ${body.text}`,
     ),
   enumItem: (
     name: RustIdent,

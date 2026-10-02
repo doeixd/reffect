@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-10-02 — Bounded async execution and suspended RPC
+
+- Added checked literal Sleep (0–60000 ms) and non-failing Unit/Never Ensuring IR, official Effect reference interpretation, an explicit Rust.tokio capability and explainable reachable Tokio runtime/dependencies. Existing std and synchronous Tokio-target programs stay dependency-free. Native helpers have concrete futures; scalar values remain plain.
+- AsyncContext owns cancellation/masking, optional log scopes/request JSON and optional bounded failure storage. Async-only modules omit failure TLS; capture None removes the trail field/propagation. Context and finalizer state survives suspension without a TLS guard. Entered cleanup is awaited once in reverse nesting order; pre-entry cancellation skips it. Interrupted successful cleanup and preserved typed failure during masked cleanup match Effect.
+- Async HTTP groups use owned workers and response-body cancellation signals. Stock-client interruption and real socket disconnects await both delayed finalizers, skip the next batch handler and preserve subsequent/concurrent principal/ID/annotation/span isolation. Debug/release and both frame policies pass. General Scope/acquireRelease, fallible finalizers, Services/Layers, process-abort cleanup and graceful draining remain outside the slice. [Example](examples/rpc-async/README.md) and [design/results](docs/research/async-rpc.md) document the boundary.
+- [Release probe](packages/reffect/scripts/async-cost.ts) and [raw results](docs/research/async-cost-results.json) record context sizes 24–32 bytes without scopes and 96–104 with scopes; tested future construction/context construction adds zero allocations, while the cancellation watch allocates once. Shared depth 4/8 futures grow linearly in the checked corpus. Polling/logging/HTTP allocations and throughput are separate; [cost limits](docs/metadata-cost.md#async-context-and-future-costs) make that distinction explicit.
+- Full vp test passes 95 tests in 18 files (556.58s), including existing native conformance. vp check, strict package TypeScript, workspace build, runnable stock-client example, git diff --check and 259 local links/anchors pass. The compiler build is fresh; unrelated tasks use cache. Final review makes the masked-cleanup probe signal on its first suspension rather than depend on competing timers; both focused tests pass (51.82s). Publication requires rereading the committed diff and repeating checks/full tests/build.
+- Review corrected async borrowed-context lifetime, pre-entry cancellation, missing test imports, reference annotation normalization, synchronous-only interruption output refusal and optional frame ownership. Native interruption frames are bounded diagnostics; the reference frame observer does not claim interruption-frame parity. PLAN now puts the next frontier at resource Scope preparation, followed by Services/Layers.
+
+## 2026-10-02 — Execution roadmap clarification
+
+- Applied the user’s planning guidance: preserved the thesis and semantic gates, made the current frontier explicit, promoted minimal async ownership/cancellation/finalization/Scope into milestone 3A, and separated unary RPC/services at 3B from later streaming. Roadmap profile names are provisional commitments, not invented CLI APIs; SQL remains independently composable. Added milestone decision deadlines and [performance evidence/gates](docs/performance.md); detailed observability/source-map matrices remain in their specifications. General Scope is explicitly distinguished from the active non-failing Ensuring slice.
+
+## 2026-10-02 — Suspended RPC preparation
+
+- Reviewed existing scalar RPC/auth, frame policies, source mapping and scoped logging. Checked pinned Effect finalization/HTTP lifetimes and Tokio/http-body primary sources online. Recorded the explicit execution context, cooperative cancellation, concrete futures and narrow Sleep/Ensuring profile in [async RPC research](docs/research/async-rpc.md) before planning or implementation.
+
 ## 2026-10-01 — Failure-frame construction bounds and opt-out
 
 - Replaced intermediate native vectors with one lazily allocated boxed 32-entry trail per failure. Propagation retains innermost frames and counts omitted boundaries; reference arrays obey the same construction bound. Observation drains frames/omitted together; RPC cleanup drops directly without allocating an observer Vec.

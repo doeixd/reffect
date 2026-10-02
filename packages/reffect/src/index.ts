@@ -29,6 +29,7 @@ export {
   Computation,
   EffectFn,
   SyncEffects,
+  AsyncEffects,
   maxLogicalFrames,
   LogIR,
   logLevels,

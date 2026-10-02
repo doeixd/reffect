@@ -1,6 +1,6 @@
 # reffect semantic compiler
 
-Implemented profiles cover unsigned arithmetic, Foldkit Query conformance, and synchronous Boolean/u64/Unit Effect computations with official Effect reference execution, explainable Rust planning, and Cargo integration.
+Implemented profiles cover unsigned arithmetic, Foldkit Query conformance, and Boolean/u64/Unit Effect computations (synchronous plus a bounded Tokio async profile) with official Effect reference execution, explainable Rust planning, and Cargo integration.
 
 ```ts
 import { Effect } from "effect";
@@ -26,7 +26,7 @@ pub fn r_Add(p0: u64, p1: u64) -> u64 {
 
 - `R.U64` is an exact bigint in `0..2^64-1`, with native Rust `u64`. `literal`, `add`, `sub`, `mul`, `eq`, and `lt` construct immutable expressions. Arithmetic is modulo `2^64` in every build profile.
 - `R.fn` invokes a build-time callback with symbolic parameters, and `R.program` declares named entry functions. Symbols belong to their function or lexical continuation. Use exhaustive `R.Match.bool` for runtime branching; ordinary runtime TypeScript operators/generators are outside this subset.
-- `Reference.run` validates arguments, checks the graph, and returns an official Effect. Pure expressions and supported synchronous computations share this entry point.
+- `Reference.run` validates arguments, checks the graph, and returns an official Effect. Pure expressions and supported synchronous and async computations share this entry point.
 - `IRType.make` constructs semantic witnesses; `Operation.make` declares complete typed signatures and reference evaluators. Values support Effect-style `.pipe` composition through focused combinators, including `IRType.withTraits`, `Operation.withCapabilities/withEffects/withRequirements/withLaws`, and `Target.withCapabilities`. Arithmetic supports data-first and data-last forms.
 - `SemanticRef` factories create typed type, operation, target, capability, effect, requirement and trait references. Semantic lookups use these objects; strings are their serialized/display identities. `Native.U64`, `Capabilities.U64`, `Targets.RustStd` and `Traits` expose the builtin objects. The initial Rust target accepts only verified built-in operations and representations.
 - `Law.associative/commutative` name typed operation references and receive evidence from `Evidence.claim/tested/proven/builtin`. Evidence policies are named constants. Built-in algebraic registrations are **claims**; no optimization uses them. Traits for the builtin u64 representation are checked from its registered witness, not arbitrary declarations.
@@ -91,7 +91,7 @@ Containment accepts evaluated non-NUL ASCII operands until upstream Unicode/NUL 
 
 All 27 upstream fixtures run against evaluate, the unchanged licensed upstream Drizzle compiler/SQLite, and fresh native debug/release crates. See [integration research](../../docs/research/foldkit-query.md) for the Drizzle RC.118 import limitation and [upstream issue reproductions](../../docs/research/foldkit-plus-issues.md). Normalization and optimization remain identity steps; the canonical predicate/order lists are retained, borrowed scalar inputs and copied row indices have conservative ownership, and shared expression nodes lower once.
 
-Run `vp exec node --experimental-transform-types examples/query/main.ts` for a native/reference search example. Additional general representations, RPC, concurrency, and asynchronous runtime adapters follow the roadmap.
+Run `vp exec node --experimental-transform-types examples/query/main.ts` for a native/reference search example. Additional representations, general resource Scope and concurrency follow the roadmap; scalar RPC and the bounded async profile below are implemented.
 
 ## Synchronous Effect profile
 
@@ -190,7 +190,7 @@ Source annotations are compiler-side data; generated Boolean/u64 values remain p
 
 The artifact includes core handler explanation/stages and an Axum/Tokio/serde_json runtime profile. Write with CargoApi.write, explicitly prepare dependencies with CargoApi.fetch, then build offline with CargoApi.build. Server arguments are `--host` and `--port`; loopback/3000 is the default, and port 0 prints a versioned ready record. Both configured route spellings with/without a trailing slash accept POST. Requests are limited to 64 KiB and 64 entries per batch.
 
-Run [examples/rpc](../../examples/rpc/README.md) for the unchanged stock client calling native Rust. The current server uses synchronous scalar execution on a current-thread HTTP substrate and drains failure frames around dispatch. RPC artifacts have SourceArtifacts.None; general middleware/Schema/Services support, trace propagation, CORS, async Effect execution and graceful draining are following work. The checked bearer slice below adds one explicit service projection.
+Run [examples/rpc](../../examples/rpc/README.md) for the unchanged stock client calling native Rust. Synchronous groups use scalar execution on a current-thread HTTP substrate and drain failure frames around dispatch. Groups with supported async handlers use the owned worker profile below. RPC artifacts have SourceArtifacts.None; general middleware/Schema/Services support, trace propagation, CORS and graceful draining remain following work. The checked bearer slice below adds one explicit service projection.
 
 ### Authenticated request profile
 
@@ -198,7 +198,7 @@ Run [examples/rpc](../../examples/rpc/README.md) for the unchanged stock client 
 
 Credentials are a bounded runtime environment JSON array of token/principal pairs, never compiler inputs. Invalid configuration fails before listening; denied calls return a typed middleware failure without executing handlers. Payload decoding precedes middleware; normalized envelope authorization overrides HTTP authorization, matching Effect. See [the runnable authenticated example](../../examples/rpc-auth/README.md) for configuration and limits.
 
-Each synchronous dispatch owns a stack context view borrowing request ID/tag from the HTTP-owned body, with a plain optional u64 principal. Local handler logs carry a separate request field; a lexical RAII guard restores previous context through typed errors and unwinding. JSON context is prepared only for the reachable logging profile; values and Result channels gain no metadata fields. Credentials allocate once at startup in immutable shared server state. This adapter does not compile arbitrary middleware/Context/Layer operations or establish async context, JWT verification, cancellation/draining or OTel export.
+Each synchronous dispatch owns a stack context view borrowing request ID/tag from the HTTP-owned body, with a plain optional u64 principal. Local handler logs carry a separate request field; a lexical RAII guard restores previous context through typed errors and unwinding. JSON context is prepared only for the reachable logging profile; values and Result channels gain no metadata fields. Credentials allocate once at startup in immutable shared server state. This adapter does not compile arbitrary middleware/Context/Layer operations, JWT verification, graceful draining or OTel export. Its suspended-handler extension is described below.
 
 ## Failure-frame selection and native costs
 
@@ -227,3 +227,55 @@ layouts. Observation through take_last_frames may allocate a Vec; RPC cleanup
 uses clear_last_frames without converting. This synchronous thread-local owner
 is not an async task context. See [measured costs](../../docs/metadata-cost.md#native-failure-frame-costs)
 and [design research](../../docs/research/failure-frames.md#construction-bounds-and-frame-policy-preparation--2026-10-01).
+
+## Bounded async execution and RPC
+
+```ts
+import { Compile, R, Rust } from "reffect";
+
+const delayed = R.fn([R.U64], R.U64, R.Never, (value) =>
+  R.Effect.sleep(10).pipe(
+    R.Effect.flatMap(() => R.Effect.succeed(value)),
+    R.Effect.ensuring(R.Log.info("cleanup")),
+  ),
+);
+const artifact = Compile.make(R.program({ delayed })).pipe(
+  Compile.withTarget(Rust.tokio),
+  Compile.run,
+);
+```
+
+`R.Effect.sleep` admits integer build-time literals from 0 to 60000 milliseconds.
+`R.Effect.ensuring` accepts a Unit/Never finalizer, may suspend, and preserves the
+body's channels. Finalizers run inside first, exactly once on each entered body
+exit, with cooperative cancellation masked while cleanup is awaited. A pending
+interruption after successful cleanup interrupts success; a typed failed body
+retains its failure if interruption arrives during masked cleanup, matching the
+pinned Effect oracle. General Scope/acquireRelease and fallible finalizers are
+not admitted.
+
+Default Rust.std refuses async nodes. Rust.tokio selects the same scalar backend
+with an explicit async capability and reachable Tokio 1.53.1 time/sync features;
+its synchronous programs still emit dependency-free code. Planning reports the
+async runtime adapter. Helpers have concrete future types and receive an explicit
+mutable AsyncContext, with separate AsyncError.Fail/Interrupted outcomes.
+
+NativeRpc.compile selects this profile automatically for groups with async
+handlers, preserving stock clients, scalar schemas and bearer projection. A worker
+owns parsed requests, headers and auth state. Each invocation owns cancellation,
+request/log scopes and optional bounded failure storage. Dropping a pending HTTP
+response signals cancellation; the worker awaits cleanup before leaving. Batches
+remain sequential and stop starting handlers after cancellation. No thread-local
+context guard survives suspension. Scalars remain plain; failure capture None
+removes the trail field and propagation independently of logging/source artifacts.
+
+Native Rust consumers must **signal cancellation and await completion**. Dropping
+or aborting a future cannot execute async cleanup. NativeRunner process interruption
+shuts down its child; cooperative cleanup is exercised through HTTP or a direct
+Rust context, rather than process termination. Panics, process termination
+and graceful server draining are outside this slice's guarantee. The frame
+reference observer compares typed failures; native interruption frames are
+bounded diagnostics, without a claimed official interruption-frame oracle.
+See [the runnable example](../../examples/rpc-async/README.md),
+[design/evidence](../../docs/research/async-rpc.md) and
+[measured costs](../../docs/metadata-cost.md#async-context-and-future-costs).

@@ -2,7 +2,7 @@
 
 Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. Use [PROGRESS.md](../PROGRESS.md) for implementation status.
 
-Read the [later design revision overview](op-expr-revision-convo.md) first for current direction. Its revised design and numbered milestones update the earlier kernel, pipeline, reuse, and sequencing proposals.
+The roadmap governs current sequencing and the active frontier. The [design revision overview](op-expr-revision-convo.md) explains historical changes; use it as architecture background, not a prerequisite archaeology exercise.
 
 ## Revised design and implementation references
 
@@ -21,7 +21,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 ## Observability design and research
 
-[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; source artifacts, logical frames, bounded failure construction, independent frame stripping and scoped logging are implemented for the scalar profile, with synchronous authenticated RPC request/log correlation now implemented. Async context, propagation and exported telemetry remain planned.
+[Observability, logging and source diagnostics](observability.md) defines typed semantic records, provenance/source maps, logical versus native stacks, scoped log/span context, OTel policy/propagation/metrics, selected Rust tools, optional dependency profiles and acceptance/delivery gates. It is the current observability design direction; source artifacts, logical frames, bounded failure construction, independent frame stripping and scoped logging are implemented for the scalar profile, with synchronous authenticated RPC request/log correlation now implemented. The bounded Sleep/Ensuring async context and cooperative cancellation slice is implemented; general Scope, propagation and exported telemetry remain planned.
 
 [Observability research](research/observability.md) records pinned Effect RC.118 behavior, primary Rust/OTel/W3C sources and observed releases, alternatives and compatibility gaps checked before integration.
 
@@ -40,6 +40,13 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 [Rust emission research](research/rust-emit.md) records the helper roles, escaping/format contracts, alternatives and byte-identical migration acceptance for the internal `Rs` module.
 
 [Facet evaluation](research/facet.md) checks static Rust type reflection against metadata ownership and future Schema/codec consumers. Facet remains an optional candidate; source occurrences/Effect semantics and protocol conformance stay compiler-owned.
+
+## Async execution and performance
+
+- [Suspended RPC research](research/async-rpc.md): owned context, cooperative interruption and awaited non-failing finalization, with reference/native/socket evidence.
+- [Runnable async example](../examples/rpc-async/README.md): unchanged stock authenticated client calling suspended native handlers.
+- [Performance requirements](performance.md): workload measurements, structural growth/allocation gates and exploratory baselines.
+- [Async cost probe](../packages/reffect/scripts/async-cost.ts) and [raw results](research/async-cost-results.json): release future/context layouts and construction allocations.
 
 ## Original detailed references
 

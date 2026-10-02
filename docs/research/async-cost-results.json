@@ -1,0 +1,74 @@
+{
+  "checked": "2026-10-02",
+  "target": "linux/x64",
+  "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "effect": "4.0.0-rc.118",
+  "tokio": "1.53.1",
+  "scope": "Release layout and construction allocations; futures are constructed/dropped unpolled. Watch ownership is separate; timer, logging, frame failure, task and HTTP allocations are excluded.",
+  "results": [
+    {
+      "profile": "bare-bounded",
+      "generated_rust_bytes": 15156,
+      "helpers": 15,
+      "crates": ["tokio@1.53.1"],
+      "measurements": {
+        "context_bytes": 32,
+        "delay_future_bytes": 304,
+        "shared4_future_bytes": 368,
+        "shared8_future_bytes": 432,
+        "scoped_future_bytes": 0,
+        "watch_allocations": 1,
+        "context_construction_allocations": 0,
+        "future_construction_allocations": 0
+      }
+    },
+    {
+      "profile": "bare-none",
+      "generated_rust_bytes": 7313,
+      "helpers": 15,
+      "crates": ["tokio@1.53.1"],
+      "measurements": {
+        "context_bytes": 24,
+        "delay_future_bytes": 296,
+        "shared4_future_bytes": 360,
+        "shared8_future_bytes": 424,
+        "scoped_future_bytes": 0,
+        "watch_allocations": 1,
+        "context_construction_allocations": 0,
+        "future_construction_allocations": 0
+      }
+    },
+    {
+      "profile": "logging-bounded",
+      "generated_rust_bytes": 21103,
+      "helpers": 20,
+      "crates": ["tokio@1.53.1"],
+      "measurements": {
+        "context_bytes": 104,
+        "delay_future_bytes": 304,
+        "shared4_future_bytes": 368,
+        "shared8_future_bytes": 432,
+        "scoped_future_bytes": 400,
+        "watch_allocations": 1,
+        "context_construction_allocations": 0,
+        "future_construction_allocations": 0
+      }
+    },
+    {
+      "profile": "logging-none",
+      "generated_rust_bytes": 11772,
+      "helpers": 20,
+      "crates": ["tokio@1.53.1"],
+      "measurements": {
+        "context_bytes": 96,
+        "delay_future_bytes": 296,
+        "shared4_future_bytes": 360,
+        "shared8_future_bytes": 424,
+        "scoped_future_bytes": 392,
+        "watch_allocations": 1,
+        "context_construction_allocations": 0,
+        "future_construction_allocations": 0
+      }
+    }
+  ]
+}

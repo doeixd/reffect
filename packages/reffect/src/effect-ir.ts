@@ -27,6 +27,12 @@ export const SyncEffects = Object.freeze({
   Annotate: SemanticRef.effect("reffect/effect/annotate@1"),
   Span: SemanticRef.effect("reffect/effect/span@1"),
 });
+export const AsyncEffects = Object.freeze({
+  Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
+  Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
+});
+const validDelay = (milliseconds: number): boolean =>
+  Number.isSafeInteger(milliseconds) && milliseconds >= 0 && milliseconds <= 60_000;
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error" | "Fatal";
 export const logLevels = Object.freeze([
   "Trace",
@@ -55,6 +61,12 @@ const checkLogName = (kind: string, value: string): void => {
     );
 };
 export type ComputationNode =
+  | { readonly _tag: "Sleep"; readonly milliseconds: number }
+  | {
+      readonly _tag: "Ensuring";
+      readonly body: Computation<unknown, unknown>;
+      readonly finalizer: Computation<void, never>;
+    }
   | { readonly _tag: "Succeed"; readonly value: Expr<unknown> }
   | { readonly _tag: "Fail"; readonly error: Expr<unknown> }
   | {
@@ -124,6 +136,45 @@ const succeed = <A>(value: Expr<A>): Computation<A> =>
   Computation.make(value.type, NeverType, { _tag: "Succeed", value });
 const failValue = <E>(error: Expr<E>): Computation<never, E> =>
   Computation.make(NeverType, error.type, { _tag: "Fail", error });
+const sleep = (milliseconds: number): Computation<void> => {
+  if (!validDelay(milliseconds))
+    throw fail(
+      "INVALID_DELAY",
+      "authoring",
+      "sleep",
+      "Delay requires an integer literal from 0 to 60000 milliseconds",
+    );
+  return Computation.make(UnitType, NeverType, { _tag: "Sleep", milliseconds });
+};
+const ensuring: {
+  (finalizer: Computation<void, never>): <A, E>(self: Computation<A, E>) => Computation<A, E>;
+  <A, E>(self: Computation<A, E>, finalizer: Computation<void, never>): Computation<A, E>;
+} = dual(2, <A, E>(self: Computation<A, E>, finalizer: Computation<void, never>) =>
+  Computation.make(self.output, self.error, { _tag: "Ensuring", body: self, finalizer }),
+);
+/** Reachability used for execution profiles, never a second semantic interpreter. */
+export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean => {
+  const seen = new Set<Computation<unknown, unknown>>();
+  const walk = (c: Computation<unknown, unknown>): boolean => {
+    if (seen.has(c)) return false;
+    seen.add(c);
+    return Match.value(c.node).pipe(
+      Match.tagsExhaustive({
+        Sleep: () => true,
+        Ensuring: () => true,
+        Succeed: () => false,
+        Fail: () => false,
+        Log: () => false,
+        Map: (n) => walk(n.source),
+        FlatMap: (n) => walk(n.source) || walk(n.body),
+        Match: (n) => walk(n.onTrue) || walk(n.onFalse),
+        Annotate: (n) => walk(n.body),
+        Span: (n) => walk(n.body),
+      }),
+    );
+  };
+  return walk(root);
+};
 const map: {
   <A, B>(build: (value: Expr<A>) => Expr<B>): <E>(self: Computation<A, E>) => Computation<B, E>;
   <A, E, B>(self: Computation<A, E>, build: (value: Expr<A>) => Expr<B>): Computation<B, E>;
@@ -240,6 +291,28 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
       issues.push(...checkExpression(e, bindings, `${at}.${step}`));
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        Sleep: (n) => {
+          if (
+            !validDelay(n.milliseconds) ||
+            !IRType.same(c.output, UnitType) ||
+            !IRType.same(c.error, NeverType)
+          )
+            add(
+              at,
+              "Sleep requires Unit/Never channels and an integer delay from 0 to 60000 milliseconds",
+            );
+        },
+        Ensuring: (n) => {
+          if (
+            !IRType.same(c.output, n.body.output) ||
+            !IRType.same(c.error, n.body.error) ||
+            !IRType.same(n.finalizer.output, UnitType) ||
+            !IRType.same(n.finalizer.error, NeverType)
+          )
+            add(at, "Ensuring preserves body channels and requires a Unit/Never finalizer");
+          walk(n.body, bindings, `${at}.body`);
+          walk(n.finalizer, bindings, `${at}.finalizer`);
+        },
         Succeed: (n) => {
           if (!IRType.same(c.output, n.value.type) || !IRType.same(c.error, NeverType))
             add(at, "Succeed channel witnesses are inconsistent");
@@ -354,6 +427,11 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
         });
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          Sleep: (n) => Effect.sleep(n.milliseconds),
+          Ensuring: (n) =>
+            evaluate(n.body, bindings).pipe(
+              Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
+            ),
           Succeed: (n) => expression(n.value).pipe(Effect.flatMap(Effect.succeed)),
           Fail: (n) => expression(n.error).pipe(Effect.flatMap(Effect.fail)),
           Map: (n) =>
@@ -419,7 +497,10 @@ export interface LogicalFrame {
     | "flatMap"
     | "match"
     | "annotate"
-    | "span";
+    | "span"
+    | "sleep"
+    | "ensuring"
+    | "log";
 }
 export const maxLogicalFrames = 32;
 export interface FramedExit<A, E> {
@@ -472,6 +553,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
     adapted.set(c, path);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        Sleep: () => {},
+        Ensuring: (n) => {
+          adaptNode(n.body, `${path}.body`);
+          adaptNode(n.finalizer, `${path}.finalizer`);
+        },
         Succeed: () => {},
         Fail: () => {},
         Map: (n) => {
@@ -532,6 +618,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             };
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          Sleep: (n) => Effect.sleep(n.milliseconds),
+          Ensuring: (n) =>
+            evaluate(n.body, bindings).pipe(
+              Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
+              Effect.mapError((failure) => outward(failure, "ensuring")),
+            ),
           Succeed: (n) =>
             expression(n.value, `${path}.value`).pipe(
               Effect.mapError((cause): FramedFailure =>
@@ -749,6 +841,8 @@ export const EffectIR = Object.freeze({
   asVoid: <A, E>(self: Computation<A, E>): Computation<void, E> =>
     map(self, () => UnitType.literal()),
   succeed,
+  sleep,
+  ensuring,
   fail: failValue,
   map,
   flatMap,

@@ -8,7 +8,8 @@ import { BoolType, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.t
 import type { Expr, OperationRef, Program } from "./kernel.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
-import { frameRuntime } from "./frame-runtime.ts";
+import { asyncRuntime } from "./async-runtime.ts";
+import { frameTrailRuntime, syncFrameStorageRuntime } from "./frame-runtime.ts";
 import { EffectFn, maxLogicalFrames } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
@@ -63,6 +64,8 @@ interface Parameter {
   readonly type: IRType<unknown>;
 }
 type HelperBody =
+  | { readonly _tag: "Sleep"; readonly milliseconds: number }
+  | { readonly _tag: "Ensuring"; readonly body: number; readonly finalizer: number }
   | { readonly _tag: "Pure"; readonly block: RustBlock }
   | { readonly _tag: "Succeed"; readonly block: RustBlock }
   | { readonly _tag: "Fail"; readonly block: RustBlock }
@@ -107,6 +110,7 @@ type HelperBody =
       readonly body: number;
     };
 interface Helper {
+  readonly asynchronous?: boolean;
   readonly origin?: string;
   readonly path: string;
   readonly index: number;
@@ -116,6 +120,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
+  readonly asynchronous: boolean;
   readonly origin?: string;
   readonly path: string;
   readonly name: string;
@@ -285,6 +290,12 @@ export function lowerFunctions(
         effectMemo.set(c.node, scopes);
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            Sleep: (n): HelperBody => ({ _tag: "Sleep", milliseconds: n.milliseconds }),
+            Ensuring: (n): HelperBody => ({
+              _tag: "Ensuring",
+              body: effectHelper(n.body, scope, error, `${path}.body`),
+              finalizer: effectHelper(n.finalizer, scope, error, `${path}.finalizer`),
+            }),
             Succeed: (n): HelperBody => ({
               _tag: "Succeed",
               block: block(n.value, scope, `${path}.value`),
@@ -352,6 +363,23 @@ export function lowerFunctions(
           index,
           Object.freeze({
             index,
+            asynchronous: Match.value(body).pipe(
+              Match.tagsExhaustive({
+                Pure: () => false,
+                Succeed: () => false,
+                Fail: () => false,
+                Log: () => false,
+                Sleep: () => true,
+                Ensuring: () => true,
+                Map: (n) => helpers.get(n.source)?.asynchronous ?? false,
+                FlatMap: (n) =>
+                  !!(helpers.get(n.source)?.asynchronous || helpers.get(n.body)?.asynchronous),
+                Match: (n) =>
+                  !!(helpers.get(n.onTrue)?.asynchronous || helpers.get(n.onFalse)?.asynchronous),
+                Annotate: (n) => helpers.get(n.body)?.asynchronous ?? false,
+                Span: (n) => helpers.get(n.body)?.asynchronous ?? false,
+              }),
+            ),
             origin: provenance?.origin(c),
             path,
             input: scope.input,
@@ -372,6 +400,12 @@ export function lowerFunctions(
           : Object.freeze({ _tag: "Pure", block: block(f.body, rootScope, `${path}.body`) });
       return Object.freeze({
         name,
+        asynchronous: Match.value(node).pipe(
+          Match.tagsExhaustive({
+            Pure: () => false,
+            Effect: (n) => helpers.get(n.root)?.asynchronous ?? false,
+          }),
+        ),
         path,
         origin: provenance?.origin(f),
         input: f.input,
@@ -400,13 +434,15 @@ const newCall = (path: ReturnType<typeof rsSegments>, args: readonly RsExpr[]) =
   Rs.pathCall(path, Rs.ident("new"), args);
 
 /** The bounded array lives behind a failure-only handle, keeping helper Results compact. */
-const framePrelude = Rs.itemsText(
-  [
-    Rs.constItem(Rs.ident("MAX_LOGICAL_FRAMES"), Rs.usizeType(), Rs.litInt(maxLogicalFrames)),
-    Rs.verbatimItem(frameRuntime),
-  ],
-  "\n",
-);
+const framePrelude = (synchronous: boolean) =>
+  Rs.itemsText(
+    [
+      Rs.constItem(Rs.ident("MAX_LOGICAL_FRAMES"), Rs.usizeType(), Rs.litInt(maxLogicalFrames)),
+      Rs.verbatimItem(frameTrailRuntime),
+      ...(synchronous ? [Rs.verbatimItem(syncFrameStorageRuntime)] : []),
+    ],
+    "\n",
+  );
 /** JSON string literal; lone surrogates become \u escapes, keeping Rust sources valid UTF-8. */
 const jsonString = (text: string): RsExpr => Rs.verbatimExpr(`"${escapeJsonContent(text)}"`);
 const rustString = (text: string): RsExpr => Rs.stringLiteral(text);
@@ -553,20 +589,26 @@ export const emitFunctions = (
     writer.write(typeof text === "string" ? text : text.text);
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   const captureFrames = !FailureFrames.isNone(module.failureFrames);
-  if (hasEffect && captureFrames) write(framePrelude);
+  if (hasEffect && captureFrames)
+    write(framePrelude(module.functions.some((f) => f.node._tag === "Effect" && !f.asynchronous)));
   const hasLogScopes = module.functions.some((f) =>
     f.helpers.some(
       (h) => h.body._tag === "Log" || h.body._tag === "Annotate" || h.body._tag === "Span",
     ),
   );
   if (hasLogScopes) write(logPrelude);
+  const hasAsync = module.functions.some((f) => f.asynchronous);
+  if (hasAsync) write(asyncRuntime(hasLogScopes, captureFrames));
   for (const f of module.functions) {
     const callText = (index: number): string => {
       const helper = f.helpers[index];
-      return Rs.call(
+      const call = Rs.call(
         Rs.identExpr(Rs.ident(`h_${f.name}_${helper.index}`)),
-        helper.input.map((p) => Rs.identExpr(Rs.ident(p.name))),
-      ).text;
+        (f.asynchronous && helper.error ? [identExpr("ctx")] : []).concat(
+          helper.input.map((p) => Rs.identExpr(Rs.ident(p.name))),
+        ),
+      );
+      return helper.asynchronous ? Rs.await(call).text : call.text;
     };
     const callFrag = (index: number, occurrence?: string): MappedFragment =>
       mapFragment(f.helpers[index].origin, occurrence, textFragment(callText(index)));
@@ -652,16 +694,20 @@ export const emitFunctions = (
       parts.push("\n}");
       return joinFragments(parts);
     };
+    const errorType = (error: IRType<unknown>) =>
+      f.asynchronous
+        ? Rs.genericType(Rs.namedType("AsyncError"), [rsTypeOf(error)])
+        : rsTypeOf(error);
     const resultType = (output: IRType<unknown>, error?: IRType<unknown>) =>
-      error ? Rs.resultType(rsTypeOf(output), rsTypeOf(error)).text : rsTypeOf(output).text;
-    // Internal Effect helpers carry failure frames alongside the payload; the public
-    // function strips them back to Result<T, E> and stashes the frames for the binary.
+      error ? Rs.resultType(rsTypeOf(output), errorType(error)).text : rsTypeOf(output).text;
+    // Internal helpers carry bounded frames with the error. Public functions stash
+    // them in the synchronous thread owner or the explicit async context.
     const tracedType = (output: IRType<unknown>, error: IRType<unknown>) =>
       captureFrames
         ? Rs.resultType(
             rsTypeOf(output),
             Rs.tupleType([
-              rsTypeOf(error),
+              errorType(error),
               Rs.genericType(Rs.namedType("Box"), [Rs.namedType("FrameTrail")]),
             ]),
           ).text
@@ -682,6 +728,26 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          Sleep: (n) =>
+            joinFragments([
+              `{ match ctx.sleep(${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
+              captureFrames
+                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
+                : "Err(error) => Err(error)",
+              " } }",
+            ]),
+          Ensuring: (n) =>
+            joinFragments([
+              "{ let result = ",
+              adaptFrag(n.body, helper.output, use("body")),
+              "; let saved_interruptible = ctx.interruptible; ctx.interruptible = false; let cleanup = ",
+              callFrag(n.finalizer, use("finalizer")),
+              '; ctx.interruptible = saved_interruptible; if cleanup.is_err() { panic!("Non-failing masked finalizer returned an error"); } match result { Ok(value) => { if ctx.is_cancelled() { ',
+              captureFrames
+                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "ensuring").text})))`
+                : "Err(AsyncError::Interrupted)",
+              ` } else { Ok(value) } }, ${failureArm(helper, "ensuring")} } }`,
+            ]),
           Pure: (n) => renderBlock(n.block),
           Succeed: (n) =>
             joinFragments([
@@ -696,7 +762,9 @@ export const emitFunctions = (
               "{ ",
               mapFragment(helper.origin, undefined, textFragment("Err")),
               captureFrames ? "((" : "(",
-              renderBlock(n.block),
+              ...(f.asynchronous
+                ? ["AsyncError::Fail(", renderBlock(n.block), ")"]
+                : [renderBlock(n.block)]),
               captureFrames
                 ? `, ${Rs.pathCall(rsSegments("FrameTrail"), Rs.ident("new"), [frameOf(helper, "fail")]).text})) }`
                 : ") }",
@@ -753,16 +821,24 @@ export const emitFunctions = (
                 ? ``
                 : ` if ${n.attributes.map((attr) => `*name == ${rustString(attr.key).text}`).join(" || ")} { continue; }`;
             parts.push(
-              ` LOG_ANNOS.with(|scope| { for (name, value) in scope.borrow().iter() {${shadowed} if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str("\\""); log_record.push_str(name); log_record.push_str("\\":"); log_attr_json(*value, &mut log_record); } });`,
+              ` ${f.asynchronous ? "{ for (name, value) in ctx.annos.iter()" : "LOG_ANNOS.with(|scope| { for (name, value) in scope.borrow().iter()"} {${shadowed} if !log_attr_first { log_record.push(','); } log_attr_first = false; log_record.push_str("\\""); log_record.push_str(name); log_record.push_str("\\":"); log_attr_json(*value, &mut log_record); } }${f.asynchronous ? "" : ");"}`,
               ` } log_record.push('}');`,
-              ` LOG_SPANS.with(|scope| { log_record.push_str(",\\"spans\\":["); for (index, entry) in scope.borrow().iter().rev().enumerate() { if index > 0 { log_record.push(','); } log_record.push_str("{\\"label\\":\\""); log_record.push_str(entry.0); log_record.push_str("\\",\\"elapsed_ms\\":"); log_record.push_str(&entry.1.elapsed().as_millis().to_string()); log_record.push('}'); } log_record.push(']'); });`,
-              ` LOG_CONTEXT.with(|scope| { if let Some(context) = scope.borrow().as_ref() { log_record.push_str(",\\"request\\":"); log_record.push_str(context); } });`,
+              ` ${f.asynchronous ? "{ " : "LOG_SPANS.with(|scope| { "}log_record.push_str(",\\"spans\\":["); for (index, entry) in ${f.asynchronous ? "ctx.spans.iter()" : "scope.borrow().iter()"}.rev().enumerate() { if index > 0 { log_record.push(','); } log_record.push_str("{\\"label\\":\\""); log_record.push_str(entry.0); log_record.push_str("\\",\\"elapsed_ms\\":"); log_record.push_str(&entry.1.elapsed().as_millis().to_string()); log_record.push('}'); } log_record.push(']'); }${f.asynchronous ? "" : ");"}`,
+              ` ${f.asynchronous ? "{ if let Some(context) = ctx.request.as_ref()" : "LOG_CONTEXT.with(|scope| { if let Some(context) = scope.borrow().as_ref()"} { log_record.push_str(",\\"request\\":"); log_record.push_str(context); } }${f.asynchronous ? "" : ");"}`,
               ` log_record.push('}'); eprintln!("{}", log_record); } } Ok(()) }`,
             );
             return joinFragments(parts);
           },
           Annotate: (n) => {
             const key = rustString(n.key).text;
+            if (f.asynchronous)
+              return joinFragments([
+                `{ let saved_log_annos = ctx.annos.clone(); let value = LogAttr::${attrVariant(n.type).text}(`,
+                renderBlock(n.value),
+                `); if let Some(slot) = ctx.annos.iter_mut().find(|(name, _)| *name == ${key}) { *slot = (${key}, value); } else { ctx.annos.push((${key}, value)); } let result = `,
+                adaptFrag(n.body, helper.output, use("body")),
+                `; ctx.annos = saved_log_annos; match result { Ok(value) => Ok(value), ${failureArm(helper, "annotate")} } }`,
+              ]);
             return joinFragments([
               `{ let saved_log_annos = LOG_ANNOS.with(|scope| scope.borrow().clone());`,
               ` LOG_ANNOS.with(|scope| { let value = LogAttr::${attrVariant(n.type).text}(`,
@@ -780,44 +856,59 @@ export const emitFunctions = (
             ]);
           },
           Span: (n) =>
-            joinFragments([
-              `{ LOG_SPANS.with(|scope| scope.borrow_mut().push((`,
-              rustString(n.label).text,
-              `, std::time::Instant::now())));`,
-              ` match `,
-              adaptFrag(n.body, helper.output, use("body")),
-              ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } ${failureArm(helper, "span", "LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); ")} } }`,
-            ]),
+            f.asynchronous
+              ? joinFragments([
+                  `{ ctx.spans.push((${rustString(n.label).text}, std::time::Instant::now())); let result = `,
+                  adaptFrag(n.body, helper.output, use("body")),
+                  `; ctx.spans.pop(); match result { Ok(value) => Ok(value), ${failureArm(helper, "span")} } }`,
+                ])
+              : joinFragments([
+                  `{ LOG_SPANS.with(|scope| scope.borrow_mut().push((`,
+                  rustString(n.label).text,
+                  `, std::time::Instant::now())));`,
+                  ` match `,
+                  adaptFrag(n.body, helper.output, use("body")),
+                  ` { Ok(value) => { LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); Ok(value) } ${failureArm(helper, "span", "LOG_SPANS.with(|scope| { scope.borrow_mut().pop(); }); ")} } }`,
+                ]),
         }),
       );
       // Inlining shared control flow can recreate exponential trees; preserve existing optimization boundary.
       writer.writeFragment(
         joinFragments([
-          "#[inline(never)]\nfn ",
+          `#[inline(never)]\n${helper.asynchronous ? "async " : ""}fn `,
           mapFragment(
             helper.origin,
             useAt(helper.path),
             textFragment(Rs.ident(`h_${f.name}_${helper.index}`).text),
             "definition",
           ),
-          `(${helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`).join(", ")}) -> `,
+          `(${(f.asynchronous && helper.error ? ["ctx: &mut AsyncContext"] : []).concat(helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`)).join(", ")}) -> `,
           mapFragment(helper.origin, useAt(helper.path), textFragment(signature), "definition"),
           " ",
-          helperBody,
+          ...(f.asynchronous && helper.error && helper.body._tag !== "Ensuring"
+            ? [
+                `{ if ctx.is_cancelled() { return ${captureFrames ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, helper.body._tag === "FlatMap" ? "flatMap" : helper.body._tag.toLowerCase()).text})))` : "Err(AsyncError::Interrupted)"}; } `,
+                helperBody,
+                " }",
+              ]
+            : [helperBody]),
           "\n\n",
         ]),
       );
     }
+    const entryCancellation = f.asynchronous
+      ? `if ctx.is_cancelled() { ${captureFrames ? `ctx.frames = Some(FrameTrail::new(${frameLiteral(f.name, f.path, "function", f.origin).text}));` : ""} return Err(AsyncError::Interrupted); } `
+      : "";
     writer.writeFragment(
       joinFragments([
-        "\npub fn ",
+        `\npub ${f.asynchronous ? "async " : ""}fn `,
         mapFragment(
           f.origin,
           useAt(f.path),
           textFragment(Rs.ident(`r_${f.name}`).text),
           "definition",
         ),
-        `(${f.input.map((type, i) => `p${i}: ${rsTypeOf(type).text}`).join(", ")}) -> `,
+        `(${(f.asynchronous ? ["ctx: &mut AsyncContext"] : []).concat(f.input.map((type, i) => `p${i}: ${rsTypeOf(type).text}`)).join(", ")}) -> `,
         mapFragment(
           f.origin,
           useAt(f.path),
@@ -835,15 +926,19 @@ export const emitFunctions = (
         Match.value(f.node).pipe(
           Match.tagsExhaustive({
             Pure: (n) => renderBlock(n.block),
-            // Public functions keep Result<T, E>; frames go to the thread-local stash for the binary.
+            // Public functions separate typed/interrupted outcomes from observer-owned frames.
             Effect: (n) =>
               captureFrames
                 ? joinFragments([
-                    "{ match ",
+                    f.asynchronous ? `{ ctx.frames = None; ${entryCancellation}match ` : "{ match ",
                     adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
-                    ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); store_frames(frames); Err(error) } } }`,
+                    ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); ${f.asynchronous ? "ctx.frames = Some(frames)" : "store_frames(frames)"}; Err(error) } } }`,
                   ])
-                : joinFragments(["{ ", adaptFrag(n.root, f.output, useAt(`${f.path}.body`)), " }"]),
+                : joinFragments([
+                    `{ ${entryCancellation}`,
+                    adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
+                    " }",
+                  ]),
           }),
         ),
         "\n\n",
@@ -882,48 +977,55 @@ export const emitFunctions = (
             },
           ]),
         );
-  const callExpr = (f: LoweredModule["functions"][number]): RsExpr =>
-    Rs.pathCall(
+  const callExpr = (f: LoweredModule["functions"][number]): RsExpr => {
+    const call = Rs.pathCall(
       rsSegments("reffect_generated"),
       Rs.ident(`r_${f.name}`),
-      f.input.map((type, i) => parseArg(type, i + 1)),
+      (f.asynchronous ? [Rs.mutRefExpr(identExpr("ctx"))] : []).concat(
+        f.input.map((type, i) => parseArg(type, i + 1)),
+      ),
     );
-  const framesBlock = Rs.inlineStmtBlock(
-    Rs.letPat(
-      Rs.tuplePat(Rs.identPat(Rs.ident("frames")), Rs.identPat(Rs.ident("omitted"))),
-      undefined,
-      Rs.pathCall(rsSegments("reffect_generated"), Rs.ident("take_last_frames"), []),
-    ),
-    Rs.letMut(Rs.ident("body"), undefined, Rs.stringFrom(Rs.stringLiteral("["))),
-    Rs.blockStmt(
-      Rs.forLoop(
-        Rs.pat("(i, frame)"),
-        Rs.dotChain(identExpr("frames"), [
-          { method: Rs.ident("iter"), args: [] },
-          { method: Rs.ident("enumerate"), args: [] },
-        ]),
-        Rs.inlineStmtBlock(
-          Rs.blockStmt(
-            Rs.if_(
-              Rs.cmp(identExpr("i"), ">", Rs.litInt(0)),
-              Rs.inlineStmtBlock(
-                Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push"), [Rs.litChar(",")])),
+    return f.asynchronous ? Rs.await(call) : call;
+  };
+  const framesBlock = (asynchronous: boolean) =>
+    Rs.inlineStmtBlock(
+      Rs.letPat(
+        Rs.tuplePat(Rs.identPat(Rs.ident("frames")), Rs.identPat(Rs.ident("omitted"))),
+        undefined,
+        asynchronous
+          ? Rs.dotCall(identExpr("ctx"), Rs.ident("take_frames"), [])
+          : Rs.pathCall(rsSegments("reffect_generated"), Rs.ident("take_last_frames"), []),
+      ),
+      Rs.letMut(Rs.ident("body"), undefined, Rs.stringFrom(Rs.stringLiteral("["))),
+      Rs.blockStmt(
+        Rs.forLoop(
+          Rs.pat("(i, frame)"),
+          Rs.dotChain(identExpr("frames"), [
+            { method: Rs.ident("iter"), args: [] },
+            { method: Rs.ident("enumerate"), args: [] },
+          ]),
+          Rs.inlineStmtBlock(
+            Rs.blockStmt(
+              Rs.if_(
+                Rs.cmp(identExpr("i"), ">", Rs.litInt(0)),
+                Rs.inlineStmtBlock(
+                  Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push"), [Rs.litChar(",")])),
+                ),
               ),
             ),
+            Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push_str"), [identExpr("frame")])),
           ),
-          Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push_str"), [identExpr("frame")])),
         ),
       ),
-    ),
-    Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push"), [Rs.litChar("]")])),
-    Rs.eprintln(
-      '{"schema":"reffect.frames@1","frames":',
-      identExpr("body"),
-      ',"omitted":',
-      identExpr("omitted"),
-      "}",
-    ),
-  );
+      Rs.stmt(Rs.dotCall(identExpr("body"), Rs.ident("push"), [Rs.litChar("]")])),
+      Rs.eprintln(
+        '{"schema":"reffect.frames@1","frames":',
+        identExpr("body"),
+        ',"omitted":',
+        identExpr("omitted"),
+        "}",
+      ),
+    );
   const arms = module.functions.map((f) => ({
     pat: Rs.stringPat(f.name),
     guard: Rs.cmp(
@@ -941,11 +1043,24 @@ export const emitFunctions = (
         Effect: (n) =>
           Rs.match_(callExpr(f), [
             { pat: Rs.pat("Ok(value)"), body: print(f.output, identExpr("value"), "ok") },
+            ...(f.asynchronous
+              ? [
+                  {
+                    pat: Rs.pat("Err(reffect_generated::AsyncError::Interrupted)"),
+                    body: Rs.inlineStmtBlock(
+                      Rs.println("interrupt"),
+                      ...(captureFrames ? [Rs.blockStmt(framesBlock(true))] : []),
+                    ),
+                  },
+                ]
+              : []),
             {
-              pat: Rs.pat("Err(error)"),
+              pat: Rs.pat(
+                f.asynchronous ? "Err(reffect_generated::AsyncError::Fail(error))" : "Err(error)",
+              ),
               body: Rs.inlineStmtBlock(
                 Rs.stmt(print(n.error, identExpr("error"), "err")),
-                ...(captureFrames ? [Rs.blockStmt(framesBlock)] : []),
+                ...(captureFrames ? [Rs.blockStmt(framesBlock(f.asynchronous))] : []),
               ),
             },
           ]),
@@ -954,6 +1069,13 @@ export const emitFunctions = (
   }));
   const mainBody = Rs.block(
     [
+      ...(hasAsync
+        ? [
+            Rs.verbatimStmt(
+              "let (_cancel_sender, cancellation) = tokio::sync::watch::channel(false); let mut ctx = reffect_generated::AsyncContext::new(cancellation);",
+            ),
+          ]
+        : []),
       Rs.let_(
         Rs.ident("args"),
         Rs.vecType(Rs.stringType()),
@@ -989,10 +1111,24 @@ export const emitFunctions = (
   );
   const files = Object.freeze({
     "Cargo.toml":
-      '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n',
+      '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n' +
+      (hasAsync
+        ? '\n[dependencies]\ntokio = { version = "=1.53.1", features = ["macros", "rt", "time", "sync"] }\n'
+        : ""),
     "src/lib.rs": writer.text,
     "src/main.rs": `${
-      Rs.fnItem(Rs.ident("main"), [], Rs.resultType(Rs.unitType(), Rs.strRefType()), mainBody).text
+      (hasAsync
+        ? Rs.withAttributes(
+            [Rs.tokioMainAttribute()],
+            Rs.asyncFnItem(
+              Rs.ident("main"),
+              [],
+              Rs.resultType(Rs.unitType(), Rs.strRefType()),
+              mainBody,
+            ),
+          )
+        : Rs.fnItem(Rs.ident("main"), [], Rs.resultType(Rs.unitType(), Rs.strRefType()), mainBody)
+      ).text
     }\n`,
   });
   return Object.freeze({ files, ranges: writer.ranges });
