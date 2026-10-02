@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Option, Schema, SchemaAST, SchemaIssue } from "effect";
+import { Cause, Effect, Exit, Match, Option, Schema, SchemaAST, SchemaIssue } from "effect";
 import { Rpc, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, type Plan } from "./compiler.ts";
 import { FailureFrames } from "./frame-policy.ts";
@@ -23,7 +23,7 @@ import {
 import type { AnyFn } from "./kernel.ts";
 import { Rs } from "./rust-emit.ts";
 import { ArrayType, Struct, TaggedUnion, rustFieldNames, rustVariantName } from "./records.ts";
-import { arrayItem, structLayout, unionCases } from "./kernel.ts";
+import { NumberType, arrayItem, structLayout, unionCases } from "./kernel.ts";
 import type { RsExpr } from "./rust-emit.ts";
 import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
@@ -36,6 +36,8 @@ const StringJson = RpcCodecs.StringJson;
 type Scalar = "u64" | "bool" | "unit" | "never" | "string";
 /** A struct or tagged union recognized structurally from the contract (REC-005). */
 interface Composite {
+  /** Generated function stem, derived from the full codec structure (NUM-003). */
+  readonly name: string;
   readonly type: IRType<unknown>;
   /** Fields per struct, or per union case keyed by tag; codecs in schema order. */
   readonly fields: readonly { readonly name: string; readonly codec: Codec }[];
@@ -47,12 +49,24 @@ interface Composite {
   readonly expected: string;
   /** Element codec of a `Schema.Array` (ARR-005). */
   readonly item?: Codec;
+  /** A JS number: plain JSON numbers when finite-only, plus verified checks (NUM-002). */
+  readonly number?: {
+    readonly finiteOnly: boolean;
+    readonly checks: readonly { readonly rust: string; readonly expected: string }[];
+  };
 }
-/** Rust function-name stem for a composite's generated codec. */
-const codecName = (type: IRType<unknown>): string =>
-  arrayItem(type) ? `Array_${type.id.slice(type.id.lastIndexOf("/") + 1)}` : type.native.type;
 type Codec = Scalar | Composite;
-type Registry = Map<IRType<unknown>, Composite>;
+type Registry = Map<string, Composite>;
+const codecKey = (codec: Codec): string => (typeof codec === "string" ? codec : codec.name);
+// FNV-1a over the codec signature; names only need to be stable and distinct per build.
+const digest = (text: string): string => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+};
 const isScalar = (codec: Codec): codec is Scalar => typeof codec === "string";
 const witness = {
   u64: U64Type,
@@ -140,6 +154,7 @@ const fieldsOf = (
   path: string,
   registry: Registry,
   tagged: boolean,
+  decodeOnly: boolean,
 ): { readonly tag: string | undefined; readonly fields: Composite["fields"] } => {
   if (
     ast.encoding ||
@@ -169,7 +184,7 @@ const fieldsOf = (
     }
     fields.push({
       name: property.name,
-      codec: codec(property.type, `${path}.${property.name}`, false, registry),
+      codec: codec(property.type, `${path}.${property.name}`, false, registry, decodeOnly),
     });
   }
   if (tagged && tag === undefined)
@@ -178,13 +193,23 @@ const fieldsOf = (
 };
 const witnessFields = (fields: Composite["fields"]) =>
   Object.fromEntries(fields.map((field) => [field.name, witnessOf(field.codec)]));
-const composite = (ast: SchemaAST.AST, path: string, registry: Registry): Composite => {
+const composite = (
+  ast: SchemaAST.AST,
+  path: string,
+  registry: Registry,
+  decodeOnly: boolean,
+): Composite => {
   if (SchemaAST.isObjects(ast)) {
-    const { fields } = fieldsOf(ast, path, registry, false);
+    const { fields } = fieldsOf(ast, path, registry, false, decodeOnly);
     const plain = Struct(witnessFields(fields));
     const identifier = ast.annotations?.identifier;
     const type = typeof identifier === "string" ? plain.annotate({ identifier }) : plain;
-    return register(registry, { type, fields, cases: [], expected: expectedOf(type) });
+    return register(registry, type.native.type, {
+      type,
+      fields,
+      cases: [],
+      expected: expectedOf(type),
+    });
   }
   if (SchemaAST.isArrays(ast)) {
     if (
@@ -200,10 +225,16 @@ const composite = (ast: SchemaAST.AST, path: string, registry: Registry): Compos
         path,
         "Only plain Schema.Array(item) is supported; tuples and checks are not",
       );
-    const item = codec(ast.rest[0], `${path}[]`, false, registry);
+    const item = codec(ast.rest[0], `${path}[]`, false, registry, decodeOnly);
     if (item === "never") throw unsupported(path, "Array items cannot be Never");
     const type = ArrayType.of(witnessOf(item));
-    return register(registry, { type, fields: [], cases: [], item, expected: expectedOf(type) });
+    return register(registry, "Array", {
+      type,
+      fields: [],
+      cases: [],
+      item,
+      expected: expectedOf(type),
+    });
   }
   if (SchemaAST.isUnion(ast)) {
     if (ast.checks || ast.encoding || ast.context || ast.annotations)
@@ -214,7 +245,7 @@ const composite = (ast: SchemaAST.AST, path: string, registry: Registry): Compos
           `${path}.members[${i}]`,
           "Only tagged Struct union members are supported",
         );
-      const { tag, fields } = fieldsOf(member, `${path}.members[${i}]`, registry, true);
+      const { tag, fields } = fieldsOf(member, `${path}.members[${i}]`, registry, true, decodeOnly);
       return { tag: tag!, fields };
     });
     if (new Set(cases.map((c) => c.tag)).size !== cases.length)
@@ -222,25 +253,146 @@ const composite = (ast: SchemaAST.AST, path: string, registry: Registry): Compos
     const type = TaggedUnion(
       Object.fromEntries(cases.map((c) => [c.tag, witnessFields(c.fields)])),
     );
-    return register(registry, { type, fields: [], cases, expected: expectedOf(type) });
+    return register(registry, type.native.type, {
+      type,
+      fields: [],
+      cases,
+      expected: expectedOf(type),
+    });
   }
   throw unsupported(path, "Unsupported schema");
 };
-const register = (registry: Registry, shape: Composite): Composite => {
-  const existing = registry.get(shape.type);
+const register = (registry: Registry, base: string, shape: Omit<Composite, "name">): Composite => {
+  const signature = JSON.stringify([
+    base,
+    shape.type.id,
+    shape.fields.map((f) => [f.name, codecKey(f.codec)]),
+    shape.cases.map((c) => [c.tag, c.fields.map((f) => [f.name, codecKey(f.codec)])]),
+    shape.item === undefined ? null : codecKey(shape.item),
+    shape.number ?? null,
+  ]);
+  const name = `${base}_${digest(signature)}`;
+  const existing = registry.get(name);
   if (existing) return existing;
-  registry.set(shape.type, shape);
-  return shape;
+  const composite = Object.freeze({ ...shape, name });
+  registry.set(name, composite);
+  return composite;
 };
-const codec = (ast: SchemaAST.AST, path: string, payload: boolean, registry: Registry): Codec => {
+// Effect's number checks, recognized by representation id and verified by running them.
+const numberChecks: Record<
+  string,
+  (
+    payload: Record<string, unknown>,
+  ) => { readonly test: (x: number) => boolean; readonly rust: (x: string) => string } | undefined
+> = {
+  "effect/schema/isInt": () => ({
+    test: (x) => Number.isSafeInteger(x),
+    rust: (x) => `(${x}.is_finite() && ${x}.trunc() == ${x} && ${x}.abs() <= 9007199254740991.0)`,
+  }),
+  "effect/schema/isFinite": () => ({
+    test: (x) => Number.isFinite(x),
+    rust: (x) => `${x}.is_finite()`,
+  }),
+  // Range checks compare with Order.Number, which orders NaN below every number: NaN passes
+  // the upper bounds and fails the lower ones. NaN bounds are refused.
+  "effect/schema/isGreaterThanOrEqualTo": ({ minimum: m }) =>
+    typeof m === "number" && !Number.isNaN(m)
+      ? { test: (x) => x >= m, rust: (x) => `${x} >= ${f64(m)}` }
+      : undefined,
+  "effect/schema/isGreaterThan": ({ exclusiveMinimum: m }) =>
+    typeof m === "number" && !Number.isNaN(m)
+      ? { test: (x) => x > m, rust: (x) => `${x} > ${f64(m)}` }
+      : undefined,
+  "effect/schema/isLessThanOrEqualTo": ({ maximum: m }) =>
+    typeof m === "number" && !Number.isNaN(m)
+      ? {
+          test: (x) => Number.isNaN(x) || x <= m,
+          rust: (x) => `(${x}.is_nan() || ${x} <= ${f64(m)})`,
+        }
+      : undefined,
+  "effect/schema/isLessThan": ({ exclusiveMaximum: m }) =>
+    typeof m === "number" && !Number.isNaN(m)
+      ? {
+          test: (x) => Number.isNaN(x) || x < m,
+          rust: (x) => `(${x}.is_nan() || ${x} < ${f64(m)})`,
+        }
+      : undefined,
+};
+const f64 = (value: number): string => {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  return `f64::from_bits(0x${view.getBigUint64(0).toString(16).padStart(16, "0")})`;
+};
+const numberCodec = (
+  ast: SchemaAST.AST,
+  path: string,
+  decodeOnly: boolean,
+  registry: Registry,
+): Composite => {
+  if (ast.encoding || ast.context || ast.annotations)
+    throw unsupported(path, "Annotated or transformed numbers are not supported");
+  const checks = (ast.checks ?? []).map((group, i) => {
+    const check = Match.value(group).pipe(
+      Match.tag("Filter", (filter) => filter),
+      Match.orElse(() => undefined),
+    );
+    if (!check) throw unsupported(`${path}.checks[${i}]`, "Check groups are not supported");
+    const representation = check.annotations?.representation as
+      | { readonly id?: unknown; readonly payload?: unknown }
+      | undefined;
+    const id = typeof representation?.id === "string" ? representation.id : "";
+    const expected = check.annotations?.expected;
+    const recognized = Object.hasOwn(numberChecks, id)
+      ? numberChecks[id]((representation?.payload ?? {}) as Record<string, unknown>)
+      : undefined;
+    if (!recognized || typeof expected !== "string")
+      throw unsupported(`${path}.checks[${i}]`, "Unsupported number check");
+    const probes = [NaN, Infinity, -Infinity, 0, -0, 1, -1, 1.5, 2 ** 53, 2 ** 53 - 1, 5e-324];
+    const payloadValues = Object.values((representation?.payload ?? {}) as Record<string, unknown>);
+    for (const bound of payloadValues)
+      if (typeof bound === "number") probes.push(bound, bound + 1, bound - 1, bound + 0.5);
+    for (const probe of probes)
+      if ((check.run(probe, ast, {}) === undefined) !== recognized.test(probe))
+        throw unsupported(
+          `${path}.checks[${i}]`,
+          `Check ${id} disagrees with its native predicate`,
+        );
+    return { rust: recognized.rust("x"), expected: `Expected ${expected}` };
+  });
+  if (checks.length && !decodeOnly)
+    throw unsupported(path, "Checked numbers are supported for decoding payloads only");
+  const ids = (ast.checks ?? []).map(
+    (check) => (check.annotations?.representation as { readonly id?: unknown } | undefined)?.id,
+  );
+  return register(registry, "Number", {
+    type: NumberType,
+    fields: [],
+    cases: [],
+    expected: "",
+    number: {
+      // SchemaAST.Number.toCodecJson drops the non-finite strings when finiteness is checked.
+      finiteOnly: ids.includes("effect/schema/isInt") || ids.includes("effect/schema/isFinite"),
+      checks,
+    },
+  });
+};
+// `payload` admits top-level u64 ranges; `decodeOnly` admits checked numbers anywhere beneath.
+const codec = (
+  ast: SchemaAST.AST,
+  path: string,
+  payload: boolean,
+  registry: Registry,
+  decodeOnly: boolean,
+): Codec => {
   if (u64RangeOf(ast)) {
     if (!payload) throw unsupported(path, "u64Range schemas are supported for payloads only");
     return "u64";
   }
   if (ast === U64Json.ast) return "u64";
   if (ast === StringJson.ast) return "string";
+  if (SchemaAST.isNumber(ast)) return numberCodec(ast, path, decodeOnly, registry);
   if (SchemaAST.isObjects(ast) || SchemaAST.isUnion(ast) || SchemaAST.isArrays(ast))
-    return composite(ast, path, registry);
+    return composite(ast, path, registry, decodeOnly);
   if (ast.checks || ast.encoding || ast.context || ast.annotations)
     throw unsupported(
       path,
@@ -262,7 +414,7 @@ const codec = (ast: SchemaAST.AST, path: string, payload: boolean, registry: Reg
 const local = (name: string) => Rs.identExpr(Rs.ident(name));
 const callLocal = (name: string, ...args: readonly RsExpr[]) => Rs.call(local(name), args);
 const encode = (kind: Codec, value: RsExpr): RsExpr => {
-  if (!isScalar(kind)) return callLocal(`encode_${codecName(kind.type)}`, Rs.refExpr(value));
+  if (!isScalar(kind)) return callLocal(`encode_${kind.name}`, Rs.refExpr(value));
   if (kind === "never") return Rs.unreachableMatch(value);
   if (kind === "unit")
     return Rs.block(
@@ -414,8 +566,14 @@ const compile = <Rpcs extends Rpc.Any>(
           const positions = services.map((service) => servicePosition(service, procedure));
           if (rpc.defectSchema.ast !== Schema.Defect().ast)
             throw unsupported(procedure, "Custom defect codecs are unsupported");
-          const success = codec(rpc.successSchema.ast, `${procedure}.success`, false, registry);
-          const error = codec(rpc.errorSchema.ast, `${procedure}.error`, false, registry);
+          const success = codec(
+            rpc.successSchema.ast,
+            `${procedure}.success`,
+            false,
+            registry,
+            false,
+          );
+          const error = codec(rpc.errorSchema.ast, `${procedure}.error`, false, registry, false);
           const fn = binding.fn;
           if (
             !IRType.same(fn.output, witnessOf(success)) ||
@@ -467,12 +625,12 @@ const compile = <Rpcs extends Rpc.Any>(
               if (!field) throw unsupported(procedure, `Unknown payload field ${name}`);
               return {
                 name,
-                codec: codec(field.type, `${procedure}.payload.${name}`, true, registry),
+                codec: codec(field.type, `${procedure}.payload.${name}`, true, registry, true),
                 range: u64RangeOf(field.type),
               };
             });
           } else {
-            const kind = codec(payload, `${procedure}.payload`, true, registry);
+            const kind = codec(payload, `${procedure}.payload`, true, registry, true);
             if (binding.fields.length)
               throw unsupported(procedure, "Scalar payload bindings have no named fields");
             inputs =
@@ -509,7 +667,7 @@ const compile = <Rpcs extends Rpc.Any>(
                       : []),
                   )
                 : callLocal(
-                    `decode_${codecName(input.codec.type)}`,
+                    `decode_${input.codec.name}`,
                     isRecord
                       ? Rs.try_(callLocal("field", local("payload"), Rs.stringLiteral(input.name)))
                       : local("payload"),
@@ -871,6 +1029,7 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
     const item = arrayItem(type);
     if (item) return `Vec<${rustType(item)}>`;
     if (type.layout) return `reffect_generated::${type.native.type}`;
+    if (IRType.same(type, NumberType)) return "f64";
     return IRType.same(type, U64Type)
       ? "u64"
       : IRType.same(type, BoolType)
@@ -882,7 +1041,7 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
   const decodeField = (codec: Codec, value: string, path: string): string =>
     isScalar(codec)
       ? `${codec === "never" ? "never" : codec}_in(${value}, ${path})`
-      : `decode_${codecName(codec.type)}(${value}, ${path})`;
+      : `decode_${codec.name}(${value}, ${path})`;
   const encodeField = (codec: Codec, value: string): string =>
     isScalar(codec)
       ? codec === "u64"
@@ -892,7 +1051,7 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
           : codec === "string"
             ? `Value::String(${value}.clone())`
             : "Value::Null"
-      : `encode_${codecName(codec.type)}(&${value})`;
+      : `encode_${codec.name}(&${value})`;
   const structBody = (
     type: IRType<unknown>,
     tag: string | undefined,
@@ -923,8 +1082,28 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
     return { decode: decode + `    Ok(${build})\n`, encode };
   };
   const items = composites.map((shape) => {
-    const name = codecName(shape.type);
+    const name = shape.name;
     const expected = Rs.stringLiteral(shape.expected).text;
+    if (shape.number !== undefined) {
+      const { finiteOnly, checks } = shape.number;
+      const fallback = finiteOnly
+        ? ""
+        : `        Value::String(text) => match text.as_str() { "NaN" => f64::NAN, "Infinity" => f64::INFINITY, "-Infinity" => f64::NEG_INFINITY, _ => return Err(at(${Rs.stringLiteral('Expected "Infinity" | "-Infinity" | "NaN"').text}, path)) },\n`;
+      const mismatch = Rs.stringLiteral(
+        finiteOnly ? "Expected number" : 'Expected number | "Infinity" | "-Infinity" | "NaN"',
+      ).text;
+      return (
+        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<f64, String> {\n    let x = match value {\n        Value::Number(number) => number.as_f64().unwrap_or(f64::NAN),\n${fallback}        _ => return Err(at(${mismatch}, path)),\n    };\n` +
+        checks
+          .map(
+            (check) =>
+              `    if !(${check.rust}) { return Err(at(${Rs.stringLiteral(check.expected).text}, path)); }\n`,
+          )
+          .join("") +
+        `    Ok(x)\n}\n` +
+        `fn encode_${name}(value: &f64) -> Value { js_number(*value) }\n`
+      );
+    }
     if (shape.item !== undefined)
       return (
         `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
@@ -968,6 +1147,14 @@ fn at(message: &str, path: Option<&Path>) -> String {
     // Array indexes print unquoted, keys as JSON strings, as the pinned formatter does.
     let segments: String = names.iter().map(|segment| if segment.index { format!("[{}]", segment.name) } else { format!("[{}]", serde_json::to_string(segment.name).unwrap()) }).collect();
     format!("{}\\n  at {}", message, segments)
+}
+/// JSON.stringify-compatible doubles: non-finite as strings, -0 as 0, safe integers unfractioned.
+fn js_number(x: f64) -> Value {
+    if x.is_nan() { return Value::String("NaN".to_string()); }
+    if x.is_infinite() { return Value::String(if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string()); }
+    if x == 0.0 { return Value::from(0u64); }
+    if x.fract() == 0.0 && x.abs() < 9007199254740992.0 { return Value::from(x as i64); }
+    Value::from(x)
 }
 fn u64_in(value: &Value, path: Option<&Path>) -> Result<u64, String> { u64_arg(value, None).map_err(|message| at(&message, path)) }
 fn bool_in(value: &Value, path: Option<&Path>) -> Result<bool, String> { bool_arg(value, None).map_err(|message| at(&message, path)) }

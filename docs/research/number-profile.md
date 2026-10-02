@@ -24,6 +24,14 @@ Status: **accepted for implementation (2026-10-02)**, the first wire feature in 
 - **NUM-004 — JS-compatible encoding.** Non-finite values become the three strings (plain codec only), `-0` becomes `0`, and integral values with magnitude below 2^53 print as integers. Other finite values use `serde_json`'s shortest round-trip form, which parses to the same double.
 - **NUM-005 — known divergences.** (a) `serde_json` parses a JSON `-0` as `+0`; this is unobservable through the admitted operations and encoding. (b) A JSON number outside the double range (`1e400`) is a whole-body parse failure natively, whereas JavaScript reads it as `Infinity`. (c) The runner passes doubles as `f64:` plus 16 hex digits of their bits.
 
+## Delivered (2026-10-02)
+
+Part A (`de6bc5a`) added `R.Number` and its operations. Part B admitted `Schema.Number` at the RPC boundary: plain and checked numbers at top level, in projected fields, in structs and in arrays, with codec functions named from their full structure (NUM-003) and JS-compatible encoding (NUM-004).
+
+**Finding while verifying checks:** Effect's range filters compare with `Order.Number`, which orders NaN below every number. `isLessThan`/`isLessThanOrEqualTo` therefore **accept** NaN, while the greater-than checks reject it. The compile-time verification (running each recognized filter on probe values against its JS twin) caught the naive `x <= m` mapping. The native predicates now include NaN for upper bounds, and NaN bounds are refused. Verification covers the JS twin; the emitted Rust is covered by the differential test, and a mutation that drops the safe-integer bound from native `isInt` fails it.
+
+Evidence: [numbers.test.ts](../../packages/reffect/tests/numbers.test.ts) 2/2 and [numbers-rpc.test.ts](../../packages/reffect/tests/numbers-rpc.test.ts) 2/2. About 70 raw requests (plain, range-only, finite-only, `PageSize` as Remote declares it, two-sided ranges, nested and array numbers; `-0`, `1e21`, 2^53 ± 1, `5e-324`, the non-finite strings, wrong types) give responses equal to the official server under strict equality; the stock client round-trips NaN and infinities. Checked outputs and unrecognized checks such as `isMultipleOf` are refused.
+
 ## Acceptance
 
 Reference results equal JS for `add`/`eq`/`lt` over a corpus that includes NaN, infinities, ±0, 2^53 + 1 and subnormals; native debug/release agree bit for bit. Raw RPC requests with plain and checked numbers (top level, in struct fields, in arrays) match the official server's responses exactly, including the non-finite strings and every check message. Unrecognized or mismatching checks are refused while compiling.
