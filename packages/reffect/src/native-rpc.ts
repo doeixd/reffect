@@ -117,10 +117,18 @@ export interface RpcBinding<F extends AnyFn = AnyFn> {
   readonly services: readonly Service[];
 }
 type NativeValue<A> = [A] extends [never] ? never : [A] extends [undefined] ? void : A;
+// TaggedError classes reach R as their data: `_tag` plus fields (TE-002).
+type ErrorData<S> = S extends { readonly members: infer M extends ReadonlyArray<unknown> }
+  ? ErrorData<M[number]>
+  : S extends { readonly fields: infer F extends Schema.Struct.Fields }
+    ? Schema.Struct<F>["Type"]
+    : S extends Schema.Top
+      ? S["Type"]
+      : never;
 type HandlerError<P extends Rpc.Any> = P extends {
   readonly errorSchema: infer E extends Schema.Top;
 }
-  ? E["Type"]
+  ? ErrorData<E>
   : never;
 type HasMiddleware<P extends Rpc.Any> = [Rpc.Middleware<P>] extends [never] ? false : true;
 type Bindings<Rpcs extends Rpc.Any> = {
@@ -281,6 +289,67 @@ const withoutContext = (ast: SchemaAST.AST): SchemaAST.AST => {
     }),
   );
 };
+// Schema.TaggedError: a Declaration encoded through exactly its tagged struct (TE-001).
+const taggedClass = (
+  ast: SchemaAST.Declaration,
+  path: string,
+  decodeOnly: boolean,
+): SchemaAST.AST => {
+  if (decodeOnly)
+    throw unsupported(path, "TaggedError classes are supported in success and error schemas only");
+  const struct = ast.typeParameters[0];
+  if (
+    ast.checks ||
+    ast.context ||
+    ast.encodingChecks ||
+    ast.typeParameters.length !== 1 ||
+    ast.encoding?.length !== 1 ||
+    ast.encoding[0].to !== struct ||
+    typeof ast.annotations?.identifier !== "string"
+  )
+    throw unsupported(path, "Only Schema.TaggedError classes are supported");
+  return struct;
+};
+// A struct-form sample per admitted codec, for round-trip verification.
+const sampleOf = (codec: Codec, path: string): unknown => {
+  if (isScalar(codec))
+    return Match.value(codec).pipe(
+      Match.when("bool", () => true),
+      Match.when("string", () => "reffect"),
+      Match.when("u64", () => "7"),
+      Match.orElse(() => {
+        throw unsupported(path, "Class fields must have a sample value for verification");
+      }),
+    );
+  if (codec.number) return 1.5;
+  if (codec.item) return [];
+  if (codec.record) return {};
+  if (codec.cases.length)
+    return { _tag: codec.cases[0].tag, ...sampleFields(codec.cases[0].fields, path) };
+  return sampleFields(codec.fields, path);
+};
+const sampleFields = (fields: readonly FieldCodec[], path: string) =>
+  Object.fromEntries(
+    fields
+      .filter((field) => field.optional === undefined)
+      .map((field) => [field.name, sampleOf(field.codec, `${path}.${field.name}`)]),
+  );
+// The class must decode its struct form to an instance and encode it back unchanged.
+const verifyClass = (
+  ast: SchemaAST.Declaration,
+  tag: string,
+  fields: readonly FieldCodec[],
+  path: string,
+) => {
+  const sample = { _tag: tag, ...sampleFields(fields, path) };
+  const codec = Schema.toCodecJson(Schema.make<Schema.Codec<unknown>>(ast));
+  const decoded = Schema.decodeUnknownExit(codec)(sample);
+  const roundTrip = Exit.isSuccess(decoded)
+    ? Schema.encodeUnknownExit(codec)(decoded.value)
+    : decoded;
+  if (!Exit.isSuccess(roundTrip) || JSON.stringify(roundTrip.value) !== JSON.stringify(sample))
+    throw unsupported(path, "TaggedError class does not round-trip through its struct form");
+};
 const fieldsOf = (
   ast: SchemaAST.Objects,
   path: string,
@@ -423,16 +492,18 @@ const composite = (
       ...(lengths.length ? { lengths } : {}),
     });
   }
-  if (SchemaAST.isUnion(ast)) {
-    if (ast.checks || ast.encoding || ast.context || ast.annotations)
+  if (SchemaAST.isUnion(ast) || SchemaAST.isDeclaration(ast)) {
+    if (SchemaAST.isUnion(ast) && (ast.checks || ast.encoding || ast.context || ast.annotations))
       throw unsupported(path, "Annotated or checked unions are not supported");
-    const cases = ast.types.map((member, i) => {
-      if (!SchemaAST.isObjects(member))
-        throw unsupported(
-          `${path}.members[${i}]`,
-          "Only tagged Struct union members are supported",
-        );
-      const { tag, fields } = fieldsOf(member, `${path}.members[${i}]`, registry, true, decodeOnly);
+    // A single TaggedError class is a one-case union (TE-001).
+    const members = SchemaAST.isUnion(ast) ? ast.types : [ast];
+    const cases = members.map((member, i) => {
+      const at = `${path}.members[${i}]`;
+      const struct = SchemaAST.isDeclaration(member) ? taggedClass(member, at, decodeOnly) : member;
+      if (!SchemaAST.isObjects(struct))
+        throw unsupported(at, "Only tagged Struct or TaggedError union members are supported");
+      const { tag, fields } = fieldsOf(struct, at, registry, true, decodeOnly);
+      if (SchemaAST.isDeclaration(member)) verifyClass(member, tag!, fields, at);
       return { tag: tag!, fields };
     });
     if (new Set(cases.map((c) => c.tag)).size !== cases.length)
@@ -632,7 +703,12 @@ const codec = (
   if (ast === U64Json.ast) return "u64";
   if (ast === StringJson.ast) return "string";
   if (SchemaAST.isNumber(ast)) return numberCodec(ast, path, decodeOnly, registry);
-  if (SchemaAST.isObjects(ast) || SchemaAST.isUnion(ast) || SchemaAST.isArrays(ast))
+  if (
+    SchemaAST.isObjects(ast) ||
+    SchemaAST.isUnion(ast) ||
+    SchemaAST.isArrays(ast) ||
+    SchemaAST.isDeclaration(ast)
+  )
     return composite(ast, path, registry, decodeOnly);
   if (ast.checks || ast.encoding || ast.context || ast.annotations)
     throw unsupported(
@@ -642,6 +718,8 @@ const codec = (
   if (SchemaAST.isBoolean(ast)) return "bool";
   if (SchemaAST.isUndefined(ast)) return "unit";
   if (SchemaAST.isNever(ast)) return "never";
+  // Native strings are well-formed, so encoding through plain Schema.String is exact (TE-003).
+  if (SchemaAST.isString(ast) && !decodeOnly) return "string";
   if (SchemaAST.isString(ast))
     throw unsupported(
       path,

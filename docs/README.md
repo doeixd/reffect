@@ -58,6 +58,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 - [Well-formed strings](research/string-profile.md): `R.String` semantics compared across UTF-16/UTF-8, literal `replaceAll`, owned/borrowed lowering and the Foldkit escaping differential.
 - [JS numbers](research/number-profile.md): `R.Number` as IEEE doubles, pinned `Schema.Number` JSON codec rules (non-finite strings, `isInt`/`isFinite`), structural check recognition and JS-compatible encoding.
 - [Native types](research/native-types.md) (proposed): JS-type Rust crates (`ryu-js`, Boa's `JsString`), and sized integers, tuples, fixed arrays and bytes as checked refinements of Effect schemas.
+- [TaggedError classes](research/tagged-errors.md): `Schema.TaggedError` error unions as R tagged-union cases with verified round trips; plain `Schema.String` in encoded positions; JS boundaries build instances.
 - [Array length checks](research/array-length.md): decode-only `isMaxLength`/`isMinLength`/`isBetweenLength` on `Schema.Array`, verified against Effect filters; checks run after elements, and the first failure wins.
 - [String-keyed records](research/records-js-order.md): `R.Record(R.String, V)` with `keys`/`values`/`size`/`has`, JS own-property key order natively (`preserve_order` plus index-key partitioning), and record codecs.
 - [Optional fields](research/optional-fields.md): `R.optional`/`R.optionalKey` struct fields and `R.UndefinedOr`, native presence (`Option`/`Option<Option>`), and the verified `| null` mismatch text of `Schema.optional` JSON codecs.

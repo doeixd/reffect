@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-02 — TaggedError classes in RPC error schemas
+
+- Recorded [TaggedError decisions](docs/research/tagged-errors.md) (TE-001–004) from Remote's error classes and probes on Effect 4.0.0. A class is a `Declaration` encoding to its tagged struct. Failures go over the wire as the struct form. A handler failing with a plain object (not an instance) is a defect, so JS boundaries must build instances.
+- `NativeRpc` maps TaggedError classes in success and error schemas onto `R.TaggedUnion` cases: a union of classes becomes the union, and one class becomes a one-case union. Each class is verified by round-tripping a generated struct sample through it. Plain `Schema.String` is now admitted in encoded positions, where native strings encode exactly. Binding types map classes to their field data (`ErrorData`).
+- Validation (focused):
+  - `tagged-errors-rpc.test.ts` 2/2. Read/protocol failures (including `-0`, `Infinity` and non-ASCII messages), successes, invalid payloads and a single-class error are strictly equal to the official server. A stock client receives `instanceof ReadError`/`ProtocolError` with the same fields.
+  - Refusals: a class in a payload, an untagged `Schema.Class`.
+  - String, records, native, schema, optional and auth RPC suites pass, as does `vp check`.
+
 ## 2026-10-02 — Array length checks
 
 - Recorded [length-check decisions](docs/research/array-length.md) (LEN-001–003) from Remote's only use (`Fields = Array(String).check(isMaxLength(256))`, requests only) and probes on Effect 4.0.0. Elements decode before checks run, and only the first failing check is reported. `NonEmptyArray` is a tuple.
