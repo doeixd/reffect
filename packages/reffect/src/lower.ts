@@ -1144,7 +1144,8 @@ export const emitFunctions = (
         parts.push(";\n");
       }
       parts.push("    ");
-      parts.push(render(block.body));
+      // A block's final expression runs after every operand borrow, so an owned local moves (§17).
+      parts.push(render(block.body, undefined, block.body._tag === "Local"));
       parts.push("\n}");
       return joinFragments(parts);
     };

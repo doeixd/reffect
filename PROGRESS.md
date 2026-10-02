@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-02 — Prior-design reconciliation for strings and roadmap
+
+- Per user direction, the existing PLAN sequence stands: the north-star review now records that its inputs are context only, and the frontier returns to milestone 4 preparation (portable Schema, owned strings/records, explicit unions, wire validation).
+- Searched the docs for existing string designs and reconciled [the string record](docs/research/string-profile.md) with architecture §11/§14, the initial ownership rules (§17), Foldkit IR/compiler-design operation sketches and the Rust literal encoder. Fixed the one conflict: lowering now moves an owned computed local in a block's final position instead of copying it.
+- Validation: `string-profile`, `rust-emission-output` and `effect` pass 11/11 in 3 files; strict package TypeScript passes.
+
 ## 2026-10-02 — Bounded well-formed string profile
 
 - Recorded [string decisions](docs/research/string-profile.md) (STR-001–005) after comparing JS UTF-16 and Rust UTF-8 semantics, ECMAScript `replaceAll`/`GetSubstitution`, and Effect v4 `String`. Added `R.String` (`reffect/string@1`, refusing lone surrogates at decode) with `literal`, `eq`, `includes` and literal-only `replaceAll` (non-empty search, no `$`), enforced by a new checked `Operation.withLiteralArguments`. Native lowering uses owned `String` at boundaries, `&str` in helpers and `str::contains`/`str::replace` with no crate; the native runner passes hex-encoded UTF-8. Delayed-cleanup string captures are refused.

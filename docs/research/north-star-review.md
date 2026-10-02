@@ -17,7 +17,9 @@ Reviewed 2026-10-02: [north-star acceptance input](../north_star.md) and [runtim
 - **NS-3 — semantic foreign operations.** A JS reference package paired with a Rust implementation and conformance evidence (for example `parse5` with `html5ever`, WHATWG URL with `url`, JSON with `serde_json`) is an operation/implementation registry entry under existing policy, not a new mechanism. Each pairing stays a candidate until conformance passes.
 - **Suggestions document.** It is consistent with decisions already in force: async Scope, interruption and finalization before RPC is complete (done as milestone 3A); erase/specialize/preserve; no similarly-named aliasing. New references recorded as candidates only: `id_effect` and related Rust Effect ports as design comparisons (source reuse needs licensing review), and Shuttle for controlled-schedule concurrency tests at milestone 12. Its module-tier ordering is **not** adopted as sequencing; workloads keep driving order (NS-1).
 
-## Needs a user decision
+## User decision (2026-10-02)
+
+The user prefers the existing PLAN sequence and asked that these inputs be taken with a grain of salt. Milestone order and acceptance criteria are unchanged; the north star and inventory stay as context, not as roadmap commitments. The original open questions follow for the record.
 
 - **Q-1 — milestone 8 acceptance and order.** The north star proposes that milestone 8 accept only _unmodified_ upstream Foldkit SSR source, mechanically transformed, compiled and hydrated by the stock client. It would also move SSR ahead of Remote and SQL (milestones 4–7). That raises the bar substantially: a codemod for generators/control flow, strings/records/unions/collections, JSON/URL/RegExp operations, a VNode representation and a `parse5`-compatible parser. Recommendation: decide after the inventory quantifies the gap. Strings, records, unions and arrays gate milestones 4 and 8 alike, so the next representation work is useful either way.
 - **Q-2 — which Foldkit.** Upstream `foldkit/foldkit` or the `doeixd/foldkit-plus` fork; Remote and replicated-state work may exist only in the fork.

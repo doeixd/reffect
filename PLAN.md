@@ -79,17 +79,17 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Next: string JSON codecs at the RPC boundary, then the next inventory-ranked gap.**
-The [bounded string profile](docs/research/string-profile.md) is implemented:
-well-formed `R.String`, `eq`/`includes`/literal `replaceAll`, owned `String` with
-borrowed helpers, and Foldkit `escapeText`/`escapeAttributeValue` agreeing with
-the pinned upstream functions in reference and native builds. The
-[north-star review](docs/research/north-star-review.md) and
-[Foldkit SSR inventory](docs/research/foldkit-ssr-inventory.md) drive what follows.
+**Next: continue milestone 4 preparation in roadmap order.**
+The "Before milestone 4" gate requires a portable Schema subset, owned
+strings/records, explicit unions, wire validation and Remote authorization
+semantics. [Well-formed strings](docs/research/string-profile.md) are the
+first piece. [Server-lifetime RPC services](docs/research/server-layer.md)
+closed the current 3B workload. The [north-star review](docs/research/north-star-review.md)
+is context only; the roadmap order stands.
 
-1. Admit `Schema.String` payloads/results in `NativeRpc` (serde_json already refuses lone surrogates); compare stock-client round trips, including astral text and refusals.
-2. From the inventory, pick the next representation gate. Records/tagged unions and string building (concatenation/templates) are the leading candidates; prefer the one that unlocks a whole upstream function.
-3. Open decisions for the user: Q-1 (milestone 8 acceptance on unmodified upstream source, and whether SSR moves ahead of Remote/SQL) and Q-2 (upstream Foldkit or the `foldkit-plus` fork).
+1. Admit `Schema.String` payloads/results in `NativeRpc` and compare stock-client round trips, including astral text and refusals.
+2. Search existing designs first ([Foldkit Remote](docs/foldkit-remote.md), [RPC protocol](docs/rpc-protocol.md), [Foldkit IR](docs/foldkit-ir-design.md), [architecture](docs/architecture.md)), then record decisions for records/structs and explicit tagged unions as RemoteServer needs them.
+3. Derive the portable Schema subset and wire validation from the Remote contracts before admitting a RemoteServer path.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 
