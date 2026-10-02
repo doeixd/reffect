@@ -288,13 +288,19 @@ const compile = <Rpcs extends Rpc.Any>(
             ? [
                 Rs.stmt(
                   Rs.if_(
-                    Rs.prefix("!", Rs.dotCall(local("payload"), Rs.ident("is_object"), [])),
+                    payload.propertySignatures.length === 0
+                      ? Rs.dotCall(local("payload"), Rs.ident("is_null"), [])
+                      : Rs.prefix("!", Rs.dotCall(local("payload"), Rs.ident("is_object"), [])),
                     Rs.inlineStmtBlock(
                       Rs.stmt(
                         Rs.return_(
                           Rs.err(
                             Rs.dotCall(
-                              Rs.stringLiteral("Expected payload object"),
+                              Rs.stringLiteral(
+                                payload.propertySignatures.length === 0
+                                  ? "Expected object | array"
+                                  : "Expected object",
+                              ),
                               Rs.ident("to_string"),
                               [],
                             ),
@@ -308,8 +314,17 @@ const compile = <Rpcs extends Rpc.Any>(
             : inputs.length === 0
               ? [Rs.stmt(Rs.try_(callLocal("unit_arg", local("payload"), Rs.none())))]
               : [];
-          inputs.forEach((_input, i) =>
-            statements.push(Rs.let_(Rs.ident(`arg_${i}`), undefined, args[i])),
+          const inputIndices = new Map(inputs.map((input, index) => [input.name, index]));
+          const validationOrder = isRecord
+            ? payload.propertySignatures.map((field) => {
+                const index = inputIndices.get(String(field.name));
+                if (index === undefined)
+                  throw unsupported(procedure, "Missing handler argument for payload field");
+                return index;
+              })
+            : inputs.map((_input, index) => index);
+          validationOrder.forEach((index) =>
+            statements.push(Rs.let_(Rs.ident(`arg_${index}`), undefined, args[index])),
           );
           if (protectedRpc && auth) {
             statements.push(
