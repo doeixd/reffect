@@ -180,7 +180,7 @@ const total = R.fn([R.U64, R.U64], R.U64, (a, b) =>
 );
 ```
 
-`R.Effect.forEach(self, (a, i) => effect, { discard? })` iterates effectfully, sequential and fail-fast as in Effect; concurrency is refused. Index access, `findFirst`, sorting, `append`/`concat` and RPC array codecs are not admitted yet. See [array decisions](../../docs/research/arrays.md).
+`R.Effect.forEach(self, (a, i) => effect, { discard? })` iterates effectfully, sequential and fail-fast as in Effect; concurrency is refused. `NativeRpc` accepts `Schema.Array(item)` payloads, fields and results with invalid-input messages matching the stock server. Index access, `findFirst`, sorting, `append`/`concat`, tuples and checked arrays are not admitted yet. See [array decisions](../../docs/research/arrays.md).
 
 ## Synchronous Effect profile
 

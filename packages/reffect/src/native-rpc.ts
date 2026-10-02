@@ -22,8 +22,8 @@ import {
 } from "./kernel.ts";
 import type { AnyFn } from "./kernel.ts";
 import { Rs } from "./rust-emit.ts";
-import { Struct, TaggedUnion, rustFieldNames, rustVariantName } from "./records.ts";
-import { structLayout, unionCases } from "./kernel.ts";
+import { ArrayType, Struct, TaggedUnion, rustFieldNames, rustVariantName } from "./records.ts";
+import { arrayItem, structLayout, unionCases } from "./kernel.ts";
 import type { RsExpr } from "./rust-emit.ts";
 import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
@@ -45,7 +45,12 @@ interface Composite {
   }[];
   /** Official `defaultFormatter` text for a value that is not this shape at all. */
   readonly expected: string;
+  /** Element codec of a `Schema.Array` (ARR-005). */
+  readonly item?: Codec;
 }
+/** Rust function-name stem for a composite's generated codec. */
+const codecName = (type: IRType<unknown>): string =>
+  arrayItem(type) ? `Array_${type.id.slice(type.id.lastIndexOf("/") + 1)}` : type.native.type;
 type Codec = Scalar | Composite;
 type Registry = Map<IRType<unknown>, Composite>;
 const isScalar = (codec: Codec): codec is Scalar => typeof codec === "string";
@@ -181,6 +186,25 @@ const composite = (ast: SchemaAST.AST, path: string, registry: Registry): Compos
     const type = typeof identifier === "string" ? plain.annotate({ identifier }) : plain;
     return register(registry, { type, fields, cases: [], expected: expectedOf(type) });
   }
+  if (SchemaAST.isArrays(ast)) {
+    if (
+      ast.elements.length ||
+      ast.rest.length !== 1 ||
+      ast.checks ||
+      ast.encoding ||
+      ast.context ||
+      ast.annotations ||
+      ast.encodingChecks
+    )
+      throw unsupported(
+        path,
+        "Only plain Schema.Array(item) is supported; tuples and checks are not",
+      );
+    const item = codec(ast.rest[0], `${path}[]`, false, registry);
+    if (item === "never") throw unsupported(path, "Array items cannot be Never");
+    const type = ArrayType.of(witnessOf(item));
+    return register(registry, { type, fields: [], cases: [], item, expected: expectedOf(type) });
+  }
   if (SchemaAST.isUnion(ast)) {
     if (ast.checks || ast.encoding || ast.context || ast.annotations)
       throw unsupported(path, "Annotated or checked unions are not supported");
@@ -215,7 +239,8 @@ const codec = (ast: SchemaAST.AST, path: string, payload: boolean, registry: Reg
   }
   if (ast === U64Json.ast) return "u64";
   if (ast === StringJson.ast) return "string";
-  if (SchemaAST.isObjects(ast) || SchemaAST.isUnion(ast)) return composite(ast, path, registry);
+  if (SchemaAST.isObjects(ast) || SchemaAST.isUnion(ast) || SchemaAST.isArrays(ast))
+    return composite(ast, path, registry);
   if (ast.checks || ast.encoding || ast.context || ast.annotations)
     throw unsupported(
       path,
@@ -237,7 +262,7 @@ const codec = (ast: SchemaAST.AST, path: string, payload: boolean, registry: Reg
 const local = (name: string) => Rs.identExpr(Rs.ident(name));
 const callLocal = (name: string, ...args: readonly RsExpr[]) => Rs.call(local(name), args);
 const encode = (kind: Codec, value: RsExpr): RsExpr => {
-  if (!isScalar(kind)) return callLocal(`encode_${kind.type.native.type}`, Rs.refExpr(value));
+  if (!isScalar(kind)) return callLocal(`encode_${codecName(kind.type)}`, Rs.refExpr(value));
   if (kind === "never") return Rs.unreachableMatch(value);
   if (kind === "unit")
     return Rs.block(
@@ -484,14 +509,14 @@ const compile = <Rpcs extends Rpc.Any>(
                       : []),
                   )
                 : callLocal(
-                    `decode_${input.codec.type.native.type}`,
+                    `decode_${codecName(input.codec.type)}`,
                     isRecord
                       ? Rs.try_(callLocal("field", local("payload"), Rs.stringLiteral(input.name)))
                       : local("payload"),
                     isRecord
                       ? Rs.some(
                           Rs.verbatimExpr(
-                            `&Path { parent: None, name: ${Rs.stringLiteral(input.name).text} }`,
+                            `&Path { parent: None, name: ${Rs.stringLiteral(input.name).text}, index: false }`,
                           ),
                         )
                       : Rs.none(),
@@ -842,11 +867,22 @@ export const NativeRpc = Object.freeze({
 
 /** Generated serde_json decoders/encoders for contract composites, with official messages. */
 const compositeCodecs = (composites: readonly Composite[]): string => {
-  const rustType = (type: IRType<unknown>) => `reffect_generated::${type.native.type}`;
+  const rustType = (type: IRType<unknown>): string => {
+    const item = arrayItem(type);
+    if (item) return `Vec<${rustType(item)}>`;
+    if (type.layout) return `reffect_generated::${type.native.type}`;
+    return IRType.same(type, U64Type)
+      ? "u64"
+      : IRType.same(type, BoolType)
+        ? "bool"
+        : IRType.same(type, StringType)
+          ? "String"
+          : "()";
+  };
   const decodeField = (codec: Codec, value: string, path: string): string =>
     isScalar(codec)
       ? `${codec === "never" ? "never" : codec}_in(${value}, ${path})`
-      : `decode_${codec.type.native.type}(${value}, ${path})`;
+      : `decode_${codecName(codec.type)}(${value}, ${path})`;
   const encodeField = (codec: Codec, value: string): string =>
     isScalar(codec)
       ? codec === "u64"
@@ -856,7 +892,7 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
           : codec === "string"
             ? `Value::String(${value}.clone())`
             : "Value::Null"
-      : `encode_${codec.type.native.type}(&${value})`;
+      : `encode_${codecName(codec.type)}(&${value})`;
   const structBody = (
     type: IRType<unknown>,
     tag: string | undefined,
@@ -869,7 +905,7 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
     const decode = fields
       .map(
         (field, i) =>
-          `    let child_${i} = Path { parent: path, name: ${Rs.stringLiteral(field.name).text} };\n` +
+          `    let child_${i} = Path { parent: path, name: ${Rs.stringLiteral(field.name).text}, index: false };\n` +
           `    let f${i} = match object.get(${Rs.stringLiteral(field.name).text}) { Some(value) => ${decodeField(field.codec, "value", `Some(&child_${i})`)}?, None => return Err(at("Missing key", Some(&child_${i}))) };\n`,
       )
       .join("");
@@ -887,8 +923,16 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
     return { decode: decode + `    Ok(${build})\n`, encode };
   };
   const items = composites.map((shape) => {
-    const name = shape.type.native.type;
+    const name = codecName(shape.type);
     const expected = Rs.stringLiteral(shape.expected).text;
+    if (shape.item !== undefined)
+      return (
+        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
+        `    let Some(items) = value.as_array() else { return Err(at(${expected}, path)) };\n` +
+        `    let mut out = Vec::with_capacity(items.len());\n` +
+        `    for (i, item) in items.iter().enumerate() {\n        let index = i.to_string();\n        let child = Path { parent: path, name: &index, index: true };\n        out.push(${decodeField(shape.item, "item", "Some(&child)")}?);\n    }\n    Ok(out)\n}\n` +
+        `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    Value::Array(value.iter().map(|item| ${encodeField(shape.item, "(*item)")}).collect())\n}\n`
+      );
     if (shape.cases.length === 0) {
       const body = structBody(shape.type, undefined, shape.fields);
       // An empty Struct also accepts arrays, as the pinned decoder does.
@@ -914,14 +958,15 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
       `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    match value {\n${variants.map((v) => v.encode).join("")}    }\n}\n`
     );
   });
-  return `struct Path<'a> { parent: Option<&'a Path<'a>>, name: &'a str }
+  return `struct Path<'a> { parent: Option<&'a Path<'a>>, name: &'a str, index: bool }
 fn at(message: &str, path: Option<&Path>) -> String {
     let mut names = Vec::new();
     let mut current = path;
-    while let Some(segment) = current { names.push(segment.name); current = segment.parent; }
+    while let Some(segment) = current { names.push(segment); current = segment.parent; }
     if names.is_empty() { return message.to_string(); }
     names.reverse();
-    let segments: String = names.iter().map(|name| format!("[{}]", serde_json::to_string(name).unwrap())).collect();
+    // Array indexes print unquoted, keys as JSON strings, as the pinned formatter does.
+    let segments: String = names.iter().map(|segment| if segment.index { format!("[{}]", segment.name) } else { format!("[{}]", serde_json::to_string(segment.name).unwrap()) }).collect();
     format!("{}\\n  at {}", message, segments)
 }
 fn u64_in(value: &Value, path: Option<&Path>) -> Result<u64, String> { u64_arg(value, None).map_err(|message| at(&message, path)) }

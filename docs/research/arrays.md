@@ -37,6 +37,12 @@ Evidence: [arrays.test.ts](../../packages/reffect/tests/arrays.test.ts) passes 3
 
 Evidence: `arrays.test.ts` 3/3 adds reference-vs-official exits and log counts for success, mid-way failure and first-element failure, plus native exits and stderr showing elements after a failure never run, discard logging, and an async body with a sleep per element, under both frame policies on Tokio.
 
+## Part C delivered (2026-10-02)
+
+`NativeRpc` recognizes plain `Schema.Array(item)` recursively (top-level, in Struct fields, nested arrays, arrays of tagged unions) and maps it onto the interned `R.Array` witness; tuples and checked arrays (for example `isMinLength`) are refused. Generated decoders report `Expected array` (from the official formatter) and first element errors through unquoted index path segments; encoders build JSON arrays. Codec function names come from the witness id, because `Vec<…>` is not an identifier.
+
+Evidence: [arrays-rpc.test.ts](../../packages/reffect/tests/arrays-rpc.test.ts) passes 2/2. 15 raw requests match the official server exactly (u64 arrays with index and u64 edge values, empty arrays, objects and null as arrays, bad elements, struct elements with nested missing keys, nested boolean grids, unions with bad tags or case fields), stock-client round trips succeed, and checked arrays are refused. Quoting index segments natively makes the test fail. TypeScript 5.9, 6.0.3 and 7.0.2 report no errors.
+
 ## Deferred
 
 Index access and `findFirst` (both need `Option`), sorting (ordering semantics), `append`/`concat`, non-empty array types, fixed-size arrays, loop fusion, concurrent `forEach`, records/maps and `Chunk`.

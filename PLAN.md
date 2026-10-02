@@ -90,7 +90,8 @@ is context only; the roadmap order stands.
 
 1. Done: `NativeRpc.StringJson` payloads/results match the official server ([STR-006/007](docs/research/string-profile.md#rpc-boundary-2026-10-02)).
 2. Done: [records and tagged unions](docs/research/records-unions.md), including pure/effectful matching and RPC codecs with exact invalid-input parity.
-3. Derive the portable Schema subset and wire validation from the Remote contracts before admitting a RemoteServer path.
+3. Done: [arrays and structured iteration](docs/research/arrays.md), including `Effect.forEach` and RPC array codecs.
+4. Remaining Remote wire gaps before a RemoteServer path: `NullOr`/optional fields, literal unions, records/maps, integer-checked `Schema.Number`, and typed error unions. Search existing designs first for each.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

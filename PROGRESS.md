@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Arrays, part C (RPC codecs)
+
+- `NativeRpc` recognizes plain `Schema.Array(item)` recursively and generates decoders and encoders with official `Expected array` text and unquoted index path segments; tuples and checked arrays are refused.
+- Validation (focused): `arrays-rpc.test.ts` 2/2 (15 raw requests identical to the official server, stock-client round trips, refusal); quoting index segments natively fails the test. `records-rpc`, `string-rpc`, `native-rpc`, `schema-rpc`, `rpc-auth`, `server-layer` and `arrays` pass 17/17 in 7 files. TypeScript 5.9, 6.0.3 and 7.0.2 report no errors; `vp check` passes.
+
 ## 2026-10-02 — Arrays, part B (Effect.forEach)
 
 - Added dual `R.Effect.forEach` with optional `discard` as a Computation `ForEach` node (sequential, fail-fast; concurrency refused), delegating to official `Effect.forEach` in the reference and lowering to one awaited loop with early return natively.
