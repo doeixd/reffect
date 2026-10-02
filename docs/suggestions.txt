@@ -1,0 +1,760 @@
+# reffect Rust Runtime Strategy
+
+## Goal
+
+reffect is not a Rust port of Effect.
+
+It is a semantic compiler for a statically representable subset of Effect v4. TypeScript constructs typed IR, official Effect acts as the semantic oracle, and reffect lowers supported programs into specialized native Rust.
+
+The guiding principle is:
+
+> **Compile away what can be proven static, lower to native Rust libraries where semantics match, and implement only the irreducible Effect-specific semantics in a small reffect runtime.**
+
+The generated runtime should therefore remain as small as possible.
+
+---
+
+## Architecture
+
+```text
+                     Effect v4
+                  semantic oracle
+                        │
+                        ▼
+                    reffect IR
+                        │
+                 semantic planner
+                        │
+        ┌───────────────┼────────────────┐
+        │               │                │
+        ▼               ▼                ▼
+   Compile away    Rust ecosystem   reffect kernel
+```
+
+### Compile away
+
+Examples:
+
+- Context lookups
+- most Layer wiring
+- Match
+- pure expressions
+- static service graphs
+- some Schedule programs
+- Request batching
+- Stream pipelines where fusion is valid
+
+### Lower to Rust ecosystem
+
+Examples:
+
+- Tokio
+- Axum / Hyper / Tower
+- SQLx
+- `futures`
+- Serde
+- Moka
+- tracing / OpenTelemetry
+
+### Small reffect runtime
+
+Reserved for semantics that cannot safely disappear:
+
+- Scope
+- finalizers
+- interruption
+- Cause
+- Exit
+- fiber parent/child semantics
+- FiberRef inheritance/join behavior
+- observable Layer lifecycle behavior
+
+The middle column should become large.
+
+The custom-runtime column should remain small.
+
+---
+
+# Effect Modules: Suggested Priority
+
+## Tier 1 — Semantic kernel
+
+These are prerequisites for serious native Effect execution.
+
+1. `Effect`
+2. `Scope`
+3. `Cause`
+4. `Exit`
+5. `Context`
+6. `Layer`
+7. `Clock`
+8. `Duration`
+9. `Fiber`
+10. Fiber-local references / runtime references
+
+The most important immediate work is:
+
+```text
+async Effect
+   ↓
+Scope
+   ↓
+interruption
+   ↓
+finalization
+   ↓
+fiber lifetime
+```
+
+This should happen before native RPC is considered semantically complete.
+
+---
+
+## Tier 2 — Core concurrency
+
+11. `Deferred`
+12. `Ref`
+13. `Semaphore`
+14. `Queue`
+15. `PubSub`
+
+These unlock most server-side concurrency patterns.
+
+---
+
+## Tier 3 — Server platform
+
+16. RPC
+17. Schema
+18. HTTP server
+19. SQL
+20. Stream
+21. Channel
+22. Sink
+
+These form the core native application platform.
+
+---
+
+## Tier 4 — Higher-level runtime
+
+23. `Schedule`
+24. `Request`
+25. `RequestResolver`
+26. `Cache`
+27. `ScopedCache`
+28. `Pool`
+29. `Resource`
+30. `RcRef`
+31. `RcMap`
+32. `SubscriptionRef`
+
+These should be implemented as workloads require them rather than as a blanket Effect-standard-library port.
+
+---
+
+## Tier 5 — Operational infrastructure
+
+33. Logger
+34. Tracer
+35. Metric
+36. Config
+37. FileSystem
+38. Path
+39. Console / Stdio
+40. Random
+41. Crypto
+42. HTTP client
+
+---
+
+## Tier 6 — Later ecosystem support
+
+43. HttpApi
+44. persistent RPC / WebSockets
+45. FiberSet / FiberMap / FiberHandle
+46. LayerRef / LayerMap / ScopedRef
+47. transactional / STM modules
+48. workflow / cluster
+49. CLI / process
+50. specialized Effect ecosystem modules
+
+Pure collection/utility modules such as Array, Option, Chunk, HashMap, Order, String, Number, etc. should not receive separate milestones. Add their operations to the IR as needed.
+
+---
+
+# Rust Substrate Mapping
+
+| Effect area | Likely Rust substrate | Strategy |
+|---|---|---|
+| Effect async | Tokio / native Future | Direct lowering |
+| Fiber | Tokio tasks / JoinSet | Semantic adapter |
+| Interruption | CancellationToken + cooperative cancellation | reffect semantics |
+| Scope | RAII + custom async scope | reffect kernel |
+| Cause | Custom representation | reffect kernel |
+| Exit | Result + custom completion representation | reffect kernel |
+| Context | Rust arguments / generated structs | Compile away |
+| Layer | Generated constructors / dependency graph | Mostly compile away |
+| FiberRef | task-local substrate | Custom inheritance semantics |
+| Deferred | Tokio oneshot / Notify | Adapter |
+| Ref | Atomic / Mutex / RwLock | Planner selects representation |
+| Semaphore | Tokio Semaphore | Thin adapter |
+| Queue | Tokio mpsc | Semantic adapter |
+| PubSub | Tokio broadcast / async-broadcast | Planner selects implementation |
+| Clock | Tokio time | Adapter |
+| Schedule | Generated state machine | Compile |
+| Stream | `futures::Stream` | Native lowering |
+| Sink | `futures::Sink` | Native lowering |
+| HTTP | Axum / Hyper / Tower | Generate |
+| RPC | Generated HTTP/WebSocket handlers | Generate |
+| SQL | SQLx | Direct lowering |
+| Schema | Serde + generated validation/codecs | Compile |
+| Cache | Moka | Adapter |
+| Pool | SQLx Pool / deadpool / bb8 | Adapter |
+| Logger | tracing | Adapter |
+| Tracing | tracing + OpenTelemetry | Adapter |
+| Metrics | OpenTelemetry / native metrics | Adapter |
+| RequestResolver | generated batching | Prefer compile-time specialization |
+
+A Rust primitive with a similar name is not automatically semantically equivalent.
+
+For example:
+
+```text
+Effect Queue     ≠ automatically Tokio mpsc
+Effect Layer     ≠ Tower Layer
+Effect FiberRef  ≠ task_local!
+Effect Scope     ≠ Rust Drop
+```
+
+Every mapping must pass the same reference-conformance requirements as generated code.
+
+---
+
+# Existing Rust Effect Ports
+
+There are already substantial Effect/ZIO-inspired Rust implementations.
+
+## `Industrial/id_effect`
+
+This is the most relevant prior art.
+
+It includes implementations or equivalents for much of:
+
+- Effect
+- Context
+- Layer
+- Scope
+- Cause
+- Exit
+- Fiber
+- cancellation
+- FiberRef
+- Deferred
+- Queue
+- Semaphore
+- PubSub
+- Ref
+- Clock
+- Schedule
+- Stream
+- Sink
+- Cache
+- Pool
+- STM
+- Schema
+- tracing
+- testing infrastructure
+
+This demonstrates that Effect-style semantics can be expressed in Rust.
+
+However, its architectural goal differs from reffect.
+
+`id_effect` asks approximately:
+
+```text
+How do we implement an Effect runtime in Rust?
+```
+
+reffect asks:
+
+```text
+Given an Effect program known statically,
+what is the smallest native program with equivalent observable semantics?
+```
+
+That distinction is fundamental.
+
+---
+
+## `effectful`
+
+`effectful` derives from the `id_effect` lineage rather than representing a completely separate implementation approach.
+
+It contains integrations for systems such as Tokio, Axum, Tower and Reqwest.
+
+It is useful prior art for integration issues, but direct source reuse should receive separate technical and licensing review.
+
+---
+
+## `effect-rs`
+
+Another ZIO/Cats Effect-inspired Rust project.
+
+It provides concepts including:
+
+- typed environment
+- typed errors
+- fibers
+- cancellation
+- dependency injection
+- streams
+- schedules
+- STM
+- test runtime
+
+It is useful as independent design research but currently less compelling as reffect's primary runtime substrate.
+
+---
+
+# Should reffect use an existing Effect port?
+
+## Recommendation
+
+> **Study them heavily. Do not make them the default generated runtime.**
+
+Use projects such as `id_effect` for:
+
+### Architecture research
+
+Compare representations of:
+
+- Cause
+- Scope
+- Fiber
+- Layer
+- FiberRef
+- Schedule
+- STM
+
+### Coverage checklist
+
+They reveal which semantic primitives eventually become necessary in a complete Effect-like system.
+
+### Design review
+
+Whenever reffect introduces a semantic primitive, compare:
+
+```text
+Effect v4
+vs.
+id_effect / other Rust implementations
+vs.
+reffect's proposed native lowering
+```
+
+### Selective reuse
+
+Individual implementation ideas may be reusable after verifying:
+
+- semantic equivalence
+- runtime cost
+- maintenance
+- licensing
+- target compatibility
+
+But reffect should avoid generating a generic Effect interpreter when static compilation can eliminate the abstraction.
+
+---
+
+# Why a Generic Rust Effect Runtime Should Not Be the Default
+
+Consider:
+
+```ts
+UserRepo.pipe(
+  Effect.flatMap(repo => repo.find(id)),
+  Effect.retry(Schedule.exponential("100 millis"))
+)
+```
+
+A generic Effect implementation may retain something conceptually resembling:
+
+```text
+Effect
+ ↓
+FlatMap
+ ↓
+Context lookup
+ ↓
+Effect
+ ↓
+Schedule interpreter
+ ↓
+runtime
+```
+
+reffect should try to produce:
+
+```rust
+let user = retry_exponential(
+    || repo.find(id)
+).await?;
+```
+
+or, when static analysis permits:
+
+```rust
+let user = sqlx::query_as!(...)
+    .fetch_one(&pool)
+    .await?;
+```
+
+The semantic abstraction disappears while its behavior remains.
+
+That is reffect's main advantage over a direct Rust Effect port.
+
+---
+
+# Important Native Libraries
+
+## Tokio
+
+Primary substrate for:
+
+- async execution
+- tasks
+- timers
+- channels
+- Semaphore
+- Mutex / RwLock
+- Notify
+- task locals
+
+Use `tokio-util::sync::CancellationToken` as a possible cancellation primitive.
+
+Do not equate Tokio cancellation directly with Effect interruption semantics.
+
+---
+
+## Axum / Hyper / Tower
+
+Preferred HTTP substrate.
+
+```text
+Effect RpcGroup
+      ↓
+reffect planner
+      ↓
+generated Axum / Hyper handler
+      ↓
+compiled native function
+```
+
+Avoid unnecessary intermediate Effect-style HTTP runtimes.
+
+---
+
+## SQLx
+
+Preferred database substrate.
+
+Especially valuable with Foldkit because reffect can translate:
+
+```text
+Foldkit Query IR
+      ↓
+semantic plan
+      ↓
+SQL
+      ↓
+SQLx
+```
+
+This may eliminate substantial runtime machinery.
+
+---
+
+## `futures`
+
+Use `Stream` and `Sink` as native Rust representations where their semantics fit.
+
+A pipeline such as:
+
+```text
+Stream
+ → map
+ → filter
+ → take
+```
+
+may eventually compile to a fused native polling loop rather than an interpreted chain of combinators.
+
+---
+
+## Serde
+
+Use Serde as serialization infrastructure.
+
+Do not treat Serde itself as Effect Schema.
+
+Instead:
+
+```text
+Effect Schema AST
+        ↓
+reffect
+        ├── Rust type
+        ├── Serde implementation
+        ├── validation
+        ├── transformations
+        └── protocol codec
+```
+
+---
+
+## Moka
+
+Strong candidate for Cache.
+
+Still verify:
+
+- concurrent lookup sharing
+- failures
+- TTL
+- cancellation
+- eviction semantics
+- scoped lifetime
+
+before claiming Effect Cache equivalence.
+
+---
+
+## tracing + OpenTelemetry
+
+Preferred observability substrate.
+
+Effect-visible logging/tracing/metric behavior remains part of the semantic adapter, while the actual telemetry machinery should come from the Rust ecosystem.
+
+---
+
+# Scope, Fibers and Cancellation
+
+This is currently the most important unresolved runtime design.
+
+The minimum semantic model must explain:
+
+```text
+HTTP request begins
+       ↓
+request Scope created
+       ↓
+handler acquires resource
+       ↓
+handler suspends
+       ↓
+child fibers may start
+       ↓
+client disconnects
+       ↓
+interruption propagates
+       ↓
+children terminate
+       ↓
+finalizers run exactly once
+       ↓
+Scope closes
+```
+
+The implementation should compare:
+
+- Effect v4
+- `id_effect`
+- Tokio primitives
+- structured-concurrency projects
+- Asupersync-style region/cancellation designs
+
+before selecting the final representation.
+
+The likely answer is a small reffect semantic kernel implemented over Tokio rather than a complete independent executor.
+
+Conceptually:
+
+```text
+ReffectFiber
+ ├── cancellation state
+ ├── parent / child relationship
+ ├── FiberRefs
+ └── Scope
+      ├── resources
+      ├── finalizers
+      └── completion state
+```
+
+The exact representation should be determined experimentally through conformance tests rather than fixed prematurely.
+
+---
+
+# Schedule
+
+Prefer compilation over interpretation.
+
+For example:
+
+```text
+Schedule.exponential(...)
+  + Schedule.recurs(5)
+```
+
+can become a native state machine or loop.
+
+Libraries such as BackON may serve as implementations for simple supported profiles, but richer Effect Schedule programs may be better generated directly.
+
+---
+
+# Queue and PubSub
+
+The planner should allow multiple implementations.
+
+For example:
+
+```text
+Effect PubSub requirement
+        ↓
+candidate implementations
+
+Tokio broadcast
+async-broadcast
+custom generated implementation
+        ↓
+semantic verification
+        ↓
+selected backend
+```
+
+This is an ideal use of reffect's implementation registry.
+
+---
+
+# RequestResolver
+
+This area may offer especially valuable compiler optimizations.
+
+Instead of preserving a runtime DataLoader abstraction:
+
+```text
+all([
+  Users.get(1),
+  Users.get(2),
+  Users.get(3)
+])
+```
+
+reffect may recognize the static relationship and emit:
+
+```text
+users.get_many([1, 2, 3])
+```
+
+or a single SQL query.
+
+Only perform such rewrites when identity, ordering, failure, caching, batching and interruption semantics remain equivalent.
+
+---
+
+# Concurrency Testing
+
+Native concurrency deserves additional testing beyond ordinary examples.
+
+A tool such as Shuttle could run generated Rust under controlled/replayable scheduling.
+
+Potential targets:
+
+- Scope finalization
+- cancellation races
+- Deferred
+- Queue
+- PubSub
+- Layer acquisition
+- resource release
+- parallel effects
+
+Possible strategy:
+
+```text
+official Effect execution
+          ↓
+semantic trace
+          ↑
+generated Rust
+under controlled scheduler
+```
+
+This could become an important part of proving native concurrency semantics.
+
+---
+
+# Recommended Runtime Dependency Spine
+
+```text
+Effect
+  ↓
+Scope
+  ↓
+Cause / Exit
+  ↓
+Context / Layer
+  ↓
+async / Clock
+  ↓
+Fiber / FiberRef
+  ↓
+Deferred / Ref / Semaphore / Queue
+  ↓
+RPC / HTTP
+  ↓
+SQL
+  ↓
+Stream / Channel
+  ↓
+PubSub / Schedule / RequestResolver
+  ↓
+Cache / Pool / broader concurrency
+```
+
+Minimal async execution, Scope, cancellation and finalization should move earlier than full streaming support.
+
+They are prerequisites for correct native RPC rather than merely Stream features.
+
+---
+
+# Final Principle
+
+reffect should not aim to implement Effect twice.
+
+The target architecture is:
+
+```text
+               Effect program
+                     │
+                     ▼
+                semantic IR
+                     │
+         ┌───────────┼───────────┐
+         │           │           │
+         ▼           ▼           ▼
+       erase      specialize    preserve
+         │           │           │
+         ▼           ▼           ▼
+     plain Rust   Rust crates   tiny runtime
+```
+
+A successful reffect compiler should increasingly transform high-level Effect abstractions into ordinary specialized Rust.
+
+Existing Effect ports prove that the semantic model can exist in Rust.
+
+The wider Rust ecosystem supplies most of the execution machinery.
+
+reffect's opportunity is to do something neither provides by itself:
+
+> **Use whole-program semantic information to erase, fuse and specialize Effect programs into small native executables while preserving verified Effect behavior.**
