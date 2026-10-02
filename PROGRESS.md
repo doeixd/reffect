@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-10-02 — String-keyed records in JS key order
+
+- Recorded [record decisions](docs/research/records-js-order.md) (RECJS-001–005) after probing `Schema.Record(Schema.String, V)` under rc.118:
+  - Decoding follows JS own-property order: array-index keys first, ascending, then insertion order.
+  - A duplicate key keeps its first position and its last value.
+  - The first failing entry is reported in that order.
+  - Clients observe key order after decoding.
+- Added `R.Record(R.String, V)` (natively `Vec<(String, V)>` in JS order) with `keys`, `values`, `size` and `has`, mirroring `effect/Record`. A kernel `RecordQuery` node backs them.
+- `NativeRpc` decodes records through a JS-order entry partition and encodes in that order. Crates that reach a Record enable `serde_json`'s `preserve_order` feature; others are unchanged. Refused: checked or non-String keys, optional values, records combined with properties.
+- Validation (focused):
+  - `records-js.test.ts` 1/1 (reference parity with `effect/Record` on index-like, `__proto__` and ordinary keys).
+  - `records-js-rpc.test.ts` 2/2. About 30 raw requests are strictly equal to the official server, and key sequences are equal at every depth. Stock-client round trips succeed, and the refusals are covered.
+  - Removing the index-key partition fails the test; so does removing `preserve_order`.
+  - 16 related files (50 tests) pass, and `vp check` passes.
+
 ## 2026-10-02 — Qwik closure-conversion research
 
 - Researched current Qwik v2 optimizer closure extraction/capture analysis and Oxc/SWC scope handling as prior art for milestone 8B. The new [Qwik closure-conversion note](docs/research/qwik-closure-conversion.md) adopts boundary-first capture analysis, binding-aware free-variable resolution, explicit CapturePlans and mutation/ownership classification, while rejecting Qwik's serialized QRL environment as reffect's target representation.

@@ -24,6 +24,7 @@ import type { AnyFn } from "./kernel.ts";
 import { Rs } from "./rust-emit.ts";
 import {
   ArrayType,
+  RecordType,
   Struct,
   TaggedUnion,
   optional as optionalField,
@@ -31,7 +32,14 @@ import {
   rustFieldNames,
   rustVariantName,
 } from "./records.ts";
-import { NumberType, arrayItem, structLayout, unionCases } from "./kernel.ts";
+import {
+  NumberType,
+  arrayItem,
+  recordValue,
+  structLayout,
+  undefinedOrItem,
+  unionCases,
+} from "./kernel.ts";
 import type { RsExpr } from "./rust-emit.ts";
 import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
@@ -69,6 +77,8 @@ interface Composite {
   readonly expected: string;
   /** Element codec of a `Schema.Array` (ARR-005). */
   readonly item?: Codec;
+  /** Value codec of a string-keyed `Schema.Record` (RECJS-001). */
+  readonly record?: Codec;
   /** A JS number: plain JSON numbers when finite-only, plus verified checks (NUM-002). */
   readonly number?: {
     readonly finiteOnly: boolean;
@@ -194,6 +204,7 @@ const kindsOf = (
           expected: 'Expected number | "Infinity" | "-Infinity" | "NaN"',
         };
   if (codec.item) return { kinds: ["array"], expected: codec.expected };
+  if (codec.record) return { kinds: ["object"], expected: codec.expected };
   if (codec.cases.length === 0 && codec.fields.length === 0)
     throw unsupported(path, "optional(Struct({})) accepts any value in Effect and is refused");
   return { kinds: ["object"], expected: codec.expected };
@@ -340,6 +351,37 @@ const composite = (
   registry: Registry,
   decodeOnly: boolean,
 ): Composite => {
+  if (SchemaAST.isObjects(ast) && ast.indexSignatures.length) {
+    const [signature] = ast.indexSignatures;
+    if (
+      ast.indexSignatures.length !== 1 ||
+      ast.propertySignatures.length ||
+      ast.encoding ||
+      ast.checks ||
+      ast.context ||
+      ast.annotations ||
+      ast.encodingChecks
+    )
+      throw unsupported(path, "Only plain Schema.Record(Schema.String, V) records are supported");
+    const key = signature.parameter;
+    const plainString =
+      SchemaAST.isString(key) && !key.checks && !key.encoding && !key.annotations && !key.context;
+    if (!plainString && key !== StringJson.ast)
+      throw unsupported(`${path}.key`, "Record keys must be Schema.String or NativeRpc.StringJson");
+    if (signature.type.context)
+      throw unsupported(`${path}.value`, "Record values cannot be optional");
+    const value = codec(signature.type, `${path}.value`, false, registry, decodeOnly);
+    if (value === "never" || value === "unit")
+      throw unsupported(`${path}.value`, "Record values cannot be Never or Undefined");
+    const type = RecordType.of(StringType, witnessOf(value));
+    return register(registry, "Record", {
+      type,
+      fields: [],
+      cases: [],
+      record: value,
+      expected: expectedOf(type),
+    });
+  }
   if (SchemaAST.isObjects(ast)) {
     const { fields } = fieldsOf(ast, path, registry, false, decodeOnly);
     const plain = Struct(witnessFields(fields));
@@ -413,6 +455,7 @@ const register = (registry: Registry, base: string, shape: Omit<Composite, "name
       c.fields.map((f) => [f.name, codecKey(f.codec), f.optional?.kind ?? null]),
     ]),
     shape.item === undefined ? null : codecKey(shape.item),
+    shape.record === undefined ? null : codecKey(shape.record),
     shape.number ?? null,
   ]);
   const name = `${base}_${digest(signature)}`;
@@ -1127,14 +1170,22 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
       files: Object.freeze({
         "Cargo.toml":
           core.files["Cargo.toml"].split("\n[dependencies]")[0] +
-          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n'.replace(
-            '["macros", "rt", "net", "time", "sync"]',
-            prepared.layered
-              ? '["macros", "rt", "net", "time", "sync", "signal"]'
-              : prepared.asynchronous
-                ? '["macros", "rt", "net", "time", "sync"]'
-                : '["macros", "rt", "net"]',
-          ) +
+          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n'
+            .replace(
+              '["float_roundtrip"]',
+              // Records observe insertion order, so only crates that reach one pay for it.
+              prepared.composites.some((shape) => shape.record !== undefined)
+                ? '["float_roundtrip", "preserve_order"]'
+                : '["float_roundtrip"]',
+            )
+            .replace(
+              '["macros", "rt", "net", "time", "sync"]',
+              prepared.layered
+                ? '["macros", "rt", "net", "time", "sync", "signal"]'
+                : prepared.asynchronous
+                  ? '["macros", "rt", "net", "time", "sync"]'
+                  : '["macros", "rt", "net"]',
+            ) +
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : ""),
         "src/lib.rs": core.files["src/lib.rs"],
@@ -1177,6 +1228,10 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
   const rustType = (type: IRType<unknown>): string => {
     const item = arrayItem(type);
     if (item) return `Vec<${rustType(item)}>`;
+    const value = recordValue(type);
+    if (value) return `Vec<(String, ${rustType(value)})>`;
+    const defined = undefinedOrItem(type);
+    if (defined) return `Option<${rustType(defined)}>`;
     if (type.layout) return `reffect_generated::${type.native.type}`;
     if (IRType.same(type, NumberType)) return "f64";
     return IRType.same(type, U64Type)
@@ -1282,6 +1337,14 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
         `fn encode_${name}(value: &f64) -> Value { js_number(*value) }\n`
       );
     }
+    if (shape.record !== undefined)
+      return (
+        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
+        `    let Some(object) = value.as_object() else { return Err(at(${expected}, path)) };\n` +
+        `    let mut out = Vec::with_capacity(object.len());\n` +
+        `    for (key, item) in js_entries(object) {\n        let child = Path { parent: path, name: key, index: false };\n        out.push((key.clone(), ${decodeField(shape.record, "item", "Some(&child)")}?));\n    }\n    Ok(out)\n}\n` +
+        `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    let mut map = serde_json::Map::new();\n    for (key, item) in value.iter() { map.insert(key.clone(), ${encodeField(shape.record, "(*item)")}); }\n    Value::Object(map)\n}\n`
+      );
     if (shape.item !== undefined)
       return (
         `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
@@ -1339,5 +1402,25 @@ fn bool_in(value: &Value, path: Option<&Path>) -> Result<bool, String> { bool_ar
 fn string_in(value: &Value, path: Option<&Path>) -> Result<String, String> { string_arg(value, None).map_err(|message| at(&message, path)) }
 fn unit_in(value: &Value, path: Option<&Path>) -> Result<(), String> { unit_arg(value, None).map_err(|message| at(&message, path)) }
 fn never_in(_value: &Value, path: Option<&Path>) -> Result<std::convert::Infallible, String> { Err(at("Expected never", path)) }
+${
+  composites.some((shape) => shape.record !== undefined)
+    ? `/// JS own-property order (RECJS-003): array-index keys ascending, then insertion order.
+fn js_entries(object: &serde_json::Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut indexed = Vec::new();
+    let mut named = Vec::new();
+    for (key, value) in object.iter() {
+        match array_index(key) { Some(index) => indexed.push((index, key, value)), None => named.push((key, value)) }
+    }
+    indexed.sort_by_key(|entry| entry.0);
+    indexed.into_iter().map(|(_, key, value)| (key, value)).chain(named).collect()
+}
+fn array_index(key: &str) -> Option<u32> {
+    if key == "0" { return Some(0); }
+    if key.is_empty() || key.starts_with('0') || !key.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
+    key.parse::<u32>().ok().filter(|index| *index != u32::MAX)
+}
+`
+    : ""
+}
 ${items.join("")}`;
 };
