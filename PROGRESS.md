@@ -1,5 +1,9 @@
 # Progress
 
+## 2026-10-02 — Async RPC post-commit review
+
+- Post-commit regression caught an observation race: the final HTTP response arrived before the stderr consumer collected the Public log (54 of 55 records). The remaining 94 tests passed. Added a bounded log-collection barrier before the unchanged exact count/context/order assertions; this synchronizes independent transport channels without relaxing conformance. The committed implementation/docs review and 259 local links passed; formatting, strict TypeScript and workspace builds passed. Follow-up focused RPC tests pass (2 tests, 173.95s); vp check, strict package TypeScript, cached workspace builds and 50 changed-document links pass. Publication awaits the required post-commit full regression repeat.
+
 ## 2026-10-02 — Bounded async execution and suspended RPC
 
 - Added checked literal Sleep (0–60000 ms) and non-failing Unit/Never Ensuring IR, official Effect reference interpretation, an explicit Rust.tokio capability and explainable reachable Tokio runtime/dependencies. Existing std and synchronous Tokio-target programs stay dependency-free. Native helpers have concrete futures; scalar values remain plain.

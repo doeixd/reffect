@@ -101,6 +101,8 @@ const scenario = (transport: typeof fetch, url: string, logs: Log[]) =>
         Array.from({ length: 8 }, (_, i) => BigInt(credentials[i % 2].principal)),
       );
       expect(yield* client.Public(undefined)).toBe(0n);
+      // HTTP completion and the stderr reader are independent observation channels.
+      yield* waitUntil(() => logs.length >= 55);
       expect(logs).toHaveLength(55);
       const ids = new Set(
         logs.filter((log) => log.message === "started").map((log) => log.request.id),

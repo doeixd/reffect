@@ -49,6 +49,9 @@ The HTTP corpus uses unchanged stock clients, eight overlapping principals per
 run and a real socket disconnected after the started log. Native workers await
 both delayed finalizers once, emit no post-delay body log, skip the next batched
 handler and leave subsequent contexts clean. Debug/release and Bounded/None pass.
+HTTP completion and stderr collection are independent observation channels;
+the native test waits for the expected records before asserting exact counts,
+ordering and context. Post-commit regression exposed that observation race.
 The stock web-handler oracle must wrap its raw HTTP effect in Effect.interruptible,
 matching HttpRouter's route behavior: HttpEffect.toHandled starts uninterruptible
 for response handling. Without that wrapper the test would exercise a different
