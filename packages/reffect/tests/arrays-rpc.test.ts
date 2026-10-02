@@ -103,17 +103,28 @@ const oracle = Effect.gen(function* () {
   return HttpEffect.toWebHandler(http);
 });
 
-test("checked arrays and tuples are refused at the RPC boundary", async () => {
-  const Checked = RpcGroup.make(
+// Length checks are admitted on payloads (array-length.md, LEN-001); other checks and tuples are not.
+test("non-length checks and tuples are refused at the RPC boundary", async () => {
+  const Unique = RpcGroup.make(
     Rpc.make("Nums", {
-      payload: Schema.Array(NativeRpc.U64Json).check(Schema.isMinLength(1)),
+      payload: Schema.Array(NativeRpc.U64Json).check(Schema.isUnique()),
       success: Schema.Array(NativeRpc.U64Json),
     }),
   );
-  const error = await Effect.runPromise(
-    NativeRpc.compile(Checked, { Nums: NativeRpc.bind(nums) }).pipe(Effect.flip),
+  const unique = await Effect.runPromise(
+    NativeRpc.compile(Unique, { Nums: NativeRpc.bind(nums) }).pipe(Effect.flip),
   );
-  expect(error.message).toContain("Schema.Array");
+  expect(unique.message).toContain("Unsupported array check");
+  const Tuple = RpcGroup.make(
+    Rpc.make("Nums", {
+      payload: Schema.NonEmptyArray(NativeRpc.U64Json),
+      success: Schema.Array(NativeRpc.U64Json),
+    }),
+  );
+  const tuple = await Effect.runPromise(
+    NativeRpc.compile(Tuple, { Nums: NativeRpc.bind(nums) }).pipe(Effect.flip),
+  );
+  expect(tuple.message).toContain("tuples are not");
 });
 
 test(

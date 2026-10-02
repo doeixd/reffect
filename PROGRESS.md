@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-02 — Array length checks
+
+- Recorded [length-check decisions](docs/research/array-length.md) (LEN-001–003) from Remote's only use (`Fields = Array(String).check(isMaxLength(256))`, requests only) and probes on Effect 4.0.0. Elements decode before checks run, and only the first failing check is reported. `NonEmptyArray` is a tuple.
+- `NativeRpc` admits decode-only `isMaxLength`/`isMinLength`/`isBetweenLength` (including `isNonEmpty`) on `Schema.Array`. Each is recognized by representation id and verified by running Effect's filter on probe lengths. The generated decoder checks `out.len()` after the elements. Fixed-size `[T; N]` stays deferred because no workload needs it.
+- Validation (focused):
+  - `array-length-rpc.test.ts` 2/2: 26 raw requests strictly equal to the official server (top-level, nested and optional checked arrays; bounds ±1; element failures before length failures); refusals of checked outputs and `isUnique`.
+  - An off-by-one mutation in the native `isMaxLength` predicate fails the test.
+  - `arrays-rpc`'s refusal test now covers `isUnique` and `NonEmptyArray`, since length checks are admitted.
+  - Arrays, optional, numbers, records-js and native RPC suites pass, as does `vp check`.
+
 ## 2026-10-02 — Oracle moved to Effect 4.0.0 stable
 
 - Pinned `effect` and `@effect/platform-node` to **4.0.0**, replacing rc.118, ahead of the Remote harness (NR-007). One Effect copy is installed. I compared the rc.118 and 4.0.0 sources for the modules reffect uses (Schema/SchemaAST, union codecs and formatter, Record, HttpEffect, RpcClient). The changes are internal: candidate indexing, codec member ordering, and request scopes closing with the failure cause. None changes a pinned message.

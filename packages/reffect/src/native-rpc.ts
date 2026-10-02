@@ -77,6 +77,8 @@ interface Composite {
   readonly expected: string;
   /** Element codec of a `Schema.Array` (ARR-005). */
   readonly item?: Codec;
+  /** Verified length checks on a decoded array, in declaration order (LEN-001). */
+  readonly lengths?: readonly { readonly rust: string; readonly expected: string }[];
   /** Value codec of a string-keyed `Schema.Record` (RECJS-001). */
   readonly record?: Codec;
   /** A JS number: plain JSON numbers when finite-only, plus verified checks (NUM-002). */
@@ -398,16 +400,17 @@ const composite = (
     if (
       ast.elements.length ||
       ast.rest.length !== 1 ||
-      ast.checks ||
       ast.encoding ||
       ast.context ||
       ast.annotations ||
       ast.encodingChecks
     )
-      throw unsupported(
-        path,
-        "Only plain Schema.Array(item) is supported; tuples and checks are not",
-      );
+      throw unsupported(path, "Only plain Schema.Array(item) is supported; tuples are not");
+    const lengths = (ast.checks ?? []).map((group, i) =>
+      lengthCheck(ast, group, `${path}.checks[${i}]`),
+    );
+    if (lengths.length && !decodeOnly)
+      throw unsupported(path, "Length-checked arrays are supported for decoding payloads only");
     const item = codec(ast.rest[0], `${path}[]`, false, registry, decodeOnly);
     if (item === "never") throw unsupported(path, "Array items cannot be Never");
     const type = ArrayType.of(witnessOf(item));
@@ -417,6 +420,7 @@ const composite = (
       cases: [],
       item,
       expected: expectedOf(type),
+      ...(lengths.length ? { lengths } : {}),
     });
   }
   if (SchemaAST.isUnion(ast)) {
@@ -457,6 +461,7 @@ const register = (registry: Registry, base: string, shape: Omit<Composite, "name
     shape.item === undefined ? null : codecKey(shape.item),
     shape.record === undefined ? null : codecKey(shape.record),
     shape.number ?? null,
+    shape.lengths ?? null,
   ]);
   const name = `${base}_${digest(signature)}`;
   const existing = registry.get(name);
@@ -504,6 +509,55 @@ const numberChecks: Record<
           rust: (x) => `(${x}.is_nan() || ${x} < ${f64(m)})`,
         }
       : undefined,
+};
+// Effect's length checks (LEN-001), recognized by representation id and verified by running them.
+const lengthChecks: Record<
+  string,
+  (
+    payload: Record<string, unknown>,
+  ) => { readonly test: (n: number) => boolean; readonly rust: string } | undefined
+> = {
+  "effect/schema/isMaxLength": ({ maxLength: m }) =>
+    isLength(m) ? { test: (n) => n <= m, rust: `n <= ${m}` } : undefined,
+  "effect/schema/isMinLength": ({ minLength: m }) =>
+    isLength(m) ? { test: (n) => n >= m, rust: `n >= ${m}` } : undefined,
+  "effect/schema/isBetweenLength": ({ minimum: a, maximum: b }) =>
+    isLength(a) && isLength(b)
+      ? { test: (n) => n >= a && n <= b, rust: `n >= ${a} && n <= ${b}` }
+      : undefined,
+};
+const isLength = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const lengthCheck = (ast: SchemaAST.Arrays, group: SchemaAST.Check<unknown>, path: string) => {
+  const check = Match.value(group).pipe(
+    Match.tag("Filter", (filter) => filter),
+    Match.orElse(() => undefined),
+  );
+  if (!check) throw unsupported(path, "Check groups are not supported");
+  const representation = check.annotations?.representation as
+    | { readonly id?: unknown; readonly payload?: unknown }
+    | undefined;
+  const id = typeof representation?.id === "string" ? representation.id : "";
+  const payload = (representation?.payload ?? {}) as Record<string, unknown>;
+  const expected = check.annotations?.expected;
+  const recognized = Object.hasOwn(lengthChecks, id) ? lengthChecks[id](payload) : undefined;
+  if (!recognized || typeof expected !== "string")
+    throw unsupported(path, "Unsupported array check");
+  const bounds = Object.values(payload).filter(isLength);
+  const probes = new Set([0, 1, 2, ...bounds.flatMap((b) => [b - 1, b, b + 1])]);
+  for (const length of probes)
+    if (
+      length >= 0 &&
+      (check.run(
+        Array.from({ length }, () => null),
+        ast,
+        {},
+      ) ===
+        undefined) !==
+        recognized.test(length)
+    )
+      throw unsupported(path, `Check ${id} disagrees with its native predicate`);
+  return { rust: recognized.rust, expected: `Expected ${expected}` };
 };
 const f64 = (value: number): string => {
   const view = new DataView(new ArrayBuffer(8));
@@ -1350,7 +1404,18 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
         `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
         `    let Some(items) = value.as_array() else { return Err(at(${expected}, path)) };\n` +
         `    let mut out = Vec::with_capacity(items.len());\n` +
-        `    for (i, item) in items.iter().enumerate() {\n        let index = i.to_string();\n        let child = Path { parent: path, name: &index, index: true };\n        out.push(${decodeField(shape.item, "item", "Some(&child)")}?);\n    }\n    Ok(out)\n}\n` +
+        `    for (i, item) in items.iter().enumerate() {\n        let index = i.to_string();\n        let child = Path { parent: path, name: &index, index: true };\n        out.push(${decodeField(shape.item, "item", "Some(&child)")}?);\n    }\n` +
+        // Elements decode first; length checks then run in declaration order, first failure wins.
+        (shape.lengths?.length
+          ? `    let n = out.len();\n` +
+            shape.lengths
+              .map(
+                (check) =>
+                  `    if !(${check.rust}) { return Err(at(${Rs.stringLiteral(check.expected).text}, path)); }\n`,
+              )
+              .join("")
+          : "") +
+        `    Ok(out)\n}\n` +
         `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    Value::Array(value.iter().map(|item| ${encodeField(shape.item, "(*item)")}).collect())\n}\n`
       );
     if (shape.cases.length === 0) {
