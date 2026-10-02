@@ -13,7 +13,7 @@ Status: **proposed; awaiting review before implementation.** Prepared 2026-10-02
 
 ## Workload evidence
 
-The upstream `foldkit/foldkit` tree has **no** Remote packages; `remote`, `remote-server`, `remote-drizzle`, `entity` and `ssr` exist in the `foldkit-plus` fork. Its Remote sources use roughly 96 `Schema.Struct`, 41 `Array`, 23 `Literal`, 17 `Record`, 11 `Union`, 7 `TaggedError` and 4 `NullOr` occurrences. `WireBoundary` is `Union([Struct({_tag: Literal("Terminal")}), Struct({_tag: Literal("Cursor"), cursor: String}), Struct({_tag: Literal("Unknown")})])`, and `position` fields are `Union([Literal("prepend"), Literal("append")])`. Numeric fields use `Schema.Number` with integer checks, not bigint.
+Core `foldkit/foldkit` does not contain Remote. `remote`, `remote-server`, `remote-drizzle`, `entity`, `ssr` and other ecosystem packages live in `doeixd/foldkit-plus`, a collection of Foldkit ecosystem packages (not a fork). The Remote sources use roughly 96 `Schema.Struct`, 41 `Array`, 23 `Literal`, 17 `Record`, 11 `Union`, 7 `TaggedError` and 4 `NullOr` occurrences. `WireBoundary` is `Union([Struct({_tag: Literal("Terminal")}), Struct({_tag: Literal("Cursor"), cursor: String}), Struct({_tag: Literal("Unknown")})])`, and `position` fields are `Union([Literal("prepend"), Literal("append")])`. Numeric fields use `Schema.Number` with integer checks, not bigint.
 
 ## Proposed decisions
 

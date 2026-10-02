@@ -2,7 +2,7 @@
 
 ## 2026-10-02 — Records and tagged unions proposal
 
-- Searched existing designs (architecture §7–§13, compiler design §5, basic Effect IR, schema/unary-RPC/string records, Foldkit Remote) and the `foldkit-plus` Remote wire schemas, then drafted [records and tagged unions](docs/research/records-unions.md) (REC-001–005, proposed). Upstream `foldkit/foldkit` has no Remote packages; they exist only in the fork, which makes the fork milestone 4's practical target. Implementation waits for review.
+- Searched existing designs (architecture §7–§13, compiler design §5, basic Effect IR, schema/unary-RPC/string records, Foldkit Remote) and the `foldkit-plus` Remote wire schemas, then drafted [records and tagged unions](docs/research/records-unions.md) (REC-001–005, proposed). Core `foldkit/foldkit` does not contain Remote; the Remote packages live in `foldkit-plus`, the Foldkit ecosystem package collection (corrected from an earlier "fork" description), which milestone 4 targets. Implementation waits for review.
 
 ## 2026-10-02 — Well-formed strings at the RPC boundary
 

@@ -8,7 +8,7 @@ Reviewed 2026-10-02: [north-star acceptance input](../north_star.md) and [runtim
 - **The Effect surface is small.** A syntax search of those six files finds `Effect.gen/fail/try/mapError/succeed/void`, `Schema.toCodecJson/encodeEffect/decodeUnknownSync`, `Option.match/isNone`, `Data.TaggedError`, `Context.empty`, `Match.value/tagsExhaustive` and a few `Array`/`Predicate`/`String` helpers. Most of the code is plain TypeScript: strings, collections, regular expressions, closures, local mutation and Foldkit's own HTML/VNode modules.
 - **`parse5` is imported** by the SSR modules. The north star's claim that HTML parsing is the largest external dependency is consistent with the imports.
 - **Not verified:** the `html5ever`, `url` and `serde_json` equivalence claims. They are plausible substrate candidates only; each needs conformance on Foldkit's admitted cases, as the input itself says.
-- **Fork versus upstream.** Local Foldkit checkouts (`foldkit-agent`) track the user's `doeixd/foldkit-plus` fork, not `foldkit/foldkit`. Which tree is the north-star input is open (Q-2).
+- **Core versus ecosystem packages.** The local `foldkit-agent` checkout is `doeixd/foldkit-plus`, a collection of Foldkit ecosystem packages (Remote, entity, ssr and others), not a fork of `foldkit/foldkit`. The north star's SSR source is core Foldkit's `experimental/server`.
 
 ## Adopted
 
@@ -22,7 +22,7 @@ Reviewed 2026-10-02: [north-star acceptance input](../north_star.md) and [runtim
 The user prefers the existing PLAN sequence and asked that these inputs be taken with a grain of salt. Milestone order and acceptance criteria are unchanged; the north star and inventory stay as context, not as roadmap commitments. The original open questions follow for the record.
 
 - **Q-1 — milestone 8 acceptance and order.** The north star proposes that milestone 8 accept only _unmodified_ upstream Foldkit SSR source, mechanically transformed, compiled and hydrated by the stock client. It would also move SSR ahead of Remote and SQL (milestones 4–7). That raises the bar substantially: a codemod for generators/control flow, strings/records/unions/collections, JSON/URL/RegExp operations, a VNode representation and a `parse5`-compatible parser. Recommendation: decide after the inventory quantifies the gap. Strings, records, unions and arrays gate milestones 4 and 8 alike, so the next representation work is useful either way.
-- **Q-2 — which Foldkit.** Upstream `foldkit/foldkit` or the `doeixd/foldkit-plus` fork; Remote and replicated-state work may exist only in the fork.
+- **Q-2 — which Foldkit (resolved).** `foldkit-plus` is an ecosystem package collection, not a fork: Remote targets its packages, while core Foldkit supplies the runtime and `experimental/server` SSR.
 
 ## Next
 
