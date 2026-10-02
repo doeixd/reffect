@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-02 — Qwik closure-conversion research
+
+- Researched current Qwik v2 optimizer closure extraction/capture analysis and Oxc/SWC scope handling as prior art for milestone 8B. The new [Qwik closure-conversion note](docs/research/qwik-closure-conversion.md) adopts boundary-first capture analysis, binding-aware free-variable resolution, explicit CapturePlans and mutation/ownership classification, while rejecting Qwik's serialized QRL environment as reffect's target representation.
+- Key conclusion: the Foldkit SSR inventory's 1,184 closures are an upper-bound syntax count, not 1,184 runtime closure requirements. The next migration measurement should add function-level SSR reachability and classify callbacks by known semantic boundary, capture type, writes/escapes and mechanical transformability. The proposed QC-0–QC-5 slices keep the work in migration tooling and reuse the existing R IR/compiler rather than widening the core parser.
+- Verified upstream Qwik v2 at commit `8eb4589be115eb8f2dabfd12c107dcc23647caec`, including the TypeScript Oxc capture/gather passes, Rust optimizer architecture, block/loop/computed-key regression tests, generated-name hygiene guidance and current optimizer/serialization documentation. Qwik is MIT; the note recommends adapting design/tests rather than taking a runtime dependency.
+
 ## 2026-10-02 — Native types research (proposed)
 
 - Searched the docs (architecture §9–10 already lists sized/tuple/fixed-array representations; no JS-type crate was recorded) and crates.io. Recorded the [native types proposal](docs/research/native-types.md):
