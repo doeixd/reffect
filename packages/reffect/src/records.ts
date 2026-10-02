@@ -1,8 +1,11 @@
 import { Match, Schema } from "effect";
 import { dual } from "effect/Function";
 import {
+  BoolType,
   Expr,
   IRType,
+  NumberType,
+  StringType,
   SemanticRef,
   Targets,
   Traits,
@@ -11,6 +14,7 @@ import {
   arrayItem,
   fail,
   structLayout,
+  recordValue,
   undefinedOrItem,
   unionCases,
 } from "./kernel.ts";
@@ -655,4 +659,68 @@ export const forEach: {
       discard,
     });
   },
+);
+
+/** `Schema.Record(Schema.String, V)`: a string-keyed record in JS key order (RECJS-001). */
+export class RecordType<V> extends Composite<{ readonly [key: string]: V }> {
+  private constructor(readonly value: IRType<V>) {
+    super(
+      `reffect/record@1/${digest(value.id)}`,
+      // R.String's schema is a refined `Schema.String`, whose static type erases the key brand.
+      freeze(
+        Schema.Record(StringType.schema as unknown as typeof Schema.String, value.schema),
+      ) as unknown as Schema.Codec<{
+        readonly [key: string]: V;
+      }>,
+      `Vec<(String, ${value.native.type})>`,
+      { _tag: "Record", value },
+    );
+    Object.freeze(this);
+  }
+  static of<V>(key: IRType<string>, value: IRType<V>): RecordType<V> {
+    if (!IRType.same(key, StringType) || !(value instanceof IRType))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        "Record",
+        "Records take R.String keys and a value witness",
+      );
+    return intern(["record", value], () => new RecordType(value));
+  }
+}
+type RecordOf<V> = { readonly [key: string]: V };
+const requireRecord = (self: Expr<unknown>, name: string) => {
+  const value = recordValue(self.type);
+  if (!value)
+    throw fail("TYPE_MISMATCH", "authoring", `Record.${name}`, `${name} requires a Record`);
+  return value;
+};
+/** Effect `Record.keys`: own keys in JS order. */
+const recordKeys = <V>(self: Expr<RecordOf<V>>): Expr<ReadonlyArray<string>> => {
+  requireRecord(self, "keys");
+  return Expr.recordQuery("Keys", ArrayType.of(StringType), self);
+};
+/** Effect `Record.values`, in key order. */
+const recordValues = <V>(self: Expr<RecordOf<V>>): Expr<ReadonlyArray<V>> =>
+  Expr.recordQuery("Values", ArrayType.of(requireRecord(self, "values") as IRType<V>), self);
+/** Effect `Record.size`, a JS number. */
+const recordSize = <V>(self: Expr<RecordOf<V>>): Expr<number> => {
+  requireRecord(self, "size");
+  return Expr.recordQuery("Size", NumberType, self);
+};
+/** Effect `Record.has(self, key)`: whether `key` is an own key. */
+const recordHas: {
+  (key: Expr<string>): <V>(self: Expr<RecordOf<V>>) => Expr<boolean>;
+  <V>(self: Expr<RecordOf<V>>, key: Expr<string>): Expr<boolean>;
+} = dual(2, <V>(self: Expr<RecordOf<V>>, key: Expr<string>): Expr<boolean> => {
+  requireRecord(self, "has");
+  if (!IRType.same(key.type, StringType))
+    throw fail("TYPE_MISMATCH", "authoring", "Record.has", "Keys are R.String values");
+  return Expr.recordQuery("Has", BoolType, self, key);
+});
+export const RecordIR = Object.freeze(
+  Object.assign(
+    <V>(key: IRType<string>, value: IRType<V>): RecordType<V> => RecordType.of(key, value),
+    { keys: recordKeys, values: recordValues, size: recordSize, has: recordHas },
+  ),
 );

@@ -65,6 +65,8 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       ],
       Defined: (n) => [edge("value", n.value)],
       Undefined: () => [],
+      RecordQuery: (n) =>
+        n.key ? [edge("value", n.value), edge("key", n.key)] : [edge("value", n.value)],
       ArrayMake: (n) =>
         n.elements.map((element, index) => [`elements[${index}]`, element] as const),
       ArrayLength: (n) => [edge("value", n.value)],

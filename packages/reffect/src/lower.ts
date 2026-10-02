@@ -20,7 +20,7 @@ import {
   undefinedOrItem,
 } from "./kernel.ts";
 import { rustFieldNames, rustVariantName } from "./records.ts";
-import type { Expr, OperationRef, Program } from "./kernel.ts";
+import type { Expr, OperationRef, Program, RecordQuery } from "./kernel.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -81,6 +81,13 @@ export type RustExpr = (
   | { readonly _tag: "Undefined" }
   /** An `optional` field read: presence and definedness collapse to `Option<T>`. */
   | { readonly _tag: "Flatten"; readonly base: RustExpr }
+  /** A `Record` query over `Vec<(String, V)>` in JS order (RECJS-002). */
+  | {
+      readonly _tag: "RecordQuery";
+      readonly query: RecordQuery;
+      readonly source: RustExpr;
+      readonly key: RustExpr | undefined;
+    }
   | { readonly _tag: "ArrayMake"; readonly elements: readonly RustExpr[] }
   | { readonly _tag: "ArrayLength"; readonly value: RustExpr }
   /** One generated loop per structured iteration (ARR-004). */
@@ -408,6 +415,10 @@ export function lowerFunctions(
               },
               Defined: (n) => expression(n.value),
               Undefined: () => {},
+              RecordQuery: (n) => {
+                expression(n.value);
+                if (n.key) expression(n.key);
+              },
               ArrayMake: (n) => n.elements.forEach(expression),
               ArrayLength: (n) => expression(n.value),
               ArrayLoop: (n) => {
@@ -618,6 +629,13 @@ export function lowerFunctions(
               Defined: (n): RustExpr =>
                 Object.freeze({ _tag: "Defined", value: expression(n.value, `${path}.value`) }),
               Undefined: (): RustExpr => Object.freeze({ _tag: "Undefined" }),
+              RecordQuery: (n): RustExpr =>
+                Object.freeze({
+                  _tag: "RecordQuery",
+                  query: n.query,
+                  source: expression(n.value, `${path}.value`),
+                  key: n.key && expression(n.key, `${path}.key`),
+                }),
               ArrayMake: (n): RustExpr =>
                 Object.freeze({
                   _tag: "ArrayMake",
@@ -687,6 +705,7 @@ export function lowerFunctions(
               Defined: () => true,
               Undefined: () => true,
               Flatten: () => true,
+              RecordQuery: () => true,
             }),
             Match.orElse(() => false),
           );
@@ -1179,6 +1198,11 @@ export const emitFunctions = (
         Match.tag("UndefinedOr", (option) =>
           Rs.genericType(Rs.namedType("Option"), [rsTypeOf(option.item)]),
         ),
+        Match.tag("Record", (record) =>
+          Rs.genericType(Rs.namedType("Vec"), [
+            Rs.tupleType([Rs.stringType(), rsTypeOf(record.value)]),
+          ]),
+        ),
         Match.orElse(() => Rs.namedType(type.native.type)),
       );
     if (IRType.same(type, NeverType))
@@ -1522,6 +1546,36 @@ export const emitFunctions = (
                 },
                 Defined: (n) => joinFragments(["Some(", render(n.value), ")"]),
                 Undefined: () => textFragment("None"),
+                RecordQuery: (n) =>
+                  Match.value(n.query).pipe(
+                    Match.when("Keys", () =>
+                      joinFragments([
+                        "(",
+                        operand(n.source),
+                        ").iter().map(|(key, _)| key.clone()).collect::<Vec<String>>()",
+                      ]),
+                    ),
+                    Match.when("Values", () =>
+                      joinFragments([
+                        "(",
+                        operand(n.source),
+                        ").iter().map(|(_, value)| value.clone()).collect::<Vec<_>>()",
+                      ]),
+                    ),
+                    Match.when("Size", () =>
+                      joinFragments(["((", operand(n.source), ").len() as f64)"]),
+                    ),
+                    Match.when("Has", () =>
+                      joinFragments([
+                        "{ let needle: &str = ",
+                        operand(n.key!),
+                        "; (",
+                        operand(n.source),
+                        ").iter().any(|(key, _)| key.as_str() == needle) }",
+                      ]),
+                    ),
+                    Match.exhaustive,
+                  ),
                 Flatten: (n) =>
                   joinFragments([render(n.base, undefined, true), ".clone().flatten()"]),
                 Literal: (n) => {
@@ -2461,6 +2515,7 @@ const writeCompositeTypes = (
         Union: (union) => union.cases.forEach(visit),
         Array: (array) => visit(array.item),
         UndefinedOr: (option) => visit(option.item),
+        Record: (record) => visit(record.value),
       }),
     );
     const previous = names.get(type.native.type);
@@ -2523,6 +2578,7 @@ const writeCompositeTypes = (
           ),
         Array: () => undefined,
         UndefinedOr: () => undefined,
+        Record: () => undefined,
       }),
     );
 };

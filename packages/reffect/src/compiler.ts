@@ -362,6 +362,10 @@ const derive = Effect.fn("Compile.derive")(function* (
         },
         Defined: (n) => walk(n.value),
         Undefined: () => {},
+        RecordQuery: (n) => {
+          walk(n.value);
+          if (n.key) walk(n.key);
+        },
         ArrayMake: (n) => n.elements.forEach(walk),
         ArrayLength: (n) => walk(n.value),
         ArrayLoop: (n) => {

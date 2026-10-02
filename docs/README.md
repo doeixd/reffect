@@ -58,6 +58,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 - [Well-formed strings](research/string-profile.md): `R.String` semantics compared across UTF-16/UTF-8, literal `replaceAll`, owned/borrowed lowering and the Foldkit escaping differential.
 - [JS numbers](research/number-profile.md): `R.Number` as IEEE doubles, pinned `Schema.Number` JSON codec rules (non-finite strings, `isInt`/`isFinite`), structural check recognition and JS-compatible encoding.
 - [Native types](research/native-types.md) (proposed): JS-type Rust crates (`ryu-js`, Boa's `JsString`), and sized integers, tuples, fixed arrays and bytes as checked refinements of Effect schemas.
+- [String-keyed records](research/records-js-order.md): `R.Record(R.String, V)` with `keys`/`values`/`size`/`has`, JS own-property key order natively (`preserve_order` plus index-key partitioning), and record codecs.
 - [Optional fields](research/optional-fields.md): `R.optional`/`R.optionalKey` struct fields and `R.UndefinedOr`, native presence (`Option`/`Option<Option>`), and the verified `| null` mismatch text of `Schema.optional` JSON codecs.
 - [Native RemoteServer design](research/native-remote.md): proposed semantic-port engine, generated wire codecs, JS ordering rules, memory backend first and the differential harness.
 - [Milestone 4 gap analysis](research/remote-gap-analysis.md): Remote wire features still missing, probed Number/optional/Record semantics, and why the native engine design comes next.

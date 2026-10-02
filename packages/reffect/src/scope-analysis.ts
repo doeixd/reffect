@@ -104,6 +104,10 @@ export const analyzeScopes = (
             },
             Defined: (n) => visit(n.value),
             Undefined: () => {},
+            RecordQuery: (n) => {
+              visit(n.value);
+              if (n.key) visit(n.key);
+            },
             ArrayMake: (n) => n.elements.forEach(visit),
             ArrayLength: (n) => visit(n.value),
             ArrayLoop: (n) => {

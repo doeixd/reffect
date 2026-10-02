@@ -18,6 +18,7 @@ import { ContextIR } from "./context.ts";
 import { LayerIR } from "./layer.ts";
 import {
   ArrayIR,
+  RecordIR,
   Struct,
   TaggedUnion,
   UndefinedOr,
@@ -86,6 +87,7 @@ export const R = Object.freeze({
   optional,
   optionalKey,
   Array: ArrayIR,
+  Record: RecordIR,
   Match: Object.freeze({ bool, valueTags }),
   Predicate: Object.freeze({
     not: BoolType.not,

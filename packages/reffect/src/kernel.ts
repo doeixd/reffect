@@ -171,7 +171,9 @@ export type Layout =
   | { readonly _tag: "Union"; readonly cases: readonly IRType<unknown>[] }
   | { readonly _tag: "Array"; readonly item: IRType<unknown> }
   /** A plain `T | undefined` (OPT-001). */
-  | { readonly _tag: "UndefinedOr"; readonly item: IRType<unknown> };
+  | { readonly _tag: "UndefinedOr"; readonly item: IRType<unknown> }
+  /** A string-keyed record in JS own-property order (RECJS-001). */
+  | { readonly _tag: "Record"; readonly value: IRType<unknown> };
 export class IRType<A> extends Pipeable.Class {
   protected constructor(
     readonly ref: SemanticRef<"type">,
@@ -384,6 +386,13 @@ export type Node =
       readonly onDefined: Expr<unknown>;
       readonly onUndefined: Expr<unknown>;
     }
+  /** `Record.keys`/`values`/`size`/`has` (RECJS-002); `key` is present only for `Has`. */
+  | {
+      readonly _tag: "RecordQuery";
+      readonly query: RecordQuery;
+      readonly value: Expr<unknown>;
+      readonly key: Expr<unknown> | undefined;
+    }
   /** A defined value widened to `UndefinedOr<T>`, and the `undefined` of that witness. */
   | { readonly _tag: "Defined"; readonly value: Expr<unknown> }
   | { readonly _tag: "Undefined" }
@@ -396,6 +405,7 @@ export type Node =
       readonly index: symbol;
       readonly body: Expr<unknown>;
     };
+export type RecordQuery = "Keys" | "Values" | "Size" | "Has";
 export type ArrayOp =
   | { readonly _tag: "Map" }
   | { readonly _tag: "Filter" }
@@ -428,6 +438,14 @@ export const undefinedOrItem = (type: IRType<unknown>): IRType<unknown> | undefi
     ? undefined
     : Match.value(type.layout).pipe(
         Match.tag("UndefinedOr", (layout) => layout.item),
+        Match.orElse(() => undefined),
+      );
+/** The value witness of a string-keyed record, or undefined for any other witness. */
+export const recordValue = (type: IRType<unknown>): IRType<unknown> | undefined =>
+  type.layout === undefined
+    ? undefined
+    : Match.value(type.layout).pipe(
+        Match.tag("Record", (layout) => layout.value),
         Match.orElse(() => undefined),
       );
 /** Whether `value` may initialize a struct field (OPT-002); absent only for optional keys. */
@@ -541,6 +559,18 @@ export class Expr<A> extends Pipeable.Class {
       onDefined.type,
       Object.freeze({ _tag: "MatchUndefined", value, binder, onDefined, onUndefined }),
     );
+  }
+  /** A `Record` query; `output` is the keys/values array, Number or Bool witness. */
+  static recordQuery<A>(
+    this: void,
+    query: RecordQuery,
+    output: IRType<A>,
+    value: Expr<unknown>,
+    key?: Expr<unknown>,
+  ): Expr<A> {
+    if (!recordValue(value.type) || (query === "Has") !== (key !== undefined))
+      throw fail("TYPE_MISMATCH", "authoring", "Record", "Record queries require a Record");
+    return new Expr(output, Object.freeze({ _tag: "RecordQuery", query, value, key }));
   }
   static defined<A>(this: void, type: IRType<A | undefined>, value: Expr<A>): Expr<A | undefined> {
     const item = undefinedOrItem(type);
@@ -717,6 +747,13 @@ export class Expr<A> extends Pipeable.Class {
               : new Expr(self.type, Object.freeze({ _tag: "Defined", value }), self.source);
           },
           Undefined: () => self,
+          RecordQuery: (n) => {
+            const value = walk(n.value);
+            const key = n.key && walk(n.key);
+            return value === n.value && key === n.key
+              ? self
+              : new Expr(self.type, Object.freeze({ ...n, value, key }), self.source);
+          },
           ArrayLoop: (n) => {
             const source = walk(n.source);
             const body = walk(n.body);
@@ -1173,6 +1210,37 @@ export const checkExpression = (
           if (!undefinedOrItem(e.type))
             add("TYPE_MISMATCH", at, "undefined requires an UndefinedOr witness");
         },
+        RecordQuery: (n) => {
+          const value = recordValue(n.value.type);
+          const valid =
+            value !== undefined &&
+            Match.value(n.query).pipe(
+              Match.when(
+                "Keys",
+                () =>
+                  IRType.same(arrayItem(e.type) ?? e.type, StringType) &&
+                  arrayItem(e.type) !== undefined,
+              ),
+              Match.when(
+                "Values",
+                () =>
+                  IRType.same(arrayItem(e.type) ?? e.type, value) &&
+                  arrayItem(e.type) !== undefined,
+              ),
+              Match.when("Size", () => IRType.same(e.type, NumberType)),
+              Match.when(
+                "Has",
+                () =>
+                  IRType.same(e.type, BoolType) &&
+                  n.key !== undefined &&
+                  IRType.same(n.key.type, StringType),
+              ),
+              Match.exhaustive,
+            );
+          if (!valid) add("TYPE_MISMATCH", at, "Record query witnesses are inconsistent");
+          walk(n.value, `${at}.value`);
+          if (n.key) walk(n.key, `${at}.key`);
+        },
         Get: (n) => {
           const declared = structLayout(n.value.type)?.fields.find((f) => f.name === n.field);
           if (!declared || !IRType.same(declared.type, e.type))
@@ -1343,6 +1411,16 @@ export const evaluateExpression = (
         },
         Defined: (n) => evaluate(n.value),
         Undefined: () => undefined,
+        RecordQuery: (n) => {
+          const record = evaluate(n.value) as Readonly<Record<string, unknown>>;
+          return Match.value(n.query).pipe(
+            Match.when("Keys", () => Object.keys(record)),
+            Match.when("Values", () => Object.values(record)),
+            Match.when("Size", () => Object.keys(record).length),
+            Match.when("Has", () => Object.hasOwn(record, evaluate(n.key!) as string)),
+            Match.exhaustive,
+          );
+        },
         Get: (n) => (evaluate(n.value) as Record<string, unknown>)[n.field],
         ArrayMake: (n) => n.elements.map(evaluate),
         ArrayLength: (n) => BigInt((evaluate(n.value) as readonly unknown[]).length),
