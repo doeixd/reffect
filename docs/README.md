@@ -6,6 +6,8 @@ The roadmap governs current sequencing and the active frontier. The [design revi
 
 [Parallel Effect module work](effect-modules.md) tracks the resource lifetime, Context/Layer, error recovery and Schema implementation batch, with per-module decision records for later review.
 
+[North-star acceptance input](north_star.md) preserves the proposed Foldkit SSR corpus/migration acceptance test. It is design input; verify its external claims before using it as roadmap direction.
+
 ## Revised design and implementation references
 
 The later [runtime lowering reference](runtime-lowering.md) integrates the supplied Rust-substrate conversation once. It extends implementation selection and registry guidance while retaining the revised milestone sequence.
