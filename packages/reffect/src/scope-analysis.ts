@@ -12,6 +12,8 @@ export const maxScopeFinalizers = 16;
 export interface ScopeAnalysis {
   readonly diagnostics: readonly Diagnostic[];
   readonly capacities: ReadonlyMap<Computation<unknown, unknown>, number>;
+  /** Registrations the root retains for an enclosing scope, capped above the budget. */
+  readonly retained: number;
 }
 
 const maximumRuns = (schedule: SchedulePlan, times: number | undefined): number =>
@@ -203,6 +205,6 @@ export const analyzeScopes = (
     memo.set(c, contexts);
     return count;
   };
-  walk(root, path, false, false, false);
-  return Object.freeze({ diagnostics: Object.freeze(diagnostics), capacities });
+  const retained = walk(root, path, false, false, false);
+  return Object.freeze({ diagnostics: Object.freeze(diagnostics), capacities, retained });
 };

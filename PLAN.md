@@ -28,7 +28,7 @@ The destination is a native executable serving Foldkit rendering, Effect RPC, Re
 
 ## Current state
 
-Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar brackets, static Context/Layer wiring, constrained scalar Schema inputs and bounded sequential resource Scope registration are implemented extensions. General Schema, dynamic services/resource Layers and general Scope services remain open.
+Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar brackets, static Context/Layer wiring, constrained scalar Schema inputs, bounded sequential resource Scope registration and per-invocation resource-bearing Layers are implemented extensions. General Schema, dynamic services, server-lifetime Layers and general Scope services remain open.
 
 The active slice is [suspended scalar RPC](docs/research/async-rpc.md): literal delay, owned execution context, cooperative cancellation and non-failing awaited `ensuring` cleanup. The bounded slice has reference/native conformance, real-socket and stock-client cancellation coverage, and measured layout/construction costs. [PROGRESS.md](PROGRESS.md) records completed evidence; the [package README](packages/reffect/README.md) describes shipped APIs.
 
@@ -44,7 +44,7 @@ These are roadmap names, **not implemented CLI target strings or a new public re
 | ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `rust:core`      | Pure scalar functions, Match, Result and the bounded synchronous Effect subset                                       | `Rust.std`, typed recovery and static providers; Query is a separate checked adapter                                      |
 | `rust:async`     | Core plus owned execution context, cancellation and the admitted finalization/resource subset                        | Sleep/Ensuring/scalar brackets/bounded sequential Scope registration through `Rust.tokio`; general Scope services pending |
-| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded HTTP/auth/input ranges and static service wiring; dynamic services pending                                        |
+| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded HTTP/auth/input ranges, static and per-invocation resource Layers; dynamic/server-lifetime services pending       |
 | `rust:remote`    | RPC plus Foldkit Remote contracts, portable validation and authorization                                             | Planned                                                                                                                   |
 | `rust:sql`       | Checked Query/storage semantics and SQLx; compose with Remote when needed                                            | Planned                                                                                                                   |
 | `rust:fullstack` | Remote/SQL plus streaming, live data, SSR and resume                                                                 | Planned                                                                                                                   |
@@ -75,17 +75,21 @@ Milestone numbers remain 0–15. Milestone 3 now owns the minimal async foundati
 | 14. Additional targets/codecs | Verified serializer/library and WASM profiles                                                               | Each target satisfies explicit semantic and compatibility gates                                                           |
 | 15. Syntax widening           | Additional producers for the same checked IR                                                                | New syntax preserves the already verified native subset                                                                   |
 
-Each gate can ship bounded subprofiles without claiming the whole milestone. Ensuring, structured scalar brackets and bounded sequential Scope registration prove awaited cleanup with compiler-proved capacity, registration-time context and masked LIFO close; they do not complete manual/child/parallel Scope, Exit-aware/fallible cleanup or general fiber semantics. Static providers prove lexical wiring/sharing, independently of dynamic service or resource Layer support. Hybrid hosting follows established native semantics and reports its host requirement explicitly.
+Each gate can ship bounded subprofiles without claiming the whole milestone. Ensuring, structured scalar brackets and bounded sequential Scope registration prove awaited cleanup with compiler-proved capacity, registration-time context and masked LIFO close; they do not complete manual/child/parallel Scope, Exit-aware/fallible cleanup or general fiber semantics. Static and per-invocation resource providers prove lexical wiring, sharing and provide-owned release, independently of dynamic service or server-lifetime Layer support. Hybrid hosting follows established native semantics and reports its host requirement explicitly.
 
 ## Current frontier
 
-**Next: prepare a bounded resource-bearing Layer profile (milestone 3B).**
-The [sequential registration slice](docs/research/resource-scope-registration.md)
-now provides compiler-proved capacity, runtime LIFO registration, owned scalar
-captures, registration-time context and masked awaited closure. The real
-registered-file adapter proves delayed ownership through outer scope exit,
-including post-open cancellation. General manual/child/parallel Scope and
-Exit-aware cleanup remain separate gates.
+**Next: prepare server-lifetime Layers for RPC services (milestone 3B).**
+The [resource-bearing Layer profile](docs/research/resource-layer.md) is
+implemented per invocation: scoped `Layer.effect` acquisition, a provide-owned
+scope, fallible acquisition, shared/fresh/nested memo inheritance (matching
+`CurrentMemoMap`) and a registered-file size workload, all specialized into
+existing Scope IR. Every provide still acquires per invocation.
+
+1. Research how RPC servers own Layers built once for the server lifetime (`Layer.launch`, `ManagedRuntime`, `RpcServer.layer` handler wiring) against pinned Effect before choosing an API.
+2. Decide native ownership for values that outlive one invocation: immutable shared state constructed at startup versus per-request acquisition, and how release runs at graceful shutdown.
+3. Compare reference/native acquisition count across requests, shutdown release order and cancellation of in-flight requests; measure startup/shared-state costs.
+4. Admit one server-lifetime provider path for the scalar RPC demo; keep dynamic registries, service methods and concurrent merge deferred.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

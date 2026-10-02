@@ -450,9 +450,25 @@ const base = R.Layer.succeed(Count, R.U64.literal(10n));
 const computation = R.Layer.provide(base, (context) => R.Effect.succeed(context.get(Count)));
 ```
 
-Contexts are immutable build-time environments containing symbolic values. Compatible IDs share a slot; witnesses must agree. `R.Layer.effect` admits non-failing scalar acquisition, `sequence` builds providers sequentially with per-provide sharing and right override, and `fresh` gives each occurrence an independent memo boundary. `merge` admits only pure providers; effectful concurrent merge is refused. Expansion produces existing checked IR, with no native service map or scalar metadata. Pure providers retain the dependency-free profile; suspending acquisition selects Tokio through reachability.
+Contexts are immutable build-time environments containing symbolic values. Compatible IDs share a slot; witnesses must agree. `R.Layer.effect` admits scalar acquisition, `sequence` builds providers sequentially with per-provide sharing and right override, and `fresh` gives each occurrence an independent memo boundary. `merge` admits only pure providers; effectful concurrent merge is refused. Expansion produces existing checked IR, with no native service map or scalar metadata. Pure providers retain the dependency-free profile; suspending acquisition selects Tokio through reachability.
 
-This is lexical service wiring. Dynamic Effect requirements, arbitrary service objects/methods, fallible/resource Layers and shared acquisition across separate invocations remain pending. See [Context/Layer decisions](../../docs/research/context-layer.md) and [the module decision index](../../docs/effect-modules.md).
+### Resource-bearing Layers
+
+As in Effect v4 (which has no `Layer.scoped`), `R.Layer.effect` acquisition may register finalizers with `addFinalizer`, `acquireRelease` or `R.File.acquireReadOnly`. `R.Layer.provide` then owns a scope around acquisition and body, like `Effect.provide`: releases run after the body in reverse acquisition order, a shared provider acquires once, and a failed acquisition releases what earlier providers registered. Acquisition errors join the body's error channel. A provide staged inside another provide's body reuses the outer memoized providers, mirroring `CurrentMemoMap`; `fresh` and `provide(layer, build, { local: true })` reacquire.
+
+```ts
+const Size = R.Context.service("app/Size@1", R.U64);
+const file = R.Layer.effect(
+  Size,
+  R.File.acquireReadOnly("input.txt", (f) => f.size),
+);
+// The file stays open until the provide exits.
+const size = R.Layer.provide(file, (ctx) => R.Effect.succeed(ctx.get(Size)));
+```
+
+Layer registrations share the provide scope's proved 16-slot budget. Providers without retained registrations are not wrapped in a scope.
+
+This is lexical, per-invocation service wiring. Dynamic Effect requirements, arbitrary service objects/methods, concurrent resource merge and server-lifetime layers shared across separate invocations remain pending. See [Context/Layer decisions](../../docs/research/context-layer.md), [resource Layer decisions](../../docs/research/resource-layer.md) and [the module decision index](../../docs/effect-modules.md).
 
 ## Constrained scalar RPC payloads
 

@@ -3,6 +3,7 @@ import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
 import {
   R,
+  type Computation,
   Compile,
   CargoApi,
   NativeRunner,
@@ -119,8 +120,14 @@ test("lexical Context enforces available keys/witnesses and right overrides", ()
       R.Effect.succeed(R.U64.literal(1n)),
       R.Effect.fail(R.Bool.literal(false)),
     );
-    // @ts-expect-error Fallible acquisition is outside the bounded Layer profile.
-    LayerIR.effect(Count, fallible);
+    // Fallible acquisition (RL-003) surfaces its error through provide.
+    const tracked: Computation<bigint, boolean> = LayerIR.provide(
+      LayerIR.effect(Count, fallible),
+      (ctx) => R.Effect.succeed(ctx.get(Count)),
+    );
+    // @ts-expect-error The acquisition error is not erased by provide.
+    const erased: Computation<bigint, never> = tracked;
+    void erased;
   };
   void typeContracts;
 });
