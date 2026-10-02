@@ -135,8 +135,8 @@ A Qwik closure such as:
 
 ```ts
 useTask$(() => {
-  console.log(state.count)
-})
+  console.log(state.count);
+});
 ```
 
 is conceptually transformed into:
@@ -232,9 +232,9 @@ ordinary Rust
 For example:
 
 ```ts
-const threshold = 10
+const threshold = 10;
 
-users.filter((user) => user.age > threshold)
+users.filter((user) => user.age > threshold);
 ```
 
 should not imply a Rust `Box<dyn Fn>` or a generic closure object.
@@ -258,7 +258,7 @@ and native lowering can emit an ordinary loop.
 Likewise:
 
 ```ts
-xs.reduce((total, x) => total + x, 0)
+xs.reduce((total, x) => total + x, 0);
 ```
 
 should become the existing structured Array loop IR and finally something like:
@@ -284,8 +284,8 @@ A conceptual registry entry:
 
 ```ts
 interface BoundarySpec {
-  callee: SemanticRef
-  callbackArgument: number
+  callee: SemanticRef;
+  callbackArgument: number;
   kind:
     | "PureCallback"
     | "EffectCallback"
@@ -294,9 +294,9 @@ interface BoundarySpec {
     | "Finalizer"
     | "AcquireUse"
     | "UnionCase"
-    | "ForeignCallback"
-  parameterShape: readonly ParameterRole[]
-  capturePolicy: CapturePolicy
+    | "ForeignCallback";
+  parameterShape: readonly ParameterRole[];
+  capturePolicy: CapturePolicy;
 }
 ```
 
@@ -310,10 +310,10 @@ The migration frontend should construct an explicit analysis value before rewrit
 
 ```ts
 interface CapturePlan {
-  boundary: BoundarySpec
-  callbackRange: SourceRange
-  parameters: readonly BinderPlan[]
-  captures: readonly Capture[]
+  boundary: BoundarySpec;
+  callbackRange: SourceRange;
+  parameters: readonly BinderPlan[];
+  captures: readonly Capture[];
 }
 
 type Capture =
@@ -324,7 +324,7 @@ type Capture =
   | ResourceCapture
   | MutableCapture
   | FunctionCapture
-  | UnsupportedCapture
+  | UnsupportedCapture;
 ```
 
 Every capture should retain:
@@ -350,8 +350,8 @@ Use binding identity internally. Human diagnostics can display names. Names alon
 Examples:
 
 ```ts
-const prefix = "data-"
-const limit = 100
+const prefix = "data-";
+const limit = 100;
 ```
 
 If the initializer is safe to evaluate or already represented as an R literal, inline it into the generated builder graph.
@@ -393,10 +393,10 @@ Current delayed-cleanup restrictions on non-Copy captures are examples of exactl
 Example:
 
 ```ts
-let found = false
+let found = false;
 xs.forEach((x) => {
-  if (predicate(x)) found = true
-})
+  if (predicate(x)) found = true;
+});
 ```
 
 This is not ordinary immutable capture conversion.
@@ -518,11 +518,11 @@ Qwik's code and regressions imply several rules that should be non-negotiable.
 ### Resolve bindings, not names
 
 ```ts
-const value = outer
+const value = outer;
 
 {
-  const value = inner
-  operation(() => value)
+  const value = inner;
+  operation(() => value);
 }
 ```
 
@@ -531,8 +531,7 @@ The capture is the inner binding. A string set containing `"value"` is insuffici
 ### Computed property positions are references
 
 ```ts
-record[key]
-({ [key]: value })
+record[key]({ [key]: value });
 ```
 
 `key` is a capture when it resolves outside the callback.
@@ -543,8 +542,8 @@ Qwik has a dedicated regression for this.
 
 ```ts
 for (const item of items) {
-  const name = item.name
-  operation(() => name)
+  const name = item.name;
+  operation(() => name);
 }
 ```
 
@@ -590,9 +589,9 @@ Example:
 
 ```ts
 const result = (() => {
-  if (condition) return a
-  return b
-})()
+  if (condition) return a;
+  return b;
+})();
 ```
 
 Action: leave alone until the containing function itself is transformed, then inline or structurally lower as needed.
@@ -645,9 +644,9 @@ Action: transform only when the foreign-operation registry defines callback sema
 Examples:
 
 ```ts
-return callback
-object.handler = callback
-unknownLibrary(callback)
+return callback;
+object.handler = callback;
+unknownLibrary(callback);
 ```
 
 Action: initially refuse if reachable by the native target.
@@ -661,11 +660,9 @@ Do not implement general first-class closures merely to raise a migration percen
 Input:
 
 ```ts
-const prefix = "data-"
+const prefix = "data-";
 
-const names = items
-  .filter((item) => item.enabled)
-  .map((item) => prefix + item.name)
+const names = items.filter((item) => item.enabled).map((item) => prefix + item.name);
 ```
 
 Analysis:
@@ -684,18 +681,12 @@ map boundary
 Possible R-shaped output:
 
 ```ts
-const prefix = R.String.literal("data-")
+const prefix = R.String.literal("data-");
 
 const names = R.Array.map(
-  R.Array.filter(items, (item) =>
-    R.Struct.get(item, "enabled")
-  ),
-  (item) =>
-    R.String.concat(
-      prefix,
-      R.Struct.get(item, "name")
-    )
-)
+  R.Array.filter(items, (item) => R.Struct.get(item, "enabled")),
+  (item) => R.String.concat(prefix, R.Struct.get(item, "name")),
+);
 ```
 
 The exact API is illustrative; use existing or subsequently admitted Effect-v4-aligned R APIs rather than introducing names solely for this example.
