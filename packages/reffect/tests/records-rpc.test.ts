@@ -130,14 +130,14 @@ test("contract composites map onto the interned handler witnesses", async () => 
   const artifact = await Effect.runPromise(NativeRpc.compile(Group, bindings));
   for (const token of ["fn decode_Item", "fn encode_Item", "Expected Item"])
     expect(artifact.files["src/main.rs"]).toContain(token);
-  // Plain Schema.String inside a composite is still refused.
+  // Plain Schema.String fields map onto R.String (STR-008), so witnesses still have to agree.
   const Plain = RpcGroup.make(
     Rpc.make("Flag", { payload: Schema.Struct({ flag: Schema.String }), success: Schema.Boolean }),
   );
   const error = await Effect.runPromise(
     NativeRpc.compile(Plain, { Flag: NativeRpc.bind(flag) }).pipe(Effect.flip),
   );
-  expect(error.message).toContain("NativeRpc.StringJson");
+  expect(error.message).toContain("Handler argument witnesses disagree");
 });
 
 test(

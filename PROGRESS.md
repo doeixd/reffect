@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Plain Schema.String in requests (STR-008)
+
+- Per the user's decision (option 1), `NativeRpc` now decodes plain `Schema.String` onto `R.String`, as Remote's requests require. It is recorded as [STR-008](docs/research/string-profile.md#plain-schemastring-in-requests-2026-10-02): the official server accepts lone-surrogate escapes and runs the handler, while the native server refuses the whole body (`Invalid JSON`). `StringJson` remains the exact choice for new contracts.
+- Validation (focused): `string-rpc.test.ts` 2/2, with plain-String successes, wrong kinds and a missing field matching the official server, and the divergence asserted on both sides. `records-rpc` 3/3: the old refusal test now checks witness agreement.
+
 ## 2026-10-02 — Raw Unknown as JSON data
 
 - Recorded [Unknown decisions](docs/research/unknown-json.md) (UNK-001–004) from Remote's `values`/`input`/`output` and probes on Effect 4.0.0. The official server returns Unknown data **as `JSON.parse` saw it**: objects in JS key order at every depth, numbers as doubles (`1.0`→`1`, `-0`→`0`, large integers rounded), duplicate keys last-wins. `1e400` is a per-request `Expected JSON value`.

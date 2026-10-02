@@ -54,6 +54,13 @@ Decisions:
 
 Evidence: [string-rpc.test.ts](../../packages/reffect/tests/string-rpc.test.ts) passes 2/2. Nine raw requests produce response JSON identical to the official server: astral text, NUL, quotes and backslashes; surrogate-pair escapes; non-string payloads and fields; a missing field; success and typed string failure; a mixed batch. The divergence is asserted exactly, stock-client round trips succeed, and plain `Schema.String` is refused. Changing the native `Expected string` message makes the test fail.
 
+## Plain `Schema.String` in requests (2026-10-02)
+
+The Remote contract decodes plain `Schema.String` in every request (ids, entity names, `requestId`, field lists; see [Unknown record](unknown-json.md#open-question-for-the-remote-contract-recorded-2026-10-02)). The user chose option 1 over a UTF-16 text profile and over a foldkit-plus contract change.
+
+- **STR-008 — accepted divergence: plain `Schema.String` decodes natively.** Payload fields and payloads declared with plain `Schema.String` map onto `R.String` and decode with the same `Expected string` text. The official server **accepts** a lone-surrogate escape and passes it to the handler. Natively, the body is refused as a whole (`Invalid JSON`, STR-007). This widens STR-007 from a refusal mismatch to an acceptance mismatch for inputs that well-formed clients do not produce. It is a recorded protocol difference, not silent parity. Lone-surrogate inputs stay out of differential corpora and are asserted explicitly. Supersedes the STR-006 refusal of plain `Schema.String`; `StringJson` remains the exact choice for new contracts.
+- Revisit if a workload must round-trip lone surrogates: the [native types](native-types.md) UTF-16 profile plus a `RawValue` envelope would remove both STR-007 and STR-008.
+
 ## Deferred
 
 `length`/slicing with explicit UTF-16 semantics, ordering, concatenation and template building, case mapping, regular expressions, string RPC/JSON codecs, string service values and log attributes.

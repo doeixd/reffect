@@ -18,6 +18,8 @@ const Group = RpcGroup.make(
     success: Schema.Boolean,
     error: NativeRpc.StringJson,
   }),
+  // Plain Schema.String, as Remote's requests declare it (STR-008).
+  Rpc.make("Plain", { payload: { text: Schema.String }, success: Schema.String }),
 );
 const echo = R.fn([R.String], R.String, (text) => text);
 const field = R.fn([R.String, R.U64], R.String, (text, count) =>
@@ -34,6 +36,7 @@ const bindings = {
   Echo: NativeRpc.bind(echo),
   Field: NativeRpc.bind(field, ["text", "count"]),
   Check: NativeRpc.bind(check),
+  Plain: NativeRpc.bind(echo, ["text"]),
 };
 
 const request = (tag: string, payload: string, id = "1") =>
@@ -48,12 +51,16 @@ const agreed: ReadonlyArray<readonly [string, string]> = [
   ["field success", request("Field", String.raw`{"text":"<b>","count":"2"}`)],
   ["typed success", request("Check", '"ok"')],
   ["typed string failure", request("Check", '"bad 😀"')],
+  ["plain string", request("Plain", String.raw`{"text":"a😀\u0000\"<"}`)],
+  ["plain nonstring", request("Plain", String.raw`{"text":5}`)],
+  ["plain missing", request("Plain", "{}")],
   [
     "batch",
     `[${request("Echo", '"one"', "a")},${request("Check", '"two"', "b")},${request("Echo", "null", "c")}]`,
   ],
 ];
 const loneSurrogate = request("Field", String.raw`{"text":"x\udc00","count":"1"}`);
+const plainLoneSurrogate = request("Plain", String.raw`{"text":"x\udc00"}`);
 
 const oracle = Effect.gen(function* () {
   const run = <A, E>(effect: Effect.Effect<A, E | { readonly _tag: "CompileError" }>) =>
@@ -62,6 +69,7 @@ const oracle = Effect.gen(function* () {
     Echo: (text) => run(Reference.run(echo, [text])),
     Field: ({ text, count }) => run(Reference.run(field, [text, count])),
     Check: (text) => run(Reference.run(check, [text])),
+    Plain: ({ text }) => run(Reference.run(echo, [text])),
   });
   const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
     Effect.provide([handlers, RpcSerialization.layerJson]),
@@ -69,12 +77,10 @@ const oracle = Effect.gen(function* () {
   return HttpEffect.toWebHandler(http);
 });
 
-test("plain Schema.String is refused in favour of the canonical well-formed codec", async () => {
+test("plain Schema.String maps onto R.String in payloads and results (STR-008)", async () => {
   const Plain = RpcGroup.make(Rpc.make("Echo", { payload: Schema.String, success: Schema.String }));
-  const error = await Effect.runPromise(
-    NativeRpc.compile(Plain, { Echo: NativeRpc.bind(echo) }).pipe(Effect.flip),
-  );
-  expect(error.message).toContain("NativeRpc.StringJson");
+  const artifact = await Effect.runPromise(NativeRpc.compile(Plain, { Echo: NativeRpc.bind(echo) }));
+  expect(artifact.files["src/main.rs"]).toContain("string_arg");
 });
 
 test(
@@ -144,6 +150,22 @@ test(
             ],
           });
           expect(yield* post(url, loneSurrogate)).toEqual({
+            status: 200,
+            body: [{ _tag: "Defect", defect: { name: "SyntaxError", message: "Invalid JSON" } }],
+          });
+          // STR-008: plain Schema.String decodes a lone surrogate officially, so the request reaches
+          // its handler (here the R reference refuses the input), while the native body is refused.
+          const officialPlain = yield* officialPost(plainLoneSurrogate);
+          expect(officialPlain.body).toEqual([
+            {
+              _tag: "Defect",
+              defect: {
+                name: "CompileError",
+                message: "Expected well-formed Unicode without lone surrogates",
+              },
+            },
+          ]);
+          expect(yield* post(url, plainLoneSurrogate)).toEqual({
             status: 200,
             body: [{ _tag: "Defect", defect: { name: "SyntaxError", message: "Invalid JSON" } }],
           });

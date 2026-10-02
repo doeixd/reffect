@@ -736,13 +736,9 @@ const codec = (
   if (SchemaAST.isBoolean(ast)) return "bool";
   if (SchemaAST.isUndefined(ast)) return "unit";
   if (SchemaAST.isNever(ast)) return "never";
-  // Native strings are well-formed, so encoding through plain Schema.String is exact (TE-003).
-  if (SchemaAST.isString(ast) && !decodeOnly) return "string";
-  if (SchemaAST.isString(ast))
-    throw unsupported(
-      path,
-      "Plain Schema.String admits lone surrogates; use NativeRpc.StringJson for native strings",
-    );
+  // Encoding is exact (TE-003). Decoding accepts the recorded STR-008 divergence: lone-surrogate
+  // escapes, which the official server accepts, refuse the whole body natively (STR-007).
+  if (SchemaAST.isString(ast)) return "string";
   throw unsupported(
     path,
     "Only Boolean, Undefined, Never, NativeRpc.U64Json, NativeRpc.StringJson, Structs and tagged unions are supported",
