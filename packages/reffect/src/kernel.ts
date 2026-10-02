@@ -67,6 +67,7 @@ export const Capabilities = Object.freeze({
   Bool: SemanticRef.capability("reffect/capability/bool@1"),
   Unit: SemanticRef.capability("reffect/capability/unit@1"),
   String: SemanticRef.capability("reffect/capability/string@1"),
+  Number: SemanticRef.capability("reffect/capability/number@1"),
   AsyncResult: SemanticRef.capability("reffect/capability/async-result@1"),
   ScopedFiles: SemanticRef.capability("reffect/capability/scoped-files@1"),
   SyncResult: SemanticRef.capability("reffect/capability/sync-result@1"),
@@ -88,6 +89,7 @@ export const Native = Object.freeze({
   Bool: Object.freeze({ target: Targets.RustStd, type: "bool" }) satisfies NativeRepresentation,
   Unit: Object.freeze({ target: Targets.RustStd, type: "()" }) satisfies NativeRepresentation,
   String: Object.freeze({ target: Targets.RustStd, type: "String" }) satisfies NativeRepresentation,
+  Number: Object.freeze({ target: Targets.RustStd, type: "f64" }) satisfies NativeRepresentation,
   Never: Object.freeze({
     target: Targets.RustStd,
     type: "std::convert::Infallible",
@@ -918,6 +920,61 @@ const replacementProblem = (values: readonly unknown[]): string | undefined => {
   return undefined;
 };
 export const StringType = new StringWitness();
+
+/**
+ * JS numbers: IEEE 754 doubles (NUM-001). Copyable, but not Eq or totally ordered, since NaN
+ * is unequal to itself and unordered.
+ */
+class NumberWitness extends IRType<number> {
+  constructor() {
+    const schema = Schema.Number.check(Schema.makeFilter(() => true));
+    for (const check of schema.ast.checks ?? []) Object.freeze(check);
+    if (schema.ast.checks) Object.freeze(schema.ast.checks);
+    Object.freeze(schema.ast);
+    Object.freeze(schema);
+    super(
+      SemanticRef.type("reffect/number@1"),
+      schema,
+      Native.Number,
+      Object.freeze([Traits.Copyable, Traits.Cloneable]),
+    );
+    Object.freeze(this);
+  }
+  literal(value: number): Expr<number> {
+    return Expr.literal(this, value);
+  }
+  readonly add: {
+    (that: Expr<number>): (self: Expr<number>) => Expr<number>;
+    (self: Expr<number>, that: Expr<number>): Expr<number>;
+  } = dual(2, (a: Expr<number>, b: Expr<number>) => Expr.apply(AddNumber, a, b));
+  readonly eq: {
+    (that: Expr<number>): (self: Expr<number>) => Expr<boolean>;
+    (self: Expr<number>, that: Expr<number>): Expr<boolean>;
+  } = dual(2, (a: Expr<number>, b: Expr<number>) => Expr.apply(EqNumber, a, b));
+  readonly lt: {
+    (that: Expr<number>): (self: Expr<number>) => Expr<boolean>;
+    (self: Expr<number>, that: Expr<number>): Expr<boolean>;
+  } = dual(2, (a: Expr<number>, b: Expr<number>) => Expr.apply(LtNumber, a, b));
+}
+export const NumberType = new NumberWitness();
+export const AddNumber = Operation.make(
+  SemanticRef.operation("reffect/number.add@1"),
+  [NumberType, NumberType],
+  NumberType,
+  (a, b) => a + b,
+).pipe(Operation.withCapabilities([Capabilities.Number]));
+export const EqNumber = Operation.make(
+  SemanticRef.operation("reffect/number.eq@1"),
+  [NumberType, NumberType],
+  BoolType,
+  (a, b) => a === b,
+).pipe(Operation.withCapabilities([Capabilities.Number, Capabilities.Bool]));
+export const LtNumber = Operation.make(
+  SemanticRef.operation("reffect/number.lt@1"),
+  [NumberType, NumberType],
+  BoolType,
+  (a, b) => a < b,
+).pipe(Operation.withCapabilities([Capabilities.Number, Capabilities.Bool]));
 export const EqString = Operation.make(
   SemanticRef.operation("reffect/string.eq@1"),
   [StringType, StringType],

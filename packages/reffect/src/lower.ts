@@ -8,6 +8,7 @@ import {
   BoolType,
   IRType,
   NeverType,
+  NumberType,
   StringType,
   Traits,
   U64Type,
@@ -41,7 +42,7 @@ export type RustExpr = (
   | { readonly _tag: "Parameter"; readonly index: number }
   | { readonly _tag: "Bound"; readonly name: string }
   | { readonly _tag: "Local"; readonly index: number }
-  | { readonly _tag: "Literal"; readonly value: bigint | boolean | string | void }
+  | { readonly _tag: "Literal"; readonly value: bigint | boolean | string | number | void }
   | {
       readonly _tag: "Call";
       readonly method: Implementation["method"];
@@ -103,7 +104,7 @@ export const RustExpr = Object.freeze({
   parameter: (index: number): RustExpr => Object.freeze({ _tag: "Parameter", index }),
   bound: (name: string): RustExpr => Object.freeze({ _tag: "Bound", name }),
   local: (index: number): RustExpr => Object.freeze({ _tag: "Local", index }),
-  literal: (value: bigint | boolean | string | void): RustExpr =>
+  literal: (value: bigint | boolean | string | number | void): RustExpr =>
     Object.freeze({ _tag: "Literal", value }),
   call: (method: Implementation["method"], left: RustExpr, right: RustExpr): RustExpr =>
     Object.freeze({ _tag: "Call", method, args: Object.freeze([left, right]) }),
@@ -512,7 +513,8 @@ export function lowerFunctions(
                 const parameter = scope.bindings.get(n.binder)![n.index];
                 return RustExpr.bound(parameter.name);
               },
-              Literal: (n) => RustExpr.literal(n.value as bigint | boolean | string | void),
+              Literal: (n) =>
+                RustExpr.literal(n.value as bigint | boolean | string | number | void),
               Apply: (n): RustExpr =>
                 Object.freeze({
                   _tag: "Call",
@@ -1098,6 +1100,7 @@ export const emitFunctions = (
     if (IRType.same(type, BoolType)) return Rs.namedType("bool");
     if (IRType.same(type, UnitType)) return Rs.unitType();
     if (IRType.same(type, StringType)) return Rs.stringType();
+    if (IRType.same(type, NumberType)) return Rs.namedType("f64");
     if (type.layout)
       return Match.value(type.layout).pipe(
         Match.tag("Array", (array) => Rs.genericType(Rs.namedType("Vec"), [rsTypeOf(array.item)])),
@@ -1422,6 +1425,9 @@ export const emitFunctions = (
                   if (Predicate.isBoolean(n.value)) return textFragment(Rs.litBool(n.value).text);
                   if (Predicate.isString(n.value))
                     return textFragment(Rs.stringLiteral(n.value).text);
+                  // Bit patterns keep NaN, infinities and -0 exact.
+                  if (Predicate.isNumber(n.value))
+                    return textFragment(`f64::from_bits(0x${f64Bits(n.value)})`);
                   throw fail(
                     "UNSUPPORTED_REPRESENTATION",
                     "lower",
@@ -1431,6 +1437,14 @@ export const emitFunctions = (
                 },
                 Call: (n) => {
                   if (n.method === "not") return joinFragments(["!(", operand(n.args[0]), ")"]);
+                  if (n.method === "add")
+                    return joinFragments([
+                      "(",
+                      operand(n.args[0]),
+                      ") + (",
+                      operand(n.args[1]),
+                      ")",
+                    ]);
                   if (n.method === "eq" || n.method === "lt")
                     return joinFragments([
                       "(",
@@ -2091,6 +2105,11 @@ export const emitFunctions = (
         Rs.letDiscard(Rs.unitType(), value),
         Rs.println(`${channel ? `${channel}:` : ""}unit`),
       );
+    if (IRType.same(type, NumberType))
+      return Rs.printlnExpr(
+        `${channel ? `${channel}:` : ""}f64:`,
+        Rs.verbatimExpr(`format!("{:016x}", (${value.text}).to_bits())`),
+      );
     if (IRType.same(type, StringType))
       return Rs.printlnExpr(
         `${channel ? `${channel}:` : ""}str:`,
@@ -2104,25 +2123,31 @@ export const emitFunctions = (
     return Rs.printlnExpr(prefix, value);
   };
   const parseArg = (type: IRType<unknown>, index: number): RsExpr =>
-    IRType.same(type, StringType)
-      ? Rs.try_(Rs.call(identExpr("unhex"), [Rs.refExpr(Rs.index(identExpr("args"), index))]))
-      : IRType.same(type, UnitType)
-        ? Rs.inlineBlock(
-            Rs.if_(
-              Rs.cmp(Rs.index(identExpr("args"), index), "!=", Rs.stringLiteral("unit")),
-              Rs.inlineStmtBlock(Rs.stmt(Rs.return_(Rs.err(Rs.stringLiteral("invalid unit"))))),
-            ),
-            Rs.litUnit(),
-          )
-        : Rs.try_(
-            Rs.dotChain(Rs.index(identExpr("args"), index), [
-              { method: Rs.ident("parse"), args: [], turboTypes: [rsTypeOf(type)] },
-              {
-                method: Rs.ident("map_err"),
-                args: [Rs.closure(Rs.pat("_"), Rs.stringLiteral(`invalid ${rsTypeOf(type).text}`))],
-              },
-            ]),
-          );
+    IRType.same(type, NumberType)
+      ? Rs.verbatimExpr(
+          `f64::from_bits(u64::from_str_radix(args[${index}].strip_prefix("f64:").ok_or("invalid f64")?, 16).map_err(|_| "invalid f64")?)`,
+        )
+      : IRType.same(type, StringType)
+        ? Rs.try_(Rs.call(identExpr("unhex"), [Rs.refExpr(Rs.index(identExpr("args"), index))]))
+        : IRType.same(type, UnitType)
+          ? Rs.inlineBlock(
+              Rs.if_(
+                Rs.cmp(Rs.index(identExpr("args"), index), "!=", Rs.stringLiteral("unit")),
+                Rs.inlineStmtBlock(Rs.stmt(Rs.return_(Rs.err(Rs.stringLiteral("invalid unit"))))),
+              ),
+              Rs.litUnit(),
+            )
+          : Rs.try_(
+              Rs.dotChain(Rs.index(identExpr("args"), index), [
+                { method: Rs.ident("parse"), args: [], turboTypes: [rsTypeOf(type)] },
+                {
+                  method: Rs.ident("map_err"),
+                  args: [
+                    Rs.closure(Rs.pat("_"), Rs.stringLiteral(`invalid ${rsTypeOf(type).text}`)),
+                  ],
+                },
+              ]),
+            );
   const callExpr = (f: LoweredModule["functions"][number]): RsExpr => {
     const call = Rs.pathCall(
       rsSegments("reffect_generated"),
@@ -2390,4 +2415,11 @@ const writeCompositeTypes = (
         Array: () => undefined,
       }),
     );
+};
+
+/** Lowercase hex of a double's IEEE 754 bits, preserving NaN, infinities and -0. */
+const f64Bits = (value: number): string => {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  return view.getBigUint64(0).toString(16).padStart(16, "0");
 };

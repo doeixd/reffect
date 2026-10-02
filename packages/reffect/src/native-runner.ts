@@ -2,7 +2,7 @@ import { Effect, Exit, Predicate, Schema } from "effect";
 import { CargoApi } from "./cargo.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import { EffectFn, isAsyncComputation, maxLogicalFrames } from "./effect-ir.ts";
-import { BoolType, IRType, StringType, U64Type, UnitType, fail } from "./kernel.ts";
+import { BoolType, IRType, NumberType, StringType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Fn, Inputs } from "./kernel.ts";
 import type { Artifact } from "./compiler.ts";
 
@@ -50,6 +50,12 @@ const encodeArguments = <I extends readonly IRType<unknown>[]>(
         values.push(undefined);
         continue;
       }
+      if (Predicate.isNumber(value) && IRType.same(fn.input[i], NumberType)) {
+        const view = new DataView(new ArrayBuffer(8));
+        view.setFloat64(0, value);
+        values.push(`f64:${view.getBigUint64(0).toString(16).padStart(16, "0")}`);
+        continue;
+      }
       if (Predicate.isString(value) && IRType.same(fn.input[i], StringType)) {
         values.push(`str:${Buffer.from(value, "utf8").toString("hex")}`);
         continue;
@@ -69,7 +75,11 @@ const decodeScalar = <T>(type: IRType<T>, name: string, encoded: string) =>
     else if (IRType.same(type, BoolType) && /^bool:(true|false)$/.test(encoded))
       value = encoded === "bool:true";
     else if (IRType.same(type, UnitType) && encoded === "unit") value = undefined;
-    else if (IRType.same(type, StringType) && /^str:(?:[0-9a-f]{2})*$/.test(encoded)) {
+    else if (IRType.same(type, NumberType) && /^f64:[0-9a-f]{16}$/.test(encoded)) {
+      const view = new DataView(new ArrayBuffer(8));
+      view.setBigUint64(0, BigInt(`0x${encoded.slice(4)}`));
+      value = view.getFloat64(0);
+    } else if (IRType.same(type, StringType) && /^str:(?:[0-9a-f]{2})*$/.test(encoded)) {
       try {
         value = new TextDecoder("utf-8", { fatal: true }).decode(
           Buffer.from(encoded.slice(4), "hex"),

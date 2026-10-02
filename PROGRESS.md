@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — JS numbers, part A (witness and operations)
+
+- Recorded [number decisions](docs/research/number-profile.md) (NUM-001–005) after reading `SchemaAST.Number.toCodecJson` and probing plain and checked codecs. Added `R.Number` (f64; Copyable, not Eq/ordered) with `literal` (bit-exact native literals), `add`, `eq` and `lt`; the runner passes doubles as their hex bits.
+- Validation (focused): `numbers.test.ts` 2/2 (169 pairs including NaN, ±Infinity, ±0, subnormals and 2^53 neighbours against JS; native debug/release bit-exact on a subset). `string-profile`, `effect`, `rust-emission-output` and `compiler` still pass. TypeScript and `vp check` pass. The RPC codec is part B.
+
 ## 2026-10-02 — Native RemoteServer design (proposed)
 
 - Read the full `foldkit-remote-server` 0.9.0 handler implementation and the shared `foldkit-remote` helpers, then recorded the [native RemoteServer design](docs/research/native-remote.md). Proposed: a literal semantic-port engine (the milestone-1 precedent), wire codecs generated from the unchanged `RemoteRpc` group, explicit JS ordering rules, the memory backend first, compiled Sources and authorization next, and a differential harness against the official server plus a stock client. Open: the published packages' `effect` peer range excludes rc.118, and they use `foldkit-entity` 0.5.0. No code changed.

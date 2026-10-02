@@ -38,6 +38,10 @@ import {
   LtU64,
   EqBool,
   EqString,
+  AddNumber,
+  EqNumber,
+  LtNumber,
+  NumberType,
   IncludesString,
   ReplaceAllString,
   StringType,
@@ -71,7 +75,8 @@ export interface Implementation {
     | "lt"
     | "not"
     | "contains"
-    | "replace";
+    | "replace"
+    | "add";
 }
 export class Target extends Pipeable.Class {
   private constructor(
@@ -118,6 +123,9 @@ const implementations = Object.freeze([
   implementation(EqString as AnyOperation, "eq"),
   implementation(IncludesString as AnyOperation, "contains"),
   implementation(ReplaceAllString as AnyOperation, "replace"),
+  implementation(AddNumber as AnyOperation, "add"),
+  implementation(EqNumber as AnyOperation, "eq"),
+  implementation(LtNumber as AnyOperation, "lt"),
 ]);
 const syncResultAdapter = Object.freeze({
   ref: SemanticRef.runtime("rust/std-result@1"),
@@ -151,6 +159,7 @@ export const Rust = Object.freeze({
       Capabilities.Bool,
       Capabilities.Unit,
       Capabilities.String,
+      Capabilities.Number,
       Capabilities.SyncResult,
       Capabilities.AsyncResult,
       Capabilities.ScopedFiles,
@@ -163,6 +172,7 @@ export const Rust = Object.freeze({
       Capabilities.Bool,
       Capabilities.Unit,
       Capabilities.String,
+      Capabilities.Number,
       Capabilities.SyncResult,
     ]),
   ),
@@ -527,7 +537,9 @@ const derive = Effect.fn("Compile.derive")(function* (
               ? [Capabilities.Unit]
               : IRType.same(type, StringType)
                 ? [Capabilities.String]
-                : [],
+                : IRType.same(type, NumberType)
+                  ? [Capabilities.Number]
+                  : [],
       ),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
       ...(Array.from(effectRefs).some((ref) =>
@@ -660,7 +672,7 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
   for (const type of expected.analysis.types) {
     if (
       type.layout === undefined &&
-      ![U64Type, BoolType, UnitType, NeverType, StringType].some((builtin) =>
+      ![U64Type, BoolType, UnitType, NeverType, StringType, NumberType].some((builtin) =>
         IRType.same(type, builtin),
       )
     )
