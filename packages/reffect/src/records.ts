@@ -11,16 +11,48 @@ import {
   arrayItem,
   fail,
   structLayout,
+  undefinedOrItem,
   unionCases,
 } from "./kernel.ts";
 import type { ArrayOp, Layout, MatchCase, StructLayout, Value } from "./kernel.ts";
 import { Computation, joinType } from "./effect-ir.ts";
 import { RustIdent } from "./rust-emit.ts";
 
+/** `Schema.optional(T)` / `Schema.optionalKey(T)` as a struct field marker (OPT-002). */
+export interface OptionalField<T, Kind extends "optional" | "optionalKey"> {
+  readonly _tag: "OptionalField";
+  readonly kind: Kind;
+  readonly type: IRType<T>;
+}
 /** Field witnesses of a struct, in declaration (and wire-encoding) order. */
-export type Fields = { readonly [name: string]: IRType<any> };
-export type StructValue<F extends Fields> = { readonly [K in keyof F]: Value<F[K]> };
-type FieldExprs<F extends Fields> = { readonly [K in keyof F]: Expr<Value<F[K]>> };
+export type Fields = {
+  readonly [name: string]: IRType<any> | OptionalField<any, "optional" | "optionalKey">;
+};
+type RequiredKeys<F extends Fields> = {
+  [K in keyof F]: F[K] extends OptionalField<any, any> ? never : K;
+}[keyof F];
+type OptionalKeys<F extends Fields> = Exclude<keyof F, RequiredKeys<F>>;
+type FieldValue<T> =
+  T extends OptionalField<infer A, infer Kind>
+    ? Kind extends "optional"
+      ? A | undefined
+      : A
+    : Value<T>;
+type Simplify<T> = { [K in keyof T]: T[K] } & {};
+export type StructValue<F extends Fields> = Simplify<
+  { readonly [K in RequiredKeys<F>]: FieldValue<F[K]> } & {
+    readonly [K in OptionalKeys<F>]?: FieldValue<F[K]>;
+  }
+>;
+type FieldExpr<T> =
+  T extends OptionalField<infer A, infer Kind>
+    ? Kind extends "optional"
+      ? Expr<A> | Expr<A | undefined>
+      : Expr<A>
+    : Expr<Value<T>>;
+type FieldExprs<F extends Fields> = { readonly [K in RequiredKeys<F>]: FieldExpr<F[K]> } & {
+  readonly [K in OptionalKeys<F>]?: FieldExpr<F[K]>;
+};
 export type CaseValue<Tag extends string, F extends Fields> = {
   readonly _tag: Tag;
 } & StructValue<F>;
@@ -87,20 +119,40 @@ class Composite<A> extends IRType<A> {
   }
 }
 
+const isOptionalField = (
+  value: unknown,
+): value is OptionalField<unknown, "optional" | "optionalKey"> =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as { readonly _tag?: unknown })._tag === "OptionalField";
 const fieldList = (fields: Fields) => {
   if (Object.hasOwn(fields, "_tag"))
     throw fail("RESERVED_FIELD", "authoring", "Struct", "`_tag` is reserved for tagged unions");
-  return Object.entries(fields).map(([name, type]) => {
+  return Object.entries(fields).map(([name, field]): StructLayout["fields"][number] => {
+    const type = isOptionalField(field) ? field.type : field;
     if (!(type instanceof IRType))
       throw fail("TYPE_MISMATCH", "authoring", `Struct.${name}`, "Fields require IRType witnesses");
-    return Object.freeze({ name, type: type as IRType<unknown> });
+    // Optional fields record their read witness, UndefinedOr<T> (OPT-002).
+    return isOptionalField(field)
+      ? Object.freeze({
+          name,
+          type: UndefinedOrType.of(type) as IRType<unknown>,
+          optional: field.kind,
+        })
+      : Object.freeze({ name, type: type as IRType<unknown> });
   });
 };
+const fieldSchema = (field: StructLayout["fields"][number]): Schema.Top =>
+  field.optional === undefined
+    ? field.type.schema
+    : field.optional === "optional"
+      ? Schema.optional(undefinedOrItem(field.type)!.schema)
+      : Schema.optionalKey(undefinedOrItem(field.type)!.schema);
 const structKey = (layout: StructLayout) =>
   JSON.stringify([
     layout.tag ?? null,
     layout.identifier ?? null,
-    layout.fields.map((f) => [f.name, f.type.id]),
+    layout.fields.map((f) => [f.name, f.type.id, f.optional ?? null]),
   ]);
 
 /** A struct witness (`Schema.Struct`), or a union case when it carries a `_tag`. */
@@ -128,7 +180,7 @@ export class StructType<F extends Fields, A = StructValue<F>> extends Composite<
         : `${tag === undefined ? "Struct" : (rustIdent(tag) ?? "Case")}_${digest(key)}`;
     const struct = Schema.Struct({
       ...(tag === undefined ? {} : { _tag: Schema.tag(tag) }),
-      ...Object.fromEntries(list.map((f) => [f.name, f.type.schema])),
+      ...Object.fromEntries(list.map((f) => [f.name, fieldSchema(f)])),
     });
     super(
       `reffect/struct@1/${digest(key)}`,
@@ -143,7 +195,7 @@ export class StructType<F extends Fields, A = StructValue<F>> extends Composite<
   static of<const F extends Fields>(fields: F, tag?: string, identifier?: string): StructType<F> {
     const list = fieldList(fields);
     return intern(
-      ["struct", tag, identifier, ...list.flatMap((f) => [f.name, f.type])],
+      ["struct", tag, identifier, ...list.flatMap((f) => [f.name, f.optional, f.type])],
       () => new StructType(fields, tag, identifier),
     );
   }
@@ -158,24 +210,27 @@ export class StructType<F extends Fields, A = StructValue<F>> extends Composite<
     return Expr.make(this, undefined, ordered(this, values));
   }
 }
+// Omitted optional keys are absent; an explicit `undefined` entry is not admitted (OPT-002).
 const ordered = (
   type: IRType<unknown>,
-  values: { readonly [name: string]: Expr<unknown> },
+  values: { readonly [name: string]: Expr<unknown> | undefined },
   tag?: string,
 ) => {
   const layout = structLayout(type, tag)!;
   const names = Object.keys(values);
   if (
-    names.length !== layout.fields.length ||
-    names.some((n) => !layout.fields.some((f) => f.name === n))
+    names.some((n) => !layout.fields.some((f) => f.name === n) || values[n] === undefined) ||
+    layout.fields.some((f) => f.optional === undefined && !Object.hasOwn(values, f.name))
   )
     throw fail(
       "TYPE_MISMATCH",
       "authoring",
       "make",
-      "Construction requires exactly the declared fields",
+      "Construction requires every required field and only declared fields",
     );
-  return layout.fields.map((field) => values[field.name]);
+  return layout.fields.map((field) =>
+    Object.hasOwn(values, field.name) ? values[field.name] : undefined,
+  );
 };
 
 /** A union case: constructing it yields the union-typed value (narrower than Effect, REC-002). */
@@ -233,7 +288,7 @@ export class TaggedUnionType<C extends { readonly [tag: string]: Fields }> exten
       const tag = tags[i];
       cases[tag] = Object.freeze(
         Object.assign(Object.create(member), {
-          make: (values: { readonly [name: string]: Expr<unknown> }) =>
+          make: (values: { readonly [name: string]: Expr<unknown> | undefined }) =>
             Expr.make(this, tag, ordered(this, values, tag)),
         }),
       );
@@ -314,11 +369,98 @@ export const valueTags: {
   <const H extends AnyHandlers>(value: Expr<unknown>, handlers: H) => MatchResult<H>
 >(2, (value, handlers) => matchTags(value, handlers));
 
-/** `Struct.get(key)(self)` / `Struct.get(self, key)`. */
+/** `Struct.get(key)(self)` / `Struct.get(self, key)`; optional keys read as `T | undefined`. */
 const get: {
   <S, const K extends keyof S & string>(key: K): (self: Expr<S>) => Expr<S[K]>;
   <S, const K extends keyof S & string>(self: Expr<S>, key: K): Expr<S[K]>;
 } = dual(2, (self: Expr<unknown>, key: string) => Expr.get(self, key));
+
+/** `Schema.optional(T)`: the key may be absent, and a present value may be `undefined`. */
+export const optional = <T>(type: IRType<T>): OptionalField<T, "optional"> =>
+  Object.freeze({ _tag: "OptionalField", kind: "optional", type });
+/** `Schema.optionalKey(T)`: the key may be absent; a present value is a `T`. */
+export const optionalKey = <T>(type: IRType<T>): OptionalField<T, "optionalKey"> =>
+  Object.freeze({ _tag: "OptionalField", kind: "optionalKey", type });
+
+/** `Schema.UndefinedOr(T)`: a plain `T | undefined`, natively `Option<T>` (OPT-001). */
+export class UndefinedOrType<T> extends Composite<T | undefined> {
+  private constructor(readonly item: IRType<T>) {
+    super(
+      `reffect/undefined-or@1/${digest(item.id)}`,
+      freeze(Schema.UndefinedOr(item.schema)) as unknown as Schema.Codec<T | undefined>,
+      `Option<${item.native.type}>`,
+      { _tag: "UndefinedOr", item },
+    );
+    Object.freeze(this);
+  }
+  static of<T>(item: IRType<T>): UndefinedOrType<T> {
+    if (!(item instanceof IRType))
+      throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr", "UndefinedOr requires a witness");
+    // `undefined | undefined` collapses in JS, so a witness admitting undefined cannot nest.
+    if (IRType.same(item, UnitType) || undefinedOrItem(item))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        "UndefinedOr",
+        "The item witness must not admit undefined",
+      );
+    return intern(["undefinedOr", item], () => new UndefinedOrType(item));
+  }
+}
+const undefinedOrMatch = <A, B>(
+  self: Expr<A | undefined>,
+  options: {
+    readonly onUndefined: () => Expr<B>;
+    readonly onDefined: (a: Expr<A>) => Expr<NoInfer<B>>;
+  },
+): Expr<B> => {
+  const item = undefinedOrItem(self.type);
+  if (!item)
+    throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr.match", "match requires UndefinedOr");
+  const binder = Symbol("reffect/undefinedOr/defined");
+  const onDefined = options.onDefined(Expr.parameter(item as IRType<A>, binder, 0));
+  if (!(onDefined instanceof Expr))
+    throw fail(
+      "TYPE_MISMATCH",
+      "authoring",
+      "UndefinedOr.match",
+      "Handlers must return pure expressions in this profile",
+    );
+  return Expr.matchUndefined(self, binder, onDefined, options.onUndefined());
+};
+/** Effect `UndefinedOr.match(self, { onUndefined, onDefined })`, data-first or data-last. */
+const undefinedOrMatchDual: {
+  <A, B>(options: {
+    readonly onUndefined: () => Expr<B>;
+    readonly onDefined: (a: Expr<A>) => Expr<NoInfer<B>>;
+  }): (self: Expr<A | undefined>) => Expr<B>;
+  <A, B>(
+    self: Expr<A | undefined>,
+    options: {
+      readonly onUndefined: () => Expr<B>;
+      readonly onDefined: (a: Expr<A>) => Expr<NoInfer<B>>;
+    },
+  ): Expr<B>;
+} = dual(2, undefinedOrMatch);
+/** Effect `UndefinedOr.map(self, f)`: maps a defined value, keeping `undefined`. */
+const undefinedOrMap: {
+  <A, B>(f: (a: Expr<A>) => Expr<B>): (self: Expr<A | undefined>) => Expr<B | undefined>;
+  <A, B>(self: Expr<A | undefined>, f: (a: Expr<A>) => Expr<B>): Expr<B | undefined>;
+} = dual(2, <A, B>(self: Expr<A | undefined>, f: (a: Expr<A>) => Expr<B>): Expr<B | undefined> => {
+  const item = undefinedOrItem(self.type);
+  if (!item)
+    throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr.map", "map requires UndefinedOr");
+  const binder = Symbol("reffect/undefinedOr/defined");
+  const body = f(Expr.parameter(item as IRType<A>, binder, 0));
+  const output = UndefinedOrType.of(body.type);
+  return Expr.matchUndefined(self, binder, Expr.defined(output, body), Expr.undefined(output));
+});
+export const UndefinedOr = Object.freeze(
+  Object.assign(<T>(item: IRType<T>): UndefinedOrType<T> => UndefinedOrType.of(item), {
+    match: undefinedOrMatchDual,
+    map: undefinedOrMap,
+  }),
+);
 
 export const Struct = Object.assign(
   <const F extends Fields>(fields: F): StructType<F> => StructType.of(fields),

@@ -95,8 +95,15 @@ export const analyzeScopes = (
               visit(n.onTrue);
               visit(n.onFalse);
             },
-            Make: (n) => n.fields.forEach(visit),
+            Make: (n) => n.fields.forEach((field) => field && visit(field)),
             Get: (n) => visit(n.value),
+            MatchUndefined: (n) => {
+              visit(n.value);
+              visit(n.onDefined);
+              visit(n.onUndefined);
+            },
+            Defined: (n) => visit(n.value),
+            Undefined: () => {},
             ArrayMake: (n) => n.elements.forEach(visit),
             ArrayLength: (n) => visit(n.value),
             ArrayLoop: (n) => {

@@ -353,8 +353,15 @@ const derive = Effect.fn("Compile.derive")(function* (
           walk(n.onTrue);
           walk(n.onFalse);
         },
-        Make: (n) => n.fields.forEach(walk),
+        Make: (n) => n.fields.forEach((field) => field && walk(field)),
         Get: (n) => walk(n.value),
+        MatchUndefined: (n) => {
+          walk(n.value);
+          walk(n.onDefined);
+          walk(n.onUndefined);
+        },
+        Defined: (n) => walk(n.value),
+        Undefined: () => {},
         ArrayMake: (n) => n.elements.forEach(walk),
         ArrayLength: (n) => walk(n.value),
         ArrayLoop: (n) => {

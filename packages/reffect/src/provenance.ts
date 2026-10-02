@@ -53,8 +53,18 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
         edge("onTrue", n.onTrue),
         edge("onFalse", n.onFalse),
       ],
-      Make: (n) => n.fields.map((field, index) => [`fields[${index}]`, field] as const),
+      Make: (n) =>
+        n.fields.flatMap((field, index) =>
+          field === undefined ? [] : [[`fields[${index}]`, field] as const],
+        ),
       Get: (n) => [edge("value", n.value)],
+      MatchUndefined: (n) => [
+        edge("value", n.value),
+        edge("onDefined", n.onDefined),
+        edge("onUndefined", n.onUndefined),
+      ],
+      Defined: (n) => [edge("value", n.value)],
+      Undefined: () => [],
       ArrayMake: (n) =>
         n.elements.map((element, index) => [`elements[${index}]`, element] as const),
       ArrayLength: (n) => [edge("value", n.value)],

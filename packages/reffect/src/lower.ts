@@ -17,6 +17,7 @@ import {
   arrayItem,
   structLayout,
   unionCases,
+  undefinedOrItem,
 } from "./kernel.ts";
 import { rustFieldNames, rustVariantName } from "./records.ts";
 import type { Expr, OperationRef, Program } from "./kernel.ts";
@@ -60,8 +61,26 @@ export type RustExpr = (
       readonly _tag: "Make";
       readonly type: IRType<unknown>;
       readonly tag: string | undefined;
-      readonly fields: readonly RustExpr[];
+      /** `None` is an absent optional key; `Some`/`SomeSome` wrap presence (OPT-003). */
+      readonly fields: readonly {
+        readonly value: RustExpr | undefined;
+        readonly wrap: "Plain" | "None" | "Some" | "SomeSome";
+      }[];
     }
+  | {
+      readonly _tag: "MatchUndefined";
+      readonly scrutinee: RustExpr;
+      readonly binder: string;
+      readonly itemCopy: boolean;
+      readonly onDefined: number;
+      readonly onDefinedUse?: string;
+      readonly onUndefined: number;
+      readonly onUndefinedUse?: string;
+    }
+  | { readonly _tag: "Defined"; readonly value: RustExpr }
+  | { readonly _tag: "Undefined" }
+  /** An `optional` field read: presence and definedness collapse to `Option<T>`. */
+  | { readonly _tag: "Flatten"; readonly base: RustExpr }
   | { readonly _tag: "ArrayMake"; readonly elements: readonly RustExpr[] }
   | { readonly _tag: "ArrayLength"; readonly value: RustExpr }
   /** One generated loop per structured iteration (ARR-004). */
@@ -380,8 +399,15 @@ export function lowerFunctions(
                 expression(n.onTrue);
                 expression(n.onFalse);
               },
-              Make: (n) => n.fields.forEach(expression),
+              Make: (n) => n.fields.forEach((field) => field && expression(field)),
               Get: (n) => expression(n.value),
+              MatchUndefined: (n) => {
+                expression(n.value);
+                expression(n.onDefined);
+                expression(n.onUndefined);
+              },
+              Defined: (n) => expression(n.value),
+              Undefined: () => {},
               ArrayMake: (n) => n.elements.forEach(expression),
               ArrayLength: (n) => expression(n.value),
               ArrayLoop: (n) => {
@@ -513,8 +539,15 @@ export function lowerFunctions(
                 const parameter = scope.bindings.get(n.binder)![n.index];
                 return RustExpr.bound(parameter.name);
               },
-              Literal: (n) =>
-                RustExpr.literal(n.value as bigint | boolean | string | number | void),
+              Literal: (n): RustExpr => {
+                const literal = RustExpr.literal(
+                  n.value as bigint | boolean | string | number | void,
+                );
+                if (!undefinedOrItem(e.type)) return literal;
+                return n.value === undefined
+                  ? Object.freeze({ _tag: "Undefined" })
+                  : Object.freeze({ _tag: "Defined", value: literal });
+              },
               Apply: (n): RustExpr =>
                 Object.freeze({
                   _tag: "Call",
@@ -532,24 +565,59 @@ export function lowerFunctions(
                   onFalse: pureHelper(n.onFalse, scope, `${path}.onFalse`),
                   onFalseUse: provenance?.use(`${path}.onFalse`),
                 }),
-              Make: (n): RustExpr =>
-                Object.freeze({
+              Make: (n): RustExpr => {
+                const layout = structLayout(e.type, n.tag)!;
+                return Object.freeze({
                   _tag: "Make",
                   type: e.type,
                   tag: n.tag,
                   fields: Object.freeze(
-                    n.fields.map((field, i) => expression(field, `${path}.fields[${i}]`)),
+                    n.fields.map((field, i) => {
+                      const declared = layout.fields[i];
+                      const value = field && expression(field, `${path}.fields[${i}]`);
+                      const wrap =
+                        declared.optional === undefined
+                          ? "Plain"
+                          : field === undefined
+                            ? "None"
+                            : declared.optional === "optional" &&
+                                !IRType.same(field.type, declared.type)
+                              ? "SomeSome"
+                              : "Some";
+                      return Object.freeze({ value, wrap });
+                    }),
                   ),
-                }),
+                });
+              },
               Get: (n): RustExpr => {
                 const layout = structLayout(n.value.type)!;
                 const index = layout.fields.findIndex((f) => f.name === n.field);
-                return Object.freeze({
+                const place: RustExpr = Object.freeze({
                   _tag: "Field",
                   base: expression(n.value, `${path}.value`),
                   field: rustFieldNames(layout)[index],
                 });
+                return layout.fields[index].optional === "optional"
+                  ? Object.freeze({ _tag: "Flatten", base: place })
+                  : place;
               },
+              MatchUndefined: (n): RustExpr => {
+                const item = undefinedOrItem(n.value.type)!;
+                const nested = caseScope(scope, n.binder, item);
+                return Object.freeze({
+                  _tag: "MatchUndefined",
+                  scrutinee: expression(n.value, `${path}.value`),
+                  binder: nested.input[nested.input.length - 1].name,
+                  itemCopy: item.traits.includes(Traits.Copyable),
+                  onDefined: pureHelper(n.onDefined, nested, `${path}.onDefined`),
+                  onDefinedUse: provenance?.use(`${path}.onDefined`),
+                  onUndefined: pureHelper(n.onUndefined, scope, `${path}.onUndefined`),
+                  onUndefinedUse: provenance?.use(`${path}.onUndefined`),
+                });
+              },
+              Defined: (n): RustExpr =>
+                Object.freeze({ _tag: "Defined", value: expression(n.value, `${path}.value`) }),
+              Undefined: (): RustExpr => Object.freeze({ _tag: "Undefined" }),
               ArrayMake: (n): RustExpr =>
                 Object.freeze({
                   _tag: "ArrayMake",
@@ -607,14 +675,18 @@ export function lowerFunctions(
               },
             }),
           );
-          const local = Match.value(e.node).pipe(
+          const local = Match.value(value).pipe(
             Match.tags({
-              Apply: () => true,
+              Call: () => true,
               Match: () => true,
               Make: () => true,
               MatchTags: () => true,
               ArrayMake: () => true,
               ArrayLoop: () => true,
+              MatchUndefined: () => true,
+              Defined: () => true,
+              Undefined: () => true,
+              Flatten: () => true,
             }),
             Match.orElse(() => false),
           );
@@ -1104,6 +1176,9 @@ export const emitFunctions = (
     if (type.layout)
       return Match.value(type.layout).pipe(
         Match.tag("Array", (array) => Rs.genericType(Rs.namedType("Vec"), [rsTypeOf(array.item)])),
+        Match.tag("UndefinedOr", (option) =>
+          Rs.genericType(Rs.namedType("Option"), [rsTypeOf(option.item)]),
+        ),
         Match.orElse(() => Rs.namedType(type.native.type)),
       );
     if (IRType.same(type, NeverType))
@@ -1396,7 +1471,21 @@ export const emitFunctions = (
                   const caseType = n.tag === undefined ? n.type : caseOf(n.type, n.tag);
                   const body = joinFragments([
                     `${typeName(caseType)} { `,
-                    ...n.fields.flatMap((field, i) => [`${names[i]}: `, render(field), ", "]),
+                    ...n.fields.flatMap((field, i) => [
+                      `${names[i]}: `,
+                      Match.value(field.wrap).pipe(
+                        Match.when("Plain", () => render(field.value!)),
+                        Match.when("None", () => textFragment("None")),
+                        Match.when("Some", () =>
+                          joinFragments(["Some(", render(field.value!), ")"]),
+                        ),
+                        Match.when("SomeSome", () =>
+                          joinFragments(["Some(Some(", render(field.value!), "))"]),
+                        ),
+                        Match.exhaustive,
+                      ),
+                      ", ",
+                    ]),
                     "}",
                   ]);
                   return n.tag === undefined
@@ -1419,6 +1508,22 @@ export const emitFunctions = (
                     ]),
                     "}",
                   ]),
+                MatchUndefined: (n) => {
+                  const binder = Rs.ident(n.binder).text;
+                  return joinFragments([
+                    "match ",
+                    operand(n.scrutinee),
+                    ` { Some(${binder}) => { ${n.itemCopy ? `let ${binder} = *${binder}; ` : ""}`,
+                    callFrag(n.onDefined, n.onDefinedUse),
+                    " } None => ",
+                    callFrag(n.onUndefined, n.onUndefinedUse),
+                    ", }",
+                  ]);
+                },
+                Defined: (n) => joinFragments(["Some(", render(n.value), ")"]),
+                Undefined: () => textFragment("None"),
+                Flatten: (n) =>
+                  joinFragments([render(n.base, undefined, true), ".clone().flatten()"]),
                 Literal: (n) => {
                   if (Predicate.isUndefined(n.value)) return textFragment(Rs.litUnit().text);
                   if (Predicate.isBigInt(n.value)) return textFragment(Rs.litU64(n.value).text);
@@ -2355,6 +2460,7 @@ const writeCompositeTypes = (
         Struct: (struct) => struct.fields.forEach((field) => visit(field.type)),
         Union: (union) => union.cases.forEach(visit),
         Array: (array) => visit(array.item),
+        UndefinedOr: (option) => visit(option.item),
       }),
     );
     const previous = names.get(type.native.type);
@@ -2402,7 +2508,10 @@ const writeCompositeTypes = (
           const fields = rustFieldNames(struct);
           write(
             `#[derive(Clone, Debug, PartialEq)]\n#[allow(non_snake_case)]\npub struct ${type.native.type} {${struct.fields
-              .map((field, i) => ` pub ${fields[i]}: ${typeName(field.type)},`)
+              .map(
+                (field, i) =>
+                  ` pub ${fields[i]}: ${field.optional === "optional" ? `Option<${typeName(field.type)}>` : typeName(field.type)},`,
+              )
               .join("")} }\n\n`,
           );
         },
@@ -2413,6 +2522,7 @@ const writeCompositeTypes = (
               .join("")} }\n\n`,
           ),
         Array: () => undefined,
+        UndefinedOr: () => undefined,
       }),
     );
 };

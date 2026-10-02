@@ -155,13 +155,23 @@ export class Law<Subject extends OperationRef = OperationRef> extends Pipeable.C
 export type Layout =
   | {
       readonly _tag: "Struct";
-      readonly fields: readonly { readonly name: string; readonly type: IRType<unknown> }[];
+      /**
+       * Optional fields (OPT-002) carry their read witness, `UndefinedOr<T>`, as `type`;
+       * `optional` also admits a present `undefined`, `optionalKey` does not.
+       */
+      readonly fields: readonly {
+        readonly name: string;
+        readonly type: IRType<unknown>;
+        readonly optional?: "optional" | "optionalKey";
+      }[];
       /** `_tag` literal of a tagged struct (a union case); not stored natively. */
       readonly tag: string | undefined;
       readonly identifier: string | undefined;
     }
   | { readonly _tag: "Union"; readonly cases: readonly IRType<unknown>[] }
-  | { readonly _tag: "Array"; readonly item: IRType<unknown> };
+  | { readonly _tag: "Array"; readonly item: IRType<unknown> }
+  /** A plain `T | undefined` (OPT-001). */
+  | { readonly _tag: "UndefinedOr"; readonly item: IRType<unknown> };
 export class IRType<A> extends Pipeable.Class {
   protected constructor(
     readonly ref: SemanticRef<"type">,
@@ -349,11 +359,14 @@ export type Node =
       readonly onTrue: Expr<unknown>;
       readonly onFalse: Expr<unknown>;
     }
-  /** Struct construction, or union-case construction when `tag` names a case of a union type. */
+  /**
+   * Struct construction, or union-case construction when `tag` names a case of a union type.
+   * An `undefined` entry is an absent optional key (OPT-002).
+   */
   | {
       readonly _tag: "Make";
       readonly tag: string | undefined;
-      readonly fields: readonly Expr<unknown>[];
+      readonly fields: readonly (Expr<unknown> | undefined)[];
     }
   | { readonly _tag: "Get"; readonly value: Expr<unknown>; readonly field: string }
   | {
@@ -363,6 +376,17 @@ export type Node =
     }
   | { readonly _tag: "ArrayMake"; readonly elements: readonly Expr<unknown>[] }
   | { readonly _tag: "ArrayLength"; readonly value: Expr<unknown> }
+  /** `UndefinedOr.match` (OPT-001); `binder` names the defined value. */
+  | {
+      readonly _tag: "MatchUndefined";
+      readonly value: Expr<unknown>;
+      readonly binder: symbol;
+      readonly onDefined: Expr<unknown>;
+      readonly onUndefined: Expr<unknown>;
+    }
+  /** A defined value widened to `UndefinedOr<T>`, and the `undefined` of that witness. */
+  | { readonly _tag: "Defined"; readonly value: Expr<unknown> }
+  | { readonly _tag: "Undefined" }
   /** Structured iteration (ARR-002); the compiler owns every loop. */
   | {
       readonly _tag: "ArrayLoop";
@@ -398,6 +422,24 @@ export const arrayItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
         Match.tag("Array", (layout) => layout.item),
         Match.orElse(() => undefined),
       );
+/** The defined witness of an `UndefinedOr`, or undefined for any other witness. */
+export const undefinedOrItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
+  type.layout === undefined
+    ? undefined
+    : Match.value(type.layout).pipe(
+        Match.tag("UndefinedOr", (layout) => layout.item),
+        Match.orElse(() => undefined),
+      );
+/** Whether `value` may initialize a struct field (OPT-002); absent only for optional keys. */
+export const fieldAccepts = (
+  field: StructLayout["fields"][number],
+  value: Expr<unknown> | undefined,
+): boolean =>
+  field.optional === undefined
+    ? value !== undefined && IRType.same(field.type, value.type)
+    : value === undefined ||
+      IRType.same(undefinedOrItem(field.type)!, value.type) ||
+      (field.optional === "optional" && IRType.same(field.type, value.type));
 /** The case witnesses of a tagged union, or undefined for any other witness. */
 export const unionCases = (type: IRType<unknown>): readonly IRType<unknown>[] | undefined =>
   type.layout === undefined
@@ -453,13 +495,13 @@ export class Expr<A> extends Pipeable.Class {
     this: void,
     type: IRType<A>,
     tag: string | undefined,
-    fields: readonly Expr<unknown>[],
+    fields: readonly (Expr<unknown> | undefined)[],
   ): Expr<A> {
     const layout = structLayout(type, tag);
     if (
       !layout ||
       layout.fields.length !== fields.length ||
-      layout.fields.some((field, i) => !IRType.same(field.type, fields[i].type))
+      layout.fields.some((field, i) => !fieldAccepts(field, fields[i]))
     )
       throw fail(
         "TYPE_MISMATCH",
@@ -479,6 +521,37 @@ export class Expr<A> extends Pipeable.Class {
         `Unknown field ${JSON.stringify(field)}`,
       );
     return new Expr(declared.type as IRType<A>, Object.freeze({ _tag: "Get", value, field }));
+  }
+  /** `UndefinedOr.match`: `onDefined` sees the defined value through `binder`. */
+  static matchUndefined<A>(
+    this: void,
+    value: Expr<unknown>,
+    binder: symbol,
+    onDefined: Expr<A>,
+    onUndefined: Expr<A>,
+  ): Expr<A> {
+    if (!undefinedOrItem(value.type) || !IRType.same(onDefined.type, onUndefined.type))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        "UndefinedOr.match",
+        "match requires an UndefinedOr value and identical branch witnesses",
+      );
+    return new Expr(
+      onDefined.type,
+      Object.freeze({ _tag: "MatchUndefined", value, binder, onDefined, onUndefined }),
+    );
+  }
+  static defined<A>(this: void, type: IRType<A | undefined>, value: Expr<A>): Expr<A | undefined> {
+    const item = undefinedOrItem(type);
+    if (!item || !IRType.same(item, value.type))
+      throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr", "Value disagrees with the witness");
+    return new Expr(type, Object.freeze({ _tag: "Defined", value }));
+  }
+  static undefined<A>(this: void, type: IRType<A | undefined>): Expr<A | undefined> {
+    if (!undefinedOrItem(type))
+      throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr", "Requires an UndefinedOr witness");
+    return new Expr(type, Object.freeze({ _tag: "Undefined" }));
   }
   static arrayMake<A>(this: void, type: IRType<A>, elements: readonly Expr<unknown>[]): Expr<A> {
     const item = arrayItem(type);
@@ -590,7 +663,7 @@ export class Expr<A> extends Pipeable.Class {
                 );
           },
           Make: (n) => {
-            const fields = n.fields.map((field) => walk(field));
+            const fields = n.fields.map((field) => field && walk(field));
             return fields.every((field, i) => field === n.fields[i])
               ? self
               : new Expr(
@@ -625,6 +698,25 @@ export class Expr<A> extends Pipeable.Class {
               ? self
               : new Expr(self.type, Object.freeze({ _tag: "ArrayLength", value }), self.source);
           },
+          MatchUndefined: (n) => {
+            const value = walk(n.value);
+            const onDefined = walk(n.onDefined);
+            const onUndefined = walk(n.onUndefined);
+            return value === n.value && onDefined === n.onDefined && onUndefined === n.onUndefined
+              ? self
+              : new Expr(
+                  self.type,
+                  Object.freeze({ ...n, value, onDefined, onUndefined }),
+                  self.source,
+                );
+          },
+          Defined: (n) => {
+            const value = walk(n.value);
+            return value === n.value
+              ? self
+              : new Expr(self.type, Object.freeze({ _tag: "Defined", value }), self.source);
+          },
+          Undefined: () => self,
           ArrayLoop: (n) => {
             const source = walk(n.source);
             const body = walk(n.body);
@@ -1044,10 +1136,42 @@ export const checkExpression = (
           if (
             !layout ||
             layout.fields.length !== n.fields.length ||
-            layout.fields.some((field, i) => !IRType.same(field.type, n.fields[i].type))
+            layout.fields.some((field, i) => !fieldAccepts(field, n.fields[i]))
           )
             add("TYPE_MISMATCH", at, "Construction fields differ from the declared layout");
-          n.fields.forEach((field, i) => walk(field, `${at}.fields[${i}]`));
+          n.fields.forEach((field, i) => field && walk(field, `${at}.fields[${i}]`));
+        },
+        MatchUndefined: (n) => {
+          const item = undefinedOrItem(n.value.type);
+          walk(n.value, `${at}.value`);
+          if (
+            !item ||
+            !IRType.same(n.onDefined.type, e.type) ||
+            !IRType.same(n.onUndefined.type, e.type)
+          ) {
+            add(
+              "TYPE_MISMATCH",
+              at,
+              "UndefinedOr match requires an UndefinedOr and equal branches",
+            );
+            return;
+          }
+          const nested = new Map(bindings);
+          nested.set(n.binder, [item]);
+          issues.push(...checkExpression(n.onDefined, nested, `${at}.onDefined`));
+          walk(n.onUndefined, `${at}.onUndefined`);
+        },
+        Defined: (n) => {
+          if (
+            !IRType.same(undefinedOrItem(e.type) ?? e.type, n.value.type) ||
+            !undefinedOrItem(e.type)
+          )
+            add("TYPE_MISMATCH", at, "A defined value must match its UndefinedOr witness");
+          walk(n.value, `${at}.value`);
+        },
+        Undefined: () => {
+          if (!undefinedOrItem(e.type))
+            add("TYPE_MISMATCH", at, "undefined requires an UndefinedOr witness");
         },
         Get: (n) => {
           const declared = structLayout(n.value.type)?.fields.find((f) => f.name === n.field);
@@ -1203,9 +1327,22 @@ export const evaluateExpression = (
           const layout = structLayout(e.type, n.tag)!;
           const value: Record<string, unknown> =
             layout.tag === undefined ? {} : { _tag: layout.tag };
-          layout.fields.forEach((field, i) => (value[field.name] = evaluate(n.fields[i])));
+          // Absent optional keys are omitted; a present `undefined` stays an own key (OPT-002).
+          layout.fields.forEach((field, i) => {
+            const fieldValue = n.fields[i];
+            if (fieldValue !== undefined) value[field.name] = evaluate(fieldValue);
+          });
           return value;
         },
+        MatchUndefined: (n) => {
+          const value = evaluate(n.value);
+          if (value === undefined) return evaluate(n.onUndefined);
+          const nested = new Map(scope);
+          nested.set(n.binder, [value]);
+          return evaluateExpression(n.onDefined, nested);
+        },
+        Defined: (n) => evaluate(n.value),
+        Undefined: () => undefined,
         Get: (n) => (evaluate(n.value) as Record<string, unknown>)[n.field],
         ArrayMake: (n) => n.elements.map(evaluate),
         ArrayLength: (n) => BigInt((evaluate(n.value) as readonly unknown[]).length),

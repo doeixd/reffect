@@ -55,6 +55,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 - [Resource-bearing Layers](research/resource-layer.md): scoped `Layer.effect` acquisition in a provide-owned scope, fallible acquisition, shared/fresh/nested memo inheritance and the registered-file size workload.
 - [Well-formed strings](research/string-profile.md): `R.String` semantics compared across UTF-16/UTF-8, literal `replaceAll`, owned/borrowed lowering and the Foldkit escaping differential.
 - [JS numbers](research/number-profile.md): `R.Number` as IEEE doubles, pinned `Schema.Number` JSON codec rules (non-finite strings, `isInt`/`isFinite`), structural check recognition and JS-compatible encoding.
+- [Optional fields](research/optional-fields.md): `R.optional`/`R.optionalKey` struct fields and `R.UndefinedOr`, native presence (`Option`/`Option<Option>`), and the verified `| null` mismatch text of `Schema.optional` JSON codecs.
 - [Native RemoteServer design](research/native-remote.md): proposed semantic-port engine, generated wire codecs, JS ordering rules, memory backend first and the differential harness.
 - [Milestone 4 gap analysis](research/remote-gap-analysis.md): Remote wire features still missing, probed Number/optional/Record semantics, and why the native engine design comes next.
 - [Arrays and structured iteration](research/arrays.md): `R.Array` mirroring `effect/Array`/`Schema.Array`, structured loops, `Effect.forEach` and exact RPC array codecs.

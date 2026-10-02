@@ -33,8 +33,26 @@ export {
   apply,
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
-export { Struct, TaggedUnion, StructType, TaggedUnionType, ArrayType, ArrayIR } from "./records.ts";
-export type { Fields, StructValue, CaseValue, UnionValue, CaseType } from "./records.ts";
+export {
+  Struct,
+  TaggedUnion,
+  StructType,
+  TaggedUnionType,
+  ArrayType,
+  ArrayIR,
+  UndefinedOr,
+  UndefinedOrType,
+  optional,
+  optionalKey,
+} from "./records.ts";
+export type {
+  Fields,
+  StructValue,
+  CaseValue,
+  UnionValue,
+  CaseType,
+  OptionalField,
+} from "./records.ts";
 export { flow } from "./flow.ts";
 export type { FlowResult } from "./flow.ts";
 export { Schedule } from "./schedule.ts";
@@ -64,6 +82,7 @@ export type {
   Inputs,
   Symbols,
   AnyOperation,
+  Value,
 } from "./kernel.ts";
 export { Compile, Compiler, CompileSpec, Rust, Target, Plan, RustExpr } from "./compiler.ts";
 export type {

@@ -16,7 +16,16 @@ import { Computation, EffectFn, EffectIR, LogIR, matchComputation } from "./effe
 import { catchAll, mapError, orElse } from "./error-recovery.ts";
 import { ContextIR } from "./context.ts";
 import { LayerIR } from "./layer.ts";
-import { ArrayIR, Struct, TaggedUnion, forEach, valueTags } from "./records.ts";
+import {
+  ArrayIR,
+  Struct,
+  TaggedUnion,
+  UndefinedOr,
+  forEach,
+  optional,
+  optionalKey,
+  valueTags,
+} from "./records.ts";
 import { FileIR } from "./file-resource.ts";
 import { ScheduleIR } from "./schedule.ts";
 import { ScopedIR } from "./scoped-sequence.ts";
@@ -73,6 +82,9 @@ export const R = Object.freeze({
   Number: NumberType,
   Struct,
   TaggedUnion,
+  UndefinedOr,
+  optional,
+  optionalKey,
   Array: ArrayIR,
   Match: Object.freeze({ bool, valueTags }),
   Predicate: Object.freeze({
