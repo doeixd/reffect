@@ -176,12 +176,13 @@ const ordered = (
 };
 
 /** A union case: constructing it yields the union-typed value (narrower than Effect, REC-002). */
-export type CaseType<Tag extends string, F extends Fields, U> = Omit<
-  StructType<F, CaseValue<Tag, F>>,
-  "make"
-> & {
-  readonly make: (values: FieldExprs<F>) => Expr<U>;
-};
+export interface CaseType<Tag extends string, F extends Fields, U> extends IRType<
+  CaseValue<Tag, F>
+> {
+  readonly fields: F;
+  readonly tag: Tag;
+  make(values: FieldExprs<F>): Expr<U>;
+}
 /** Exhaustive handlers: all pure (`Expr`) or all effectful (`Computation`). */
 type Handlers<C extends { readonly [tag: string]: Fields }> = {
   readonly [T in keyof C & string]: (

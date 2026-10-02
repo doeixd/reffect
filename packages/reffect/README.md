@@ -168,7 +168,7 @@ const label = R.fn([R.String], R.String, (cursor) =>
 );
 ```
 
-Handlers may instead all return computations, which branches effectfully (typed failures, logging, suspension). Case constructors return the union type, which is narrower than Effect's case type. Native code uses generated Rust structs and an enum of case structs; composite values are borrowed by helpers and copied only where they escape. RPC codecs for composites, arrays, records/maps, literal unions and `NullOr` are not yet admitted. See [record decisions](../../docs/research/records-unions.md).
+Handlers may instead all return computations, which branches effectfully (typed failures, logging, suspension). Case constructors return the union type, which is narrower than Effect's case type. Native code uses generated Rust structs and an enum of case structs; composite values are borrowed by helpers and copied only where they escape. `NativeRpc` accepts contract `Schema.Struct`/`Schema.TaggedUnion` payloads, results and typed errors built from admitted codecs, with invalid-input messages matching the stock server. Native JSON keys are ordered alphabetically rather than in schema order. Arrays, records/maps, literal unions, optional fields and `NullOr` are not yet admitted. See [record decisions](../../docs/research/records-unions.md).
 
 ## Synchronous Effect profile
 

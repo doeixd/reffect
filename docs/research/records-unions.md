@@ -49,7 +49,13 @@ Evidence: [records.test.ts](../../packages/reffect/tests/records.test.ts) passes
 
 Part 1b delivered the same day: `match`/`valueTags` handlers may all return Computations, producing a Computation `MatchTags` whose output and error channels join like `R.Match.bool`. It is checked, substituted, interpreted by both reference evaluators (failure frames use the `match` kind), and lowered to `match` over borrowed case values; async cases keep borrowing across `.await`. Mixing pure and effectful handlers is refused. Result types union across handlers, so mismatched witnesses are refused while authoring rather than in types. Evidence: `records.test.ts` 3/3 adds sync (fail/log/succeed) and async (sleep) branching against official `TaggedUnion.match`, with native debug/release on Tokio under both frame policies.
 
-Remaining: part 2 (RPC codecs with exact parity). One known extra copy: a field read from a local that is used only once is cloned rather than moved.
+## Part 2 delivered (2026-10-02)
+
+`NativeRpc` recognizes contract `Struct`s (optionally annotated with `identifier`) and `_tag`-literal `Union`s/`TaggedUnion`s whose leaves are admitted codecs, recursively, and maps them onto the interned R witnesses. A handler taking exactly the payload's composite type receives it whole; otherwise Struct payloads are projected by field as before, now with composite fields. Generated `decode_*`/`encode_*` functions in the server use a zero-allocation path chain. Top-level "Expected …" text comes from `SchemaIssue.makeFormatterDefault()` (what the server's internal `defaultFormatter` is) applied to decoding `null` at compile time; `Missing key` and scalar messages reuse the existing decoders. Empty structs accept arrays, as upstream does. Refused: optional fields, other annotations, non-`_tag` literals, nested `u64Range`, plain `Schema.String`.
+
+Evidence: [records-rpc.test.ts](../../packages/reffect/tests/records-rpc.test.ts) passes 2/2. 28 raw requests produce response JSON identical to the official server: union cases; wrong, missing or numeric `_tag`; non-object, null and array payloads; excess properties; nested paths through projected fields; identifier messages; typed composite errors; u64::MAX; batches. The stock client round-trips unions, structs and typed union errors. `CaseType` is an explicit interface so TypeScript 5.9 and 7 agree on `cases.X.make` returning the union type.
+
+Known byte-level divergence (REC-005): serde_json orders object keys alphabetically while the official encoder follows schema order; decoded values are identical. One known extra copy: a field read from a local that is used only once is cloned rather than moved.
 
 ## Open questions
 

@@ -89,7 +89,7 @@ closed the current 3B workload. The [north-star review](docs/research/north-star
 is context only; the roadmap order stands.
 
 1. Done: `NativeRpc.StringJson` payloads/results match the official server ([STR-006/007](docs/research/string-profile.md#rpc-boundary-2026-10-02)).
-2. In progress: [records and tagged unions](docs/research/records-unions.md). Structs/unions with pure and effectful matching are implemented (parts 1a/1b); next are RPC codecs with exact invalid-input parity (part 2).
+2. Done: [records and tagged unions](docs/research/records-unions.md), including pure/effectful matching and RPC codecs with exact invalid-input parity.
 3. Derive the portable Schema subset and wire validation from the Remote contracts before admitting a RemoteServer path.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.

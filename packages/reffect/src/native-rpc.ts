@@ -1,4 +1,4 @@
-import { Effect, Schema, SchemaAST } from "effect";
+import { Cause, Effect, Exit, Option, Schema, SchemaAST, SchemaIssue } from "effect";
 import { Rpc, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, type Plan } from "./compiler.ts";
 import { FailureFrames } from "./frame-policy.ts";
@@ -22,6 +22,8 @@ import {
 } from "./kernel.ts";
 import type { AnyFn } from "./kernel.ts";
 import { Rs } from "./rust-emit.ts";
+import { Struct, TaggedUnion, rustFieldNames, rustVariantName } from "./records.ts";
+import { structLayout, unionCases } from "./kernel.ts";
 import type { RsExpr } from "./rust-emit.ts";
 import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
@@ -31,7 +33,22 @@ import { rpcRuntime } from "./rpc-runtime.ts";
 const U64Json = RpcCodecs.U64Json;
 const StringJson = RpcCodecs.StringJson;
 
-type Codec = "u64" | "bool" | "unit" | "never" | "string";
+type Scalar = "u64" | "bool" | "unit" | "never" | "string";
+/** A struct or tagged union recognized structurally from the contract (REC-005). */
+interface Composite {
+  readonly type: IRType<unknown>;
+  /** Fields per struct, or per union case keyed by tag; codecs in schema order. */
+  readonly fields: readonly { readonly name: string; readonly codec: Codec }[];
+  readonly cases: readonly {
+    readonly tag: string;
+    readonly fields: readonly { readonly name: string; readonly codec: Codec }[];
+  }[];
+  /** Official `defaultFormatter` text for a value that is not this shape at all. */
+  readonly expected: string;
+}
+type Codec = Scalar | Composite;
+type Registry = Map<IRType<unknown>, Composite>;
+const isScalar = (codec: Codec): codec is Scalar => typeof codec === "string";
 const witness = {
   u64: U64Type,
   bool: BoolType,
@@ -39,6 +56,8 @@ const witness = {
   never: NeverType,
   string: StringType,
 };
+const witnessOf = (codec: Codec): IRType<unknown> =>
+  isScalar(codec) ? witness[codec] : codec.type;
 export interface RpcBinding<F extends AnyFn = AnyFn> {
   readonly fn: F;
   readonly fields: readonly string[];
@@ -94,13 +113,109 @@ export interface RpcArtifact extends GeneratedFiles {
 }
 const unsupported = (path: string, message: string) =>
   fail("RPC_UNSUPPORTED", "rpc", path, message);
-const codec = (ast: SchemaAST.AST, path: string, payload = false): Codec => {
+// The pinned server formats decode issues with the default formatter (the internal
+// `defaultFormatter` is `makeFormatterDefault()`); a null input
+// yields the top-level "Expected ..." text, to which the native decoder appends paths.
+const formatIssue = SchemaIssue.makeFormatterDefault();
+const expectedOf = (type: IRType<unknown>): string =>
+  Exit.match(Schema.decodeUnknownExit(type.schema as Schema.Codec<unknown>)(null), {
+    onSuccess: () => {
+      throw unsupported(type.id, "A composite schema unexpectedly accepted null");
+    },
+    onFailure: (cause) =>
+      Option.match(Cause.findErrorOption(cause), {
+        onNone: () => {
+          throw unsupported(type.id, "Composite decoding failed without a Schema issue");
+        },
+        onSome: (error) => formatIssue(error.issue),
+      }),
+  });
+const fieldsOf = (
+  ast: SchemaAST.Objects,
+  path: string,
+  registry: Registry,
+  tagged: boolean,
+): { readonly tag: string | undefined; readonly fields: Composite["fields"] } => {
+  if (
+    ast.encoding ||
+    ast.checks ||
+    ast.context ||
+    ast.indexSignatures.length ||
+    ast.encodingChecks ||
+    Object.keys(ast.annotations ?? {}).some((key) => key !== "identifier" || tagged)
+  )
+    throw unsupported(
+      path,
+      "Only plain required Struct shapes (with an optional identifier) are supported",
+    );
+  let tag: string | undefined;
+  const fields: { readonly name: string; readonly codec: Codec }[] = [];
+  for (const property of ast.propertySignatures) {
+    if (typeof property.name !== "string" || !wellFormed(property.name))
+      throw unsupported(path, "Struct field names must be well-formed strings");
+    if (property.type.context?.isOptional)
+      throw unsupported(`${path}.${property.name}`, "Optional fields are not supported yet");
+    if (property.name === "_tag") {
+      const literal = property.type;
+      if (!tagged || !SchemaAST.isLiteral(literal) || typeof literal.literal !== "string")
+        throw unsupported(`${path}._tag`, "`_tag` is admitted only as a string union discriminant");
+      tag = literal.literal;
+      continue;
+    }
+    fields.push({
+      name: property.name,
+      codec: codec(property.type, `${path}.${property.name}`, false, registry),
+    });
+  }
+  if (tagged && tag === undefined)
+    throw unsupported(path, "Union members must be Structs with a string `_tag` literal");
+  return { tag, fields };
+};
+const witnessFields = (fields: Composite["fields"]) =>
+  Object.fromEntries(fields.map((field) => [field.name, witnessOf(field.codec)]));
+const composite = (ast: SchemaAST.AST, path: string, registry: Registry): Composite => {
+  if (SchemaAST.isObjects(ast)) {
+    const { fields } = fieldsOf(ast, path, registry, false);
+    const plain = Struct(witnessFields(fields));
+    const identifier = ast.annotations?.identifier;
+    const type = typeof identifier === "string" ? plain.annotate({ identifier }) : plain;
+    return register(registry, { type, fields, cases: [], expected: expectedOf(type) });
+  }
+  if (SchemaAST.isUnion(ast)) {
+    if (ast.checks || ast.encoding || ast.context || ast.annotations)
+      throw unsupported(path, "Annotated or checked unions are not supported");
+    const cases = ast.types.map((member, i) => {
+      if (!SchemaAST.isObjects(member))
+        throw unsupported(
+          `${path}.members[${i}]`,
+          "Only tagged Struct union members are supported",
+        );
+      const { tag, fields } = fieldsOf(member, `${path}.members[${i}]`, registry, true);
+      return { tag: tag!, fields };
+    });
+    if (new Set(cases.map((c) => c.tag)).size !== cases.length)
+      throw unsupported(path, "Union discriminants must be distinct");
+    const type = TaggedUnion(
+      Object.fromEntries(cases.map((c) => [c.tag, witnessFields(c.fields)])),
+    );
+    return register(registry, { type, fields: [], cases, expected: expectedOf(type) });
+  }
+  throw unsupported(path, "Unsupported schema");
+};
+const register = (registry: Registry, shape: Composite): Composite => {
+  const existing = registry.get(shape.type);
+  if (existing) return existing;
+  registry.set(shape.type, shape);
+  return shape;
+};
+const codec = (ast: SchemaAST.AST, path: string, payload: boolean, registry: Registry): Codec => {
   if (u64RangeOf(ast)) {
     if (!payload) throw unsupported(path, "u64Range schemas are supported for payloads only");
     return "u64";
   }
   if (ast === U64Json.ast) return "u64";
   if (ast === StringJson.ast) return "string";
+  if (SchemaAST.isObjects(ast) || SchemaAST.isUnion(ast)) return composite(ast, path, registry);
   if (ast.checks || ast.encoding || ast.context || ast.annotations)
     throw unsupported(
       path,
@@ -116,12 +231,13 @@ const codec = (ast: SchemaAST.AST, path: string, payload = false): Codec => {
     );
   throw unsupported(
     path,
-    "Only Boolean, Undefined, Never, NativeRpc.U64Json and NativeRpc.StringJson are supported",
+    "Only Boolean, Undefined, Never, NativeRpc.U64Json, NativeRpc.StringJson, Structs and tagged unions are supported",
   );
 };
 const local = (name: string) => Rs.identExpr(Rs.ident(name));
 const callLocal = (name: string, ...args: readonly RsExpr[]) => Rs.call(local(name), args);
 const encode = (kind: Codec, value: RsExpr): RsExpr => {
+  if (!isScalar(kind)) return callLocal(`encode_${kind.type.native.type}`, Rs.refExpr(value));
   if (kind === "never") return Rs.unreachableMatch(value);
   if (kind === "unit")
     return Rs.block(
@@ -218,6 +334,7 @@ const compile = <Rpcs extends Rpc.Any>(
           throw unsupported("auth", "Middleware denial schema changed after adapter creation");
         let protectedCount = 0;
         let ranges = false;
+        const registry: Registry = new Map();
         const functions: Record<string, AnyFn> = {};
         const layer = options.layer;
         if (layer !== undefined && !(layer instanceof StaticLayer))
@@ -272,24 +389,32 @@ const compile = <Rpcs extends Rpc.Any>(
           const positions = services.map((service) => servicePosition(service, procedure));
           if (rpc.defectSchema.ast !== Schema.Defect().ast)
             throw unsupported(procedure, "Custom defect codecs are unsupported");
-          const success = codec(rpc.successSchema.ast, `${procedure}.success`);
-          const error = codec(rpc.errorSchema.ast, `${procedure}.error`);
+          const success = codec(rpc.successSchema.ast, `${procedure}.success`, false, registry);
+          const error = codec(rpc.errorSchema.ast, `${procedure}.error`, false, registry);
           const fn = binding.fn;
           if (
-            !IRType.same(fn.output, witness[success]) ||
-            !IRType.same(fn instanceof EffectFn ? fn.error : NeverType, witness[error])
+            !IRType.same(fn.output, witnessOf(success)) ||
+            !IRType.same(fn instanceof EffectFn ? fn.error : NeverType, witnessOf(error))
           )
             throw unsupported(
               procedure,
               "Handler success/error witnesses disagree with RPC schemas",
             );
           const payload = rpc.payloadSchema.ast;
+          const offset = (protectedRpc ? 1 : 0) + services.length;
+          // A handler taking exactly the payload's composite type receives it whole; otherwise a
+          // Struct payload is projected into handler arguments by field name.
+          const whole =
+            binding.fields.length === 0 &&
+            fn.input.length === offset + 1 &&
+            (SchemaAST.isObjects(payload) || SchemaAST.isUnion(payload)) &&
+            fn.input[offset].layout !== undefined;
           let inputs: readonly {
             readonly name: string;
             readonly codec: Codec;
             readonly range?: ReturnType<typeof u64RangeOf>;
           }[];
-          if (SchemaAST.isObjects(payload)) {
+          if (SchemaAST.isObjects(payload) && !whole) {
             if (
               payload.encoding ||
               payload.checks ||
@@ -317,12 +442,12 @@ const compile = <Rpcs extends Rpc.Any>(
               if (!field) throw unsupported(procedure, `Unknown payload field ${name}`);
               return {
                 name,
-                codec: codec(field.type, `${procedure}.payload.${name}`, true),
+                codec: codec(field.type, `${procedure}.payload.${name}`, true, registry),
                 range: u64RangeOf(field.type),
               };
             });
           } else {
-            const kind = codec(payload, `${procedure}.payload`, true);
+            const kind = codec(payload, `${procedure}.payload`, true, registry);
             if (binding.fields.length)
               throw unsupported(procedure, "Scalar payload bindings have no named fields");
             inputs =
@@ -331,32 +456,46 @@ const compile = <Rpcs extends Rpc.Any>(
                 : [{ name: "", codec: kind, range: u64RangeOf(payload) }];
           }
           if (inputs.some((input) => input.range !== undefined)) ranges = true;
-          const offset = (protectedRpc ? 1 : 0) + services.length;
           if (
             (protectedRpc && !IRType.same(fn.input[0], U64Type)) ||
             services.some((service, i) => !IRType.same(fn.input[i], service.type)) ||
             fn.input.length !== inputs.length + offset ||
             inputs.some(
               (input, i) =>
-                input.codec === "never" || !IRType.same(fn.input[i + offset], witness[input.codec]),
+                input.codec === "never" ||
+                !IRType.same(fn.input[i + offset], witnessOf(input.codec)),
             )
           )
             throw unsupported(procedure, "Handler argument witnesses disagree with payload fields");
           const name = `handler_${index}`;
           functions[name] = fn;
-          const isRecord = SchemaAST.isObjects(payload);
+          const isRecord = SchemaAST.isObjects(payload) && !whole;
           const args = inputs.map((input) =>
             Rs.try_(
-              callLocal(
-                input.range ? "u64_range_arg" : `${input.codec}_arg`,
-                isRecord
-                  ? Rs.try_(callLocal("field", local("payload"), Rs.stringLiteral(input.name)))
-                  : local("payload"),
-                isRecord ? Rs.some(Rs.stringLiteral(input.name)) : Rs.none(),
-                ...(input.range
-                  ? [Rs.litU64(input.range.minimum), Rs.litU64(input.range.maximum)]
-                  : []),
-              ),
+              isScalar(input.codec)
+                ? callLocal(
+                    input.range ? "u64_range_arg" : `${input.codec}_arg`,
+                    isRecord
+                      ? Rs.try_(callLocal("field", local("payload"), Rs.stringLiteral(input.name)))
+                      : local("payload"),
+                    isRecord ? Rs.some(Rs.stringLiteral(input.name)) : Rs.none(),
+                    ...(input.range
+                      ? [Rs.litU64(input.range.minimum), Rs.litU64(input.range.maximum)]
+                      : []),
+                  )
+                : callLocal(
+                    `decode_${input.codec.type.native.type}`,
+                    isRecord
+                      ? Rs.try_(callLocal("field", local("payload"), Rs.stringLiteral(input.name)))
+                      : local("payload"),
+                    isRecord
+                      ? Rs.some(
+                          Rs.verbatimExpr(
+                            `&Path { parent: None, name: ${Rs.stringLiteral(input.name).text} }`,
+                          ),
+                        )
+                      : Rs.none(),
+                  ),
             ),
           );
           const statements = isRecord
@@ -499,6 +638,7 @@ const compile = <Rpcs extends Rpc.Any>(
           path,
           auth,
           ranges,
+          composites: Array.from(registry.values()),
           program: Program.make(functions),
           arms,
           layered: layer !== undefined,
@@ -630,6 +770,9 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
           ? [Rs.fnItem(Rs.ident("clear_frames"), [], Rs.unitType(), Rs.block(clear))]
           : []),
         dispatch,
+        ...(prepared.composites.length
+          ? [Rs.verbatimItem(compositeCodecs(prepared.composites))]
+          : []),
         Rs.verbatimItem(contextRuntime),
         ...(executionRuntime ? [Rs.verbatimItem(executionRuntime)] : []),
         Rs.verbatimItem(authRuntime),
@@ -696,3 +839,94 @@ export const NativeRpc = Object.freeze({
   bearer: RpcBearer.make,
   compile,
 });
+
+/** Generated serde_json decoders/encoders for contract composites, with official messages. */
+const compositeCodecs = (composites: readonly Composite[]): string => {
+  const rustType = (type: IRType<unknown>) => `reffect_generated::${type.native.type}`;
+  const decodeField = (codec: Codec, value: string, path: string): string =>
+    isScalar(codec)
+      ? `${codec === "never" ? "never" : codec}_in(${value}, ${path})`
+      : `decode_${codec.type.native.type}(${value}, ${path})`;
+  const encodeField = (codec: Codec, value: string): string =>
+    isScalar(codec)
+      ? codec === "u64"
+        ? `Value::String(${value}.to_string())`
+        : codec === "bool"
+          ? `Value::Bool(${value})`
+          : codec === "string"
+            ? `Value::String(${value}.clone())`
+            : "Value::Null"
+      : `encode_${codec.type.native.type}(&${value})`;
+  const structBody = (
+    type: IRType<unknown>,
+    tag: string | undefined,
+    fields: Composite["fields"],
+  ): { readonly decode: string; readonly encode: string } => {
+    const layout = structLayout(type, tag)!;
+    const caseType =
+      tag === undefined ? type : unionCases(type)!.find((c) => structLayout(c)?.tag === tag)!;
+    const names = rustFieldNames(layout);
+    const decode = fields
+      .map(
+        (field, i) =>
+          `    let child_${i} = Path { parent: path, name: ${Rs.stringLiteral(field.name).text} };\n` +
+          `    let f${i} = match object.get(${Rs.stringLiteral(field.name).text}) { Some(value) => ${decodeField(field.codec, "value", `Some(&child_${i})`)}?, None => return Err(at("Missing key", Some(&child_${i}))) };\n`,
+      )
+      .join("");
+    const build = `${rustType(caseType)} { ${fields.map((_, i) => `${names[i]}: f${i}, `).join("")}}`;
+    const encode =
+      (tag === undefined
+        ? ""
+        : `    map.insert("_tag".to_string(), Value::String(${Rs.stringLiteral(tag).text}.to_string()));\n`) +
+      fields
+        .map(
+          (field, i) =>
+            `    map.insert(${Rs.stringLiteral(field.name).text}.to_string(), ${encodeField(field.codec, `value.${names[i]}`)});\n`,
+        )
+        .join("");
+    return { decode: decode + `    Ok(${build})\n`, encode };
+  };
+  const items = composites.map((shape) => {
+    const name = shape.type.native.type;
+    const expected = Rs.stringLiteral(shape.expected).text;
+    if (shape.cases.length === 0) {
+      const body = structBody(shape.type, undefined, shape.fields);
+      // An empty Struct also accepts arrays, as the pinned decoder does.
+      const object =
+        shape.fields.length === 0
+          ? `if !(value.is_object() || value.is_array()) { return Err(at(${expected}, path)) }\n    let empty = serde_json::Map::new();\n    let object = value.as_object().unwrap_or(&empty);\n`
+          : `let Some(object) = value.as_object() else { return Err(at(${expected}, path)) };\n`;
+      return (
+        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n    ${object}${body.decode}}\n` +
+        `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    let mut map = serde_json::Map::new();\n${body.encode}    Value::Object(map)\n}\n`
+      );
+    }
+    const variants = shape.cases.map((c, i) => {
+      const body = structBody(shape.type, c.tag, c.fields);
+      const variant = `${rustType(shape.type)}::${rustVariantName(c.tag, i)}`;
+      return {
+        decode: `        Some(${Rs.stringLiteral(c.tag).text}) => {\n${body.decode.replace(/^ {4}Ok\((.*)\)\n$/m, `    Ok(${variant}($1))\n`)}        }\n`,
+        encode: `        ${variant}(value) => {\n            let mut map = serde_json::Map::new();\n${body.encode}            Value::Object(map)\n        }\n`,
+      };
+    });
+    return (
+      `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n    let empty = serde_json::Map::new();\n    let object = value.as_object().unwrap_or(&empty);\n    match value.as_object().and_then(|o| o.get("_tag")).and_then(Value::as_str) {\n${variants.map((v) => v.decode).join("")}        _ => Err(at(${expected}, path)),\n    }\n}\n` +
+      `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    match value {\n${variants.map((v) => v.encode).join("")}    }\n}\n`
+    );
+  });
+  return `struct Path<'a> { parent: Option<&'a Path<'a>>, name: &'a str }
+fn at(message: &str, path: Option<&Path>) -> String {
+    let mut names = Vec::new();
+    let mut current = path;
+    while let Some(segment) = current { names.push(segment.name); current = segment.parent; }
+    if names.is_empty() { return message.to_string(); }
+    names.reverse();
+    let segments: String = names.iter().map(|name| format!("[{}]", serde_json::to_string(name).unwrap())).collect();
+    format!("{}\\n  at {}", message, segments)
+}
+fn u64_in(value: &Value, path: Option<&Path>) -> Result<u64, String> { u64_arg(value, None).map_err(|message| at(&message, path)) }
+fn bool_in(value: &Value, path: Option<&Path>) -> Result<bool, String> { bool_arg(value, None).map_err(|message| at(&message, path)) }
+fn string_in(value: &Value, path: Option<&Path>) -> Result<String, String> { string_arg(value, None).map_err(|message| at(&message, path)) }
+fn unit_in(value: &Value, path: Option<&Path>) -> Result<(), String> { unit_arg(value, None).map_err(|message| at(&message, path)) }
+${items.join("")}`;
+};

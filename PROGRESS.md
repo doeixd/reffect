@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Records and tagged unions, part 2 (RPC codecs)
+
+- `NativeRpc` now recognizes contract Structs (with optional `identifier`) and `_tag`-literal unions recursively, maps them onto interned R witnesses, decodes whole or projected payloads, and encodes composite results and typed errors through generated serde_json codecs. Top-level messages come from Effect's default formatter at compile time; paths are appended natively. `CaseType` became an explicit interface after TypeScript 5.9 and 7 disagreed on the earlier `Omit` intersection.
+- Validation (focused): `records-rpc.test.ts` 2/2 with 28 raw requests identical to the official server plus stock-client round trips. `native-rpc`, `schema-rpc`, `string-rpc`, `rpc`, `rpc-auth`, `async-rpc`, `server-layer`, `records` and `module-composition` pass 30/30 in 9 files. Strict package TypeScript (7.0.2) and TypeScript 5.9 both report no errors; `vp check` passes. The full suite was not run.
+
 ## 2026-10-02 — Records and tagged unions, part 1b
 
 - Added effectful tagged-union branching: `match`/`valueTags` handlers that all return Computations build a Computation `MatchTags` (channels joined like `R.Match.bool`), with checking, substitution, both reference evaluators, scope analysis and native lowering over borrowed case values, including across `.await`.
