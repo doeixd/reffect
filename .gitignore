@@ -38,3 +38,6 @@ examples/heartbeat/generated/
 
 # Pinned upstream sources fetched by research scripts
 .cache/
+
+# Scoped native build directories left behind when a test is interrupted.
+packages/reffect/reffect-async-*/
