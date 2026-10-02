@@ -1,4 +1,5 @@
 import { Source } from "./source.ts";
+import { flow } from "./flow.ts";
 import { Fn, Program, Expr, BoolType, U64Type, UnitType, NeverType } from "./kernel.ts";
 import type { IRType, Symbols } from "./kernel.ts";
 import { Computation, EffectFn, EffectIR, LogIR, matchComputation } from "./effect-ir.ts";
@@ -49,6 +50,7 @@ function bool(
 }
 export const R = Object.freeze({
   fn,
+  flow,
   Source,
   program: Program.make,
   literal: Expr.literal,

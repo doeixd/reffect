@@ -208,6 +208,7 @@ const decodeFrames = (name: string, stderr: string) =>
           "ensuring",
           "acquireUseRelease",
           "repeat",
+          "retry",
           "fileScope",
           "fileSize",
           "log",

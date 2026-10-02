@@ -340,6 +340,63 @@ export class Expr<A> extends Pipeable.Class {
       );
     return new Expr(onTrue.type, Object.freeze({ _tag: "Match", condition, onTrue, onFalse }));
   }
+  /**
+   * Compiler-internal capture-free substitution: parameter nodes bound to
+   * `binder` become `replacement(index)`. Shared nodes stay shared; cycles are refused.
+   * `R.flow` uses this to inline one function body into the next.
+   */
+  static substitute<A>(
+    this: void,
+    root: Expr<A>,
+    binder: symbol,
+    replacement: (index: number) => Expr<unknown> | undefined,
+  ): Expr<A> {
+    const memo = new Map<Expr<unknown>, Expr<unknown>>();
+    const active = new Set<Expr<unknown>>();
+    const walk = (self: Expr<unknown>): Expr<unknown> => {
+      const cached = memo.get(self);
+      if (cached) return cached;
+      if (active.has(self))
+        throw fail("IR_CYCLE", "authoring", "substitute", "Expression graph contains a cycle");
+      active.add(self);
+      const result: Expr<unknown> = Match.value(self.node).pipe(
+        Match.tagsExhaustive({
+          Parameter: (n) => (n.binder === binder ? (replacement(n.index) ?? self) : self),
+          Literal: () => self,
+          Apply: (n) => {
+            const args: Expr<unknown>[] = n.args.map((arg) => walk(arg));
+            return args.every((arg, index) => arg === n.args[index])
+              ? self
+              : new Expr(
+                  self.type,
+                  Object.freeze({
+                    _tag: "Apply",
+                    operation: n.operation,
+                    args: Object.freeze(args),
+                  }),
+                  self.source,
+                );
+          },
+          Match: (n) => {
+            const condition: Expr<boolean> = walk(n.condition) as Expr<boolean>;
+            const onTrue = walk(n.onTrue);
+            const onFalse = walk(n.onFalse);
+            return condition === n.condition && onTrue === n.onTrue && onFalse === n.onFalse
+              ? self
+              : new Expr(
+                  self.type,
+                  Object.freeze({ _tag: "Match", condition, onTrue, onFalse }),
+                  self.source,
+                );
+          },
+        }),
+      );
+      active.delete(self);
+      memo.set(self, result);
+      return result;
+    };
+    return walk(root) as Expr<A>;
+  }
 }
 export const apply = Expr.apply;
 export class Fn<I extends readonly IRType<unknown>[] = readonly IRType<unknown>[], A = unknown>

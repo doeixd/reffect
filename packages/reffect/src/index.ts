@@ -24,7 +24,10 @@ export {
   apply,
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
-export { SpacedSchedule } from "./schedule.ts";
+export { flow } from "./flow.ts";
+export type { FlowResult } from "./flow.ts";
+export { Schedule } from "./schedule.ts";
+export type { SchedulePlan } from "./schedule.ts";
 export { ScopedSequence } from "./scoped-sequence.ts";
 export { Reference } from "./reference.ts";
 export {

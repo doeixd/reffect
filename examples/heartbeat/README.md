@@ -47,8 +47,9 @@ For deterministic smoke runs, pass a shutdown delay in milliseconds, e.g. `reffe
 
 ## Supported boundary
 
-- Spaced durations: positive integral 1–60000 milliseconds, parsed with Effect v4 Duration.
+- Schedules: `R.Schedule.recurs`, `spaced`, `exponential` and `forever` (see the package README). This example uses positive integral 1–60000 ms spacing.
 - Repeat: Unit body, preserves its typed error, optional `times` counting additional runs; otherwise runs until failure/interruption.
+- `R.Effect.retry` is available for typed failures with the same schedules and `times` option.
 - Sequential `addFinalizer(() => Unit/Never computation)` registration and `andThen`, closed with `scoped`. Registration callbacks build IR once and receive no runtime Exit. Closed scopes compose with existing branching/recovery/brackets.
 - Pending scope sequences are a separate typed authoring value: close them before passing to functions, branching or repeating. This specializes reachable sequential registrations into the existing masked acquire/use/release adapter, with reverse-order awaited release. It does not implement dynamic Scope services, Exit-aware cleanup or arbitrary Schedule combinators.
 

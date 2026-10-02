@@ -22,6 +22,18 @@ pub fn r_Add(p0: u64, p1: u64) -> u64 {
 }
 ```
 
+`R.flow` composes `Fn`/`EffectFn` values left-to-right, mirroring Effect v4 `flow`: the first function may take any number of inputs and every later function must be unary. Composition is build-time inlining through capture-free binder substitution, so the reference interpreter and native lowering are unchanged. The result is a `Fn` when all components are pure, otherwise an `EffectFn` whose error channel follows `joinType` (`never`, or an identical witness):
+
+```ts
+import { R } from "reffect";
+
+const addOne = R.fn([R.U64], R.U64, (x) => R.U64.add(x, R.U64.literal(1n)));
+const double = R.fn([R.U64], R.U64, (x) => R.U64.mul(x, R.U64.literal(2n)));
+const addOneThenDouble = R.flow(addOne, double); // Fn<[u64], bigint>
+```
+
+Plain (non-IR) function composition is Effect's own `flow`; import it from `effect` when composing builder callbacks. Composed components are inlined and are not separate logical-frame or naming boundaries; read the [design record](../../docs/research/flow-composition.md) for the boundary and refusals.
+
 ## Supported semantics
 
 - `R.U64` is an exact bigint in `0..2^64-1`, with native Rust `u64`. `literal`, `add`, `sub`, `mul`, `eq`, and `lt` construct immutable expressions. Arithmetic is modulo `2^64` in every build profile.
@@ -161,6 +173,38 @@ expressions, so structured v4 message arguments are not yet admitted.
 Machine stdout carries only evaluator payloads. No new Cargo dependencies;
 scopes save/restore bounded thread-local context on both success and failure
 paths.
+
+### Scheduled repetition and retry
+
+`R.Schedule` mirrors the bounded Effect v4 constructors: `recurs(times)` (zero
+delay), `spaced(duration)`, `exponential(base, factor?)` and `forever`.
+`R.Effect.repeat(self, scheduleOrOptions)` repeats a Unit computation and
+`R.Effect.retry(self, scheduleOrOptions)` retries typed failures, where options
+are `{ schedule, times }` and `times` counts additional runs. Both accept a bare
+schedule for the v4 dual form:
+
+```ts
+const Retry = R.Effect.fn([], R.Unit, R.Bool, () =>
+  R.Effect.retry(
+    R.Effect.logInfo("try").pipe(
+      R.Effect.andThen(R.Effect.fail(R.Bool.literal(false))),
+      R.Effect.asVoid,
+    ),
+    { schedule: R.Schedule.exponential(50, 2), times: 4 },
+  ),
+);
+```
+
+Reference execution delegates to the official `Effect.repeat`/`Effect.retry`;
+generated Rust emits one concrete loop with a `completed` counter, a
+continuation test and a computed delay, reusing `AsyncContext::sleep` for
+cancellation. `retry` never retries interruption and reports the last failure on
+exhaustion; retried attempts drop their logical frames and the final failure
+keeps one retry boundary frame. Spaced/exponential bases are integral 0–60000 ms,
+`recurs`/`times` are 0–1000000, and exponential factors are finite `> 0` and
+`<= 1000`. Fixed cadence, jitter, `while`/`until` predicates, `upTo`-by-duration
+and schedule combinators remain outside this profile, and `repeat` discards the
+schedule output.
 
 ```ts
 const Difference = R.fn([R.U64, R.U64], R.U64, R.U64, (a, b) =>

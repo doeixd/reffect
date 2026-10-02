@@ -360,6 +360,10 @@ const derive = Effect.fn("Compile.derive")(function* (
           effectRefs.add(AsyncEffects.Repeat);
           walkComputation(n.body);
         },
+        Retry: (n) => {
+          effectRefs.add(AsyncEffects.Retry);
+          walkComputation(n.body);
+        },
         FileScope: (n) => {
           effectRefs.add(AsyncEffects.FileScope);
           walkComputation(n.body);

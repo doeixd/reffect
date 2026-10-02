@@ -47,7 +47,9 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 
 - [Suspended RPC research](research/async-rpc.md): owned context, cooperative interruption and awaited non-failing finalization, with reference/native/socket evidence.
 - [Scoped heartbeat](research/heartbeat.md): bounded sequential finalizer specialization, spaced repetition and a standalone native lifecycle example.
+- [Bounded Schedule](research/schedule.md): `recurs`/`spaced`/`exponential`/`forever`, `repeat`/`retry`, frame handling and a concrete native loop.
 - [Scoped native files](research/scoped-files.md): real read-only handle ownership, borrowed use, acquisition masking and closure gates before general Scope registration.
+- [Dynamic resource Scope registration](research/resource-scope-registration.md): preparation for the current frontier — pinned v4 ordering/interruption semantics, bounded registered-finalizer options and acceptance gates before any implementation.
 - [Runnable async example](../examples/rpc-async/README.md): unchanged stock authenticated client calling suspended native handlers.
 - [Runnable scoped-file RPC](../examples/rpc-files/README.md): a native handler owns a real read-only file across suspension and closes it before cleanup.
 - [Performance requirements](performance.md): workload measurements, structural growth/allocation gates and exploratory baselines.
@@ -89,6 +91,10 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 [Scoped logging preparation](research/logging.md) records the Effect Logger/level/annotation oracle, the `R.Log` node design, stderr JSON records and conformance obligations.
 
 [Upstream reconciliation](research/upstream-reconciliation.md) records the retained dynamic Query/Effect/source paths, local prototype preservation, dependency choices, reachable-data validation and Windows failure-test budgets.
+
+[IR function composition](research/flow-composition.md) records why `flow` could not compose `R.fn` values and the implemented bounded substitution-based `R.flow`, keeping plain composition in `effect`.
+
+[Named function calls and recursion](research/function-calls.md) records the deferred Option D decision: why first-class function values are out of scope, the blast radius of a named call node, and the triggers that would justify it.
 
 [Source-artifact policy preparation](research/source-artifact-policy.md) records the independent Full/None request policy, honest artifact types, skipped provenance/writer/hash work and validation before implementation.
 

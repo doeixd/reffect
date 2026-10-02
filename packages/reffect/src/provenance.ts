@@ -65,6 +65,7 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       FileSize: () => [],
       Sleep: () => [],
       Repeat: (n) => [edge("body", n.body)],
+      Retry: (n) => [edge("body", n.body)],
       Ensuring: (n) => [edge("body", n.body), edge("finalizer", n.finalizer)],
       Span: (n) => [edge("body", n.body)],
       Succeed: (n) => [edge("value", n.value)],

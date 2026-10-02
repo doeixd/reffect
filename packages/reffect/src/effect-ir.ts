@@ -1,5 +1,6 @@
 import { Effect, Exit, Match, Pipeable, Schema, Schedule } from "effect";
-import { SpacedSchedule, validRepeatCount } from "./schedule.ts";
+import { Schedule as ScheduleValue, validSchedulePlan, validTimes } from "./schedule.ts";
+import type { SchedulePlan } from "./schedule.ts";
 import { emptySource, snapshotSource } from "./source.ts";
 import type { SourceMetadata } from "./source.ts";
 import { dual } from "effect/Function";
@@ -32,7 +33,8 @@ export const SyncEffects = Object.freeze({
   Span: SemanticRef.effect("reffect/effect/span@1"),
 });
 export const AsyncEffects = Object.freeze({
-  Repeat: SemanticRef.effect("reffect/effect/repeat-spaced@1"),
+  Repeat: SemanticRef.effect("reffect/effect/repeat-scheduled@1"),
+  Retry: SemanticRef.effect("reffect/effect/retry-scheduled@1"),
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
   AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
@@ -72,7 +74,13 @@ export type ComputationNode =
   | {
       readonly _tag: "Repeat";
       readonly body: Computation<void, unknown>;
-      readonly milliseconds: number;
+      readonly schedule: SchedulePlan;
+      readonly times: number | undefined;
+    }
+  | {
+      readonly _tag: "Retry";
+      readonly body: Computation<unknown, unknown>;
+      readonly schedule: SchedulePlan;
       readonly times: number | undefined;
     }
   | {
@@ -167,6 +175,135 @@ export const joinType = (a: IRType<unknown>, b: IRType<unknown>): IRType<unknown
     "Joining different non-Never witnesses requires an explicit union representation",
   );
 };
+/**
+ * Compiler-internal capture-free substitution over a computation graph: embedded
+ * expressions and nested computations bound to `binder` receive `replacement`.
+ * Used by `R.flow`; shared nodes stay shared and cycles are refused.
+ */
+export const substituteComputation = (
+  root: Computation<unknown, unknown>,
+  binder: symbol,
+  replacement: (index: number) => Expr<unknown> | undefined,
+): Computation<unknown, unknown> => {
+  const memo = new Map<Computation<unknown, unknown>, Computation<unknown, unknown>>();
+  const active = new Set<Computation<unknown, unknown>>();
+  const substituting = (value: Expr<unknown>): Expr<unknown> =>
+    Expr.substitute(value, binder, replacement);
+  const walk = (self: Computation<unknown, unknown>): Computation<unknown, unknown> => {
+    const cached = memo.get(self);
+    if (cached) return cached;
+    if (active.has(self))
+      throw fail("IR_CYCLE", "authoring", "substitute", "Computation graph contains a cycle");
+    active.add(self);
+    const rebuild = (node: ComputationNode): Computation<unknown, unknown> =>
+      Computation.make(self.output, self.error, node).withSource(self.source);
+    const result: Computation<unknown, unknown> = Match.value(self.node).pipe(
+      Match.tagsExhaustive({
+        Sleep: () => self,
+        FileSize: () => self,
+        Succeed: (n) => {
+          const value = substituting(n.value);
+          return value === n.value ? self : rebuild({ _tag: "Succeed", value });
+        },
+        Fail: (n) => {
+          const error = substituting(n.error);
+          return error === n.error ? self : rebuild({ _tag: "Fail", error });
+        },
+        Log: (n) => {
+          const attributes: LogAttribute[] = n.attributes.map(
+            ([key, value]) => Object.freeze([key, substituting(value)]) as LogAttribute,
+          );
+          return attributes.every(([, value], index) => value === n.attributes[index][1])
+            ? self
+            : rebuild({ _tag: "Log", level: n.level, message: n.message, attributes });
+        },
+        Map: (n) => {
+          const source = walk(n.source);
+          const body = substituting(n.body);
+          return source === n.source && body === n.body
+            ? self
+            : rebuild({ _tag: "Map", source, binder: n.binder, body });
+        },
+        FlatMap: (n) => {
+          const source = walk(n.source);
+          const body = walk(n.body);
+          return source === n.source && body === n.body
+            ? self
+            : rebuild({ _tag: "FlatMap", source, binder: n.binder, body });
+        },
+        Match: (n) => {
+          const condition = substituting(n.condition) as Expr<boolean>;
+          const onTrue = walk(n.onTrue);
+          const onFalse = walk(n.onFalse);
+          return condition === n.condition && onTrue === n.onTrue && onFalse === n.onFalse
+            ? self
+            : rebuild({ _tag: "Match", condition, onTrue, onFalse });
+        },
+        CatchAll: (n) => {
+          const source = walk(n.source);
+          const body = walk(n.body);
+          return source === n.source && body === n.body
+            ? self
+            : rebuild({ _tag: "CatchAll", source, binder: n.binder, body });
+        },
+        AcquireUseRelease: (n) => {
+          const acquire = walk(n.acquire);
+          const use = walk(n.use);
+          const release = walk(n.release) as Computation<void, never>;
+          return acquire === n.acquire && use === n.use && release === n.release
+            ? self
+            : rebuild({ _tag: "AcquireUseRelease", acquire, binder: n.binder, use, release });
+        },
+        Ensuring: (n) => {
+          const body = walk(n.body);
+          const finalizer = walk(n.finalizer) as Computation<void, never>;
+          return body === n.body && finalizer === n.finalizer
+            ? self
+            : rebuild({ _tag: "Ensuring", body, finalizer });
+        },
+        FileScope: (n) => {
+          const body = walk(n.body);
+          const afterClose = walk(n.afterClose) as Computation<void, never>;
+          return body === n.body && afterClose === n.afterClose
+            ? self
+            : rebuild({ _tag: "FileScope", path: n.path, binder: n.binder, body, afterClose });
+        },
+        Repeat: (n) => {
+          const body = walk(n.body) as Computation<void, unknown>;
+          return body === n.body
+            ? self
+            : rebuild({ _tag: "Repeat", body, schedule: n.schedule, times: n.times });
+        },
+        Retry: (n) => {
+          const body = walk(n.body);
+          return body === n.body
+            ? self
+            : rebuild({ _tag: "Retry", body, schedule: n.schedule, times: n.times });
+        },
+        Annotate: (n) => {
+          const value = substituting(n.value);
+          const body = walk(n.body);
+          return value === n.value && body === n.body
+            ? self
+            : rebuild({
+                _tag: "Annotate",
+                key: n.key,
+                value: value as LogAttribute[1],
+                body: body as Computation<unknown, unknown>,
+              });
+        },
+        Span: (n) => {
+          const body = walk(n.body);
+          return body === n.body ? self : rebuild({ _tag: "Span", label: n.label, body });
+        },
+      }),
+    );
+    active.delete(self);
+    memo.set(self, result);
+    return result;
+  };
+  return walk(root);
+};
 const succeed = <A>(value: Expr<A>): Computation<A> =>
   Computation.make(value.type, NeverType, { _tag: "Succeed", value });
 const failValue = <E>(error: Expr<E>): Computation<never, E> =>
@@ -181,36 +318,70 @@ const sleep = (milliseconds: number): Computation<void> => {
     );
   return Computation.make(UnitType, NeverType, { _tag: "Sleep", milliseconds });
 };
+const toEffectSchedule = (plan: SchedulePlan): Schedule.Schedule<unknown, unknown, never, never> =>
+  Match.value(plan).pipe(
+    Match.tagsExhaustive({
+      Recurs: (p) => Schedule.recurs(p.times),
+      Spaced: (p) => Schedule.spaced(p.milliseconds),
+      Exponential: (p) => Schedule.exponential(p.milliseconds, p.factor),
+      Forever: () => Schedule.forever,
+    }),
+  );
+/** Continuation and delay for the reference retry loop; mirrors the native generated loop. */
+const scheduleContinues = (
+  plan: SchedulePlan,
+  completed: number,
+  times: number | undefined,
+): boolean =>
+  (plan._tag !== "Recurs" || completed < plan.times) && (times === undefined || completed < times);
+const scheduleDelay = (plan: SchedulePlan, completed: number): number =>
+  plan._tag === "Exponential"
+    ? Math.min(plan.milliseconds * plan.factor ** completed, Number.MAX_SAFE_INTEGER)
+    : plan._tag === "Spaced"
+      ? plan.milliseconds
+      : 0;
+const scheduleOf = (
+  input: ScheduleValue | { schedule: ScheduleValue; times?: number },
+): { readonly schedule: ScheduleValue; readonly times: number | undefined } =>
+  input instanceof ScheduleValue
+    ? { schedule: input, times: undefined }
+    : { schedule: input.schedule, times: input.times };
+const checkSchedule = (schedule: ScheduleValue, times: number | undefined): void => {
+  if (!(schedule instanceof ScheduleValue) || !validTimes(times))
+    throw fail(
+      "INVALID_SCHEDULE",
+      "authoring",
+      "schedule",
+      "A schedule value and 0–1000000 additional runs are required",
+    );
+};
+type RepeatOptions = ScheduleValue | { readonly schedule: ScheduleValue; readonly times?: number };
 const repeat: {
-  (options: {
-    readonly schedule: SpacedSchedule;
-    readonly times?: number;
-  }): <E>(self: Computation<void, E>) => Computation<void, E>;
-  <E>(
-    self: Computation<void, E>,
-    options: { readonly schedule: SpacedSchedule; readonly times?: number },
-  ): Computation<void, E>;
-} = dual(
-  2,
-  <E>(
-    self: Computation<void, E>,
-    options: { readonly schedule: SpacedSchedule; readonly times?: number },
-  ) => {
-    if (!(options.schedule instanceof SpacedSchedule) || !validRepeatCount(options.times))
-      throw fail(
-        "INVALID_SCHEDULE",
-        "authoring",
-        "repeat",
-        "Repeat requires a spaced schedule and 0–1000000 additional runs",
-      );
-    return Computation.make(UnitType, self.error, {
-      _tag: "Repeat",
-      body: self,
-      milliseconds: options.schedule.milliseconds,
-      times: options.times,
-    });
-  },
-);
+  (options: RepeatOptions): <E>(self: Computation<void, E>) => Computation<void, E>;
+  <E>(self: Computation<void, E>, options: RepeatOptions): Computation<void, E>;
+} = dual(2, <E>(self: Computation<void, E>, options: RepeatOptions) => {
+  const { schedule, times } = scheduleOf(options);
+  checkSchedule(schedule, times);
+  return Computation.make(UnitType, self.error, {
+    _tag: "Repeat",
+    body: self,
+    schedule: schedule.plan,
+    times,
+  });
+});
+const retry: {
+  <E>(options: RepeatOptions): <A>(self: Computation<A, E>) => Computation<A, E>;
+  <A, E>(self: Computation<A, E>, options: RepeatOptions): Computation<A, E>;
+} = dual(2, <A, E>(self: Computation<A, E>, options: RepeatOptions) => {
+  const { schedule, times } = scheduleOf(options);
+  checkSchedule(schedule, times);
+  return Computation.make(self.output, self.error, {
+    _tag: "Retry",
+    body: self,
+    schedule: schedule.plan,
+    times,
+  });
+});
 const ensuring: {
   (finalizer: Computation<void, never>): <A, E>(self: Computation<A, E>) => Computation<A, E>;
   <A, E>(self: Computation<A, E>, finalizer: Computation<void, never>): Computation<A, E>;
@@ -245,6 +416,7 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         FileSize: () => true,
         Sleep: () => true,
         Repeat: () => true,
+        Retry: () => true,
         Ensuring: () => true,
         AcquireUseRelease: () => true,
         Succeed: () => false,
@@ -418,16 +590,28 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         },
         Repeat: (n) => {
           if (
-            !validDelay(n.milliseconds) ||
-            n.milliseconds === 0 ||
-            !validRepeatCount(n.times) ||
+            !validSchedulePlan(n.schedule) ||
+            !validTimes(n.times) ||
             !IRType.same(c.output, UnitType) ||
             !IRType.same(n.body.output, UnitType) ||
             !IRType.same(c.error, n.body.error)
           )
             add(
               at,
-              "Repeat requires Unit output, matching body errors, positive bounded spacing and a valid additional-run count",
+              "Repeat requires a valid bounded schedule, Unit output, matching body errors and a valid additional-run count",
+            );
+          walk(n.body, bindings, `${at}.body`);
+        },
+        Retry: (n) => {
+          if (
+            !validSchedulePlan(n.schedule) ||
+            !validTimes(n.times) ||
+            !IRType.same(c.output, n.body.output) ||
+            !IRType.same(c.error, n.body.error)
+          )
+            add(
+              at,
+              "Retry requires a valid bounded schedule, matching body channels and a valid additional-run count",
             );
           walk(n.body, bindings, `${at}.body`);
         },
@@ -632,8 +816,12 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
           Sleep: (n) => Effect.sleep(n.milliseconds),
           Repeat: (n) =>
             evaluate(n.body, bindings).pipe(
-              Effect.repeat({ schedule: Schedule.spaced(n.milliseconds), times: n.times }),
+              Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),
               Effect.asVoid,
+            ),
+          Retry: (n) =>
+            evaluate(n.body, bindings).pipe(
+              Effect.retry({ schedule: toEffectSchedule(n.schedule), times: n.times }),
             ),
           Ensuring: (n) =>
             evaluate(n.body, bindings).pipe(
@@ -707,6 +895,7 @@ export interface LogicalFrame {
     | "span"
     | "sleep"
     | "repeat"
+    | "retry"
     | "catchAll"
     | "ensuring"
     | "acquireUseRelease"
@@ -781,6 +970,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
         },
         Sleep: () => {},
         Repeat: (n) => adaptNode(n.body, `${path}.body`),
+        Retry: (n) => adaptNode(n.body, `${path}.body`),
         Ensuring: (n) => {
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.finalizer, `${path}.finalizer`);
@@ -914,10 +1104,25 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           Sleep: (n) => Effect.sleep(n.milliseconds),
           Repeat: (n) =>
             evaluate(n.body, bindings).pipe(
-              Effect.repeat({ schedule: Schedule.spaced(n.milliseconds), times: n.times }),
+              Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),
               Effect.asVoid,
               Effect.mapError((failure) => outward(failure, "repeat")),
             ),
+          Retry: (n) => {
+            let completed = 0;
+            const attempt = (): Effect.Effect<unknown, FramedFailure> =>
+              evaluate(n.body, bindings).pipe(
+                Effect.catch((failure: FramedFailure) => {
+                  if (failure._tag === "Internal") return Effect.fail(failure);
+                  if (!scheduleContinues(n.schedule, completed, n.times))
+                    return Effect.fail(failure);
+                  const delay = scheduleDelay(n.schedule, completed);
+                  completed += 1;
+                  return Effect.sleep(delay).pipe(Effect.flatMap(attempt));
+                }),
+              );
+            return attempt().pipe(Effect.mapError((failure) => outward(failure, "retry")));
+          },
           Ensuring: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
@@ -1147,6 +1352,7 @@ export const EffectIR = Object.freeze({
   succeed,
   sleep,
   repeat,
+  retry,
   ensuring,
   acquireUseRelease,
   fail: failValue,

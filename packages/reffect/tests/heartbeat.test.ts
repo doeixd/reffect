@@ -159,9 +159,14 @@ test("v4 scoped sequence preserves registration, repetition counts and nested cl
     expect(() => R.Schedule.spaced(duration)).toThrow();
   for (const times of [-1, 0.5, Infinity, NaN, 1000001])
     expect(() => R.Effect.repeat(body, { schedule: R.Schedule.spaced(1), times })).toThrow();
-  expect(R.Schedule.spaced("1 second").milliseconds).toBe(1000);
+  expect(R.Schedule.spaced("1 second").plan).toEqual({ _tag: "Spaced", milliseconds: 1000 });
   const forged = R.fn([], R.Unit, R.Never, () =>
-    Computation.make(R.Unit, R.Never, { _tag: "Repeat", body, milliseconds: 0, times: undefined }),
+    Computation.make(R.Unit, R.Never, {
+      _tag: "Repeat",
+      body,
+      schedule: { _tag: "Spaced", milliseconds: 0 },
+      times: undefined,
+    }),
   );
   const invalid = await Effect.runPromise(Compile.check(R.program({ forged })).pipe(Effect.flip));
   expect(invalid.diagnostics.map((d) => d.code)).toContain("TYPE_MISMATCH");
@@ -188,7 +193,7 @@ test("native concrete loops and registered finalizers agree with v4, including i
         );
         expect(artifact.files["src/lib.rs"]).not.toContain("Box<dyn");
         expect(artifact.explanation.analysis.effects.map((effect) => effect.id)).toContain(
-          "reffect/effect/repeat-spaced@1",
+          "reffect/effect/repeat-scheduled@1",
         );
         const directory = yield* CargoApi.write(
           artifact,

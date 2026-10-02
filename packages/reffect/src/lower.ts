@@ -6,6 +6,7 @@ import type { GeneratedRange } from "./source-artifact.ts";
 import { Match, Predicate } from "effect";
 import { BoolType, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Expr, OperationRef, Program } from "./kernel.ts";
+import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
@@ -67,7 +68,13 @@ type HelperBody =
   | {
       readonly _tag: "Repeat";
       readonly body: number;
-      readonly milliseconds: number;
+      readonly schedule: SchedulePlan;
+      readonly times: number | undefined;
+    }
+  | {
+      readonly _tag: "Retry";
+      readonly body: number;
+      readonly schedule: SchedulePlan;
       readonly times: number | undefined;
     }
   | {
@@ -387,7 +394,13 @@ export function lowerFunctions(
             Repeat: (n): HelperBody => ({
               _tag: "Repeat",
               body: effectHelper(n.body, scope, error, `${path}.body`),
-              milliseconds: n.milliseconds,
+              schedule: n.schedule,
+              times: n.times,
+            }),
+            Retry: (n): HelperBody => ({
+              _tag: "Retry",
+              body: effectHelper(n.body, scope, error, `${path}.body`),
+              schedule: n.schedule,
               times: n.times,
             }),
             Ensuring: (n): HelperBody => ({
@@ -471,6 +484,7 @@ export function lowerFunctions(
                 Log: () => false,
                 Sleep: () => true,
                 Repeat: () => true,
+                Retry: () => true,
                 FileScope: () => true,
                 FileSize: () => false,
                 Ensuring: () => true,
@@ -825,6 +839,22 @@ export const emitFunctions = (
       captureFrames
         ? `Err((error, mut frames)) => { ${cleanup}frames.push(${frameOf(helper, kind).text}); Err((error, frames)) }`
         : `Err(error) => { ${cleanup}Err(error) }`;
+    const scheduleContinue = (plan: SchedulePlan, times: number | undefined): string => {
+      const parts: string[] = [];
+      if (plan._tag === "Recurs") parts.push(`completed < ${Rs.litU64(BigInt(plan.times)).text}`);
+      if (times !== undefined) parts.push(`completed < ${Rs.litU64(BigInt(times)).text}`);
+      return parts.length ? parts.join(" && ") : "true";
+    };
+    const scheduleDelay = (plan: SchedulePlan): string =>
+      Match.value(plan).pipe(
+        Match.tagsExhaustive({
+          Recurs: () => "0u64",
+          Forever: () => "0u64",
+          Spaced: (p) => Rs.litU64(BigInt(p.milliseconds)).text,
+          Exponential: (p) =>
+            `{ let exp = completed.min(63) as i32; let d = ${p.milliseconds}f64 * (${p.factor}f64).powi(exp); if d >= u64::MAX as f64 { u64::MAX } else { d as u64 } }`,
+        }),
+      );
     for (const helper of f.helpers) {
       const use = (edge: string) => useAt(`${helper.path}.${edge}`);
       const signature =
@@ -926,23 +956,37 @@ export const emitFunctions = (
             ]),
           Repeat: (n) =>
             joinFragments([
-              "{ ",
-              n.times === undefined
-                ? ""
-                : "let mut remaining = " + Rs.litU64(BigInt(n.times)).text + "; ",
-              "loop { match ",
+              "{ let mut completed: u64 = 0u64; loop { match ",
               callFrag(n.body, use("body")),
               " { Ok(()) => {}, ",
               captureFrames
                 ? `Err((error, mut frames)) => { frames.push(${frameOf(helper, "repeat").text}); return Err((error, frames)); }`
                 : "Err(error) => return Err(error),",
-              " } ",
-              n.times === undefined ? "" : "if remaining == 0 { break Ok(()); } remaining -= 1; ",
-              `match ctx.sleep(${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => {}, `,
+              " } if !(",
+              scheduleContinue(n.schedule, n.times),
+              `) { break Ok(()); } let delay: u64 = ${scheduleDelay(n.schedule)}; if delay > 0 { match ctx.sleep(delay).await { Ok(()) => {}, `,
               captureFrames
                 ? `Err(error) => return Err((error, FrameTrail::new(${frameOf(helper, "repeat").text}))),`
                 : "Err(error) => return Err(error),",
-              " } } }",
+              " } } completed += 1; } }",
+            ]),
+          Retry: (n) =>
+            joinFragments([
+              "{ let mut completed: u64 = 0u64; loop { match ",
+              callFrag(n.body, use("body")),
+              " { Ok(value) => break Ok(value), ",
+              captureFrames
+                ? `Err((AsyncError::Interrupted, _frames)) => return Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "retry").text}))), Err((AsyncError::Fail(error), mut frames)) => { `
+                : "Err(AsyncError::Interrupted) => return Err(AsyncError::Interrupted), Err(AsyncError::Fail(error)) => { ",
+              `if !(${scheduleContinue(n.schedule, n.times)}) { `,
+              captureFrames
+                ? `frames.push(${frameOf(helper, "retry").text}); break Err((AsyncError::Fail(error), frames)); }`
+                : "break Err(AsyncError::Fail(error)); }",
+              ` let delay: u64 = ${scheduleDelay(n.schedule)}; if delay > 0 { match ctx.sleep(delay).await { Ok(()) => {}, `,
+              captureFrames
+                ? `Err(error) => return Err((error, FrameTrail::new(${frameOf(helper, "retry").text}))),`
+                : "Err(error) => return Err(error),",
+              " } } completed += 1; } } } }",
             ]),
           CatchAll: (n) => {
             const source = f.helpers[n.source];
