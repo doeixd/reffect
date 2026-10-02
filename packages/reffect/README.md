@@ -180,7 +180,7 @@ const total = R.fn([R.U64, R.U64], R.U64, (a, b) =>
 );
 ```
 
-Index access, `findFirst`, sorting, `append`/`concat`, effectful iteration and RPC array codecs are not admitted yet. See [array decisions](../../docs/research/arrays.md).
+`R.Effect.forEach(self, (a, i) => effect, { discard? })` iterates effectfully, sequential and fail-fast as in Effect; concurrency is refused. Index access, `findFirst`, sorting, `append`/`concat` and RPC array codecs are not admitted yet. See [array decisions](../../docs/research/arrays.md).
 
 ## Synchronous Effect profile
 

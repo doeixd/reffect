@@ -7,6 +7,7 @@ import {
   Targets,
   Traits,
   U64Type,
+  UnitType,
   arrayItem,
   fail,
   structLayout,
@@ -456,4 +457,59 @@ export const ArrayIR: typeof arrayOf & {
     filter,
     reduce,
   }),
+);
+
+type ForEachOptions = { readonly discard?: boolean; readonly concurrency?: never };
+/**
+ * Effect `Effect.forEach(self, (a, i) => effect, { discard? })`: sequential and fail-fast
+ * (ARR-003). Concurrency is refused until broader fiber semantics land.
+ */
+export const forEach: {
+  <A, B, E>(
+    f: (a: Expr<A>, i: Expr<bigint>) => Computation<B, E>,
+  ): (self: Expr<ReadonlyArray<A>>) => Computation<ReadonlyArray<B>, E>;
+  <A, B, E>(
+    f: (a: Expr<A>, i: Expr<bigint>) => Computation<B, E>,
+    options: { readonly discard: true },
+  ): (self: Expr<ReadonlyArray<A>>) => Computation<void, E>;
+  <A, B, E>(
+    self: Expr<ReadonlyArray<A>>,
+    f: (a: Expr<A>, i: Expr<bigint>) => Computation<B, E>,
+  ): Computation<ReadonlyArray<B>, E>;
+  <A, B, E>(
+    self: Expr<ReadonlyArray<A>>,
+    f: (a: Expr<A>, i: Expr<bigint>) => Computation<B, E>,
+    options: { readonly discard: true },
+  ): Computation<void, E>;
+} = dual(
+  (args) => args[0] instanceof Expr,
+  (
+    self: Expr<ReadonlyArray<unknown>>,
+    f: (a: Expr<unknown>, i: Expr<bigint>) => Computation<unknown, unknown>,
+    options?: ForEachOptions,
+  ) => {
+    if (options && "concurrency" in options)
+      throw fail(
+        "UNSUPPORTED_CONCURRENCY",
+        "authoring",
+        "Effect.forEach",
+        "forEach is sequential in this profile",
+      );
+    const item = arrayItem(self.type);
+    if (!item)
+      throw fail("TYPE_MISMATCH", "authoring", "Effect.forEach", "forEach requires an array");
+    const itemBinder = Symbol("reffect/forEach/item");
+    const indexBinder = Symbol("reffect/forEach/index");
+    const body = f(Expr.parameter(item, itemBinder, 0), Expr.parameter(U64Type, indexBinder, 0));
+    const discard = options?.discard === true;
+    const output: IRType<unknown> = discard ? UnitType : ArrayType.of(body.output);
+    return Computation.make(output, body.error, {
+      _tag: "ForEach",
+      source: self,
+      item: itemBinder,
+      index: indexBinder,
+      body,
+      discard,
+    });
+  },
 );

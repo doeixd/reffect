@@ -16,6 +16,7 @@ import {
   SemanticRef,
   checkExpression,
   evaluateExpression,
+  arrayItem,
   fail,
   structLayout,
   unionCases,
@@ -29,6 +30,7 @@ export { maxScopeFinalizers } from "./scope-analysis.ts";
 
 export const SyncEffects = Object.freeze({
   CatchAll: SemanticRef.effect("reffect/effect/catch-all@1"),
+  ForEach: SemanticRef.effect("reffect/effect/for-each@1"),
   Succeed: SemanticRef.effect("reffect/effect/succeed@1"),
   Fail: SemanticRef.effect("reffect/effect/fail@1"),
   Map: SemanticRef.effect("reffect/effect/map@1"),
@@ -161,6 +163,15 @@ export type ComputationNode =
       readonly _tag: "MatchTags";
       readonly value: Expr<unknown>;
       readonly cases: readonly MatchCase<Computation<unknown, unknown>>[];
+    }
+  /** Sequential, fail-fast `Effect.forEach` (ARR-003); results in order unless discarded. */
+  | {
+      readonly _tag: "ForEach";
+      readonly source: Expr<unknown>;
+      readonly item: symbol;
+      readonly index: symbol;
+      readonly body: Computation<unknown, unknown>;
+      readonly discard: boolean;
     }
   | {
       readonly _tag: "Log";
@@ -298,6 +309,11 @@ export const substituteComputation = (
           return condition === n.condition && onTrue === n.onTrue && onFalse === n.onFalse
             ? self
             : rebuild({ _tag: "Match", condition, onTrue, onFalse });
+        },
+        ForEach: (n) => {
+          const source = substituting(n.source);
+          const body = walk(n.body);
+          return source === n.source && body === n.body ? self : rebuild({ ...n, source, body });
         },
         MatchTags: (n) => {
           const value = substituting(n.value);
@@ -534,6 +550,7 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         CatchAll: (n) => walk(n.source) || walk(n.body),
         Match: (n) => walk(n.onTrue) || walk(n.onFalse),
         MatchTags: (n) => n.cases.some((c) => walk(c.body)),
+        ForEach: (n) => walk(n.body),
         Annotate: (n) => walk(n.body),
         Span: (n) => walk(n.body),
       }),
@@ -862,6 +879,23 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           walk(n.onTrue, bindings, `${at}.onTrue`);
           walk(n.onFalse, bindings, `${at}.onFalse`);
         },
+        ForEach: (n) => {
+          const item = arrayItem(n.source.type);
+          const output = n.discard ? UnitType : arrayItem(c.output);
+          if (
+            !item ||
+            !output ||
+            (!n.discard && !IRType.same(output, n.body.output)) ||
+            !agrees(n.body.error, c.error)
+          )
+            add(at, "forEach channel witnesses are inconsistent");
+          expression(n.source, "source");
+          if (!item) return;
+          const nested = new Map(bindings);
+          nested.set(n.item, [item]);
+          nested.set(n.index, [U64Type]);
+          walk(n.body, nested, `${at}.body`);
+        },
         MatchTags: (n) => {
           const caseTypes = unionCases(n.value.type);
           const tags = caseTypes?.map((t) => structLayout(t)?.tag);
@@ -1071,6 +1105,20 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
             expression(n.condition).pipe(
               Effect.flatMap((value) => evaluate(value ? n.onTrue : n.onFalse, bindings)),
             ),
+          ForEach: (n) =>
+            expression(n.source).pipe(
+              Effect.flatMap((items) =>
+                Effect.forEach(
+                  items as readonly unknown[],
+                  (item, i) =>
+                    evaluate(
+                      n.body,
+                      new Map(bindings).set(n.item, [item]).set(n.index, [BigInt(i)]),
+                    ),
+                  { discard: n.discard },
+                ),
+              ),
+            ),
           MatchTags: (n) =>
             expression(n.value).pipe(
               Effect.flatMap((value) => {
@@ -1121,6 +1169,7 @@ export interface LogicalFrame {
     | "sleep"
     | "launch"
     | "repeat"
+    | "forEach"
     | "retry"
     | "catchAll"
     | "ensuring"
@@ -1230,6 +1279,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.onFalse, `${path}.onFalse`);
         },
         MatchTags: (n) => n.cases.forEach((x, i) => adaptNode(x.body, `${path}.cases[${i}]`)),
+        ForEach: (n) => adaptNode(n.body, `${path}.body`),
         Log: () => {},
         Annotate: (n) => {
           adaptNode(n.body, `${path}.body`);
@@ -1476,6 +1526,25 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.flatMap((value) =>
                 (value ? evaluate(n.onTrue, bindings) : evaluate(n.onFalse, bindings)).pipe(
                   Effect.mapError((failure) => outward(failure, "match")),
+                ),
+              ),
+            ),
+          ForEach: (n) =>
+            expression(n.source, `${path}.source`).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap((items) =>
+                Effect.forEach(
+                  items as readonly unknown[],
+                  (item, i) =>
+                    evaluate(
+                      n.body,
+                      new Map(bindings).set(n.item, [item]).set(n.index, [BigInt(i)]),
+                    ).pipe(Effect.mapError((failure) => outward(failure, "forEach"))),
+                  { discard: n.discard },
                 ),
               ),
             ),

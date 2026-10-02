@@ -1,4 +1,4 @@
-import { Array as Arr, Cause, Effect, Exit, FileSystem, Option } from "effect";
+import { Array as Arr, Cause, Effect, Exit, FileSystem, Logger, Option } from "effect";
 import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
 import {
@@ -73,7 +73,53 @@ const cursors = R.fn([R.String], R.U64, (cursor) =>
 const empty = R.fn([R.U64], R.U64, (seed) =>
   R.Array.empty(R.U64).pipe(R.Array.reduce(seed, (acc, x) => R.U64.add(acc, x))),
 );
-const program = R.program({ indexed, strings, count, items, cursors, empty });
+// Effectful iteration: sequential and fail-fast; later elements must not run.
+const visit = R.fn([R.String, R.String], R.U64, R.Bool, (a, b) =>
+  R.Effect.forEach(R.Array.make(a, b, R.String.literal("tail")), (s) =>
+    R.Effect.logInfo("visit", []).pipe(
+      R.Effect.annotateLogs("index", R.U64.literal(0n)),
+      R.Effect.andThen(
+        R.Match.bool(
+          R.String.eq(s, R.String.literal("stop")),
+          R.Effect.fail(R.Bool.literal(false)),
+          R.Effect.succeed(R.String.replaceAll(s, "<", "&lt;")),
+        ),
+      ),
+    ),
+  ).pipe(R.Effect.map((visited) => R.Array.length(visited))),
+);
+const discard = R.fn([R.U64], R.Unit, R.Never, (n) =>
+  R.Array.make(n, R.U64.literal(2n)).pipe(
+    R.Effect.forEach((x, i) => R.Effect.logInfo("discard", [["value", R.U64.add(x, i)]]), {
+      discard: true,
+    }),
+  ),
+);
+const suspended = R.fn([R.U64], R.U64, R.Never, (n) =>
+  R.Effect.forEach(R.Array.make(n, R.U64.literal(5n)), (x) =>
+    R.Effect.sleep(1).pipe(R.Effect.andThen(R.Effect.succeed(R.U64.add(x, R.U64.literal(1n))))),
+  ).pipe(
+    R.Effect.map((xs) => R.Array.reduce(xs, R.U64.literal(0n), (acc, x) => R.U64.add(acc, x))),
+  ),
+);
+const program = R.program({
+  indexed,
+  strings,
+  count,
+  items,
+  cursors,
+  empty,
+  visit,
+  discard,
+  suspended,
+});
+const officialVisit = (a: string, b: string) =>
+  Effect.forEach([a, b, "tail"], (s) =>
+    Effect.logInfo("visit").pipe(
+      Effect.annotateLogs("index", 0n),
+      Effect.andThen(s === "stop" ? Effect.fail(false) : Effect.succeed(s.replaceAll("<", "&lt;"))),
+    ),
+  ).pipe(Effect.map((visited) => BigInt(visited.length)));
 
 const official = {
   indexed: (a: bigint, b: bigint, c: bigint) =>
@@ -130,15 +176,43 @@ test("array operations agree with effect/Array", async () => {
   ] as const)
     expect(await Effect.runPromise(Reference.run(items, [name, n]))).toBe(official.items(name, n));
   expect(await Effect.runPromise(Reference.run(empty, [7n]))).toBe(official.empty(7n));
+  for (const [a, b] of [
+    ["a<", "b"],
+    ["a", "stop"],
+    ["stop", "b"],
+  ] as const) {
+    const logs = { official: 0, reference: 0 };
+    const counting = (key: keyof typeof logs) =>
+      Logger.layer([Logger.make(() => void logs[key]++)]);
+    const officialExit = observe(
+      await Effect.runPromise(
+        Effect.exit(officialVisit(a, b).pipe(Effect.provide(counting("official")))),
+      ),
+    );
+    const referenceExit = observe(
+      await Effect.runPromise(
+        Effect.exit(Reference.run(visit, [a, b]).pipe(Effect.provide(counting("reference")))),
+      ),
+    );
+    expect(referenceExit).toEqual(officialExit);
+    // Elements after the failing one never run.
+    expect(logs.reference).toBe(logs.official);
+  }
+  expect(await Effect.runPromise(Reference.run(suspended, [1n]))).toBe(8n);
+  expect(() =>
+    R.Effect.forEach(R.Array.make(R.U64.literal(1n)), () => R.Effect.void, {
+      // @ts-expect-error Concurrency is refused in types and at authoring time.
+      concurrency: 2,
+    }),
+  ).toThrow("sequential");
 });
 
 test("array authoring refuses mixed witnesses", () => {
-  expect(() => R.Array.make(R.U64.literal(1n), R.String.literal("x") as never)).toThrow(
-    "item witness",
-  );
+  expect(() =>
+    // @ts-expect-error Elements share one witness, in types and at authoring time.
+    R.Array.make(R.U64.literal(1n), R.String.literal("x")),
+  ).toThrow("item witness");
   const typeContracts = () => {
-    // @ts-expect-error Elements share one witness.
-    R.Array.make(R.U64.literal(1n), R.String.literal("x"));
     // @ts-expect-error filter predicates are Boolean.
     R.Array.filter(R.Array.make(R.U64.literal(1n)), (x) => x);
   };
@@ -161,12 +235,12 @@ test(
           const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-arrays-" });
           for (const policy of [FailureFrames.Bounded, FailureFrames.None]) {
             const artifact = yield* Compile.make(program).pipe(
-              Compile.withTarget(Rust.std),
+              Compile.withTarget(Rust.tokio),
               Compile.withFailureFrames(policy),
               Compile.withSourceArtifacts(SourceArtifacts.None),
               Compile.run,
             );
-            expect(artifact.explanation.crates).toEqual([]);
+            expect(artifact.explanation.crates).toEqual(["tokio@1.53.1"]);
             const directory = yield* CargoApi.write(artifact, `${parent}/${policy._tag}`);
             for (const profile of ["debug", "release"] as const) {
               yield* CargoApi.build(directory, profile);
@@ -190,6 +264,43 @@ test(
               yield* agree("items", items, ["big", 9n]);
               yield* agree("items", items, ["mid", 4n]);
               yield* agree("empty", empty, [7n]);
+              for (const [a, b] of [
+                ["a<", "b"],
+                ["a", "stop"],
+                ["stop", "b"],
+              ] as const) {
+                expect(
+                  observe(
+                    yield* NativeRunner.run(artifact, directory, "visit", visit, [a, b], profile),
+                  ),
+                ).toEqual(observe(yield* Effect.exit(Reference.run(visit, [a, b]))));
+                const raw = yield* CargoApi.run(
+                  directory,
+                  "visit",
+                  [a, b].map((s) => `str:${Buffer.from(s, "utf8").toString("hex")}`),
+                  profile,
+                );
+                expect(messages(raw.stderr)).toEqual(
+                  Array.from({ length: a === "stop" ? 1 : 3 }, () => "visit").slice(
+                    0,
+                    a === "stop" ? 1 : b === "stop" ? 2 : 3,
+                  ),
+                );
+              }
+              const discarded = yield* CargoApi.run(directory, "discard", [3n], profile);
+              expect(messages(discarded.stderr)).toEqual(["discard", "discard"]);
+              expect(
+                observe(
+                  yield* NativeRunner.run(
+                    artifact,
+                    directory,
+                    "suspended",
+                    suspended,
+                    [1n],
+                    profile,
+                  ),
+                ),
+              ).toEqual({ value: 8n });
             }
           }
         }),
@@ -198,3 +309,9 @@ test(
   },
   nativeTestBudget(0) + 120000,
 );
+
+const messages = (stderr: string) =>
+  stderr
+    .split("\n")
+    .filter((line) => line.startsWith('{"schema":"reffect.log@1"'))
+    .map((line) => JSON.parse(line).message);

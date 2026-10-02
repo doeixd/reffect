@@ -207,6 +207,17 @@ export const analyzeScopes = (
           expression(n.value, "value");
           return Math.max(0, ...n.cases.map((x, i) => child(x.body, `cases[${i}]`)));
         },
+        ForEach: (n) => {
+          expression(n.source, "source");
+          // Iteration count is a runtime length, so retained registrations cannot be bounded.
+          if (child(n.body, "body") > 0)
+            diagnostic(
+              "SCOPE_CAPACITY",
+              at,
+              "forEach over a runtime array cannot retain registrations in one scope",
+            );
+          return 0;
+        },
         Annotate: (n) => {
           expression(n.value, "value");
           return child(n.body, "body");

@@ -31,6 +31,12 @@ Status: **accepted for implementation (2026-10-02)**, the next piece of the "Bef
 
 Evidence: [arrays.test.ts](../../packages/reffect/tests/arrays.test.ts) passes 3/3. Reference results equal `effect/Array` on u64, string, struct and union elements, index use and empty arrays; native debug/release under both frame policies agree. TypeScript 7 and 5.9 report no errors. Known extra copies: a `reduce` step that keeps its accumulator copies it, and filtered non-Copy elements are cloned into the output.
 
+## Part B delivered (2026-10-02)
+
+`R.Effect.forEach(self, (a, i) => effect, { discard? })` is a dual Computation node `ForEach`. It is sequential and fail-fast, with results in order (or Unit when discarded); a `concurrency` option is refused in types and while authoring. Both reference evaluators delegate to official `Effect.forEach`. Native lowering is one loop that awaits each iteration's helper, returning the first failure (with a `forEach` failure frame); async bodies keep their entry cancellation checks. Scope analysis refuses retained registrations inside the body, since a runtime length cannot be bounded.
+
+Evidence: `arrays.test.ts` 3/3 adds reference-vs-official exits and log counts for success, mid-way failure and first-element failure, plus native exits and stderr showing elements after a failure never run, discard logging, and an async body with a sleep per element, under both frame policies on Tokio.
+
 ## Deferred
 
 Index access and `findFirst` (both need `Option`), sorting (ordering semantics), `append`/`concat`, non-empty array types, fixed-size arrays, loop fusion, concurrent `forEach`, records/maps and `Chunk`.

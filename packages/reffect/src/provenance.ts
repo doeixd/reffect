@@ -66,6 +66,7 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
         ),
         edge("body", n.body),
       ],
+      ForEach: (n) => [edge("source", n.source), edge("body", n.body)],
       MatchTags: (n) => [
         edge("value", n.value),
         ...n.cases.map((c, index) => [`cases[${index}]`, c.body] as const),

@@ -172,6 +172,15 @@ type HelperBody =
     }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
   | {
+      readonly _tag: "ForEach";
+      readonly source: RustBlock;
+      readonly item: string;
+      readonly index: string;
+      readonly itemCopy: boolean;
+      readonly helper: number;
+      readonly discard: boolean;
+    }
+  | {
       readonly _tag: "MatchTags";
       readonly union: IRType<unknown>;
       readonly scrutinee: RustBlock;
@@ -438,6 +447,10 @@ export function lowerFunctions(
               MatchTags: (n) => {
                 expression(n.value);
                 n.cases.forEach((c) => computation(c.body));
+              },
+              ForEach: (n) => {
+                expression(n.source);
+                computation(n.body);
               },
               Annotate: (n) => {
                 expression(n.value);
@@ -791,6 +804,23 @@ export function lowerFunctions(
               onTrue: effectHelper(n.onTrue, scope, error, `${path}.onTrue`),
               onFalse: effectHelper(n.onFalse, scope, error, `${path}.onFalse`),
             }),
+            ForEach: (n): HelperBody => {
+              const item = arrayItem(n.source.type)!;
+              const withItem = caseScope(scope, n.item, item);
+              const loopScope = caseScope(withItem, n.index, U64Type);
+              const [itemName, indexName] = loopScope.input
+                .slice(scope.input.length)
+                .map((p) => p.name);
+              return {
+                _tag: "ForEach",
+                source: block(n.source, scope, `${path}.source`),
+                item: itemName,
+                index: indexName,
+                itemCopy: item.traits.includes(Traits.Copyable),
+                helper: effectHelper(n.body, loopScope, error, `${path}.body`),
+                discard: n.discard,
+              };
+            },
             MatchTags: (n): HelperBody => {
               const caseTypes = unionCases(n.value.type) ?? [];
               return {
@@ -867,6 +897,7 @@ export function lowerFunctions(
                 Match: (n) =>
                   !!(helpers.get(n.onTrue)?.asynchronous || helpers.get(n.onFalse)?.asynchronous),
                 MatchTags: (n) => n.cases.some((c) => helpers.get(c.helper)?.asynchronous),
+                ForEach: (n) => helpers.get(n.helper)?.asynchronous ?? false,
                 Annotate: (n) => helpers.get(n.body)?.asynchronous ?? false,
                 Span: (n) => helpers.get(n.body)?.asynchronous ?? false,
               }),
@@ -1165,6 +1196,7 @@ export const emitFunctions = (
             Map: (n) => depth(n.source),
             Match: (n) => child(n.onTrue, n.onFalse),
             MatchTags: (n) => child(...n.cases.map((c) => c.helper)),
+            ForEach: (n) => depth(n.helper),
             Annotate: (n) => depth(n.body),
             Span: (n) => depth(n.body),
             Repeat: (n) => depth(n.body),
@@ -1810,6 +1842,23 @@ export const emitFunctions = (
               adaptFrag(n.onFalse, helper.output, use("onFalse")),
               ` { Ok(value) => Ok(value), ${failureArm(helper, "match")} } } }`,
             ]),
+          ForEach: (n) => {
+            const item = Rs.ident(n.item).text;
+            const index = Rs.ident(n.index).text;
+            return joinFragments([
+              "{ let source = ",
+              n.source.bindings.length === 0
+                ? operand(n.source.body)
+                : joinFragments(["&", renderBlock(n.source)]),
+              n.discard ? "; " : "; let mut out = Vec::with_capacity(source.len()); ",
+              `for (${index}, ${item}) in source.iter().enumerate() { let ${index}: u64 = ${index} as u64; ${n.itemCopy ? `let ${item} = *${item}; ` : ""}let step = match `,
+              adaptFrag(n.helper, f.helpers[n.helper].output, use("body")),
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "forEach")} }; match step { Ok(value) => `,
+              n.discard ? "{ let _ = value; }" : "out.push(value)",
+              ", Err(error) => return Err(error) } } ",
+              n.discard ? "Ok(()) }" : "Ok(out) }",
+            ]);
+          },
           MatchTags: (n) =>
             joinFragments([
               "{ match ",
@@ -2308,6 +2357,7 @@ const writeCompositeTypes = (
           Map: (body) => [body.block],
           Match: (body) => [body.condition],
           MatchTags: (body) => [body.scrutinee],
+          ForEach: (body) => [body.source],
           Log: (body) => body.attributes.map((attribute) => attribute.block),
           Annotate: (body) => [body.value],
           Launch: (body) => body.values,

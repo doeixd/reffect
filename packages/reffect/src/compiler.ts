@@ -472,6 +472,11 @@ const derive = Effect.fn("Compile.derive")(function* (
           walk(n.value);
           n.cases.forEach((x) => walkComputation(x.body));
         },
+        ForEach: (n) => {
+          effectRefs.add(SyncEffects.ForEach);
+          walk(n.source);
+          walkComputation(n.body);
+        },
         Log: (n) => {
           effectRefs.add(SyncEffects.Log);
           for (const [, value] of n.attributes) walk(value);

@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Arrays, part B (Effect.forEach)
+
+- Added dual `R.Effect.forEach` with optional `discard` as a Computation `ForEach` node (sequential, fail-fast; concurrency refused), delegating to official `Effect.forEach` in the reference and lowering to one awaited loop with early return natively.
+- Validation (focused): `arrays.test.ts` 3/3 (official vs reference exits and log counts; native exits, log order, discard and async bodies under both frame policies). `records`, `effect`, `error-recovery`, `flow`, `async-effect`, `scope-registration` and `failure-frames` pass with it, 27/27 in 8 files. TypeScript 7 and 5.9 report no errors.
+
 ## 2026-10-02 — Arrays, part A (pure structured iteration)
 
 - Searched architecture §6/§9/§10/§15/§27 and the Foldkit IR sketches, probed pinned `effect/Array`, `Effect.forEach` and `Schema.Array` decoding, and recorded [array decisions](docs/research/arrays.md) (ARR-001–006) first. Implemented `R.Array` with `make`/`empty`/`length` and dual `map`/`filter`/`reduce` (element and u64 index binders) as kernel `ArrayMake`/`ArrayLength`/`ArrayLoop` nodes. Native lowering emits one loop per operation over borrowed elements.
