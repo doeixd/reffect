@@ -64,6 +64,7 @@ export const Capabilities = Object.freeze({
   U64: SemanticRef.capability("reffect/capability/u64@1"),
   Bool: SemanticRef.capability("reffect/capability/bool@1"),
   Unit: SemanticRef.capability("reffect/capability/unit@1"),
+  String: SemanticRef.capability("reffect/capability/string@1"),
   AsyncResult: SemanticRef.capability("reffect/capability/async-result@1"),
   ScopedFiles: SemanticRef.capability("reffect/capability/scoped-files@1"),
   SyncResult: SemanticRef.capability("reffect/capability/sync-result@1"),
@@ -84,6 +85,7 @@ export const Native = Object.freeze({
   U64: Object.freeze({ target: Targets.RustStd, type: "u64" }) satisfies NativeRepresentation,
   Bool: Object.freeze({ target: Targets.RustStd, type: "bool" }) satisfies NativeRepresentation,
   Unit: Object.freeze({ target: Targets.RustStd, type: "()" }) satisfies NativeRepresentation,
+  String: Object.freeze({ target: Targets.RustStd, type: "String" }) satisfies NativeRepresentation,
   Never: Object.freeze({
     target: Targets.RustStd,
     type: "std::convert::Infallible",
@@ -178,6 +180,11 @@ export type Value<T> = T extends IRType<infer A> ? A : never;
 export type Inputs<I extends readonly IRType<unknown>[]> = { readonly [K in keyof I]: Value<I[K]> };
 export type Symbols<I extends readonly IRType<unknown>[]> = { [K in keyof I]: Expr<Value<I[K]>> };
 
+/** Operand positions that must be literals, with a validator over their values. */
+export interface LiteralArguments {
+  readonly positions: readonly number[];
+  readonly check: (values: readonly unknown[]) => string | undefined;
+}
 export class Operation<
   I extends readonly IRType<unknown>[] = readonly IRType<unknown>[],
   A = unknown,
@@ -194,6 +201,7 @@ export class Operation<
     readonly requirements: readonly Requirement[],
     readonly capabilities: readonly Capability[],
     readonly laws: readonly Law<Ref>[],
+    readonly literalArguments?: LiteralArguments,
   ) {
     super();
     Object.freeze(this);
@@ -232,6 +240,7 @@ export class Operation<
         self.requirements,
         Object.freeze(Array.from(capabilities)),
         self.laws,
+        self.literalArguments,
       );
   }
   static withEffects(effects: readonly EffectRef[]) {
@@ -247,6 +256,7 @@ export class Operation<
         self.requirements,
         self.capabilities,
         self.laws,
+        self.literalArguments,
       );
   }
   static withRequirements(requirements: readonly Requirement[]) {
@@ -262,6 +272,7 @@ export class Operation<
         Object.freeze(Array.from(requirements)),
         self.capabilities,
         self.laws,
+        self.literalArguments,
       );
   }
   static withLaws<const Subject extends OperationRef>(laws: readonly Law<Subject>[]) {
@@ -277,6 +288,27 @@ export class Operation<
         self.requirements,
         self.capabilities,
         Object.freeze(Array.from(laws)),
+        self.literalArguments,
+      );
+  }
+  /** Require literal operands at `positions`; the checker refuses other operand shapes. */
+  static withLiteralArguments(literalArguments: LiteralArguments) {
+    return <I extends readonly IRType<unknown>[], A, Ref extends OperationRef>(
+      self: Operation<I, A, Ref>,
+    ): Operation<I, A, Ref> =>
+      new Operation(
+        self.ref,
+        self.input,
+        self.output,
+        self.reference,
+        self.effects,
+        self.requirements,
+        self.capabilities,
+        self.laws,
+        Object.freeze({
+          positions: Object.freeze(Array.from(literalArguments.positions)),
+          check: literalArguments.check,
+        }),
       );
   }
 }
@@ -591,6 +623,107 @@ export const NotBool = Operation.make(
   (a) => !a,
 ).pipe(Operation.withCapabilities([Capabilities.Bool]));
 
+/** ES2024 `String.prototype.isWellFormed`: no unpaired UTF-16 surrogates. */
+export const isWellFormed = (value: string): boolean => {
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      i++;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+  }
+  return true;
+};
+/**
+ * Well-formed Unicode text. Lone surrogates are refused at every decode boundary, so
+ * equality, containment and literal replacement agree between JS UTF-16 and Rust UTF-8.
+ */
+class StringWitness extends IRType<string> {
+  constructor() {
+    const schema = Schema.String.check(
+      Schema.makeFilter(
+        (value: string) =>
+          isWellFormed(value) || "Expected well-formed Unicode without lone surrogates",
+      ),
+    );
+    for (const check of schema.ast.checks ?? []) Object.freeze(check);
+    if (schema.ast.checks) Object.freeze(schema.ast.checks);
+    Object.freeze(schema.ast);
+    Object.freeze(schema);
+    super(
+      SemanticRef.type("reffect/string@1"),
+      schema,
+      Native.String,
+      Object.freeze([Traits.Cloneable, Traits.Eq]),
+    );
+    Object.freeze(this);
+  }
+  literal(value: string): Expr<string> {
+    if (!isWellFormed(value))
+      throw fail(
+        "INVALID_LITERAL",
+        "authoring",
+        "String.literal",
+        "String literals must be well-formed Unicode",
+      );
+    return Expr.literal(this, value);
+  }
+  readonly eq: {
+    (that: Expr<string>): (self: Expr<string>) => Expr<boolean>;
+    (self: Expr<string>, that: Expr<string>): Expr<boolean>;
+  } = dual(2, (a: Expr<string>, b: Expr<string>) => Expr.apply(EqString, a, b));
+  /** Effect `String.includes(searchString)(self)`; the position argument is not admitted. */
+  readonly includes: {
+    (searchString: Expr<string>): (self: Expr<string>) => Expr<boolean>;
+    (self: Expr<string>, searchString: Expr<string>): Expr<boolean>;
+  } = dual(2, (self: Expr<string>, search: Expr<string>) =>
+    Expr.apply(IncludesString, self, search),
+  );
+  /**
+   * Effect `String.replaceAll(searchValue, replaceValue)(self)` restricted to literal patterns:
+   * a non-empty search and a replacement without `$` substitution patterns.
+   */
+  readonly replaceAll: {
+    (searchValue: string, replaceValue: string): (self: Expr<string>) => Expr<string>;
+    (self: Expr<string>, searchValue: string, replaceValue: string): Expr<string>;
+  } = dual(3, (self: Expr<string>, search: string, replacement: string) => {
+    const problem = replacementProblem([search, replacement]);
+    if (problem) throw fail("LITERAL_ARGUMENT", "authoring", "String.replaceAll", problem);
+    return Expr.apply(ReplaceAllString, self, this.literal(search), this.literal(replacement));
+  });
+}
+const replacementProblem = (values: readonly unknown[]): string | undefined => {
+  const [search, replacement] = values;
+  if (typeof search !== "string" || search.length === 0)
+    return "replaceAll requires a non-empty literal search";
+  if (typeof replacement !== "string" || replacement.includes("$"))
+    return "replaceAll replacements cannot contain $ substitution patterns";
+  return undefined;
+};
+export const StringType = new StringWitness();
+export const EqString = Operation.make(
+  SemanticRef.operation("reffect/string.eq@1"),
+  [StringType, StringType],
+  BoolType,
+  (a, b) => a === b,
+).pipe(Operation.withCapabilities([Capabilities.String, Capabilities.Bool]));
+export const IncludesString = Operation.make(
+  SemanticRef.operation("reffect/string.includes@1"),
+  [StringType, StringType],
+  BoolType,
+  (self, search) => self.includes(search),
+).pipe(Operation.withCapabilities([Capabilities.String, Capabilities.Bool]));
+export const ReplaceAllString = Operation.make(
+  SemanticRef.operation("reffect/string.replace-all-literal@1"),
+  [StringType, StringType, StringType],
+  StringType,
+  (self, search, replacement) => self.replaceAll(search, replacement),
+).pipe(
+  Operation.withCapabilities([Capabilities.String]),
+  Operation.withLiteralArguments({ positions: [1, 2], check: replacementProblem }),
+);
+
 export const checkExpression = (
   root: Expr<unknown>,
   bindings: ReadonlyMap<symbol, readonly IRType<unknown>[]>,
@@ -651,6 +784,17 @@ export const checkExpression = (
                 at,
                 "Law evidence must name this operation reference and an artifact",
               );
+          if (op.literalArguments) {
+            const literals = op.literalArguments.positions.map((i) => n.args[i]?.node);
+            if (literals.some((node) => node?._tag !== "Literal"))
+              add("LITERAL_ARGUMENT", at, `${op.id} requires literal operands`);
+            else {
+              const problem = op.literalArguments.check(
+                literals.map((node) => (node as { readonly value: unknown }).value),
+              );
+              if (problem) add("LITERAL_ARGUMENT", at, problem);
+            }
+          }
           n.args.forEach((arg, i) => {
             if (!op.input[i] || !IRType.same(arg.type, op.input[i]))
               add(

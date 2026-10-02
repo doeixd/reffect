@@ -2,7 +2,7 @@ import { Effect, Exit, Predicate, Schema } from "effect";
 import { CargoApi } from "./cargo.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import { EffectFn, isAsyncComputation, maxLogicalFrames } from "./effect-ir.ts";
-import { BoolType, IRType, U64Type, UnitType, fail } from "./kernel.ts";
+import { BoolType, IRType, StringType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Fn, Inputs } from "./kernel.ts";
 import type { Artifact } from "./compiler.ts";
 
@@ -41,13 +41,17 @@ const encodeArguments = <I extends readonly IRType<unknown>[]>(
   Effect.gen(function* () {
     if (args.length !== fn.input.length)
       return yield* fail("ARITY_MISMATCH", "native", name, "Incorrect input count");
-    const values: (bigint | boolean | undefined)[] = [];
+    const values: (bigint | boolean | string | undefined)[] = [];
     for (let i = 0; i < args.length; i++) {
       const value = yield* Schema.decodeUnknownEffect(fn.input[i].schema)(args[i]).pipe(
         Effect.mapError((cause) => fail("INVALID_INPUT", "native", `args[${i}]`, cause.message)),
       );
       if (Predicate.isUndefined(value) && IRType.same(fn.input[i], UnitType)) {
         values.push(undefined);
+        continue;
+      }
+      if (Predicate.isString(value) && IRType.same(fn.input[i], StringType)) {
+        values.push(`str:${Buffer.from(value, "utf8").toString("hex")}`);
         continue;
       }
       if (!Predicate.isBigInt(value) && !Predicate.isBoolean(value))
@@ -65,7 +69,15 @@ const decodeScalar = <T>(type: IRType<T>, name: string, encoded: string) =>
     else if (IRType.same(type, BoolType) && /^bool:(true|false)$/.test(encoded))
       value = encoded === "bool:true";
     else if (IRType.same(type, UnitType) && encoded === "unit") value = undefined;
-    else
+    else if (IRType.same(type, StringType) && /^str:(?:[0-9a-f]{2})*$/.test(encoded)) {
+      try {
+        value = new TextDecoder("utf-8", { fatal: true }).decode(
+          Buffer.from(encoded.slice(4), "hex"),
+        );
+      } catch {
+        return yield* fail("INVALID_NATIVE_OUTPUT", "native", name, "Native string is not UTF-8");
+      }
+    } else
       return yield* fail(
         "INVALID_NATIVE_OUTPUT",
         "native",

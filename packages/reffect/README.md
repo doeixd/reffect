@@ -135,6 +135,24 @@ All 27 upstream fixtures run against evaluate, the unchanged licensed upstream D
 
 Run `vp exec node --experimental-transform-types examples/query/main.ts` for a native/reference search example. Additional representations, general resource Scope and concurrency follow the roadmap; scalar RPC and the bounded async profile below are implemented.
 
+## Well-formed strings
+
+`R.String` is well-formed Unicode text: lone surrogates are refused when an input is decoded, so JS and native agree on the admitted operations. `R.String.literal`, `eq`, `includes(search)` and `replaceAll(search, replacement)` mirror Effect's v4 data-last `String` functions, with data-first forms through `dual`:
+
+```ts
+const escapeText = R.fn([R.String], R.String, R.Bool, (value) =>
+  R.Match.bool(
+    R.String.includes(value, R.String.literal("\u0000")),
+    R.Effect.fail(R.Bool.literal(false)),
+    R.Effect.succeed(
+      value.pipe(R.String.replaceAll("&", "&amp;"), R.String.replaceAll("<", "&lt;")),
+    ),
+  ),
+);
+```
+
+`replaceAll` patterns must be literals: a non-empty search and a replacement without `$`. Hand-built `Expr.apply` calls are checked too. Native code uses owned `String` at function boundaries and `&str` inside helpers (`==`, `str::contains`, `str::replace`), with no crate. The native runner passes strings as `str:` plus hex of their UTF-8 bytes. Length, slicing, ordering, case mapping, regular expressions, string RPC codecs and string captures in delayed cleanup are not admitted yet. See [string decisions](../../docs/research/string-profile.md).
+
 ## Synchronous Effect profile
 
 ### Unit and result discarding

@@ -1,7 +1,7 @@
 import { Match } from "effect";
 import type { Computation } from "./effect-ir.ts";
 import type { Diagnostic } from "./kernel.ts";
-import { IRType } from "./kernel.ts";
+import { IRType, StringType } from "./kernel.ts";
 import type { Expr } from "./kernel.ts";
 import { FileHandleType } from "./file-model.ts";
 import type { SchedulePlan } from "./schedule.ts";
@@ -79,7 +79,14 @@ export const analyzeScopes = (
           );
         Match.value(value.node).pipe(
           Match.tagsExhaustive({
-            Parameter: () => {},
+            Parameter: () => {
+              if (IRType.same(value.type, StringType))
+                diagnostic(
+                  "RESOURCE_ESCAPE",
+                  `${at}.${edge}`,
+                  "Delayed cleanup cannot capture strings in this profile",
+                );
+            },
             Literal: () => {},
             Apply: (n) => n.args.forEach(visit),
             Match: (n) => {

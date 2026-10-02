@@ -28,7 +28,7 @@ The destination is a native executable serving Foldkit rendering, Effect RPC, Re
 
 ## Current state
 
-Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar brackets, static Context/Layer wiring, constrained scalar Schema inputs, bounded sequential resource Scope registration, per-invocation resource-bearing Layers and server-lifetime scalar RPC services with graceful shutdown are implemented extensions. General Schema, dynamic services/service objects and general Scope services remain open.
+Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar brackets, static Context/Layer wiring, constrained scalar Schema inputs, bounded sequential resource Scope registration, per-invocation resource-bearing Layers, server-lifetime scalar RPC services with graceful shutdown and well-formed strings are implemented extensions. General Schema, dynamic services/service objects and general Scope services remain open.
 
 The active slice is [suspended scalar RPC](docs/research/async-rpc.md): literal delay, owned execution context, cooperative cancellation and non-failing awaited `ensuring` cleanup. The bounded slice has reference/native conformance, real-socket and stock-client cancellation coverage, and measured layout/construction costs. [PROGRESS.md](PROGRESS.md) records completed evidence; the [package README](packages/reffect/README.md) describes shipped APIs.
 
@@ -79,17 +79,16 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Next: a bounded owned-string profile driven by Foldkit escaping.**
-[Server-lifetime RPC services](docs/research/server-layer.md) completed the
-current 3B workload; remaining 3B gaps (services with protected procedures,
-service objects, shutdown deadlines) wait for a workload. The
-[north-star review](docs/research/north-star-review.md) adopted corpus-driven
-priorities, and the [Foldkit SSR inventory](docs/research/foldkit-ssr-inventory.md)
-shows strings are the dominant data in the server-reachable graph. Strings
-also gate milestone 4, so this step serves either ordering.
+**Next: string JSON codecs at the RPC boundary, then the next inventory-ranked gap.**
+The [bounded string profile](docs/research/string-profile.md) is implemented:
+well-formed `R.String`, `eq`/`includes`/literal `replaceAll`, owned `String` with
+borrowed helpers, and Foldkit `escapeText`/`escapeAttributeValue` agreeing with
+the pinned upstream functions in reference and native builds. The
+[north-star review](docs/research/north-star-review.md) and
+[Foldkit SSR inventory](docs/research/foldkit-ssr-inventory.md) drive what follows.
 
-1. Research Effect `Schema.String`/JSON string semantics, JS UTF-16 code units versus Rust UTF-8 `String`, and wire decoding of lone surrogates; record the string witness, ownership and refusal decisions.
-2. Admit string literals, equality, the JSON wire codec and fixed-character-set replacement; port Foldkit `escapeText`/`escapeAttributeValue` and compare against the pinned upstream functions on a generated corpus.
+1. Admit `Schema.String` payloads/results in `NativeRpc` (serde_json already refuses lone surrogates); compare stock-client round trips, including astral text and refusals.
+2. From the inventory, pick the next representation gate. Records/tagged unions and string building (concatenation/templates) are the leading candidates; prefer the one that unlocks a whole upstream function.
 3. Open decisions for the user: Q-1 (milestone 8 acceptance on unmodified upstream source, and whether SSR moves ahead of Remote/SQL) and Q-2 (upstream Foldkit or the `foldkit-plus` fork).
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.

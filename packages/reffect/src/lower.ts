@@ -4,7 +4,7 @@ import { SourceWriter, joinFragments, mapFragment, textFragment } from "./source
 import type { MappedFragment } from "./source-writer.ts";
 import type { GeneratedRange } from "./source-artifact.ts";
 import { Match, Predicate } from "effect";
-import { BoolType, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.ts";
+import { BoolType, IRType, NeverType, StringType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Expr, OperationRef, Program } from "./kernel.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
@@ -28,7 +28,7 @@ export type RustExpr = (
   | { readonly _tag: "Parameter"; readonly index: number }
   | { readonly _tag: "Bound"; readonly name: string }
   | { readonly _tag: "Local"; readonly index: number }
-  | { readonly _tag: "Literal"; readonly value: bigint | boolean | void }
+  | { readonly _tag: "Literal"; readonly value: bigint | boolean | string | void }
   | {
       readonly _tag: "Call";
       readonly method: Implementation["method"];
@@ -42,12 +42,18 @@ export type RustExpr = (
       readonly onTrueUse?: string;
       readonly onFalseUse?: string;
     }
-) & { readonly origin?: string; readonly occurrence?: string };
+) & {
+  readonly origin?: string;
+  readonly occurrence?: string;
+  /** Owned-string value: operands borrow it, value positions take an owned copy (STR-002). */
+  readonly text?: true;
+};
 export const RustExpr = Object.freeze({
   parameter: (index: number): RustExpr => Object.freeze({ _tag: "Parameter", index }),
   bound: (name: string): RustExpr => Object.freeze({ _tag: "Bound", name }),
   local: (index: number): RustExpr => Object.freeze({ _tag: "Local", index }),
-  literal: (value: bigint | boolean | void): RustExpr => Object.freeze({ _tag: "Literal", value }),
+  literal: (value: bigint | boolean | string | void): RustExpr =>
+    Object.freeze({ _tag: "Literal", value }),
   call: (method: Implementation["method"], left: RustExpr, right: RustExpr): RustExpr =>
     Object.freeze({ _tag: "Call", method, args: Object.freeze([left, right]) }),
 });
@@ -400,7 +406,7 @@ export function lowerFunctions(
                 const parameter = scope.bindings.get(n.binder)![n.index];
                 return RustExpr.bound(parameter.name);
               },
-              Literal: (n) => RustExpr.literal(n.value as bigint | boolean | void),
+              Literal: (n) => RustExpr.literal(n.value as bigint | boolean | string | void),
               Apply: (n): RustExpr =>
                 Object.freeze({
                   _tag: "Call",
@@ -424,7 +430,10 @@ export function lowerFunctions(
             Match.tags({ Apply: () => true, Match: () => true }),
             Match.orElse(() => false),
           );
-          const reference = local ? RustExpr.local(bindings.length) : value;
+          const owned = local ? RustExpr.local(bindings.length) : value;
+          const reference = IRType.same(e.type, StringType)
+            ? Object.freeze({ ...owned, text: true as const })
+            : owned;
           const result = provenance ? Object.freeze({ ...reference, ...source }) : reference;
           if (local)
             bindings.push(
@@ -866,6 +875,7 @@ export const emitFunctions = (
     if (IRType.same(type, U64Type)) return Rs.namedType("u64");
     if (IRType.same(type, BoolType)) return Rs.namedType("bool");
     if (IRType.same(type, UnitType)) return Rs.unitType();
+    if (IRType.same(type, StringType)) return Rs.stringType();
     if (IRType.same(type, NeverType))
       return Rs.pathType([Rs.ident("std"), Rs.ident("convert"), Rs.ident("Infallible")]);
     throw fail(
@@ -876,6 +886,13 @@ export const emitFunctions = (
     );
   };
   const typeName = (type: IRType<unknown>) => rsTypeOf(type).text;
+  // Helpers borrow strings from the caller's owned values; scalars stay by value.
+  const helperParameterType = (type: IRType<unknown>) =>
+    IRType.same(type, StringType) ? "&str" : typeName(type);
+  const helperArgument = (p: { readonly name: string; readonly type: IRType<unknown> }) =>
+    IRType.same(p.type, StringType)
+      ? `&*${Rs.ident(p.name).text}`
+      : Rs.identExpr(Rs.ident(p.name)).text;
   const write = (text: string | { readonly text: string }) =>
     writer.write(typeof text === "string" ? text : text.text);
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
@@ -1014,7 +1031,7 @@ export const emitFunctions = (
       const call = Rs.call(
         Rs.identExpr(Rs.ident(`h_${f.name}_${helper.index}`)),
         (f.asynchronous && helper.error ? [identExpr("ctx")] : []).concat(
-          helper.input.map((p) => Rs.identExpr(Rs.ident(p.name))),
+          helper.input.map((p) => Rs.verbatimExpr(helperArgument(p))),
           helper.files.map((name) => Rs.refExpr(identExpr(name))),
         ),
       );
@@ -1031,58 +1048,85 @@ export const emitFunctions = (
         ]);
       return callFrag(index, occurrence);
     };
-    const render = (e: RustExpr, role?: GeneratedRange["role"]): MappedFragment =>
-      mapFragment(
-        e.origin,
-        e.occurrence,
-        Match.value(e).pipe(
-          Match.tagsExhaustive({
-            Parameter: (n) => textFragment(Rs.ident(`p${n.index}`).text),
-            Bound: (n) => textFragment(Rs.ident(n.name).text),
-            Local: (n) => textFragment(Rs.ident(`v${n.index}`).text),
-            Literal: (n) => {
-              if (Predicate.isUndefined(n.value)) return textFragment(Rs.litUnit().text);
-              if (Predicate.isBigInt(n.value)) return textFragment(Rs.litU64(n.value).text);
-              if (Predicate.isBoolean(n.value)) return textFragment(Rs.litBool(n.value).text);
-              throw fail(
-                "UNSUPPORTED_REPRESENTATION",
-                "lower",
-                "literal",
-                "Literals require Boolean, u64 or Unit witnesses",
-              );
-            },
-            Call: (n) => {
-              if (n.method === "not") return joinFragments(["!(", render(n.args[0]), ")"]);
-              if (n.method === "eq" || n.method === "lt")
-                return joinFragments([
-                  "(",
-                  render(n.args[0]),
-                  n.method === "eq" ? ") == (" : ") < (",
-                  render(n.args[1]),
-                  ")",
-                ]);
-              return joinFragments([
-                "(",
-                render(n.args[0]),
-                `).${Rs.ident(n.method).text}(`,
-                render(n.args[1]),
-                ")",
-              ]);
-            },
-            Match: (n) =>
-              joinFragments([
-                "if ",
-                render(n.condition),
-                " { ",
-                callFrag(n.onTrue, n.onTrueUse),
-                " } else { ",
-                callFrag(n.onFalse, n.onFalseUse),
-                " }",
-              ]),
-          }),
-        ),
-        role,
-      );
+    const operand = (e: RustExpr): MappedFragment => {
+      if (!e.text || e._tag === "Call" || e._tag === "Match") return render(e);
+      if (e._tag === "Literal")
+        return mapFragment(
+          e.origin,
+          e.occurrence,
+          textFragment(Rs.stringLiteral(e.value as string).text),
+        );
+      return joinFragments(["&*", render(e, undefined, true)]);
+    };
+    const render = (
+      e: RustExpr,
+      role?: GeneratedRange["role"],
+      borrowed = false,
+    ): MappedFragment =>
+      e.text && !borrowed && e._tag !== "Call" && e._tag !== "Match"
+        ? e._tag === "Literal"
+          ? mapFragment(
+              e.origin,
+              e.occurrence,
+              textFragment(`String::from(${Rs.stringLiteral(e.value as string).text})`),
+              role,
+            )
+          : joinFragments(["(&*", render(e, role, true), ").to_owned()"])
+        : mapFragment(
+            e.origin,
+            e.occurrence,
+            Match.value(e).pipe(
+              Match.tagsExhaustive({
+                Parameter: (n) => textFragment(Rs.ident(`p${n.index}`).text),
+                Bound: (n) => textFragment(Rs.ident(n.name).text),
+                Local: (n) => textFragment(Rs.ident(`v${n.index}`).text),
+                Literal: (n) => {
+                  if (Predicate.isUndefined(n.value)) return textFragment(Rs.litUnit().text);
+                  if (Predicate.isBigInt(n.value)) return textFragment(Rs.litU64(n.value).text);
+                  if (Predicate.isBoolean(n.value)) return textFragment(Rs.litBool(n.value).text);
+                  if (Predicate.isString(n.value))
+                    return textFragment(Rs.stringLiteral(n.value).text);
+                  throw fail(
+                    "UNSUPPORTED_REPRESENTATION",
+                    "lower",
+                    "literal",
+                    "Literals require Boolean, u64 or Unit witnesses",
+                  );
+                },
+                Call: (n) => {
+                  if (n.method === "not") return joinFragments(["!(", operand(n.args[0]), ")"]);
+                  if (n.method === "eq" || n.method === "lt")
+                    return joinFragments([
+                      "(",
+                      operand(n.args[0]),
+                      n.method === "eq" ? ") == (" : ") < (",
+                      operand(n.args[1]),
+                      ")",
+                    ]);
+                  return joinFragments([
+                    "(",
+                    operand(n.args[0]),
+                    `).${Rs.ident(n.method).text}(`,
+                    ...n.args
+                      .slice(1)
+                      .flatMap((arg, i) => (i ? [", ", operand(arg)] : [operand(arg)])),
+                    ")",
+                  ]);
+                },
+                Match: (n) =>
+                  joinFragments([
+                    "if ",
+                    render(n.condition),
+                    " { ",
+                    callFrag(n.onTrue, n.onTrueUse),
+                    " } else { ",
+                    callFrag(n.onFalse, n.onFalseUse),
+                    " }",
+                  ]),
+              }),
+            ),
+            role,
+          );
     const renderBlock = (block: RustBlock): MappedFragment => {
       const parts: Array<string | MappedFragment> = ["{\n"];
       for (const binding of block.bindings) {
@@ -1539,7 +1583,7 @@ export const emitFunctions = (
           ),
           `(${(f.asynchronous && helper.error ? ["ctx: &mut AsyncContext"] : [])
             .concat(
-              helper.input.map((p) => `${Rs.ident(p.name).text}: ${rsTypeOf(p.type).text}`),
+              helper.input.map((p) => `${Rs.ident(p.name).text}: ${helperParameterType(p.type)}`),
               helper.files.map(
                 (name) =>
                   `${Rs.ident(name).text}: ${Rs.refType(Rs.pathType(rsSegments("std", "fs", "File"))).text}`,
@@ -1659,6 +1703,11 @@ export const emitFunctions = (
         Rs.letDiscard(Rs.unitType(), value),
         Rs.println(`${channel ? `${channel}:` : ""}unit`),
       );
+    if (IRType.same(type, StringType))
+      return Rs.printlnExpr(
+        `${channel ? `${channel}:` : ""}str:`,
+        Rs.call(identExpr("hex"), [Rs.refExpr(value)]),
+      );
     const prefix = channel
       ? `${channel}:${IRType.same(type, U64Type) ? "u64" : "bool"}:`
       : IRType.same(type, BoolType)
@@ -1667,23 +1716,25 @@ export const emitFunctions = (
     return Rs.printlnExpr(prefix, value);
   };
   const parseArg = (type: IRType<unknown>, index: number): RsExpr =>
-    IRType.same(type, UnitType)
-      ? Rs.inlineBlock(
-          Rs.if_(
-            Rs.cmp(Rs.index(identExpr("args"), index), "!=", Rs.stringLiteral("unit")),
-            Rs.inlineStmtBlock(Rs.stmt(Rs.return_(Rs.err(Rs.stringLiteral("invalid unit"))))),
-          ),
-          Rs.litUnit(),
-        )
-      : Rs.try_(
-          Rs.dotChain(Rs.index(identExpr("args"), index), [
-            { method: Rs.ident("parse"), args: [], turboTypes: [rsTypeOf(type)] },
-            {
-              method: Rs.ident("map_err"),
-              args: [Rs.closure(Rs.pat("_"), Rs.stringLiteral(`invalid ${rsTypeOf(type).text}`))],
-            },
-          ]),
-        );
+    IRType.same(type, StringType)
+      ? Rs.try_(Rs.call(identExpr("unhex"), [Rs.refExpr(Rs.index(identExpr("args"), index))]))
+      : IRType.same(type, UnitType)
+        ? Rs.inlineBlock(
+            Rs.if_(
+              Rs.cmp(Rs.index(identExpr("args"), index), "!=", Rs.stringLiteral("unit")),
+              Rs.inlineStmtBlock(Rs.stmt(Rs.return_(Rs.err(Rs.stringLiteral("invalid unit"))))),
+            ),
+            Rs.litUnit(),
+          )
+        : Rs.try_(
+            Rs.dotChain(Rs.index(identExpr("args"), index), [
+              { method: Rs.ident("parse"), args: [], turboTypes: [rsTypeOf(type)] },
+              {
+                method: Rs.ident("map_err"),
+                args: [Rs.closure(Rs.pat("_"), Rs.stringLiteral(`invalid ${rsTypeOf(type).text}`))],
+              },
+            ]),
+          );
   const callExpr = (f: LoweredModule["functions"][number]): RsExpr => {
     const call = Rs.pathCall(
       rsSegments("reffect_generated"),
@@ -1816,6 +1867,11 @@ export const emitFunctions = (
     ],
     Rs.ok(Rs.litUnit()),
   );
+  const usesStrings = module.functions.some((f) =>
+    [f.output, ...(f.node._tag === "Effect" ? [f.node.error] : []), ...f.input].some((type) =>
+      IRType.same(type, StringType),
+    ),
+  );
   const files = Object.freeze({
     "Cargo.toml":
       '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n' +
@@ -1823,7 +1879,7 @@ export const emitFunctions = (
         ? '\n[dependencies]\ntokio = { version = "=1.53.1", features = ["macros", "rt", "time", "sync"] }\n'
         : ""),
     "src/lib.rs": writer.text,
-    "src/main.rs": `${
+    "src/main.rs": `${usesStrings ? stringBoundary : ""}${
       (hasAsync
         ? Rs.withAttributes(
             [Rs.tokioMainAttribute()],
@@ -1840,3 +1896,18 @@ export const emitFunctions = (
   });
   return Object.freeze({ files, ranges: writer.ranges });
 };
+
+/** Runner boundary for strings: lowercase hex of UTF-8 bytes, so NUL and any text cross argv. */
+const stringBoundary = `fn hex(value: &str) -> String {
+    value.bytes().map(|b| format!("{:02x}", b)).collect()
+}
+fn unhex(value: &str) -> Result<String, &'static str> {
+    let digits = value.strip_prefix("str:").ok_or("invalid String")?;
+    if digits.len() % 2 != 0 { return Err("invalid String"); }
+    let bytes = (0..digits.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|_| "invalid String"))
+        .collect::<Result<Vec<u8>, _>>()?;
+    String::from_utf8(bytes).map_err(|_| "invalid String")
+}
+`;

@@ -144,7 +144,7 @@ const build = Effect.fn("Cargo.build")(function* (
 const run = Effect.fn("Cargo.run")(function* (
   directory: string,
   name: string,
-  args: readonly (bigint | boolean | undefined)[],
+  args: readonly (bigint | boolean | string | undefined)[],
   profile: "debug" | "release" = "debug",
 ) {
   return yield* execute(

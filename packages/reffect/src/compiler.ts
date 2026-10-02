@@ -37,6 +37,10 @@ import {
   EqU64,
   LtU64,
   EqBool,
+  EqString,
+  IncludesString,
+  ReplaceAllString,
+  StringType,
   NotBool,
   checkFunction,
   fail,
@@ -59,7 +63,15 @@ export interface Implementation {
   readonly capabilities: readonly Capability[];
   readonly crates: readonly string[];
   readonly rationale: string;
-  readonly method: "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "eq" | "lt" | "not";
+  readonly method:
+    | "wrapping_add"
+    | "wrapping_sub"
+    | "wrapping_mul"
+    | "eq"
+    | "lt"
+    | "not"
+    | "contains"
+    | "replace";
 }
 export class Target extends Pipeable.Class {
   private constructor(
@@ -103,6 +115,9 @@ const implementations = Object.freeze([
   implementation(LtU64 as AnyOperation, "lt"),
   implementation(EqBool as AnyOperation, "eq"),
   implementation(NotBool as AnyOperation, "not"),
+  implementation(EqString as AnyOperation, "eq"),
+  implementation(IncludesString as AnyOperation, "contains"),
+  implementation(ReplaceAllString as AnyOperation, "replace"),
 ]);
 const syncResultAdapter = Object.freeze({
   ref: SemanticRef.runtime("rust/std-result@1"),
@@ -135,6 +150,7 @@ export const Rust = Object.freeze({
       Capabilities.U64,
       Capabilities.Bool,
       Capabilities.Unit,
+      Capabilities.String,
       Capabilities.SyncResult,
       Capabilities.AsyncResult,
       Capabilities.ScopedFiles,
@@ -146,6 +162,7 @@ export const Rust = Object.freeze({
       Capabilities.U64,
       Capabilities.Bool,
       Capabilities.Unit,
+      Capabilities.String,
       Capabilities.SyncResult,
     ]),
   ),
@@ -482,7 +499,9 @@ const derive = Effect.fn("Compile.derive")(function* (
             ? [Capabilities.Bool]
             : IRType.same(type, UnitType)
               ? [Capabilities.Unit]
-              : [],
+              : IRType.same(type, StringType)
+                ? [Capabilities.String]
+                : [],
       ),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
       ...(Array.from(effectRefs).some((ref) =>
@@ -613,12 +632,16 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
       "Selected plan does not cover the reachable graph with verified implementations",
     );
   for (const type of expected.analysis.types) {
-    if (![U64Type, BoolType, UnitType, NeverType].some((builtin) => IRType.same(type, builtin)))
+    if (
+      ![U64Type, BoolType, UnitType, NeverType, StringType].some((builtin) =>
+        IRType.same(type, builtin),
+      )
+    )
       return yield* fail(
         "UNSUPPORTED_REPRESENTATION",
         "verify",
         type.id,
-        "Only canonical Boolean/u64/Unit/Never witnesses have registered native representations",
+        "Only canonical Boolean/u64/Unit/Never/String witnesses have registered native representations",
       );
   }
   for (const f of Object.values(expected.analysis.program.functions)) {

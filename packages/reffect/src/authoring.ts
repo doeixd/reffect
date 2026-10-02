@@ -1,6 +1,6 @@
 import { Source } from "./source.ts";
 import { flow } from "./flow.ts";
-import { Fn, Program, Expr, BoolType, U64Type, UnitType, NeverType } from "./kernel.ts";
+import { Fn, Program, Expr, BoolType, StringType, U64Type, UnitType, NeverType } from "./kernel.ts";
 import type { IRType, Symbols } from "./kernel.ts";
 import { Computation, EffectFn, EffectIR, LogIR, matchComputation } from "./effect-ir.ts";
 import { catchAll, mapError, orElse } from "./error-recovery.ts";
@@ -58,6 +58,7 @@ export const R = Object.freeze({
   Bool: BoolType,
   Unit: UnitType,
   Never: NeverType,
+  String: StringType,
   Match: Object.freeze({ bool }),
   Predicate: Object.freeze({
     not: BoolType.not,

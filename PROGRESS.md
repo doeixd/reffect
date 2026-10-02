@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-02 — Bounded well-formed string profile
+
+- Recorded [string decisions](docs/research/string-profile.md) (STR-001–005) after comparing JS UTF-16 and Rust UTF-8 semantics, ECMAScript `replaceAll`/`GetSubstitution`, and Effect v4 `String`. Added `R.String` (`reffect/string@1`, refusing lone surrogates at decode) with `literal`, `eq`, `includes` and literal-only `replaceAll` (non-empty search, no `$`), enforced by a new checked `Operation.withLiteralArguments`. Native lowering uses owned `String` at boundaries, `&str` in helpers and `str::contains`/`str::replace` with no crate; the native runner passes hex-encoded UTF-8. Delayed-cleanup string captures are refused.
+- Vendored pinned upstream Foldkit `escapeText`/`escapeAttributeValue` as a licensed fixture and ported them as R functions.
+- Validation (focused): `vp test packages/reffect/tests/string-profile.test.ts` passes 3/3. Upstream, reference and native debug/release (both frame policies) agree on the corpus; NUL fails; lone surrogates are refused at decode (20.9s native). Affected suites `compiler`, `effect`, `rust-emission-output`, `flow`, `unit`, `error-recovery` and `source` pass 39/39 in 7 files. Strict package TypeScript, workspace `vp check` and the build pass. The full suite was not run.
+
 ## 2026-10-02 — North-star review and Foldkit SSR inventory
 
 - Reviewed [docs/north_star.md](docs/north_star.md) and [docs/suggestions.txt](docs/suggestions.txt) against the roadmap in [the review record](docs/research/north-star-review.md). Verified the pinned upstream `foldkit/foldkit@0b2a4fd` SSR files and their small Effect surface; adopted corpus-driven priorities (NS-1), the codemod as syntax frontend (NS-2) and semantic foreign operations as registry entries (NS-3). Milestone 8's "unmodified upstream" acceptance/reordering (Q-1) and which Foldkit tree to target (Q-2) are left for the user.
