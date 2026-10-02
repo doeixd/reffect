@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Arrays, part A (pure structured iteration)
+
+- Searched architecture §6/§9/§10/§15/§27 and the Foldkit IR sketches, probed pinned `effect/Array`, `Effect.forEach` and `Schema.Array` decoding, and recorded [array decisions](docs/research/arrays.md) (ARR-001–006) first. Implemented `R.Array` with `make`/`empty`/`length` and dual `map`/`filter`/`reduce` (element and u64 index binders) as kernel `ArrayMake`/`ArrayLength`/`ArrayLoop` nodes. Native lowering emits one loop per operation over borrowed elements.
+- Validation (focused): `arrays.test.ts` 3/3 (reference vs `effect/Array`; native debug/release under both frame policies). `records`, `records-rpc`, `string-profile`, `effect`, `rust-emission-output`, `flow`, `compiler` and `scope-registration` pass 35/35 in 8 files. TypeScript 7 and 5.9 report no errors; `vp check` passes.
+
 ## 2026-10-02 — Records and tagged unions, part 2 (RPC codecs)
 
 - `NativeRpc` now recognizes contract Structs (with optional `identifier`) and `_tag`-literal unions recursively, maps them onto interned R witnesses, decodes whole or projected payloads, and encodes composite results and typed errors through generated serde_json codecs. Top-level messages come from Effect's default formatter at compile time; paths are appended natively. `CaseType` became an explicit interface after TypeScript 5.9 and 7 disagreed on the earlier `Omit` intersection.

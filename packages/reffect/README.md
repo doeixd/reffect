@@ -170,6 +170,18 @@ const label = R.fn([R.String], R.String, (cursor) =>
 
 Handlers may instead all return computations, which branches effectfully (typed failures, logging, suspension). Case constructors return the union type, which is narrower than Effect's case type. Native code uses generated Rust structs and an enum of case structs; composite values are borrowed by helpers and copied only where they escape. `NativeRpc` accepts contract `Schema.Struct`/`Schema.TaggedUnion` payloads, results and typed errors built from admitted codecs, with invalid-input messages matching the stock server. Native JSON keys are ordered alphabetically rather than in schema order. Arrays, records/maps, literal unions, optional fields and `NullOr` are not yet admitted. See [record decisions](../../docs/research/records-unions.md).
 
+## Arrays
+
+`R.Array(item)` mirrors `Schema.Array`; `R.Array.make`, `empty`, `length` and dual `map`, `filter` and `reduce` mirror `effect/Array`, with callbacks receiving the element and a u64 index. There are no user-written loops: each operation compiles to one generated Rust loop over borrowed elements.
+
+```ts
+const total = R.fn([R.U64, R.U64], R.U64, (a, b) =>
+  R.Array.make(a, b).pipe(R.Array.reduce(R.U64.literal(0n), (acc, x) => R.U64.add(acc, x))),
+);
+```
+
+Index access, `findFirst`, sorting, `append`/`concat`, effectful iteration and RPC array codecs are not admitted yet. See [array decisions](../../docs/research/arrays.md).
+
 ## Synchronous Effect profile
 
 ### Unit and result discarding

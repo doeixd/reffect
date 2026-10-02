@@ -345,6 +345,16 @@ const derive = Effect.fn("Compile.derive")(function* (
         },
         Make: (n) => n.fields.forEach(walk),
         Get: (n) => walk(n.value),
+        ArrayMake: (n) => n.elements.forEach(walk),
+        ArrayLength: (n) => walk(n.value),
+        ArrayLoop: (n) => {
+          walk(n.source);
+          walk(n.body);
+          Match.value(n.op).pipe(
+            Match.tag("Reduce", (reduce) => walk(reduce.init)),
+            Match.orElse(() => undefined),
+          );
+        },
         MatchTags: (n) => {
           walk(n.value);
           n.cases.forEach((c) => walk(c.body));

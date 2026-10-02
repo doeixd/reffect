@@ -97,6 +97,16 @@ export const analyzeScopes = (
             },
             Make: (n) => n.fields.forEach(visit),
             Get: (n) => visit(n.value),
+            ArrayMake: (n) => n.elements.forEach(visit),
+            ArrayLength: (n) => visit(n.value),
+            ArrayLoop: (n) => {
+              visit(n.source);
+              visit(n.body);
+              Match.value(n.op).pipe(
+                Match.tag("Reduce", (reduce) => visit(reduce.init)),
+                Match.orElse(() => undefined),
+              );
+            },
             MatchTags: (n) => {
               visit(n.value);
               n.cases.forEach((c) => visit(c.body));

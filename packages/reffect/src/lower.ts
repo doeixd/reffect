@@ -13,6 +13,7 @@ import {
   U64Type,
   UnitType,
   fail,
+  arrayItem,
   structLayout,
   unionCases,
 } from "./kernel.ts";
@@ -59,6 +60,21 @@ export type RustExpr = (
       readonly type: IRType<unknown>;
       readonly tag: string | undefined;
       readonly fields: readonly RustExpr[];
+    }
+  | { readonly _tag: "ArrayMake"; readonly elements: readonly RustExpr[] }
+  | { readonly _tag: "ArrayLength"; readonly value: RustExpr }
+  /** One generated loop per structured iteration (ARR-004). */
+  | {
+      readonly _tag: "ArrayLoop";
+      readonly op: "Map" | "Filter" | "Reduce";
+      readonly source: RustExpr;
+      readonly init: RustExpr | undefined;
+      readonly helper: number;
+      readonly use?: string;
+      readonly item: string;
+      readonly index: string;
+      readonly accumulator: string | undefined;
+      readonly itemCopy: boolean;
     }
   /** A field place; borrowed as an operand, cloned only in value positions. */
   | { readonly _tag: "Field"; readonly base: RustExpr; readonly field: string }
@@ -356,6 +372,16 @@ export function lowerFunctions(
               },
               Make: (n) => n.fields.forEach(expression),
               Get: (n) => expression(n.value),
+              ArrayMake: (n) => n.elements.forEach(expression),
+              ArrayLength: (n) => expression(n.value),
+              ArrayLoop: (n) => {
+                expression(n.source);
+                expression(n.body);
+                Match.value(n.op).pipe(
+                  Match.tag("Reduce", (reduce) => expression(reduce.init)),
+                  Match.orElse(() => undefined),
+                );
+              },
               MatchTags: (n) => {
                 expression(n.value);
                 n.cases.forEach((c) => expression(c.body));
@@ -509,6 +535,40 @@ export function lowerFunctions(
                   field: rustFieldNames(layout)[index],
                 });
               },
+              ArrayMake: (n): RustExpr =>
+                Object.freeze({
+                  _tag: "ArrayMake",
+                  elements: Object.freeze(
+                    n.elements.map((element, i) => expression(element, `${path}.elements[${i}]`)),
+                  ),
+                }),
+              ArrayLength: (n): RustExpr =>
+                Object.freeze({ _tag: "ArrayLength", value: expression(n.value, `${path}.value`) }),
+              ArrayLoop: (n): RustExpr => {
+                const item = arrayItem(n.source.type)!;
+                const withItem = caseScope(scope, n.item, item);
+                const withIndex = caseScope(withItem, n.index, U64Type);
+                const reduce = Match.value(n.op).pipe(
+                  Match.tag("Reduce", (op) => op),
+                  Match.orElse(() => undefined),
+                );
+                const loopScope = reduce
+                  ? caseScope(withIndex, reduce.accumulator, e.type)
+                  : withIndex;
+                const names = loopScope.input.slice(scope.input.length).map((p) => p.name);
+                return Object.freeze({
+                  _tag: "ArrayLoop",
+                  op: n.op._tag,
+                  source: expression(n.source, `${path}.source`),
+                  init: reduce ? expression(reduce.init, `${path}.init`) : undefined,
+                  helper: pureHelper(n.body, loopScope, `${path}.body`),
+                  use: provenance?.use(`${path}.body`),
+                  item: names[0],
+                  index: names[1],
+                  accumulator: names[2],
+                  itemCopy: item.traits.includes(Traits.Copyable),
+                });
+              },
               MatchTags: (n): RustExpr => {
                 const cases = unionCases(n.value.type) ?? [];
                 return Object.freeze({
@@ -538,6 +598,8 @@ export function lowerFunctions(
               Match: () => true,
               Make: () => true,
               MatchTags: () => true,
+              ArrayMake: () => true,
+              ArrayLoop: () => true,
             }),
             Match.orElse(() => false),
           );
@@ -1005,7 +1067,11 @@ export const emitFunctions = (
     if (IRType.same(type, BoolType)) return Rs.namedType("bool");
     if (IRType.same(type, UnitType)) return Rs.unitType();
     if (IRType.same(type, StringType)) return Rs.stringType();
-    if (type.layout) return Rs.namedType(type.native.type);
+    if (type.layout)
+      return Match.value(type.layout).pipe(
+        Match.tag("Array", (array) => Rs.genericType(Rs.namedType("Vec"), [rsTypeOf(array.item)])),
+        Match.orElse(() => Rs.namedType(type.native.type)),
+      );
     if (IRType.same(type, NeverType))
       return Rs.pathType([Rs.ident("std"), Rs.ident("convert"), Rs.ident("Infallible")]);
     throw fail(
@@ -1026,8 +1092,13 @@ export const emitFunctions = (
       casesOf(union).findIndex((c) => structLayout(c)?.tag === tag),
     );
   // Helpers borrow non-Copy values from their caller; scalars stay by value (REC-004).
-  const helperParameterType = (type: IRType<unknown>) =>
-    copyable(type) ? typeName(type) : IRType.same(type, StringType) ? "&str" : `&${typeName(type)}`;
+  // Read-only helpers take slices for arrays (architecture §15) and `&str` for strings.
+  const helperParameterType = (type: IRType<unknown>): string => {
+    if (copyable(type)) return typeName(type);
+    if (IRType.same(type, StringType)) return "&str";
+    const item = arrayItem(type);
+    return item ? `&[${typeName(item)}]` : `&${typeName(type)}`;
+  };
   // `&name` coerces from an owned value or an existing borrow alike.
   const helperArgument = (p: { readonly name: string; readonly type: IRType<unknown> }) =>
     copyable(p.type) ? Rs.ident(p.name).text : `&${Rs.ident(p.name).text}`;
@@ -1227,6 +1298,61 @@ export const emitFunctions = (
                 Parameter: (n) => textFragment(Rs.ident(`p${n.index}`).text),
                 Bound: (n) => textFragment(Rs.ident(n.name).text),
                 Local: (n) => textFragment(Rs.ident(`v${n.index}`).text),
+                ArrayMake: (n) =>
+                  n.elements.length === 0
+                    ? textFragment("Vec::new()")
+                    : joinFragments([
+                        "vec![",
+                        ...n.elements.flatMap((element, i) =>
+                          i ? [", ", render(element)] : [render(element)],
+                        ),
+                        "]",
+                      ]),
+                ArrayLength: (n) => joinFragments(["((", operand(n.value), ").len() as u64)"]),
+                ArrayLoop: (n) => {
+                  const item = Rs.ident(n.item).text;
+                  const index = Rs.ident(n.index).text;
+                  const header = ["{ let source = ", operand(n.source), "; "];
+                  const loop = `for (${index}, ${item}) in source.iter().enumerate() { let ${index}: u64 = ${index} as u64; ${n.itemCopy ? `let ${item} = *${item}; ` : ""}`;
+                  const call = callFrag(n.helper, n.use);
+                  const owned = n.itemCopy ? item : `${item}.clone()`;
+                  return Match.value(n.op).pipe(
+                    Match.when("Map", () =>
+                      joinFragments([
+                        ...header,
+                        "let mut out = Vec::with_capacity(source.len()); ",
+                        loop,
+                        "out.push(",
+                        call,
+                        "); } out }",
+                      ]),
+                    ),
+                    Match.when("Filter", () =>
+                      joinFragments([
+                        ...header,
+                        "let mut out = Vec::new(); ",
+                        loop,
+                        "if ",
+                        call,
+                        ` { out.push(${owned}); } } out }`,
+                      ]),
+                    ),
+                    Match.when("Reduce", () => {
+                      const acc = Rs.ident(n.accumulator!).text;
+                      return joinFragments([
+                        ...header,
+                        `let mut ${acc} = `,
+                        render(n.init!),
+                        "; ",
+                        loop,
+                        `${acc} = `,
+                        call,
+                        `; } ${acc} }`,
+                      ]);
+                    }),
+                    Match.exhaustive,
+                  );
+                },
                 // Places auto-deref through borrowed names.
                 Field: (n) => joinFragments([render(n.base, undefined, true), `.${n.field}`]),
                 Make: (n) => {
@@ -2154,6 +2280,7 @@ const writeCompositeTypes = (
       Match.tagsExhaustive({
         Struct: (struct) => struct.fields.forEach((field) => visit(field.type)),
         Union: (union) => union.cases.forEach(visit),
+        Array: (array) => visit(array.item),
       }),
     );
     const previous = names.get(type.native.type);
@@ -2210,6 +2337,7 @@ const writeCompositeTypes = (
               .map((c, i) => ` ${rustVariantName(structLayout(c)!.tag!, i)}(${c.native.type}),`)
               .join("")} }\n\n`,
           ),
+        Array: () => undefined,
       }),
     );
 };

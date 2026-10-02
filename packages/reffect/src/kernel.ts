@@ -158,7 +158,8 @@ export type Layout =
       readonly tag: string | undefined;
       readonly identifier: string | undefined;
     }
-  | { readonly _tag: "Union"; readonly cases: readonly IRType<unknown>[] };
+  | { readonly _tag: "Union"; readonly cases: readonly IRType<unknown>[] }
+  | { readonly _tag: "Array"; readonly item: IRType<unknown> };
 export class IRType<A> extends Pipeable.Class {
   protected constructor(
     readonly ref: SemanticRef<"type">,
@@ -357,7 +358,22 @@ export type Node =
       readonly _tag: "MatchTags";
       readonly value: Expr<unknown>;
       readonly cases: readonly MatchCase<Expr<unknown>>[];
+    }
+  | { readonly _tag: "ArrayMake"; readonly elements: readonly Expr<unknown>[] }
+  | { readonly _tag: "ArrayLength"; readonly value: Expr<unknown> }
+  /** Structured iteration (ARR-002); the compiler owns every loop. */
+  | {
+      readonly _tag: "ArrayLoop";
+      readonly op: ArrayOp;
+      readonly source: Expr<unknown>;
+      readonly item: symbol;
+      readonly index: symbol;
+      readonly body: Expr<unknown>;
     };
+export type ArrayOp =
+  | { readonly _tag: "Map" }
+  | { readonly _tag: "Filter" }
+  | { readonly _tag: "Reduce"; readonly init: Expr<unknown>; readonly accumulator: symbol };
 /** One exhaustive tagged-union case; `binder` names the case-struct value. */
 export interface MatchCase<Body> {
   readonly tag: string;
@@ -370,6 +386,14 @@ const asStruct = (type: IRType<unknown>): StructLayout | undefined =>
     ? undefined
     : Match.value(type.layout).pipe(
         Match.tag("Struct", (layout) => layout),
+        Match.orElse(() => undefined),
+      );
+/** The element witness of an array, or undefined for any other witness. */
+export const arrayItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
+  type.layout === undefined
+    ? undefined
+    : Match.value(type.layout).pipe(
+        Match.tag("Array", (layout) => layout.item),
         Match.orElse(() => undefined),
       );
 /** The case witnesses of a tagged union, or undefined for any other witness. */
@@ -453,6 +477,42 @@ export class Expr<A> extends Pipeable.Class {
         `Unknown field ${JSON.stringify(field)}`,
       );
     return new Expr(declared.type as IRType<A>, Object.freeze({ _tag: "Get", value, field }));
+  }
+  static arrayMake<A>(this: void, type: IRType<A>, elements: readonly Expr<unknown>[]): Expr<A> {
+    const item = arrayItem(type);
+    if (!item || elements.some((element) => !IRType.same(element.type, item)))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        "Array.make",
+        "Elements must share the array's item witness",
+      );
+    return new Expr(
+      type,
+      Object.freeze({ _tag: "ArrayMake", elements: Object.freeze([...elements]) }),
+    );
+  }
+  static arrayLength(this: void, value: Expr<unknown>): Expr<bigint> {
+    if (!arrayItem(value.type))
+      throw fail("TYPE_MISMATCH", "authoring", "Array.length", "length requires an array");
+    return new Expr(U64Type, Object.freeze({ _tag: "ArrayLength", value }));
+  }
+  /** `output` is the loop result: an array for map/filter, the accumulator for reduce. */
+  static arrayLoop<A>(
+    this: void,
+    op: ArrayOp,
+    output: IRType<A>,
+    source: Expr<unknown>,
+    item: symbol,
+    index: symbol,
+    body: Expr<unknown>,
+  ): Expr<A> {
+    if (!arrayItem(source.type))
+      throw fail("TYPE_MISMATCH", "authoring", "Array", "Iteration requires an array");
+    return new Expr(
+      output,
+      Object.freeze({ _tag: "ArrayLoop", op: Object.freeze(op), source, item, index, body }),
+    );
   }
   /** Exhaustive tagged-union branching; every case receives its case-struct value. */
   static matchTags<A>(
@@ -546,6 +606,36 @@ export class Expr<A> extends Pipeable.Class {
                   Object.freeze({ _tag: "Get", value, field: n.field }),
                   self.source,
                 );
+          },
+          ArrayMake: (n) => {
+            const elements = n.elements.map((element) => walk(element));
+            return elements.every((element, i) => element === n.elements[i])
+              ? self
+              : new Expr(
+                  self.type,
+                  Object.freeze({ _tag: "ArrayMake", elements: Object.freeze(elements) }),
+                  self.source,
+                );
+          },
+          ArrayLength: (n) => {
+            const value = walk(n.value);
+            return value === n.value
+              ? self
+              : new Expr(self.type, Object.freeze({ _tag: "ArrayLength", value }), self.source);
+          },
+          ArrayLoop: (n) => {
+            const source = walk(n.source);
+            const body = walk(n.body);
+            const op: ArrayOp = Match.value(n.op).pipe(
+              Match.tag("Reduce", (reduce): ArrayOp => {
+                const init = walk(reduce.init);
+                return init === reduce.init ? reduce : Object.freeze({ ...reduce, init });
+              }),
+              Match.orElse((other) => other),
+            );
+            return source === n.source && body === n.body && op === n.op
+              ? self
+              : new Expr(self.type, Object.freeze({ ...n, source, body, op }), self.source);
           },
           MatchTags: (n) => {
             const value = walk(n.value);
@@ -908,6 +998,45 @@ export const checkExpression = (
             add("TYPE_MISMATCH", at, "Field access differs from the declared layout");
           walk(n.value, `${at}.value`);
         },
+        ArrayMake: (n) => {
+          const item = arrayItem(e.type);
+          if (!item || n.elements.some((element) => !IRType.same(element.type, item)))
+            add("TYPE_MISMATCH", at, "Array elements differ from the item witness");
+          n.elements.forEach((element, i) => walk(element, `${at}.elements[${i}]`));
+        },
+        ArrayLength: (n) => {
+          if (!arrayItem(n.value.type) || !IRType.same(e.type, U64Type))
+            add("TYPE_MISMATCH", at, "Array length requires an array and yields u64");
+          walk(n.value, `${at}.value`);
+        },
+        ArrayLoop: (n) => {
+          const item = arrayItem(n.source.type);
+          walk(n.source, `${at}.source`);
+          if (!item) {
+            add("TYPE_MISMATCH", at, "Iteration requires an array");
+            return;
+          }
+          const nested = new Map(bindings);
+          nested.set(n.item, [item]);
+          nested.set(n.index, [U64Type]);
+          const valid = Match.value(n.op).pipe(
+            Match.tagsExhaustive({
+              Map: () => {
+                const out = arrayItem(e.type);
+                return out !== undefined && IRType.same(out, n.body.type);
+              },
+              Filter: () =>
+                IRType.same(e.type, n.source.type) && IRType.same(n.body.type, BoolType),
+              Reduce: (reduce) => {
+                nested.set(reduce.accumulator, [e.type]);
+                walk(reduce.init, `${at}.init`);
+                return IRType.same(reduce.init.type, e.type) && IRType.same(n.body.type, e.type);
+              },
+            }),
+          );
+          if (!valid) add("TYPE_MISMATCH", at, "Array iteration witnesses are inconsistent");
+          issues.push(...checkExpression(n.body, nested, `${at}.body`));
+        },
         MatchTags: (n) => {
           const unionTypes = unionCases(n.value.type);
           const tags = unionTypes?.map((c) => structLayout(c)?.tag);
@@ -1021,6 +1150,30 @@ export const evaluateExpression = (
           return value;
         },
         Get: (n) => (evaluate(n.value) as Record<string, unknown>)[n.field],
+        ArrayMake: (n) => n.elements.map(evaluate),
+        ArrayLength: (n) => BigInt((evaluate(n.value) as readonly unknown[]).length),
+        ArrayLoop: (n) => {
+          const items = evaluate(n.source) as readonly unknown[];
+          // Bodies run once per element, so each iteration gets its own evaluation cache.
+          const step = (item: unknown, i: number, extra?: readonly [symbol, unknown]) => {
+            const iteration = new Map(scope);
+            iteration.set(n.item, [item]);
+            iteration.set(n.index, [BigInt(i)]);
+            if (extra) iteration.set(extra[0], [extra[1]]);
+            return evaluateExpression(n.body, iteration);
+          };
+          return Match.value(n.op).pipe(
+            Match.tagsExhaustive({
+              Map: () => items.map((item, i) => step(item, i)),
+              Filter: () => items.filter((item, i) => step(item, i) as boolean),
+              Reduce: (reduce) =>
+                items.reduce(
+                  (acc: unknown, item, i) => step(item, i, [reduce.accumulator, acc]),
+                  evaluate(reduce.init),
+                ),
+            }),
+          );
+        },
         MatchTags: (n) => {
           const value = evaluate(n.value) as { readonly _tag: string };
           const selected = n.cases.find((c) => c.tag === value._tag)!;

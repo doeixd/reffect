@@ -25,6 +25,12 @@ Status: **accepted for implementation (2026-10-02)**, the next piece of the "Bef
 - **ARR-005 — RPC codec.** Recursive `Schema.Array(item)` decoding with `Expected array`, index path segments and first-error reporting; encoding produces JSON arrays. The native path chain gains an index segment.
 - **ARR-006 — runner.** Array signatures join composite signatures in being verified through `NativeRpc`; runner arms skip them (REC-006).
 
+## Part A delivered (2026-10-02)
+
+`R.Array(item)` (interned, `Vec<T>`), `R.Array.make`/`empty`/`length` and dual `map`/`filter`/`reduce` with element and u64 index binders, over kernel nodes `ArrayMake`, `ArrayLength` and `ArrayLoop` (op `Map`/`Filter`/`Reduce`). The reference evaluates each iteration with a fresh cache. Native lowering emits one loop per operation over borrowed elements (`&[T]` helper parameters; Copy elements are dereferenced), with `Vec::with_capacity` for `map` and an owned accumulator for `reduce`. `R.Array.length` replaces the callable's built-in, read-only (but configurable) function `length`.
+
+Evidence: [arrays.test.ts](../../packages/reffect/tests/arrays.test.ts) passes 3/3. Reference results equal `effect/Array` on u64, string, struct and union elements, index use and empty arrays; native debug/release under both frame policies agree. TypeScript 7 and 5.9 report no errors. Known extra copies: a `reduce` step that keeps its accumulator copies it, and filtered non-Copy elements are cloned into the output.
+
 ## Deferred
 
 Index access and `findFirst` (both need `Option`), sorting (ordering semantics), `append`/`concat`, non-empty array types, fixed-size arrays, loop fusion, concurrent `forEach`, records/maps and `Chunk`.

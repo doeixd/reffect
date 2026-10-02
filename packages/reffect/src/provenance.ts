@@ -55,6 +55,17 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       ],
       Make: (n) => n.fields.map((field, index) => [`fields[${index}]`, field] as const),
       Get: (n) => [edge("value", n.value)],
+      ArrayMake: (n) =>
+        n.elements.map((element, index) => [`elements[${index}]`, element] as const),
+      ArrayLength: (n) => [edge("value", n.value)],
+      ArrayLoop: (n) => [
+        edge("source", n.source),
+        ...Match.value(n.op).pipe(
+          Match.tag("Reduce", (reduce) => [edge("init", reduce.init)]),
+          Match.orElse(() => []),
+        ),
+        edge("body", n.body),
+      ],
       MatchTags: (n) => [
         edge("value", n.value),
         ...n.cases.map((c, index) => [`cases[${index}]`, c.body] as const),

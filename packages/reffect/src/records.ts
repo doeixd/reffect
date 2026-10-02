@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Match, Schema } from "effect";
 import { dual } from "effect/Function";
 import {
   Expr,
@@ -6,11 +6,13 @@ import {
   SemanticRef,
   Targets,
   Traits,
+  U64Type,
+  arrayItem,
   fail,
   structLayout,
   unionCases,
 } from "./kernel.ts";
-import type { Layout, MatchCase, StructLayout, Value } from "./kernel.ts";
+import type { ArrayOp, Layout, MatchCase, StructLayout, Value } from "./kernel.ts";
 import { Computation, joinType } from "./effect-ir.ts";
 import { RustIdent } from "./rust-emit.ts";
 
@@ -324,3 +326,134 @@ export const Struct = Object.assign(
 export const TaggedUnion = <const C extends { readonly [tag: string]: Fields }>(
   casesByTag: C,
 ): TaggedUnionType<C> => TaggedUnionType.of(casesByTag);
+
+/** `Schema.Array(item)`: a readonly array lowered to `Vec<T>` (ARR-001). */
+export class ArrayType<T> extends Composite<ReadonlyArray<T>> {
+  private constructor(readonly item: IRType<T>) {
+    super(
+      `reffect/array@1/${digest(item.id)}`,
+      freeze(Schema.Array(item.schema)) as unknown as Schema.Codec<ReadonlyArray<T>>,
+      `Vec<${item.native.type}>`,
+      { _tag: "Array", item },
+    );
+    Object.freeze(this);
+  }
+  static of<T>(item: IRType<T>): ArrayType<T> {
+    if (!(item instanceof IRType))
+      throw fail("TYPE_MISMATCH", "authoring", "Array", "Arrays require an item witness");
+    return intern(["array", item], () => new ArrayType(item));
+  }
+}
+const loop = <A>(
+  op: ArrayOp,
+  output: IRType<A>,
+  self: Expr<unknown>,
+  body: (item: Expr<any>, index: Expr<bigint>, accumulator?: Expr<any>) => Expr<unknown>,
+): Expr<A> => {
+  const item = arrayItem(self.type);
+  if (!item) throw fail("TYPE_MISMATCH", "authoring", "Array", "Iteration requires an array");
+  const itemBinder = Symbol("reffect/array/item");
+  const indexBinder = Symbol("reffect/array/index");
+  const accumulator = Match.value(op).pipe(
+    Match.tag("Reduce", (reduce) => Expr.parameter(output, reduce.accumulator, 0)),
+    Match.orElse(() => undefined),
+  );
+  return Expr.arrayLoop(
+    op,
+    output,
+    self,
+    itemBinder,
+    indexBinder,
+    body(Expr.parameter(item, itemBinder, 0), Expr.parameter(U64Type, indexBinder, 0), accumulator),
+  );
+};
+/** Effect `Array.map(self, (a, i) => b)`; the index is a u64. */
+const map: {
+  <A, B>(
+    f: (a: Expr<A>, i: Expr<bigint>) => Expr<B>,
+  ): (self: Expr<ReadonlyArray<A>>) => Expr<ReadonlyArray<B>>;
+  <A, B>(
+    self: Expr<ReadonlyArray<A>>,
+    f: (a: Expr<A>, i: Expr<bigint>) => Expr<B>,
+  ): Expr<ReadonlyArray<B>>;
+} = dual(
+  2,
+  (self: Expr<ReadonlyArray<unknown>>, f: (a: Expr<unknown>, i: Expr<bigint>) => Expr<unknown>) => {
+    let output: IRType<unknown> | undefined;
+    const itemBinder = Symbol("reffect/array/item");
+    const indexBinder = Symbol("reffect/array/index");
+    const item = arrayItem(self.type);
+    if (!item) throw fail("TYPE_MISMATCH", "authoring", "Array.map", "map requires an array");
+    const body = f(Expr.parameter(item, itemBinder, 0), Expr.parameter(U64Type, indexBinder, 0));
+    output = ArrayType.of(body.type);
+    return Expr.arrayLoop({ _tag: "Map" }, output, self, itemBinder, indexBinder, body);
+  },
+);
+/** Effect `Array.filter(self, (a, i) => boolean)`. */
+const filter: {
+  <A>(
+    predicate: (a: Expr<A>, i: Expr<bigint>) => Expr<boolean>,
+  ): (self: Expr<ReadonlyArray<A>>) => Expr<ReadonlyArray<A>>;
+  <A>(
+    self: Expr<ReadonlyArray<A>>,
+    predicate: (a: Expr<A>, i: Expr<bigint>) => Expr<boolean>,
+  ): Expr<ReadonlyArray<A>>;
+} = dual(
+  2,
+  (
+    self: Expr<ReadonlyArray<unknown>>,
+    predicate: (a: Expr<unknown>, i: Expr<bigint>) => Expr<boolean>,
+  ) => loop({ _tag: "Filter" }, self.type, self, (a, i) => predicate(a, i)),
+);
+/** Effect `Array.reduce(self, b, (b, a, i) => b)`. */
+const reduce: {
+  <A, B>(
+    b: Expr<B>,
+    f: (b: Expr<B>, a: Expr<A>, i: Expr<bigint>) => Expr<B>,
+  ): (self: Expr<ReadonlyArray<A>>) => Expr<B>;
+  <A, B>(
+    self: Expr<ReadonlyArray<A>>,
+    b: Expr<B>,
+    f: (b: Expr<B>, a: Expr<A>, i: Expr<bigint>) => Expr<B>,
+  ): Expr<B>;
+} = dual(
+  3,
+  (
+    self: Expr<ReadonlyArray<unknown>>,
+    b: Expr<unknown>,
+    f: (b: Expr<unknown>, a: Expr<unknown>, i: Expr<bigint>) => Expr<unknown>,
+  ) =>
+    loop(
+      { _tag: "Reduce", init: b, accumulator: Symbol("reffect/array/accumulator") },
+      b.type,
+      self,
+      (a, i, acc) => f(acc!, a, i),
+    ),
+);
+/** Effect `Array.make(...elements)`: at least one element, all sharing a witness. */
+const make = <A>(...elements: readonly [Expr<A>, ...Expr<A>[]]): Expr<ReadonlyArray<A>> =>
+  Expr.arrayMake(ArrayType.of(elements[0].type), elements);
+/** Effect `Array.empty()`; the item witness is explicit because there is no element. */
+const empty = <A>(item: IRType<A>): Expr<ReadonlyArray<A>> =>
+  Expr.arrayMake(ArrayType.of(item), []);
+/** Effect `Array.length`, as a u64. */
+const length = <A>(self: Expr<ReadonlyArray<A>>): Expr<bigint> => Expr.arrayLength(self);
+const arrayOf = <T>(item: IRType<T>): ArrayType<T> => ArrayType.of(item);
+// A function's own `length` is read-only but configurable; Effect's `Array.length` replaces it.
+Object.defineProperty(arrayOf, "length", { value: length, enumerable: true });
+export const ArrayIR: typeof arrayOf & {
+  readonly make: typeof make;
+  readonly empty: typeof empty;
+  readonly length: typeof length;
+  readonly map: typeof map;
+  readonly filter: typeof filter;
+  readonly reduce: typeof reduce;
+} = Object.freeze(
+  Object.assign(arrayOf as typeof arrayOf & { readonly length: typeof length }, {
+    make,
+    empty,
+    map,
+    filter,
+    reduce,
+  }),
+);
