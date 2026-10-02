@@ -28,7 +28,7 @@ The destination is a native executable serving Foldkit rendering, Effect RPC, Re
 
 ## Current state
 
-Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar brackets, static Context/Layer wiring, constrained scalar Schema inputs, bounded sequential resource Scope registration and per-invocation resource-bearing Layers are implemented extensions. General Schema, dynamic services, server-lifetime Layers and general Scope services remain open.
+Milestones 0 and 1 are implemented: scalar arithmetic and the separate encoded-primitive Foldkit Query adapter have native conformance. Milestone 2 has a bounded Boolean/u64/Unit/Never function and Effect profile, shared helpers, source artifacts, bounded failure frames and scoped logging. Milestone 3 is active: scalar unary HTTP RPC, stock clients and one checked bearer/principal projection work. Typed recovery, structured scalar brackets, static Context/Layer wiring, constrained scalar Schema inputs, bounded sequential resource Scope registration, per-invocation resource-bearing Layers and server-lifetime scalar RPC services with graceful shutdown are implemented extensions. General Schema, dynamic services/service objects and general Scope services remain open.
 
 The active slice is [suspended scalar RPC](docs/research/async-rpc.md): literal delay, owned execution context, cooperative cancellation and non-failing awaited `ensuring` cleanup. The bounded slice has reference/native conformance, real-socket and stock-client cancellation coverage, and measured layout/construction costs. [PROGRESS.md](PROGRESS.md) records completed evidence; the [package README](packages/reffect/README.md) describes shipped APIs.
 
@@ -44,7 +44,7 @@ These are roadmap names, **not implemented CLI target strings or a new public re
 | ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `rust:core`      | Pure scalar functions, Match, Result and the bounded synchronous Effect subset                                       | `Rust.std`, typed recovery and static providers; Query is a separate checked adapter                                      |
 | `rust:async`     | Core plus owned execution context, cancellation and the admitted finalization/resource subset                        | Sleep/Ensuring/scalar brackets/bounded sequential Scope registration through `Rust.tokio`; general Scope services pending |
-| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded HTTP/auth/input ranges, static and per-invocation resource Layers; dynamic/server-lifetime services pending       |
+| `rust:rpc`       | Async plus scalar unary RPC, checked middleware and request services; Services/Layers as separately verified entries | Bounded HTTP/auth/input ranges, per-invocation and server-lifetime scalar Layers; service objects pending                 |
 | `rust:remote`    | RPC plus Foldkit Remote contracts, portable validation and authorization                                             | Planned                                                                                                                   |
 | `rust:sql`       | Checked Query/storage semantics and SQLx; compose with Remote when needed                                            | Planned                                                                                                                   |
 | `rust:fullstack` | Remote/SQL plus streaming, live data, SSR and resume                                                                 | Planned                                                                                                                   |
@@ -79,17 +79,16 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Next: prepare server-lifetime Layers for RPC services (milestone 3B).**
-The [resource-bearing Layer profile](docs/research/resource-layer.md) is
-implemented per invocation: scoped `Layer.effect` acquisition, a provide-owned
-scope, fallible acquisition, shared/fresh/nested memo inheritance (matching
-`CurrentMemoMap`) and a registered-file size workload, all specialized into
-existing Scope IR. Every provide still acquires per invocation.
+**Next: choose between finishing milestone 3B and preparing milestone 4.**
+[Server-lifetime RPC services](docs/research/server-layer.md) are implemented:
+`NativeRpc.compile(..., { layer })` builds a layer once at startup, handlers
+receive scalar services through `bindServices`, and Ctrl-C/stdin-EOF shutdown
+interrupts and awaits in-flight requests before LIFO release. Remaining 3B
+gaps are services combined with protected procedures, non-scalar service
+values (service objects/methods) and shutdown deadlines.
 
-1. Research how RPC servers own Layers built once for the server lifetime (`Layer.launch`, `ManagedRuntime`, `RpcServer.layer` handler wiring) against pinned Effect before choosing an API.
-2. Decide native ownership for values that outlive one invocation: immutable shared state constructed at startup versus per-request acquisition, and how release runs at graceful shutdown.
-3. Compare reference/native acquisition count across requests, shutdown release order and cancellation of in-flight requests; measure startup/shared-state costs.
-4. Admit one server-lifetime provider path for the scalar RPC demo; keep dynamic registries, service methods and concurrent merge deferred.
+1. Review [north-star acceptance input](docs/north_star.md) and [runtime suggestions](docs/suggestions.txt) against this roadmap; record which claims change milestone order.
+2. Either close 3B by combining `bindServices` with `bindPrincipal`, or begin milestone 4 preparation: owned strings/records and the portable Schema subset that RemoteServer needs.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

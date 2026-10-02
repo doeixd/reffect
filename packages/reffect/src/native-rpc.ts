@@ -5,7 +5,9 @@ import { FailureFrames } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
 import type { GeneratedFiles } from "./cargo.ts";
-import { EffectFn, SyncEffects, isAsyncComputation } from "./effect-ir.ts";
+import { EffectFn, SyncEffects, isAsyncComputation, launch } from "./effect-ir.ts";
+import { Service } from "./context.ts";
+import { StaticLayer } from "./layer.ts";
 import {
   CompileError,
   BoolType,
@@ -33,6 +35,8 @@ export interface RpcBinding<F extends AnyFn = AnyFn> {
   readonly fn: F;
   readonly fields: readonly string[];
   readonly principal: boolean;
+  /** Server-lifetime services passed, in order, before the payload arguments. */
+  readonly services: readonly Service[];
 }
 type NativeValue<A> = [A] extends [never] ? never : [A] extends [undefined] ? void : A;
 type HandlerError<P extends Rpc.Any> = P extends {
@@ -69,6 +73,8 @@ export interface RpcArtifact extends GeneratedFiles {
     readonly id: "rust/axum-unary-json@1";
     readonly crates: readonly string[];
     readonly handlerProfile: "synchronous-scalars" | "suspended-scalars";
+    /** Server-lifetime service IDs in launch-tuple order; empty without a layer. */
+    readonly services: readonly string[];
     readonly auth:
       | {
           readonly middleware: string;
@@ -121,6 +127,7 @@ const bind = <F extends AnyFn, const Fields extends readonly string[] = readonly
     fn,
     fields: Object.freeze(Array.from(fields ?? [])) as unknown as Fields,
     principal: false,
+    services: Object.freeze([]),
   });
 /** Bind a protected handler with its canonical u64 principal before the payload arguments. */
 const bindPrincipal = <F extends AnyFn, const Fields extends readonly string[] = readonly []>(
@@ -131,6 +138,26 @@ const bindPrincipal = <F extends AnyFn, const Fields extends readonly string[] =
     fn,
     fields: Object.freeze(Array.from(fields ?? [])) as unknown as Fields,
     principal: true,
+    services: Object.freeze([]),
+  });
+/**
+ * Bind a public handler whose leading arguments are services built once by the server `layer`,
+ * like handlers closing over services in `RpcGroup.toLayer`.
+ */
+const bindServices = <
+  F extends AnyFn,
+  const Services extends readonly Service[],
+  const Fields extends readonly string[] = readonly [],
+>(
+  services: Services,
+  fn: F,
+  fields?: Fields,
+): RpcBinding<F> & { readonly fields: Fields; readonly principal: false } =>
+  Object.freeze({
+    fn,
+    fields: Object.freeze(Array.from(fields ?? [])) as unknown as Fields,
+    principal: false,
+    services: Object.freeze(Array.from(services)),
   });
 
 const compile = <Rpcs extends Rpc.Any>(
@@ -140,6 +167,8 @@ const compile = <Rpcs extends Rpc.Any>(
     readonly path?: string;
     readonly auth?: RpcBearer;
     readonly failureFrames?: FailureFramePolicy;
+    /** Built once at startup and released after in-flight requests on graceful shutdown. */
+    readonly layer?: StaticLayer<Service, unknown>;
   } = {},
 ): Effect.Effect<RpcArtifact, import("./kernel.ts").CompileError> =>
   Effect.gen(function* () {
@@ -172,6 +201,26 @@ const compile = <Rpcs extends Rpc.Any>(
         let protectedCount = 0;
         let ranges = false;
         const functions: Record<string, AnyFn> = {};
+        const layer = options.layer;
+        if (layer !== undefined && !(layer instanceof StaticLayer))
+          throw unsupported("layer", "Expected an R.Layer provider graph");
+        // Launch tuple positions, deduplicated by service ID in first-binding order.
+        const serverServices: Service[] = [];
+        const servicePosition = (service: Service, procedure: string): number => {
+          if (!(service instanceof Service))
+            throw unsupported(procedure, "Expected an R.Context service");
+          const index = serverServices.findIndex((known) => known.id === service.id);
+          if (index >= 0) {
+            if (!IRType.same(serverServices[index].type, service.type))
+              throw unsupported(procedure, "Service ID reused with a different witness");
+            return index;
+          }
+          if (!layer) throw unsupported(procedure, "Server services require a NativeRpc layer");
+          if (![U64Type, BoolType, UnitType].some((type) => IRType.same(service.type, type)))
+            throw unsupported(procedure, "Server services must be Boolean, u64 or Unit scalars");
+          serverServices.push(service);
+          return serverServices.length - 1;
+        };
         const arms = entries.map((definition, index) => {
           if (!Rpc.isRpc(definition)) throw unsupported("group", "Expected a stock RPC definition");
           const rpc: Rpc.AnyWithProps = definition;
@@ -196,6 +245,13 @@ const compile = <Rpcs extends Rpc.Any>(
               "Protected procedures require bindPrincipal; public procedures require bind",
             );
           if (protectedRpc) protectedCount++;
+          const services = binding.services ?? [];
+          if (protectedRpc && services.length)
+            throw unsupported(
+              procedure,
+              "Protected procedures cannot also bind server services yet",
+            );
+          const positions = services.map((service) => servicePosition(service, procedure));
           if (rpc.defectSchema.ast !== Schema.Defect().ast)
             throw unsupported(procedure, "Custom defect codecs are unsupported");
           const success = codec(rpc.successSchema.ast, `${procedure}.success`);
@@ -252,14 +308,15 @@ const compile = <Rpcs extends Rpc.Any>(
             if (binding.fields.length)
               throw unsupported(procedure, "Scalar payload bindings have no named fields");
             inputs =
-              kind === "unit" && fn.input.length === (protectedRpc ? 1 : 0)
+              kind === "unit" && fn.input.length === (protectedRpc ? 1 : 0) + services.length
                 ? []
                 : [{ name: "", codec: kind, range: u64RangeOf(payload) }];
           }
           if (inputs.some((input) => input.range !== undefined)) ranges = true;
-          const offset = protectedRpc ? 1 : 0;
+          const offset = (protectedRpc ? 1 : 0) + services.length;
           if (
             (protectedRpc && !IRType.same(fn.input[0], U64Type)) ||
+            services.some((service, i) => !IRType.same(fn.input[i], service.type)) ||
             fn.input.length !== inputs.length + offset ||
             inputs.some(
               (input, i) =>
@@ -357,9 +414,16 @@ const compile = <Rpcs extends Rpc.Any>(
             );
           }
           const asynchronous = fn instanceof EffectFn && isAsyncComputation(fn.body);
-          const arguments_ = (protectedRpc ? [local("principal")] : []).concat(
-            inputs.map((_input, i) => local(`arg_${i}`)),
+          positions.forEach((position, i) =>
+            statements.push(
+              Rs.verbatimStmt(
+                `let service_${i} = SERVICES.get().expect("services are published before serving").${position};`,
+              ),
+            ),
           );
+          const arguments_ = (protectedRpc ? [local("principal")] : [])
+            .concat(positions.map((_position, i) => local(`service_${i}`)))
+            .concat(inputs.map((_input, i) => local(`arg_${i}`)));
           if (asynchronous)
             statements.push(
               Rs.verbatimStmt(
@@ -407,12 +471,20 @@ const compile = <Rpcs extends Rpc.Any>(
           return { pat: Rs.stringPat(rpc._tag), body: Rs.block(statements, Rs.ok(result)) };
         });
         if (auth && protectedCount === 0) throw unsupported("auth", "Bearer adapter is unused");
+        if (layer)
+          functions.launch = EffectFn.make([], NeverType, layer.error, () =>
+            StaticLayer.provide(layer, (context) =>
+              launch(serverServices.map((service) => context.get(service))),
+            ),
+          );
         return {
           path,
           auth,
           ranges,
           program: Program.make(functions),
           arms,
+          layered: layer !== undefined,
+          services: serverServices.map((service) => service.id),
           asynchronous: Object.values(functions).some(
             (fn) => fn instanceof EffectFn && isAsyncComputation(fn.body),
           ),
@@ -548,6 +620,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
             clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined,
             prepared.asynchronous,
             prepared.ranges,
+            prepared.layered,
           ),
         ),
       ],
@@ -563,9 +636,11 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
           core.files["Cargo.toml"].split("\n[dependencies]")[0] +
           '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip"] }\n'.replace(
             '["macros", "rt", "net", "time", "sync"]',
-            prepared.asynchronous
-              ? '["macros", "rt", "net", "time", "sync"]'
-              : '["macros", "rt", "net"]',
+            prepared.layered
+              ? '["macros", "rt", "net", "time", "sync", "signal"]'
+              : prepared.asynchronous
+                ? '["macros", "rt", "net", "time", "sync"]'
+                : '["macros", "rt", "net"]',
           ) +
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : ""),
@@ -581,6 +656,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
           ),
         ),
         handlerProfile: prepared.asynchronous ? "suspended-scalars" : "synchronous-scalars",
+        services: Object.freeze(prepared.services),
         auth: prepared.auth
           ? Object.freeze({
               middleware: prepared.auth.middleware.key,
@@ -597,6 +673,7 @@ export const NativeRpc = Object.freeze({
   U64Json,
   bind,
   bindPrincipal,
+  bindServices,
   bearer: RpcBearer.make,
   compile,
 });

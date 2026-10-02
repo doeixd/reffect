@@ -374,6 +374,10 @@ const derive = Effect.fn("Compile.derive")(function* (
         Sleep: () => {
           effectRefs.add(AsyncEffects.Sleep);
         },
+        Launch: (n) => {
+          effectRefs.add(AsyncEffects.Launch);
+          n.values.forEach(walk);
+        },
         Repeat: (n) => {
           effectRefs.add(AsyncEffects.Repeat);
           walkComputation(n.body);

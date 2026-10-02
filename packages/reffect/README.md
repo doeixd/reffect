@@ -468,7 +468,25 @@ const size = R.Layer.provide(file, (ctx) => R.Effect.succeed(ctx.get(Size)));
 
 Layer registrations share the provide scope's proved 16-slot budget. Providers without retained registrations are not wrapped in a scope.
 
-This is lexical, per-invocation service wiring. Dynamic Effect requirements, arbitrary service objects/methods, concurrent resource merge and server-lifetime layers shared across separate invocations remain pending. See [Context/Layer decisions](../../docs/research/context-layer.md), [resource Layer decisions](../../docs/research/resource-layer.md) and [the module decision index](../../docs/effect-modules.md).
+This is lexical, per-invocation service wiring. Dynamic Effect requirements, arbitrary service objects/methods, concurrent resource merge and service objects remain pending; native RPC servers can build layers once for the server lifetime (below). See [Context/Layer decisions](../../docs/research/context-layer.md), [resource Layer decisions](../../docs/research/resource-layer.md) and [the module decision index](../../docs/effect-modules.md).
+
+### Server-lifetime RPC services
+
+Like `RpcGroup.toLayer`, a native server can build services once at startup and pass them to handlers:
+
+```ts
+const Base = R.Context.service("app/Base@1", R.U64);
+const add = R.fn([R.U64, R.U64], R.U64, R.Never, (base, step) =>
+  R.Effect.succeed(R.U64.add(base, step)),
+);
+const artifact = NativeRpc.compile(
+  Group,
+  { Add: NativeRpc.bindServices([Base], add, ["step"]) },
+  { layer: R.Layer.effect(Base, acquireBase) },
+);
+```
+
+The generated server runs the layer before binding its listener; scalar service values are copied into each handler call, and resources registered during acquisition stay owned by the startup task. A failed acquisition releases what it registered, prints a `reffect.rpc.startup@1` failure record and exits 1 without a ready record. On Ctrl-C, or stdin EOF when started with `--shutdown-on-stdin-eof`, the server stops accepting, interrupts and awaits in-flight requests (as `RpcServer` does), then releases server-lifetime registrations in reverse order and exits 0. Services must be Boolean, u64 or Unit; protected procedures cannot yet also bind services. Servers without a layer are unchanged. See [server-lifetime decisions](../../docs/research/server-layer.md).
 
 ## Constrained scalar RPC payloads
 

@@ -193,6 +193,11 @@ export const analyzeScopes = (
           return 0;
         },
         Sleep: () => 0,
+        Launch: (n) => {
+          if (cleanup) diagnostic("LAUNCH_CLEANUP", at, "Cleanup cannot launch a server lifetime");
+          n.values.forEach((value, index) => expression(value, `values.${index}`));
+          return 0;
+        },
         Log: (n) => {
           n.attributes.forEach(([, value]) => expression(value, "attributes"));
           return 0;

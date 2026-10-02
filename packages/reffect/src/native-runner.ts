@@ -204,6 +204,7 @@ const decodeFrames = (name: string, stderr: string) =>
           "annotate",
           "span",
           "sleep",
+          "launch",
           "catchAll",
           "ensuring",
           "scope",

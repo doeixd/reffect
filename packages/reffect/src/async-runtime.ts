@@ -4,9 +4,11 @@ export const asyncRuntime = (
   frames: boolean,
   scopeDepth = 0,
   scopeCapacity = 0,
+  launch?: string,
 ): string => `
 #[derive(Debug)]
 pub enum AsyncError<E> { Fail(E), Interrupted }
+${launch ? `pub type LaunchValues = ${launch};` : ""}
 ${
   scopeDepth
     ? `
@@ -30,6 +32,7 @@ pub struct AsyncContext {
     ${logging ? "annos: Vec<(&'static str, LogAttr)>, spans: Vec<(&'static str, std::time::Instant)>, request: Option<String>," : ""}
     ${frames ? "frames: Option<Box<FrameTrail>>," : ""}
     ${scopeDepth ? `scopes: [Option<ScopeFrame>; ${scopeDepth}], scope_depth: usize,` : ""}
+    ${launch ? "launch: Option<tokio::sync::oneshot::Sender<LaunchValues>>," : ""}
 }
 impl AsyncContext {
     pub fn new(cancellation: tokio::sync::watch::Receiver<bool>) -> Self {
@@ -37,12 +40,29 @@ impl AsyncContext {
             ${logging ? "annos: Vec::new(), spans: Vec::new(), request: None," : ""}
             ${frames ? "frames: None," : ""}
             ${scopeDepth ? "scopes: std::array::from_fn(|_| None), scope_depth: 0," : ""}
+            ${launch ? "launch: None," : ""}
         }
     }
     pub fn is_cancelled(&self) -> bool {
         self.interruptible && (*self.cancellation.borrow() || self.cancellation.has_changed().is_err())
     }
     ${logging ? "pub fn set_request(&mut self, request: String) { self.request = Some(request); }" : ""}
+    ${
+      launch
+        ? `/// The host receives the launch values once; the hold then waits like Effect.never.
+    pub fn set_launch(&mut self, sender: tokio::sync::oneshot::Sender<LaunchValues>) { self.launch = Some(sender); }
+    async fn launch<E>(&mut self, values: LaunchValues) -> AsyncError<E> {
+        if let Some(sender) = self.launch.take() { let _ = sender.send(values); }
+        loop {
+            if self.is_cancelled() { return AsyncError::Interrupted; }
+            // A dropped canceller is cancellation when interruptible; masked holds never resume.
+            if self.cancellation.changed().await.is_err() && !self.interruptible {
+                std::future::pending::<()>().await;
+            }
+        }
+    }`
+        : ""
+    }
     ${
       scopeDepth
         ? `

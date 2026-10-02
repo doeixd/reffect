@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-02 — Server-lifetime RPC services and graceful shutdown
+
+- Researched pinned RC.118 `RpcGroup.toLayer` (handlers built once in `Layer.effectContext`), `RpcServer.make` shutdown (interrupt and await in-flight request fibers before dependent layers release) and the generated Axum server, then recorded decisions SL-001–005 in [server-lifetime Layers](docs/research/server-layer.md) before implementation.
+- Added an internal `Launch` node (publish scalar values once, then wait like `Effect.never`), `NativeRpc.bindServices`, and `NativeRpc.compile(..., { layer })`. Layered servers run the layer before binding, copy scalar services into handlers from a set-once executable `OnceLock`, exit 1 with LIFO cleanup and a startup record on acquisition failure, and shut down on Ctrl-C or opt-in stdin EOF by interrupting/awaiting in-flight requests before releasing server-lifetime registrations. Servers without a layer are unchanged; `AsyncContext` gains launch fields only when reachable. Protected procedures cannot yet also bind services.
+- Validation (focused): `vp test packages/reffect/tests/server-layer.test.ts` passes 3/3 (official `RpcTest`/`toLayer` vs reference traces; refusals and unchanged no-layer output; debug/release native stock-client concurrency, shutdown order and startup failure, 48.6s). A mutation disabling the shutdown forwarder fails it. Affected suites `native-rpc`, `async-rpc`, `rpc-auth`, `rust-emission-output` and `async-effect` pass 11/11 in 5 files. Strict package TypeScript, workspace `vp check` and `vp run -r build` pass. The full suite was not run.
+
 ## 2026-10-02 — Per-invocation resource-bearing Layers
 
 - Researched pinned Effect 4.0.0-rc.118 `Layer.effect`/`fromBuild`/`MemoMap`/`provideLayer` source and ran official programs before implementation; decisions RL-001–006 are recorded in [resource-bearing Layers](docs/research/resource-layer.md). v4 has no `Layer.scoped`: `R.Layer.effect` acquisition may now retain `addFinalizer`/`acquireRelease`/`RegisteredFile` registrations and may fail; `R.Layer.provide` wraps resource-bearing graphs in a provide-owned scope (matching `scopedWith`), tracks acquisition errors in its error channel and accepts `{ local }`.

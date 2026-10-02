@@ -68,6 +68,7 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       FileScope: (n) => [edge("body", n.body), edge("afterClose", n.afterClose)],
       FileSize: () => [],
       Sleep: () => [],
+      Launch: (n) => n.values.map((value, index) => edge(`values.${index}`, value)),
       Repeat: (n) => [edge("body", n.body)],
       Retry: (n) => [edge("body", n.body)],
       Ensuring: (n) => [edge("body", n.body), edge("finalizer", n.finalizer)],

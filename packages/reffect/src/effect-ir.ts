@@ -21,6 +21,7 @@ import {
 import type { Diagnostic, Inputs, Symbols } from "./kernel.ts";
 import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
+import { LaunchHost } from "./launch-host.ts";
 import { analyzeScopes } from "./scope-analysis.ts";
 export { maxScopeFinalizers } from "./scope-analysis.ts";
 
@@ -43,6 +44,7 @@ export const AsyncEffects = Object.freeze({
   Repeat: SemanticRef.effect("reffect/effect/repeat-scheduled@1"),
   Retry: SemanticRef.effect("reffect/effect/retry-scheduled@1"),
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
+  Launch: SemanticRef.effect("reffect/effect/launch@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
   AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
   FileScope: SemanticRef.effect("reffect/effect/scoped-file@1"),
@@ -127,6 +129,7 @@ export type ComputationNode =
       readonly release: Computation<void, never>;
     }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
+  | { readonly _tag: "Launch"; readonly values: readonly Expr<unknown>[] }
   | {
       readonly _tag: "Ensuring";
       readonly body: Computation<unknown, unknown>;
@@ -244,6 +247,12 @@ export const substituteComputation = (
             : rebuild({ _tag: "RegisteredFile", path: n.path, binder: n.binder, body, afterClose });
         },
         Sleep: () => self,
+        Launch: (n) => {
+          const values = n.values.map(substituting);
+          return values.every((value, index) => value === n.values[index])
+            ? self
+            : rebuild({ _tag: "Launch", values });
+        },
         FileSize: () => self,
         Succeed: (n) => {
           const value = substituting(n.value);
@@ -362,6 +371,23 @@ const sleep = (milliseconds: number): Computation<void> => {
     );
   return Computation.make(UnitType, NeverType, { _tag: "Sleep", milliseconds });
 };
+const scalarLaunch = (type: IRType<unknown>): boolean =>
+  IRType.same(type, BoolType) || IRType.same(type, U64Type) || IRType.same(type, UnitType);
+/**
+ * Internal server-lifetime hold: hands scalar service values to the host once, then waits like
+ * Effect.never until interrupted. Not exported on R; NativeRpc stages it inside a provide.
+ */
+export const launch = (values: readonly Expr<unknown>[]): Computation<never, never> =>
+  Computation.make(NeverType, NeverType, { _tag: "Launch", values: Object.freeze([...values]) });
+const launchReference = (values: readonly unknown[]): Effect.Effect<never> =>
+  Effect.serviceOption(LaunchHost).pipe(
+    Effect.flatMap((host) =>
+      host._tag === "Some"
+        ? host.value.publish(values)
+        : Effect.die(new Error("Launch requires a LaunchHost in the reference")),
+    ),
+    Effect.andThen(Effect.never),
+  );
 const toEffectSchedule = (plan: SchedulePlan): Schedule.Schedule<unknown, unknown, never, never> =>
   Match.value(plan).pipe(
     Match.tagsExhaustive({
@@ -480,6 +506,7 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         FileScope: () => true,
         FileSize: () => true,
         Sleep: () => true,
+        Launch: () => true,
         Repeat: () => true,
         Retry: () => true,
         Ensuring: () => true,
@@ -703,6 +730,15 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
               at,
               "Sleep requires Unit/Never channels and an integer delay from 0 to 60000 milliseconds",
             );
+        },
+        Launch: (n) => {
+          if (!IRType.same(c.output, NeverType) || !IRType.same(c.error, NeverType))
+            add(at, "Launch requires Never channels");
+          n.values.forEach((value, index) => {
+            if (!scalarLaunch(value.type))
+              add(`${at}.values`, "Launch values require Boolean, u64 or Unit witnesses");
+            expression(value, `values.${index}`);
+          });
         },
         Repeat: (n) => {
           if (
@@ -955,6 +991,7 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
               },
             ),
           Sleep: (n) => Effect.sleep(n.milliseconds),
+          Launch: (n) => Effect.forEach(n.values, expression).pipe(Effect.flatMap(launchReference)),
           Repeat: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),
@@ -1035,6 +1072,7 @@ export interface LogicalFrame {
     | "annotate"
     | "span"
     | "sleep"
+    | "launch"
     | "repeat"
     | "retry"
     | "catchAll"
@@ -1124,6 +1162,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.release, `${path}.release`);
         },
         Sleep: () => {},
+        Launch: () => {},
         Repeat: (n) => adaptNode(n.body, `${path}.body`),
         Retry: (n) => adaptNode(n.body, `${path}.body`),
         Ensuring: (n) => {
@@ -1292,6 +1331,17 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               },
             ).pipe(Effect.mapError((failure) => outward(failure, "acquireUseRelease"))),
           Sleep: (n) => Effect.sleep(n.milliseconds),
+          Launch: (n) =>
+            Effect.forEach(n.values, (value, index) =>
+              expression(value, `${path}.values.${index}`),
+            ).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap(launchReference),
+            ),
           Repeat: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),

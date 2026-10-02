@@ -5,6 +5,7 @@ export const rpcRuntime = (
   frameCleanup?: RsStmt,
   asynchronous = false,
   ranges = false,
+  layered = false,
 ): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use serde_json::{json, Value};
@@ -90,7 +91,17 @@ fn same_id(a: &Value, b: &Value) -> bool {
 }
 ${
   asynchronous
-    ? asyncHttpRuntime
+    ? layered
+      ? asyncHttpRuntime
+          .replace(
+            "cancellation: Option<tokio::sync::watch::Sender<bool>>,",
+            "cancellation: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,",
+          )
+          .replace(
+            "    let (sender, response) = tokio::sync::oneshot::channel();",
+            shutdownForwarder + "    let (sender, response) = tokio::sync::oneshot::channel();",
+          )
+      : asyncHttpRuntime
     : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Value>) {
     let messages: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
@@ -113,7 +124,9 @@ ${
 }
 `
 }
-#[tokio::main(flavor = "current_thread")]
+${layered ? layeredMain : plainMain}`;
+
+const plainMain = String.raw`#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut address = "127.0.0.1".to_string();
@@ -133,6 +146,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
     axum::serve(listener, app).await?;
+    Ok(())
+}
+`;
+
+/** Server shutdown also cancels each in-flight request; the forwarder ends with the request. */
+const shutdownForwarder = String.raw`    let cancellation = std::sync::Arc::new(cancellation);
+    {
+        let forward = cancellation.clone();
+        let mut shutdown = SHUTDOWN.get().expect("shutdown is installed before serving").clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = shutdown.wait_for(|stop| *stop) => { let _ = forward.send(true); }
+                _ = forward.closed() => {}
+            }
+        });
+    }
+`;
+
+/**
+ * Server-lifetime services: the launch future acquires once and publishes scalar values before
+ * the listener binds. Shutdown interrupts and awaits in-flight requests (axum graceful shutdown
+ * waits for their responses), then cancels the launch so its Scope releases in LIFO order.
+ */
+const layeredMain = String.raw`static SERVICES: std::sync::OnceLock<reffect_generated::LaunchValues> = std::sync::OnceLock::new();
+static SHUTDOWN: std::sync::OnceLock<tokio::sync::watch::Receiver<bool>> = std::sync::OnceLock::new();
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let mut address = "127.0.0.1".to_string();
+    let mut port: u16 = 3000;
+    let mut stdin_shutdown = false;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--port" => port = args.next().ok_or("missing port")?.parse()?,
+            "--host" => address = args.next().ok_or("missing host")?,
+            "--shutdown-on-stdin-eof" => stdin_shutdown = true,
+            _ => return Err("unknown server argument".into()),
+        }
+    }
+    let state = load_state()?;
+    let (stop_launch, launch_cancellation) = tokio::sync::watch::channel(false);
+    let (publish, published) = tokio::sync::oneshot::channel();
+    let launch = tokio::spawn(async move {
+        let mut ctx = reffect_generated::AsyncContext::new(launch_cancellation);
+        ctx.set_launch(publish);
+        let _ = reffect_generated::r_launch(&mut ctx).await;
+    });
+    let Ok(services) = published.await else {
+        // Acquisition failed; the launch task has already awaited its LIFO cleanup.
+        let _ = launch.await;
+        eprintln!("{}", json!({"schema":"reffect.rpc.startup@1", "outcome":"failure"}));
+        std::process::exit(1);
+    };
+    let _ = SERVICES.set(services);
+    let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+    let _ = SHUTDOWN.set(shutdown_receiver);
+    let listener = tokio::net::TcpListener::bind((address.as_str(), port)).await?;
+    let address = listener.local_addr()?;
+    let mut app = Router::new().route(RPC_PATH, post(rpc));
+    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }
+    let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
+    println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
+    let signal = async move {
+        let stdin_eof = async {
+            if !stdin_shutdown { return std::future::pending::<()>().await; }
+            let (eof, closed) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+                let _ = eof.send(());
+            });
+            let _ = closed.await;
+        };
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = stdin_eof => {} }
+        let _ = shutdown.send(true);
+    };
+    axum::serve(listener, app).with_graceful_shutdown(signal).await?;
+    let _ = stop_launch.send(true);
+    let _ = launch.await;
     Ok(())
 }
 `;

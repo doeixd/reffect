@@ -114,6 +114,11 @@ type HelperBody =
       readonly release: number;
     }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
+  | {
+      readonly _tag: "Launch";
+      readonly values: readonly RustBlock[];
+      readonly types: readonly IRType<unknown>[];
+    }
   | { readonly _tag: "Ensuring"; readonly body: number; readonly finalizer: number }
   | { readonly _tag: "Pure"; readonly block: RustBlock }
   | { readonly _tag: "Succeed"; readonly block: RustBlock }
@@ -346,6 +351,7 @@ export function lowerFunctions(
               Fail: (n) => expression(n.error),
               Log: (n) => n.attributes.forEach(([, value]) => expression(value)),
               Sleep: () => {},
+              Launch: (n) => n.values.forEach(expression),
             }),
           );
         };
@@ -544,6 +550,13 @@ export function lowerFunctions(
               ),
             }),
             Sleep: (n): HelperBody => ({ _tag: "Sleep", milliseconds: n.milliseconds }),
+            Launch: (n): HelperBody => ({
+              _tag: "Launch",
+              values: Object.freeze(
+                n.values.map((value, i) => block(value, scope, `${path}.values.${i}`)),
+              ),
+              types: Object.freeze(n.values.map((value) => value.type)),
+            }),
             Repeat: (n): HelperBody => ({
               _tag: "Repeat",
               body: effectHelper(n.body, scope, error, `${path}.body`),
@@ -640,6 +653,7 @@ export function lowerFunctions(
                 Fail: () => false,
                 Log: () => false,
                 Sleep: () => true,
+                Launch: () => true,
                 Repeat: () => true,
                 Retry: () => true,
                 FileScope: () => true,
@@ -933,6 +947,7 @@ export const emitFunctions = (
             Fail: () => 0,
             Log: () => 0,
             Sleep: () => 0,
+            Launch: () => 0,
           }),
         );
         memo.set(index, result);
@@ -965,7 +980,24 @@ export const emitFunctions = (
     );
     write("\n");
   }
-  if (hasAsync) write(asyncRuntime(hasLogScopes, captureFrames, scopeDepth, maxScopeFinalizers));
+  // One server-lifetime hold per module; its values cross to the host as one owned tuple.
+  const launches = module.functions.flatMap((f) =>
+    f.helpers.flatMap((helper) => (helper.body._tag === "Launch" ? [helper.body.types] : [])),
+  );
+  const launchTypes = launches[0];
+  if (
+    launches.some(
+      (types) =>
+        types.length !== launchTypes!.length ||
+        types.some((type, i) => !IRType.same(type, launchTypes![i])),
+    )
+  )
+    throw fail("LAUNCH_SIGNATURE", "lower", "launch", "Launch holds must publish one tuple shape");
+  const launchTuple = launchTypes
+    ? `(${launchTypes.map((type) => `${rsTypeOf(type).text}, `).join("")})`
+    : undefined;
+  if (hasAsync)
+    write(asyncRuntime(hasLogScopes, captureFrames, scopeDepth, maxScopeFinalizers, launchTuple));
   for (const f of module.functions) {
     const record = (helper: Helper): string => {
       const registration = registrationByHelper.get(helper)!;
@@ -1272,6 +1304,16 @@ export const emitFunctions = (
                 ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
                 : "Err(error) => Err(error)",
               " } }",
+            ]),
+          Launch: (n) =>
+            joinFragments([
+              "{ let error = ctx.launch((",
+              ...n.values.flatMap((value) => [renderBlock(value), ", "]),
+              ")).await; ",
+              captureFrames
+                ? `Err((error, FrameTrail::new(${frameOf(helper, "launch").text})))`
+                : "Err(error)",
+              " }",
             ]),
           Repeat: (n) =>
             joinFragments([
