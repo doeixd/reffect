@@ -1,7 +1,7 @@
 import { Match } from "effect";
 import type { Computation } from "./effect-ir.ts";
 import type { Diagnostic } from "./kernel.ts";
-import { IRType, StringType } from "./kernel.ts";
+import { IRType, Traits } from "./kernel.ts";
 import type { Expr } from "./kernel.ts";
 import { FileHandleType } from "./file-model.ts";
 import type { SchedulePlan } from "./schedule.ts";
@@ -80,11 +80,12 @@ export const analyzeScopes = (
         Match.value(value.node).pipe(
           Match.tagsExhaustive({
             Parameter: () => {
-              if (IRType.same(value.type, StringType))
+              // Registration records hold owned scalar captures only (STR-005, REC-004).
+              if (!value.type.traits.includes(Traits.Copyable))
                 diagnostic(
                   "RESOURCE_ESCAPE",
                   `${at}.${edge}`,
-                  "Delayed cleanup cannot capture strings in this profile",
+                  "Delayed cleanup cannot capture strings or composite values in this profile",
                 );
             },
             Literal: () => {},
@@ -93,6 +94,12 @@ export const analyzeScopes = (
               visit(n.condition);
               visit(n.onTrue);
               visit(n.onFalse);
+            },
+            Make: (n) => n.fields.forEach(visit),
+            Get: (n) => visit(n.value),
+            MatchTags: (n) => {
+              visit(n.value);
+              n.cases.forEach((c) => visit(c.body));
             },
           }),
         );

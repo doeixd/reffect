@@ -89,7 +89,7 @@ closed the current 3B workload. The [north-star review](docs/research/north-star
 is context only; the roadmap order stands.
 
 1. Done: `NativeRpc.StringJson` payloads/results match the official server ([STR-006/007](docs/research/string-profile.md#rpc-boundary-2026-10-02)).
-2. Search existing designs first ([Foldkit Remote](docs/foldkit-remote.md), [RPC protocol](docs/rpc-protocol.md), [Foldkit IR](docs/foldkit-ir-design.md), [architecture](docs/architecture.md)), then record decisions for records/structs and explicit tagged unions as RemoteServer needs them.
+2. In progress: [records and tagged unions](docs/research/records-unions.md). Expression-level structs/unions are implemented (part 1a); next are effectful union branching (1b) and RPC codecs with exact invalid-input parity (2).
 3. Derive the portable Schema subset and wire validation from the Remote contracts before admitting a RemoteServer path.
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.

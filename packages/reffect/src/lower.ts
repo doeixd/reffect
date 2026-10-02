@@ -4,7 +4,19 @@ import { SourceWriter, joinFragments, mapFragment, textFragment } from "./source
 import type { MappedFragment } from "./source-writer.ts";
 import type { GeneratedRange } from "./source-artifact.ts";
 import { Match, Predicate } from "effect";
-import { BoolType, IRType, NeverType, StringType, U64Type, UnitType, fail } from "./kernel.ts";
+import {
+  BoolType,
+  IRType,
+  NeverType,
+  StringType,
+  Traits,
+  U64Type,
+  UnitType,
+  fail,
+  structLayout,
+  unionCases,
+} from "./kernel.ts";
+import { rustFieldNames, rustVariantName } from "./records.ts";
 import type { Expr, OperationRef, Program } from "./kernel.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
@@ -42,11 +54,34 @@ export type RustExpr = (
       readonly onTrueUse?: string;
       readonly onFalseUse?: string;
     }
+  | {
+      readonly _tag: "Make";
+      readonly type: IRType<unknown>;
+      readonly tag: string | undefined;
+      readonly fields: readonly RustExpr[];
+    }
+  /** A field place; borrowed as an operand, cloned only in value positions. */
+  | { readonly _tag: "Field"; readonly base: RustExpr; readonly field: string }
+  | {
+      readonly _tag: "MatchTags";
+      readonly union: IRType<unknown>;
+      readonly scrutinee: RustExpr;
+      readonly cases: readonly {
+        readonly tag: string;
+        readonly path: string;
+        readonly binder: string;
+        readonly helper: number;
+        readonly use?: string;
+      }[];
+    }
 ) & {
   readonly origin?: string;
   readonly occurrence?: string;
-  /** Owned-string value: operands borrow it, value positions take an owned copy (STR-002). */
-  readonly text?: true;
+  /**
+   * Non-Copy value (STR-002, REC-004): names are borrows, locals are owned, operands borrow
+   * and value positions take an owned copy.
+   */
+  readonly owned?: true;
 };
 export const RustExpr = Object.freeze({
   parameter: (index: number): RustExpr => Object.freeze({ _tag: "Parameter", index }),
@@ -276,6 +311,18 @@ export function lowerFunctions(
           fileInputs: scope.fileInputs,
         };
       };
+      let caseBinders = 0;
+      const caseScope = (scope: Scope, binder: symbol, type: IRType<unknown>): Scope => {
+        const parameter = Object.freeze({ name: `m${caseBinders++}`, type });
+        const bindings = new Map(scope.bindings);
+        bindings.set(binder, [parameter]);
+        return {
+          bindings,
+          input: Object.freeze(scope.input.concat([parameter])),
+          files: scope.files,
+          fileInputs: scope.fileInputs,
+        };
+      };
       // Only external parameters used by cleanup need to survive until scope close.
       const delayedScope = (scope: Scope, finalizer: Computation<unknown, unknown>): Scope => {
         const captures = new Set<Parameter>();
@@ -296,6 +343,12 @@ export function lowerFunctions(
                 expression(n.condition);
                 expression(n.onTrue);
                 expression(n.onFalse);
+              },
+              Make: (n) => n.fields.forEach(expression),
+              Get: (n) => expression(n.value),
+              MatchTags: (n) => {
+                expression(n.value);
+                n.cases.forEach((c) => expression(c.body));
               },
             }),
           );
@@ -424,16 +477,60 @@ export function lowerFunctions(
                   onFalse: pureHelper(n.onFalse, scope, `${path}.onFalse`),
                   onFalseUse: provenance?.use(`${path}.onFalse`),
                 }),
+              Make: (n): RustExpr =>
+                Object.freeze({
+                  _tag: "Make",
+                  type: e.type,
+                  tag: n.tag,
+                  fields: Object.freeze(
+                    n.fields.map((field, i) => expression(field, `${path}.fields[${i}]`)),
+                  ),
+                }),
+              Get: (n): RustExpr => {
+                const layout = structLayout(n.value.type)!;
+                const index = layout.fields.findIndex((f) => f.name === n.field);
+                return Object.freeze({
+                  _tag: "Field",
+                  base: expression(n.value, `${path}.value`),
+                  field: rustFieldNames(layout)[index],
+                });
+              },
+              MatchTags: (n): RustExpr => {
+                const cases = unionCases(n.value.type) ?? [];
+                return Object.freeze({
+                  _tag: "MatchTags",
+                  union: n.value.type,
+                  scrutinee: expression(n.value, `${path}.value`),
+                  cases: Object.freeze(
+                    n.cases.map((c, i) => {
+                      const caseType = cases.find((t) => structLayout(t)?.tag === c.tag)!;
+                      const nested = caseScope(scope, c.binder, caseType);
+                      return Object.freeze({
+                        tag: c.tag,
+                        path: `${path}.cases[${i}]`,
+                        binder: nested.input[nested.input.length - 1].name,
+                        helper: pureHelper(c.body, nested, `${path}.cases[${i}]`),
+                        use: provenance?.use(`${path}.cases[${i}]`),
+                      });
+                    }),
+                  ),
+                });
+              },
             }),
           );
           const local = Match.value(e.node).pipe(
-            Match.tags({ Apply: () => true, Match: () => true }),
+            Match.tags({
+              Apply: () => true,
+              Match: () => true,
+              Make: () => true,
+              MatchTags: () => true,
+            }),
             Match.orElse(() => false),
           );
-          const owned = local ? RustExpr.local(bindings.length) : value;
-          const reference = IRType.same(e.type, StringType)
-            ? Object.freeze({ ...owned, text: true as const })
-            : owned;
+          const plain = local ? RustExpr.local(bindings.length) : value;
+          const reference = e.type.traits.includes(Traits.Copyable)
+            ? plain
+            : Object.freeze({ ...plain, owned: true as const });
           const result = provenance ? Object.freeze({ ...reference, ...source }) : reference;
           if (local)
             bindings.push(
@@ -876,6 +973,7 @@ export const emitFunctions = (
     if (IRType.same(type, BoolType)) return Rs.namedType("bool");
     if (IRType.same(type, UnitType)) return Rs.unitType();
     if (IRType.same(type, StringType)) return Rs.stringType();
+    if (type.layout) return Rs.namedType(type.native.type);
     if (IRType.same(type, NeverType))
       return Rs.pathType([Rs.ident("std"), Rs.ident("convert"), Rs.ident("Infallible")]);
     throw fail(
@@ -886,13 +984,21 @@ export const emitFunctions = (
     );
   };
   const typeName = (type: IRType<unknown>) => rsTypeOf(type).text;
-  // Helpers borrow strings from the caller's owned values; scalars stay by value.
+  const copyable = (type: IRType<unknown>) => type.traits.includes(Traits.Copyable);
+  const casesOf = (union: IRType<unknown>) => unionCases(union) ?? [];
+  const caseOf = (union: IRType<unknown>, tag: string) =>
+    casesOf(union).find((c) => structLayout(c)?.tag === tag)!;
+  const variantOf = (union: IRType<unknown>, tag: string) =>
+    rustVariantName(
+      tag,
+      casesOf(union).findIndex((c) => structLayout(c)?.tag === tag),
+    );
+  // Helpers borrow non-Copy values from their caller; scalars stay by value (REC-004).
   const helperParameterType = (type: IRType<unknown>) =>
-    IRType.same(type, StringType) ? "&str" : typeName(type);
+    copyable(type) ? typeName(type) : IRType.same(type, StringType) ? "&str" : `&${typeName(type)}`;
+  // `&name` coerces from an owned value or an existing borrow alike.
   const helperArgument = (p: { readonly name: string; readonly type: IRType<unknown> }) =>
-    IRType.same(p.type, StringType)
-      ? `&*${Rs.ident(p.name).text}`
-      : Rs.identExpr(Rs.ident(p.name)).text;
+    copyable(p.type) ? Rs.ident(p.name).text : `&${Rs.ident(p.name).text}`;
   const write = (text: string | { readonly text: string }) =>
     writer.write(typeof text === "string" ? text : text.text);
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
@@ -1020,6 +1126,7 @@ export const emitFunctions = (
     : undefined;
   if (hasAsync)
     write(asyncRuntime(hasLogScopes, captureFrames, scopeDepth, maxScopeFinalizers, launchTuple));
+  writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
     const record = (helper: Helper): string => {
       const registration = registrationByHelper.get(helper)!;
@@ -1053,40 +1160,31 @@ export const emitFunctions = (
         ]);
       return callFrag(index, occurrence);
     };
-    // Strings (STR-002): named values are borrowed as operands and copied into value
-    // positions; literals render as `&'static str`; calls and matches already yield owned values.
-    const borrowedName = (e: RustExpr): boolean =>
-      Match.value(e).pipe(
-        Match.tagsExhaustive({
-          Parameter: () => true,
-          Bound: () => true,
-          Local: () => true,
-          Literal: () => false,
-          Call: () => false,
-          Match: () => false,
-        }),
-      );
+    // Non-Copy values (STR-002, REC-004): names are borrows and computed locals are owned.
+    // Operands borrow; value positions take an owned copy; literals render as `&'static str`.
     const operand = (e: RustExpr): MappedFragment =>
-      !e.text
+      !e.owned
         ? render(e)
-        : borrowedName(e)
-          ? joinFragments(["&*", render(e, undefined, true)])
-          : render(e, undefined, true);
-    const render = (
-      e: RustExpr,
-      role?: GeneratedRange["role"],
-      borrowed = false,
-    ): MappedFragment =>
-      e.text && !borrowed
+        : Match.value(e).pipe(
+            Match.tags({
+              Local: (n) => joinFragments(["&", render(n, undefined, true)]),
+              Field: (n) => joinFragments(["&", render(n, undefined, true)]),
+            }),
+            Match.orElse((n) => render(n, undefined, true)),
+          );
+    const render = (e: RustExpr, role?: GeneratedRange["role"], plain = false): MappedFragment =>
+      e.owned && !plain
         ? Match.value(e).pipe(
             Match.tag("Literal", (n) =>
               joinFragments(["String::from(", render(n, role, true), ")"]),
             ),
-            Match.orElse((n) =>
-              borrowedName(n)
-                ? joinFragments(["(&*", render(n, role, true), ").to_owned()"])
-                : render(n, role, true),
-            ),
+            Match.tags({
+              Parameter: (n) => joinFragments([render(n, role, true), ".to_owned()"]),
+              Bound: (n) => joinFragments([render(n, role, true), ".to_owned()"]),
+              Local: (n) => joinFragments([render(n, role, true), ".clone()"]),
+              Field: (n) => joinFragments(["(", render(n, role, true), ").clone()"]),
+            }),
+            Match.orElse((n) => render(n, role, true)),
           )
         : mapFragment(
             e.origin,
@@ -1096,6 +1194,37 @@ export const emitFunctions = (
                 Parameter: (n) => textFragment(Rs.ident(`p${n.index}`).text),
                 Bound: (n) => textFragment(Rs.ident(n.name).text),
                 Local: (n) => textFragment(Rs.ident(`v${n.index}`).text),
+                // Places auto-deref through borrowed names.
+                Field: (n) => joinFragments([render(n.base, undefined, true), `.${n.field}`]),
+                Make: (n) => {
+                  const layout = structLayout(n.type, n.tag)!;
+                  const names = rustFieldNames(layout);
+                  const caseType = n.tag === undefined ? n.type : caseOf(n.type, n.tag);
+                  const body = joinFragments([
+                    `${typeName(caseType)} { `,
+                    ...n.fields.flatMap((field, i) => [`${names[i]}: `, render(field), ", "]),
+                    "}",
+                  ]);
+                  return n.tag === undefined
+                    ? body
+                    : joinFragments([
+                        `${typeName(n.type)}::${variantOf(n.type, n.tag)}(`,
+                        body,
+                        ")",
+                      ]);
+                },
+                MatchTags: (n) =>
+                  joinFragments([
+                    "match ",
+                    operand(n.scrutinee),
+                    " { ",
+                    ...n.cases.flatMap((c) => [
+                      `${typeName(n.union)}::${variantOf(n.union, c.tag)}(${Rs.ident(c.binder).text}) => `,
+                      callFrag(c.helper, c.use),
+                      ", ",
+                    ]),
+                    "}",
+                  ]),
                 Literal: (n) => {
                   if (Predicate.isUndefined(n.value)) return textFragment(Rs.litUnit().text);
                   if (Predicate.isBigInt(n.value)) return textFragment(Rs.litU64(n.value).text);
@@ -1498,7 +1627,7 @@ export const emitFunctions = (
             joinFragments([
               "{ match ",
               callFrag(n.source, use("source")),
-              ` { Ok(${Rs.ident(n.binder).text}) => Ok(`,
+              ` { Ok(${copyable(f.helpers[n.source].output) ? "" : "ref "}${Rs.ident(n.binder).text}) => Ok(`,
               renderBlock(n.block),
               `), ${failureArm(helper, "map")} } }`,
             ]),
@@ -1658,7 +1787,17 @@ export const emitFunctions = (
         " ",
         Match.value(f.node).pipe(
           Match.tagsExhaustive({
-            Pure: (n) => renderBlock(n.block),
+            Pure: (n) =>
+              f.input.some((type) => !copyable(type))
+                ? joinFragments([
+                    "{ ",
+                    ...f.input.flatMap((type, i) =>
+                      copyable(type) ? [] : [`let p${i}: ${helperParameterType(type)} = &p${i}; `],
+                    ),
+                    renderBlock(n.block),
+                    " }",
+                  ])
+                : renderBlock(n.block),
             // Public functions separate typed/interrupted outcomes from observer-owned frames.
             Effect: (n) =>
               captureFrames
@@ -1810,7 +1949,15 @@ export const emitFunctions = (
         "}",
       ),
     );
-  const arms = module.functions.map((f) => ({
+  const runnable = (f: LoweredModule["functions"][number]) =>
+    [
+      f.output,
+      ...Match.value(f.node).pipe(
+        Match.tagsExhaustive({ Pure: () => [], Effect: (n) => [n.error] }),
+      ),
+      ...f.input,
+    ].every((type) => type.layout === undefined);
+  const arms = module.functions.filter(runnable).map((f) => ({
     pat: Rs.stringPat(f.name),
     guard: Rs.cmp(
       Rs.dotCall(identExpr("args"), Rs.ident("len"), []),
@@ -1941,3 +2088,79 @@ fn unhex(value: &str) -> Result<String, &'static str> {
     String::from_utf8(bytes).map_err(|_| "invalid String")
 }
 `;
+
+/** Struct and enum definitions for every reachable composite witness, dependencies first. */
+const writeCompositeTypes = (
+  module: LoweredModule,
+  write: (text: string) => void,
+  typeName: (type: IRType<unknown>) => string,
+): void => {
+  const ordered: IRType<unknown>[] = [];
+  const seen = new Set<IRType<unknown>>();
+  const names = new Map<string, IRType<unknown>>();
+  const visit = (type: IRType<unknown>): void => {
+    const layout = type.layout;
+    if (!layout || seen.has(type)) return;
+    seen.add(type);
+    Match.value(layout).pipe(
+      Match.tagsExhaustive({
+        Struct: (struct) => struct.fields.forEach((field) => visit(field.type)),
+        Union: (union) => union.cases.forEach(visit),
+      }),
+    );
+    const previous = names.get(type.native.type);
+    if (previous && !IRType.same(previous, type))
+      throw fail(
+        "NATIVE_NAME_COLLISION",
+        "lower",
+        type.native.type,
+        "Distinct composite witnesses share a native type name",
+      );
+    names.set(type.native.type, type);
+    ordered.push(type);
+  };
+  for (const f of module.functions) {
+    [f.output, ...f.input].forEach(visit);
+    for (const helper of f.helpers) {
+      visit(helper.output);
+      helper.input.forEach((p) => visit(p.type));
+      if (helper.error) visit(helper.error);
+      const blocks: readonly RustBlock[] = Match.value(helper.body).pipe(
+        Match.tags({
+          Pure: (body) => [body.block],
+          Succeed: (body) => [body.block],
+          Fail: (body) => [body.block],
+          Map: (body) => [body.block],
+          Match: (body) => [body.condition],
+          Log: (body) => body.attributes.map((attribute) => attribute.block),
+          Annotate: (body) => [body.value],
+          Launch: (body) => body.values,
+        }),
+        Match.orElse(() => []),
+      );
+      blocks.forEach((block) => block.bindings.forEach((binding) => visit(binding.type)));
+    }
+    Match.value(f.node).pipe(
+      Match.tagsExhaustive({ Pure: () => undefined, Effect: (n) => visit(n.error) }),
+    );
+  }
+  for (const type of ordered)
+    Match.value(type.layout!).pipe(
+      Match.tagsExhaustive({
+        Struct: (struct) => {
+          const fields = rustFieldNames(struct);
+          write(
+            `#[derive(Clone, Debug, PartialEq)]\n#[allow(non_snake_case)]\npub struct ${type.native.type} {${struct.fields
+              .map((field, i) => ` pub ${fields[i]}: ${typeName(field.type)},`)
+              .join("")} }\n\n`,
+          );
+        },
+        Union: (union) =>
+          write(
+            `#[derive(Clone, Debug, PartialEq)]\n#[allow(non_camel_case_types)]\npub enum ${type.native.type} {${union.cases
+              .map((c, i) => ` ${rustVariantName(structLayout(c)!.tag!, i)}(${c.native.type}),`)
+              .join("")} }\n\n`,
+          ),
+      }),
+    );
+};

@@ -149,12 +149,23 @@ export class Law<Subject extends OperationRef = OperationRef> extends Pipeable.C
   }
 }
 
+/** Structural shape of a composite witness; scalar witnesses have none. */
+export type Layout =
+  | {
+      readonly _tag: "Struct";
+      readonly fields: readonly { readonly name: string; readonly type: IRType<unknown> }[];
+      /** `_tag` literal of a tagged struct (a union case); not stored natively. */
+      readonly tag: string | undefined;
+      readonly identifier: string | undefined;
+    }
+  | { readonly _tag: "Union"; readonly cases: readonly IRType<unknown>[] };
 export class IRType<A> extends Pipeable.Class {
   protected constructor(
     readonly ref: SemanticRef<"type">,
     readonly schema: Schema.Codec<A>,
     readonly native: NativeRepresentation,
     readonly traits: readonly Trait[],
+    readonly layout?: Layout,
   ) {
     super();
   }
@@ -171,7 +182,13 @@ export class IRType<A> extends Pipeable.Class {
   static withTraits(traits: readonly Trait[]) {
     return <A>(self: IRType<A>): IRType<A> =>
       Object.freeze(
-        new IRType(self.ref, self.schema, self.native, Object.freeze(Array.from(traits))),
+        new IRType(
+          self.ref,
+          self.schema,
+          self.native,
+          Object.freeze(Array.from(traits)),
+          self.layout,
+        ),
       );
   }
   static same(self: IRType<unknown>, other: IRType<unknown>): boolean {
@@ -328,7 +345,48 @@ export type Node =
       readonly condition: Expr<boolean>;
       readonly onTrue: Expr<unknown>;
       readonly onFalse: Expr<unknown>;
+    }
+  /** Struct construction, or union-case construction when `tag` names a case of a union type. */
+  | {
+      readonly _tag: "Make";
+      readonly tag: string | undefined;
+      readonly fields: readonly Expr<unknown>[];
+    }
+  | { readonly _tag: "Get"; readonly value: Expr<unknown>; readonly field: string }
+  | {
+      readonly _tag: "MatchTags";
+      readonly value: Expr<unknown>;
+      readonly cases: readonly MatchCase<Expr<unknown>>[];
     };
+/** One exhaustive tagged-union case; `binder` names the case-struct value. */
+export interface MatchCase<Body> {
+  readonly tag: string;
+  readonly binder: symbol;
+  readonly body: Body;
+}
+export type StructLayout = Extract<Layout, { readonly _tag: "Struct" }>;
+const asStruct = (type: IRType<unknown>): StructLayout | undefined =>
+  type.layout === undefined
+    ? undefined
+    : Match.value(type.layout).pipe(
+        Match.tag("Struct", (layout) => layout),
+        Match.orElse(() => undefined),
+      );
+/** The case witnesses of a tagged union, or undefined for any other witness. */
+export const unionCases = (type: IRType<unknown>): readonly IRType<unknown>[] | undefined =>
+  type.layout === undefined
+    ? undefined
+    : Match.value(type.layout).pipe(
+        Match.tag("Union", (layout) => layout.cases),
+        Match.orElse(() => undefined),
+      );
+/** The struct layout of a struct witness, or of the union case named by `tag`. */
+export const structLayout = (type: IRType<unknown>, tag?: string): StructLayout | undefined =>
+  tag === undefined
+    ? asStruct(type)
+    : unionCases(type)
+        ?.map(asStruct)
+        .find((layout) => layout?.tag === tag);
 export class Expr<A> extends Pipeable.Class {
   private constructor(
     readonly type: IRType<A>,
@@ -362,6 +420,52 @@ export class Expr<A> extends Pipeable.Class {
         operation: op as unknown as AnyOperation,
         args: Object.freeze(Array.from(args)),
       }),
+    );
+  }
+  /** Build a struct (no `tag`) or a union case (`tag`); fields follow the layout's order. */
+  static make<A>(
+    this: void,
+    type: IRType<A>,
+    tag: string | undefined,
+    fields: readonly Expr<unknown>[],
+  ): Expr<A> {
+    const layout = structLayout(type, tag);
+    if (
+      !layout ||
+      layout.fields.length !== fields.length ||
+      layout.fields.some((field, i) => !IRType.same(field.type, fields[i].type))
+    )
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        "Struct.make",
+        "Construction requires every declared field with its witness",
+      );
+    return new Expr(type, Object.freeze({ _tag: "Make", tag, fields: Object.freeze([...fields]) }));
+  }
+  static get<A>(this: void, value: Expr<unknown>, field: string): Expr<A> {
+    const declared = structLayout(value.type)?.fields.find((f) => f.name === field);
+    if (!declared)
+      throw fail(
+        "UNKNOWN_FIELD",
+        "authoring",
+        "Struct.get",
+        `Unknown field ${JSON.stringify(field)}`,
+      );
+    return new Expr(declared.type as IRType<A>, Object.freeze({ _tag: "Get", value, field }));
+  }
+  /** Exhaustive tagged-union branching; every case receives its case-struct value. */
+  static matchTags<A>(
+    this: void,
+    value: Expr<unknown>,
+    output: IRType<A>,
+    cases: readonly MatchCase<Expr<A>>[],
+  ): Expr<A> {
+    if (cases.some((c) => !IRType.same(c.body.type, output)))
+      throw fail("TYPE_MISMATCH", "authoring", "match", "Every case must produce the same witness");
+    return new Expr(
+      output,
+      Object.freeze({ _tag: "MatchTags", value, cases: Object.freeze([...cases]) }),
     );
   }
   static match<A>(condition: Expr<boolean>, onTrue: Expr<A>, onFalse: Expr<NoInfer<A>>): Expr<A> {
@@ -420,6 +524,41 @@ export class Expr<A> extends Pipeable.Class {
               : new Expr(
                   self.type,
                   Object.freeze({ _tag: "Match", condition, onTrue, onFalse }),
+                  self.source,
+                );
+          },
+          Make: (n) => {
+            const fields = n.fields.map((field) => walk(field));
+            return fields.every((field, i) => field === n.fields[i])
+              ? self
+              : new Expr(
+                  self.type,
+                  Object.freeze({ _tag: "Make", tag: n.tag, fields: Object.freeze(fields) }),
+                  self.source,
+                );
+          },
+          Get: (n) => {
+            const value = walk(n.value);
+            return value === n.value
+              ? self
+              : new Expr(
+                  self.type,
+                  Object.freeze({ _tag: "Get", value, field: n.field }),
+                  self.source,
+                );
+          },
+          MatchTags: (n) => {
+            const value = walk(n.value);
+            const cases = n.cases.map((c) => ({ ...c, body: walk(c.body) }));
+            return value === n.value && cases.every((c, i) => c.body === n.cases[i].body)
+              ? self
+              : new Expr(
+                  self.type,
+                  Object.freeze({
+                    _tag: "MatchTags",
+                    value,
+                    cases: Object.freeze(cases.map((c) => Object.freeze(c))),
+                  }),
                   self.source,
                 );
           },
@@ -753,6 +892,46 @@ export const checkExpression = (
           if (!Schema.is(e.type.schema)(n.value))
             add("INVALID_LITERAL", at, "Literal does not satisfy its IRType schema");
         },
+        Make: (n) => {
+          const layout = structLayout(e.type, n.tag);
+          if (
+            !layout ||
+            layout.fields.length !== n.fields.length ||
+            layout.fields.some((field, i) => !IRType.same(field.type, n.fields[i].type))
+          )
+            add("TYPE_MISMATCH", at, "Construction fields differ from the declared layout");
+          n.fields.forEach((field, i) => walk(field, `${at}.fields[${i}]`));
+        },
+        Get: (n) => {
+          const declared = structLayout(n.value.type)?.fields.find((f) => f.name === n.field);
+          if (!declared || !IRType.same(declared.type, e.type))
+            add("TYPE_MISMATCH", at, "Field access differs from the declared layout");
+          walk(n.value, `${at}.value`);
+        },
+        MatchTags: (n) => {
+          const unionTypes = unionCases(n.value.type);
+          const tags = unionTypes?.map((c) => structLayout(c)?.tag);
+          if (
+            !tags ||
+            tags.length !== n.cases.length ||
+            tags.some((tag) => n.cases.filter((c) => c.tag === tag).length !== 1)
+          )
+            add("NON_EXHAUSTIVE_MATCH", at, "Tagged match requires exactly one case per union tag");
+          walk(n.value, `${at}.value`);
+          n.cases.forEach((c, i) => {
+            const caseType = unionTypes?.[tags!.indexOf(c.tag)];
+            if (!IRType.same(c.body.type, e.type))
+              add(
+                "TYPE_MISMATCH",
+                `${at}.cases[${i}]`,
+                "Case witness differs from the match result",
+              );
+            if (!caseType) return;
+            const nested = new Map(bindings);
+            nested.set(c.binder, [caseType]);
+            issues.push(...checkExpression(c.body, nested, `${at}.cases[${i}]`));
+          });
+        },
         Apply: (n) => {
           const op = n.operation;
           if (ops.has(op.id) && ops.get(op.id) !== op)
@@ -824,14 +1003,30 @@ export const evaluateExpression = (
   bindings: ReadonlyMap<symbol, readonly unknown[]>,
 ): unknown => {
   const cache = new Map<Expr<unknown>["node"], unknown>();
+  // Tagged-match binders extend the scope; each match node evaluates at most once per call.
+  const scope = new Map(bindings);
   const evaluate = (e: Expr<unknown>): unknown => {
     if (cache.has(e.node)) return cache.get(e.node);
     const value = Match.value(e.node).pipe(
       Match.tagsExhaustive({
-        Parameter: (n) => bindings.get(n.binder)![n.index],
+        Parameter: (n) => scope.get(n.binder)![n.index],
         Literal: (n) => n.value,
         Apply: (n) => n.operation.reference(...n.args.map(evaluate)),
         Match: (n) => (evaluate(n.condition) ? evaluate(n.onTrue) : evaluate(n.onFalse)),
+        Make: (n) => {
+          const layout = structLayout(e.type, n.tag)!;
+          const value: Record<string, unknown> =
+            layout.tag === undefined ? {} : { _tag: layout.tag };
+          layout.fields.forEach((field, i) => (value[field.name] = evaluate(n.fields[i])));
+          return value;
+        },
+        Get: (n) => (evaluate(n.value) as Record<string, unknown>)[n.field],
+        MatchTags: (n) => {
+          const value = evaluate(n.value) as { readonly _tag: string };
+          const selected = n.cases.find((c) => c.tag === value._tag)!;
+          scope.set(selected.binder, [value]);
+          return evaluate(selected.body);
+        },
       }),
     );
     Schema.decodeUnknownSync(e.type.schema)(value);

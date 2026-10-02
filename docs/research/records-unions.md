@@ -41,6 +41,14 @@ Probed with the official RC.118 `RpcServer`, raw JSON bodies and `RpcSerializati
 - **REC-005 (refined):** contract `Struct`/`TaggedUnion`/`_tag`-literal `Union` schemas whose leaves are admitted codecs are recognized structurally and mapped to the interned witness. Generated decoders/encoders reproduce the messages above, including identifier/`object`, union expected text, schema-ordered first error and nested paths. Divergence recorded: native JSON key order follows serde_json, so bytes differ while decoded values are identical.
 - **REC-006: runner boundary.** The dependency-free native runner keeps scalar arguments and results; functions with composite signatures get a refusing runner arm, and composite I/O is verified through `NativeRpc`.
 
+## Part 1a delivered (2026-10-02)
+
+Expression-level records and tagged unions: `R.Struct` (with `.annotate({ identifier })` and `R.Struct.get`), `R.TaggedUnion` (`cases.X.make`, dual `match`) and dual `R.Match.valueTags`, implemented in `records.ts` over a structural `Layout` on `IRType` and kernel nodes `Make`/`Get`/`MatchTags` with checking, substitution, reference evaluation and provenance. Native lowering emits `#[derive(Clone, Debug, PartialEq)]` structs and enums in dependency order (field/variant names sanitized, name collisions refused). Non-Copy values follow REC-004 uniformly, replacing the earlier string-only rendering. Delayed-cleanup captures are refused for every non-Copy value, and runner arms are omitted for composite signatures (REC-006).
+
+Evidence: [records.test.ts](../../packages/reffect/tests/records.test.ts) passes 3/3. Reference results equal official `Schema.TaggedUnion.match` on a `WireBoundary` corpus; a struct field is both borrowed and copied; interning, identifiers and refusals (missing case, reserved `_tag`, unknown field, hand-built non-exhaustive match, composite capture, type contracts) are covered; native debug/release under both frame policies agree with the reference. Regression suites for strings, RPC, effects, emission, flow, Scope and Layers pass.
+
+Remaining: part 1b (Computation-level `MatchTags`, so effectful handlers can branch on a union) and part 2 (RPC codecs with exact parity). One known extra copy: a field read from a local that is used only once is cloned rather than moved.
+
 ## Open questions
 
 - Resolved: Rust names use Effect's `identifier` annotation when present, otherwise a digest (REC-001).

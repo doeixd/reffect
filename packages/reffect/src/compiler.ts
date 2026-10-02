@@ -343,6 +343,12 @@ const derive = Effect.fn("Compile.derive")(function* (
           walk(n.onTrue);
           walk(n.onFalse);
         },
+        Make: (n) => n.fields.forEach(walk),
+        Get: (n) => walk(n.value),
+        MatchTags: (n) => {
+          walk(n.value);
+          n.cases.forEach((c) => walk(c.body));
+        },
         Apply: (n) => {
           const op = n.operation;
           if (
@@ -633,6 +639,7 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
     );
   for (const type of expected.analysis.types) {
     if (
+      type.layout === undefined &&
       ![U64Type, BoolType, UnitType, NeverType, StringType].some((builtin) =>
         IRType.same(type, builtin),
       )

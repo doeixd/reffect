@@ -29,6 +29,8 @@ export {
   apply,
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
+export { Struct, TaggedUnion, StructType, TaggedUnionType } from "./records.ts";
+export type { Fields, StructValue, CaseValue, UnionValue, CaseType } from "./records.ts";
 export { flow } from "./flow.ts";
 export type { FlowResult } from "./flow.ts";
 export { Schedule } from "./schedule.ts";

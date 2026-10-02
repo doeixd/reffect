@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-02 — Records and tagged unions, part 1a
+
+- Probed pinned RC.118 Schema/RPC decoding for structs, tagged unions and literals, and recorded refined decisions REC-001–006 in [records and tagged unions](docs/research/records-unions.md) before implementation.
+- Implemented expression-level `R.Struct`/`R.TaggedUnion`/`R.Struct.get`/`Union.match`/`R.Match.valueTags` with structural interning, an `IRType` `Layout`, and kernel `Make`/`Get`/`MatchTags` nodes. Native lowering emits Rust structs and enums. Non-Copy values follow one rule (borrowed names, owned locals, borrowed operands, copies only in value positions), replacing the string-only rendering. Delayed cleanup refuses all non-Copy captures; runner arms skip composite signatures.
+- Validation (focused): `records.test.ts` 3/3 (official `TaggedUnion.match` vs reference; refusals and type contracts; native debug/release under both frame policies). Regression suites `string-profile`, `string-rpc`, `effect`, `rust-emission-output`, `flow`, `compiler`, `unit`, `error-recovery`, `server-layer` and `source` pass 47/47 in 10 files; `scope-registration`, `heartbeat`, `resource-layer` and `scoped-files` pass 14/14 in 4 files. Strict package TypeScript and `vp check` pass. The full suite was not run.
+
 ## 2026-10-02 — Records and tagged unions proposal
 
 - Searched existing designs (architecture §7–§13, compiler design §5, basic Effect IR, schema/unary-RPC/string records, Foldkit Remote) and the `foldkit-plus` Remote wire schemas, then drafted [records and tagged unions](docs/research/records-unions.md) (REC-001–005, proposed). Core `foldkit/foldkit` does not contain Remote; the Remote packages live in `foldkit-plus`, the Foldkit ecosystem package collection (corrected from an earlier "fork" description), which milestone 4 targets. Implementation waits for review.

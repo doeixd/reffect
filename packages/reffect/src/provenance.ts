@@ -53,6 +53,12 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
         edge("onTrue", n.onTrue),
         edge("onFalse", n.onFalse),
       ],
+      Make: (n) => n.fields.map((field, index) => [`fields[${index}]`, field] as const),
+      Get: (n) => [edge("value", n.value)],
+      MatchTags: (n) => [
+        edge("value", n.value),
+        ...n.cases.map((c, index) => [`cases[${index}]`, c.body] as const),
+      ],
       Log: (n) => n.attributes.map(([, value], index) => [`attributes[${index}]`, value] as const),
       Annotate: (n) => [edge("value", n.value), edge("body", n.body)],
       CatchAll: (n) => [edge("source", n.source), edge("body", n.body)],

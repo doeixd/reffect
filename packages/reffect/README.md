@@ -153,6 +153,23 @@ const escapeText = R.fn([R.String], R.String, R.Bool, (value) =>
 
 `replaceAll` patterns must be literals: a non-empty search and a replacement without `$`. Hand-built `Expr.apply` calls are checked too. Native code uses owned `String` at function boundaries and `&str` inside helpers (`==`, `str::contains`, `str::replace`), with no crate. The native runner passes strings as `str:` plus hex of their UTF-8 bytes. Native RPC accepts `NativeRpc.StringJson` (an ordinary Effect schema that refuses lone surrogates) for payloads, fields, results and typed errors; plain `Schema.String` is refused because it admits lone surrogates. A lone-surrogate escape in a request body is refused for the whole body natively, while the stock server refuses that request only. Length, slicing, ordering, case mapping, regular expressions and string captures in delayed cleanup are not admitted yet. See [string decisions](../../docs/research/string-profile.md).
 
+## Records and tagged unions
+
+`R.Struct(fields)` and `R.TaggedUnion({ Tag: fields })` mirror Effect v4's `Schema.Struct` and `Schema.TaggedUnion`. Identical structures share one witness; `.annotate({ identifier })` names the native type. Values are built with `make`, read with `R.Struct.get` (dual) and branched on exhaustively with `Union.match` or `R.Match.valueTags`:
+
+```ts
+const Boundary = R.TaggedUnion({ Terminal: {}, Cursor: { cursor: R.String }, Unknown: {} });
+const label = R.fn([R.String], R.String, (cursor) =>
+  Boundary.match(Boundary.cases.Cursor.make({ cursor }), {
+    Terminal: () => R.String.literal("terminal"),
+    Cursor: (c) => R.Struct.get(c, "cursor"),
+    Unknown: () => R.String.literal("unknown"),
+  }),
+);
+```
+
+Case constructors return the union type, which is narrower than Effect's case type. Native code uses generated Rust structs and an enum of case structs; composite values are borrowed by helpers and copied only where they escape. Effectful branching on a union, RPC codecs for composites, arrays, records/maps, literal unions and `NullOr` are not yet admitted. See [record decisions](../../docs/research/records-unions.md).
+
 ## Synchronous Effect profile
 
 ### Unit and result discarding
