@@ -1,5 +1,9 @@
 # Progress
 
+## 2026-10-02 — Native RemoteServer design (proposed)
+
+- Read the full `foldkit-remote-server` 0.9.0 handler implementation and the shared `foldkit-remote` helpers, then recorded the [native RemoteServer design](docs/research/native-remote.md). Proposed: a literal semantic-port engine (the milestone-1 precedent), wire codecs generated from the unchanged `RemoteRpc` group, explicit JS ordering rules, the memory backend first, compiled Sources and authorization next, and a differential harness against the official server plus a stock client. Open: the published packages' `effect` peer range excludes rc.118, and they use `foldkit-entity` 0.5.0. No code changed.
+
 ## 2026-10-02 — Milestone 4 gap analysis
 
 - Measured the `foldkit-plus` Remote wire and server against admitted features and probed pinned Effect codecs for `Schema.Number` (non-finite strings, safe-integer `isInt`), `Schema.optional` (null decodes as absent; undefined encodes as null) and `Schema.Record` (JS key order: integer keys first). Recorded in the [gap analysis](docs/research/remote-gap-analysis.md): design the native Remote engine next, since it decides which generic schema features are needed (for example, `Unknown` becomes typed per-entity codecs and two-stage input decoding). No code changed.
