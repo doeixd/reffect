@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Schema } from "effect";
+import { Cause, Effect, Exit, FileSystem, Option, Schema } from "effect";
 import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
 import {
@@ -12,6 +12,7 @@ import {
   NativeRunner,
   R,
   Reference,
+  Rust,
   SourceArtifacts,
 } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
@@ -64,7 +65,29 @@ const named = R.fn([R.String], R.String, R.Bool, (name) =>
     R.Effect.map((item) => R.Struct.get(item, "name")),
   ),
 );
-const program = R.program({ describe, isCursor, itemCount, itemName, named });
+// Effectful branching (part 1b): typed failure, logging and a suspended case.
+const resolve = R.fn([R.U64, R.String], R.String, R.Bool, (kind, cursor) =>
+  Boundary.match(boundaryOf(kind, cursor), {
+    Terminal: () => R.Effect.fail(R.Bool.literal(false)),
+    Cursor: (c) =>
+      R.Effect.logInfo("cursor").pipe(
+        R.Effect.andThen(R.Effect.succeed(R.Struct.get(c, "cursor"))),
+      ),
+    Unknown: () => R.Effect.succeed(R.String.literal("unknown")),
+  }),
+);
+const suspended = R.fn([R.U64, R.String], R.String, R.Never, (kind, cursor) =>
+  boundaryOf(kind, cursor).pipe(
+    R.Match.valueTags({
+      Terminal: () => R.Effect.succeed(R.String.literal("terminal")),
+      // The borrowed case value stays valid across the suspension point.
+      Cursor: (c) =>
+        R.Effect.sleep(1).pipe(R.Effect.andThen(R.Effect.succeed(R.Struct.get(c, "cursor")))),
+      Unknown: () => R.Effect.succeed(R.String.literal("unknown")),
+    }),
+  ),
+);
+const program = R.program({ describe, isCursor, itemCount, itemName, named, resolve, suspended });
 
 const Official = Schema.TaggedUnion({
   Terminal: {},
@@ -84,6 +107,25 @@ const officialDescribe = (kind: bigint, cursor: string) =>
       Unknown: () => "unknown",
     },
   );
+const officialResolve = (kind: bigint, cursor: string) =>
+  Official.match(
+    kind === 0n
+      ? Official.cases.Terminal.make({})
+      : kind === 1n
+        ? Official.cases.Cursor.make({ cursor })
+        : Official.cases.Unknown.make({}),
+    {
+      Terminal: (): Effect.Effect<string, boolean> => Effect.fail(false),
+      Cursor: (c): Effect.Effect<string, boolean> =>
+        Effect.logInfo("cursor").pipe(Effect.as(c.cursor)),
+      Unknown: (): Effect.Effect<string, boolean> => Effect.succeed("unknown"),
+    },
+  );
+const observe = <A, E>(exit: Exit.Exit<A, E>) =>
+  Exit.match(exit, {
+    onSuccess: (value) => ({ value }),
+    onFailure: (cause) => ({ error: Option.getOrUndefined(Cause.findErrorOption(cause)) }),
+  });
 const corpus = [
   [0n, "a<b"],
   [1n, "a<b😀"],
@@ -102,6 +144,14 @@ test("records and tagged unions agree with official Effect Schema and match", as
     );
     expect(await Effect.runPromise(Reference.run(isCursor, [kind, cursor]))).toBe(kind === 1n);
   }
+  for (const [kind, cursor] of corpus) {
+    expect(
+      observe(await Effect.runPromise(Effect.exit(Reference.run(resolve, [kind, cursor])))),
+    ).toEqual(observe(await Effect.runPromise(Effect.exit(officialResolve(kind, cursor)))));
+    expect(await Effect.runPromise(Reference.run(suspended, [kind, cursor]))).toBe(
+      kind === 0n ? "terminal" : kind === 1n ? cursor : "unknown",
+    );
+  }
   expect(await Effect.runPromise(Reference.run(itemCount, ["n", 41n]))).toBe(42n);
   expect(await Effect.runPromise(Reference.run(itemName, ["box", 1n]))).toBe("box");
   expect(await Effect.runPromise(Reference.run(itemName, ["no", 1n]))).toBe("none");
@@ -117,6 +167,14 @@ test("composite authoring and checking refuse incomplete or foreign shapes", asy
     }),
   ).toThrow("Missing case");
   expect(() => R.Struct({ _tag: R.String })).toThrow("reserved");
+  // Result types union across handlers, so differing witnesses are refused while authoring.
+  expect(() =>
+    Boundary.match(value, {
+      Terminal: () => R.Bool.literal(true),
+      Cursor: () => R.Bool.literal(true),
+      Unknown: () => R.U64.literal(1n),
+    }),
+  ).toThrow("same witness");
   expect(() =>
     Expr.get(Item.make({ name: R.String.literal("n"), count: R.U64.literal(1n) }), "nope"),
   ).toThrow("Unknown field");
@@ -140,12 +198,6 @@ test("composite authoring and checking refuse incomplete or foreign shapes", asy
   );
   expect(await checks(capture)).toBe(false);
   const typeContracts = () => {
-    Boundary.match(value, {
-      Terminal: () => R.Bool.literal(true),
-      Cursor: () => R.Bool.literal(true),
-      // @ts-expect-error Every handler must produce the same witness.
-      Unknown: () => R.U64.literal(1n),
-    });
     // @ts-expect-error Construction requires every declared field.
     Item.make({ name: R.String.literal("n") });
     // @ts-expect-error Fields keep their witnesses.
@@ -166,11 +218,12 @@ test(
           const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-records-" });
           for (const policy of [FailureFrames.Bounded, FailureFrames.None]) {
             const artifact = yield* Compile.make(program).pipe(
+              Compile.withTarget(Rust.tokio),
               Compile.withFailureFrames(policy),
               Compile.withSourceArtifacts(SourceArtifacts.None),
               Compile.run,
             );
-            expect(artifact.explanation.crates).toEqual([]);
+            expect(artifact.explanation.crates).toEqual(["tokio@1.53.1"]);
             const directory = yield* CargoApi.write(artifact, `${parent}/${policy._tag}`);
             for (const profile of ["debug", "release"] as const) {
               yield* CargoApi.build(directory, profile);
@@ -188,6 +241,23 @@ test(
               for (const [kind, cursor] of corpus) {
                 yield* agree("describe", describe, [kind, cursor]);
                 yield* agree("isCursor", isCursor, [kind, cursor]);
+                for (const [name, fn] of [
+                  ["resolve", resolve],
+                  ["suspended", suspended],
+                ] as const)
+                  expect(
+                    observe(
+                      yield* NativeRunner.run(
+                        artifact,
+                        directory,
+                        name,
+                        fn,
+                        [kind, cursor],
+                        profile,
+                      ),
+                    ),
+                    `${name}(${kind})`,
+                  ).toEqual(observe(yield* Effect.exit(Reference.run(fn, [kind, cursor]))));
               }
               yield* agree("itemCount", itemCount, ["n", 41n]);
               yield* agree("itemName", itemName, ["box", 1n]);

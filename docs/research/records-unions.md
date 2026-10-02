@@ -47,7 +47,9 @@ Expression-level records and tagged unions: `R.Struct` (with `.annotate({ identi
 
 Evidence: [records.test.ts](../../packages/reffect/tests/records.test.ts) passes 3/3. Reference results equal official `Schema.TaggedUnion.match` on a `WireBoundary` corpus; a struct field is both borrowed and copied; interning, identifiers and refusals (missing case, reserved `_tag`, unknown field, hand-built non-exhaustive match, composite capture, type contracts) are covered; native debug/release under both frame policies agree with the reference. Regression suites for strings, RPC, effects, emission, flow, Scope and Layers pass.
 
-Remaining: part 1b (Computation-level `MatchTags`, so effectful handlers can branch on a union) and part 2 (RPC codecs with exact parity). One known extra copy: a field read from a local that is used only once is cloned rather than moved.
+Part 1b delivered the same day: `match`/`valueTags` handlers may all return Computations, producing a Computation `MatchTags` whose output and error channels join like `R.Match.bool`. It is checked, substituted, interpreted by both reference evaluators (failure frames use the `match` kind), and lowered to `match` over borrowed case values; async cases keep borrowing across `.await`. Mixing pure and effectful handlers is refused. Result types union across handlers, so mismatched witnesses are refused while authoring rather than in types. Evidence: `records.test.ts` 3/3 adds sync (fail/log/succeed) and async (sleep) branching against official `TaggedUnion.match`, with native debug/release on Tokio under both frame policies.
+
+Remaining: part 2 (RPC codecs with exact parity). One known extra copy: a field read from a local that is used only once is cloned rather than moved.
 
 ## Open questions
 

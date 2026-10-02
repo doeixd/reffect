@@ -156,6 +156,16 @@ type HelperBody =
     }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
   | {
+      readonly _tag: "MatchTags";
+      readonly union: IRType<unknown>;
+      readonly scrutinee: RustBlock;
+      readonly cases: readonly {
+        readonly tag: string;
+        readonly binder: string;
+        readonly helper: number;
+      }[];
+    }
+  | {
       readonly _tag: "Launch";
       readonly values: readonly RustBlock[];
       readonly types: readonly IRType<unknown>[];
@@ -398,6 +408,10 @@ export function lowerFunctions(
                 expression(n.condition);
                 computation(n.onTrue);
                 computation(n.onFalse);
+              },
+              MatchTags: (n) => {
+                expression(n.value);
+                n.cases.forEach((c) => computation(c.body));
               },
               Annotate: (n) => {
                 expression(n.value);
@@ -715,6 +729,23 @@ export function lowerFunctions(
               onTrue: effectHelper(n.onTrue, scope, error, `${path}.onTrue`),
               onFalse: effectHelper(n.onFalse, scope, error, `${path}.onFalse`),
             }),
+            MatchTags: (n): HelperBody => {
+              const caseTypes = unionCases(n.value.type) ?? [];
+              return {
+                _tag: "MatchTags",
+                union: n.value.type,
+                scrutinee: block(n.value, scope, `${path}.value`),
+                cases: n.cases.map((c, i) => {
+                  const caseType = caseTypes.find((t) => structLayout(t)?.tag === c.tag)!;
+                  const nested = caseScope(scope, c.binder, caseType);
+                  return Object.freeze({
+                    tag: c.tag,
+                    binder: nested.input[nested.input.length - 1].name,
+                    helper: effectHelper(c.body, nested, error, `${path}.cases[${i}]`),
+                  });
+                }),
+              };
+            },
             Log: (n): HelperBody => ({
               _tag: "Log",
               level: n.level,
@@ -773,6 +804,7 @@ export function lowerFunctions(
                   !!(helpers.get(n.source)?.asynchronous || helpers.get(n.body)?.asynchronous),
                 Match: (n) =>
                   !!(helpers.get(n.onTrue)?.asynchronous || helpers.get(n.onFalse)?.asynchronous),
+                MatchTags: (n) => n.cases.some((c) => helpers.get(c.helper)?.asynchronous),
                 Annotate: (n) => helpers.get(n.body)?.asynchronous ?? false,
                 Span: (n) => helpers.get(n.body)?.asynchronous ?? false,
               }),
@@ -1061,6 +1093,7 @@ export const emitFunctions = (
             FlatMap: (n) => child(n.source, n.body),
             Map: (n) => depth(n.source),
             Match: (n) => child(n.onTrue, n.onFalse),
+            MatchTags: (n) => child(...n.cases.map((c) => c.helper)),
             Annotate: (n) => depth(n.body),
             Span: (n) => depth(n.body),
             Repeat: (n) => depth(n.body),
@@ -1651,6 +1684,21 @@ export const emitFunctions = (
               adaptFrag(n.onFalse, helper.output, use("onFalse")),
               ` { Ok(value) => Ok(value), ${failureArm(helper, "match")} } } }`,
             ]),
+          MatchTags: (n) =>
+            joinFragments([
+              "{ match ",
+              // A plain name or field is borrowed directly; anything else is a borrowed temporary.
+              n.scrutinee.bindings.length === 0
+                ? operand(n.scrutinee.body)
+                : joinFragments(["&", renderBlock(n.scrutinee)]),
+              " { ",
+              ...n.cases.flatMap((c, i) => [
+                `${typeName(n.union)}::${variantOf(n.union, c.tag)}(${Rs.ident(c.binder).text}) => match `,
+                adaptFrag(c.helper, helper.output, use(`cases[${i}]`)),
+                ` { Ok(value) => Ok(value), ${failureArm(helper, "match")} }, `,
+              ]),
+              "} }",
+            ]),
           Log: (n) => {
             const ordinal = logLevelOrdinal[n.level] ?? 99;
             const head =
@@ -2132,6 +2180,7 @@ const writeCompositeTypes = (
           Fail: (body) => [body.block],
           Map: (body) => [body.block],
           Match: (body) => [body.condition],
+          MatchTags: (body) => [body.scrutinee],
           Log: (body) => body.attributes.map((attribute) => attribute.block),
           Annotate: (body) => [body.value],
           Launch: (body) => body.values,

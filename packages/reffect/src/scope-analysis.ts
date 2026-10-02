@@ -193,6 +193,10 @@ export const analyzeScopes = (
           expression(n.condition, "condition");
           return Math.max(child(n.onTrue, "onTrue"), child(n.onFalse, "onFalse"));
         },
+        MatchTags: (n) => {
+          expression(n.value, "value");
+          return Math.max(0, ...n.cases.map((x, i) => child(x.body, `cases[${i}]`)));
+        },
         Annotate: (n) => {
           expression(n.value, "value");
           return child(n.body, "body");

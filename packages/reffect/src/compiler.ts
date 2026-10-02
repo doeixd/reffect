@@ -457,6 +457,11 @@ const derive = Effect.fn("Compile.derive")(function* (
           walkComputation(n.onTrue);
           walkComputation(n.onFalse);
         },
+        MatchTags: (n) => {
+          effectRefs.add(SyncEffects.Match);
+          walk(n.value);
+          n.cases.forEach((x) => walkComputation(x.body));
+        },
         Log: (n) => {
           effectRefs.add(SyncEffects.Log);
           for (const [, value] of n.attributes) walk(value);

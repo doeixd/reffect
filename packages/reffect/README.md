@@ -168,7 +168,7 @@ const label = R.fn([R.String], R.String, (cursor) =>
 );
 ```
 
-Case constructors return the union type, which is narrower than Effect's case type. Native code uses generated Rust structs and an enum of case structs; composite values are borrowed by helpers and copied only where they escape. Effectful branching on a union, RPC codecs for composites, arrays, records/maps, literal unions and `NullOr` are not yet admitted. See [record decisions](../../docs/research/records-unions.md).
+Handlers may instead all return computations, which branches effectfully (typed failures, logging, suspension). Case constructors return the union type, which is narrower than Effect's case type. Native code uses generated Rust structs and an enum of case structs; composite values are borrowed by helpers and copied only where they escape. RPC codecs for composites, arrays, records/maps, literal unions and `NullOr` are not yet admitted. See [record decisions](../../docs/research/records-unions.md).
 
 ## Synchronous Effect profile
 

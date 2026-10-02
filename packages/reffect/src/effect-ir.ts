@@ -17,8 +17,10 @@ import {
   checkExpression,
   evaluateExpression,
   fail,
+  structLayout,
+  unionCases,
 } from "./kernel.ts";
-import type { Diagnostic, Inputs, Symbols } from "./kernel.ts";
+import type { Diagnostic, Inputs, MatchCase, Symbols } from "./kernel.ts";
 import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
 import { LaunchHost } from "./launch-host.ts";
@@ -156,6 +158,11 @@ export type ComputationNode =
       readonly onFalse: Computation<unknown, unknown>;
     }
   | {
+      readonly _tag: "MatchTags";
+      readonly value: Expr<unknown>;
+      readonly cases: readonly MatchCase<Computation<unknown, unknown>>[];
+    }
+  | {
       readonly _tag: "Log";
       readonly level: LogLevel;
       readonly message: string;
@@ -291,6 +298,13 @@ export const substituteComputation = (
           return condition === n.condition && onTrue === n.onTrue && onFalse === n.onFalse
             ? self
             : rebuild({ _tag: "Match", condition, onTrue, onFalse });
+        },
+        MatchTags: (n) => {
+          const value = substituting(n.value);
+          const cases = n.cases.map((c) => Object.freeze({ ...c, body: walk(c.body) }));
+          return value === n.value && cases.every((c, i) => c.body === n.cases[i].body)
+            ? self
+            : rebuild({ _tag: "MatchTags", value, cases: Object.freeze(cases) });
         },
         CatchAll: (n) => {
           const source = walk(n.source);
@@ -519,6 +533,7 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         FlatMap: (n) => walk(n.source) || walk(n.body),
         CatchAll: (n) => walk(n.source) || walk(n.body),
         Match: (n) => walk(n.onTrue) || walk(n.onFalse),
+        MatchTags: (n) => n.cases.some((c) => walk(c.body)),
         Annotate: (n) => walk(n.body),
         Span: (n) => walk(n.body),
       }),
@@ -847,6 +862,28 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           walk(n.onTrue, bindings, `${at}.onTrue`);
           walk(n.onFalse, bindings, `${at}.onFalse`);
         },
+        MatchTags: (n) => {
+          const caseTypes = unionCases(n.value.type);
+          const tags = caseTypes?.map((t) => structLayout(t)?.tag);
+          if (
+            !tags ||
+            tags.length !== n.cases.length ||
+            tags.some((tag) => n.cases.filter((x) => x.tag === tag).length !== 1)
+          )
+            add(at, "Tagged match requires exactly one case per union tag");
+          if (
+            n.cases.some((x) => !agrees(x.body.output, c.output) || !agrees(x.body.error, c.error))
+          )
+            add(at, "Tagged match case channel witnesses are inconsistent");
+          expression(n.value, "value");
+          n.cases.forEach((x, i) => {
+            const caseType = caseTypes?.[tags!.indexOf(x.tag)];
+            if (!caseType) return;
+            const nested = new Map(bindings);
+            nested.set(x.binder, [caseType]);
+            walk(x.body, nested, `${at}.cases[${i}]`);
+          });
+        },
         Log: (n) => {
           if (!IRType.same(c.output, UnitType) || !IRType.same(c.error, NeverType))
             add(at, "Log channel witnesses are inconsistent");
@@ -1034,6 +1071,15 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
             expression(n.condition).pipe(
               Effect.flatMap((value) => evaluate(value ? n.onTrue : n.onFalse, bindings)),
             ),
+          MatchTags: (n) =>
+            expression(n.value).pipe(
+              Effect.flatMap((value) => {
+                const selected = n.cases.find(
+                  (x) => x.tag === (value as { readonly _tag: string })._tag,
+                )!;
+                return evaluate(selected.body, new Map(bindings).set(selected.binder, [value]));
+              }),
+            ),
           Log: (n) =>
             Effect.forEach(n.attributes, ([key, value]) =>
               expression(value).pipe(Effect.map((evaluated) => [key, evaluated] as const)),
@@ -1183,6 +1229,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.onTrue, `${path}.onTrue`);
           adaptNode(n.onFalse, `${path}.onFalse`);
         },
+        MatchTags: (n) => n.cases.forEach((x, i) => adaptNode(x.body, `${path}.cases[${i}]`)),
         Log: () => {},
         Annotate: (n) => {
           adaptNode(n.body, `${path}.body`);
@@ -1431,6 +1478,23 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   Effect.mapError((failure) => outward(failure, "match")),
                 ),
               ),
+            ),
+          MatchTags: (n) =>
+            expression(n.value, `${path}.value`).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap((value) => {
+                const selected = n.cases.find(
+                  (x) => x.tag === (value as { readonly _tag: string })._tag,
+                )!;
+                return evaluate(
+                  selected.body,
+                  new Map(bindings).set(selected.binder, [value]),
+                ).pipe(Effect.mapError((failure) => outward(failure, "match")));
+              }),
             ),
           Log: (n) =>
             Effect.forEach(n.attributes, ([key, value]) =>

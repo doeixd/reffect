@@ -11,6 +11,7 @@ import {
   unionCases,
 } from "./kernel.ts";
 import type { Layout, MatchCase, StructLayout, Value } from "./kernel.ts";
+import { Computation, joinType } from "./effect-ir.ts";
 import { RustIdent } from "./rust-emit.ts";
 
 /** Field witnesses of a struct, in declaration (and wire-encoding) order. */
@@ -181,9 +182,23 @@ export type CaseType<Tag extends string, F extends Fields, U> = Omit<
 > & {
   readonly make: (values: FieldExprs<F>) => Expr<U>;
 };
-type Handlers<C extends { readonly [tag: string]: Fields }, B> = {
-  readonly [T in keyof C & string]: (value: Expr<CaseValue<T, C[T]>>) => Expr<B>;
+/** Exhaustive handlers: all pure (`Expr`) or all effectful (`Computation`). */
+type Handlers<C extends { readonly [tag: string]: Fields }> = {
+  readonly [T in keyof C & string]: (
+    value: Expr<CaseValue<T, C[T]>>,
+  ) => Expr<any> | Computation<any, any>;
 };
+type Result<R> = [R] extends [Expr<any>]
+  ? Expr<R extends Expr<infer B> ? B : never>
+  : [R] extends [Computation<any, any>]
+    ? Computation<
+        R extends Computation<infer B, any> ? B : never,
+        R extends Computation<any, infer E> ? E : never
+      >
+    : never;
+export type MatchResult<H> = Result<
+  { readonly [K in keyof H]: H[K] extends (...args: any) => infer R ? R : never }[keyof H]
+>;
 
 /** `Schema.TaggedUnion({ Tag: fields })`, lowered to a Rust enum of case structs. */
 export class TaggedUnionType<C extends { readonly [tag: string]: Fields }> extends Composite<
@@ -228,47 +243,72 @@ export class TaggedUnionType<C extends { readonly [tag: string]: Fields }> exten
   }
   /** Effect `TaggedUnion.match(value, cases)`, data-first or data-last. */
   readonly match: {
-    <B>(cases: Handlers<C, B>): (value: Expr<UnionValue<C>>) => Expr<B>;
-    <B>(value: Expr<UnionValue<C>>, cases: Handlers<C, B>): Expr<B>;
-  } = dual(2, <B>(value: Expr<UnionValue<C>>, cases: Handlers<C, B>) => matchTags(value, cases));
+    <const H extends Handlers<C>>(cases: H): (value: Expr<UnionValue<C>>) => MatchResult<H>;
+    <const H extends Handlers<C>>(value: Expr<UnionValue<C>>, cases: H): MatchResult<H>;
+  } = dual<
+    <const H extends Handlers<C>>(cases: H) => (value: Expr<UnionValue<C>>) => MatchResult<H>,
+    <const H extends Handlers<C>>(value: Expr<UnionValue<C>>, cases: H) => MatchResult<H>
+  >(2, (value, cases) => matchTags(value, cases));
 }
 
 /** Effect `Match.valueTags`: exhaustive handlers over a tagged-union value. */
-export const matchTags = <B>(
+export const matchTags = (
   value: Expr<unknown>,
-  handlers: { readonly [tag: string]: (value: Expr<any>) => Expr<B> },
-): Expr<B> => {
+  handlers: {
+    readonly [tag: string]: (value: Expr<any>) => Expr<unknown> | Computation<unknown, unknown>;
+  },
+): any => {
   const union = unionCases(value.type);
   if (!union)
     throw fail("TYPE_MISMATCH", "authoring", "match", "Tagged matching requires a tagged union");
-  const cases: MatchCase<Expr<B>>[] = union.map((caseType) => {
-    const tag = structLayout(caseType)!.tag!;
-    const handler = Object.hasOwn(handlers, tag) ? handlers[tag] : undefined;
-    if (!handler)
-      throw fail(
-        "NON_EXHAUSTIVE_MATCH",
-        "authoring",
-        "match",
-        `Missing case ${JSON.stringify(tag)}`,
-      );
-    const binder = Symbol(`reffect/match/${tag}`);
-    return Object.freeze({ tag, binder, body: handler(Expr.parameter(caseType, binder, 0)) });
-  });
+  const cases: MatchCase<Expr<unknown> | Computation<unknown, unknown>>[] = union.map(
+    (caseType) => {
+      const tag = structLayout(caseType)!.tag!;
+      const handler = Object.hasOwn(handlers, tag) ? handlers[tag] : undefined;
+      if (!handler)
+        throw fail(
+          "NON_EXHAUSTIVE_MATCH",
+          "authoring",
+          "match",
+          `Missing case ${JSON.stringify(tag)}`,
+        );
+      const binder = Symbol(`reffect/match/${tag}`);
+      return Object.freeze({ tag, binder, body: handler(Expr.parameter(caseType, binder, 0)) });
+    },
+  );
   if (Object.keys(handlers).length !== cases.length)
     throw fail("UNKNOWN_CASE", "authoring", "match", "Handlers name a tag outside the union");
-  return Expr.matchTags(value, cases[0].body.type, cases);
+  const pure = cases.flatMap((c) => (c.body instanceof Expr ? [{ ...c, body: c.body }] : []));
+  if (pure.length === cases.length) return Expr.matchTags(value, pure[0].body.type, pure);
+  const effects = cases.flatMap((c) =>
+    c.body instanceof Computation ? [Object.freeze({ ...c, body: c.body })] : [],
+  );
+  if (effects.length !== cases.length)
+    throw fail(
+      "TYPE_MISMATCH",
+      "authoring",
+      "match",
+      "Handlers must all return Expr or all return Computation",
+    );
+  // Like R.Match.bool: Never channels widen, distinct non-Never witnesses are refused.
+  return Computation.make(
+    effects.map((c) => c.body.output).reduce(joinType),
+    effects.map((c) => c.body.error).reduce(joinType),
+    { _tag: "MatchTags", value, cases: Object.freeze(effects) },
+  );
 };
 
 /** Effect `Match.valueTags(value, handlers)`, data-first or data-last. */
+type AnyHandlers = {
+  readonly [tag: string]: (value: Expr<any>) => Expr<any> | Computation<any, any>;
+};
 export const valueTags: {
-  <B>(handlers: {
-    readonly [tag: string]: (value: Expr<any>) => Expr<B>;
-  }): (value: Expr<unknown>) => Expr<B>;
-  <B>(
-    value: Expr<unknown>,
-    handlers: { readonly [tag: string]: (value: Expr<any>) => Expr<B> },
-  ): Expr<B>;
-} = dual(2, matchTags);
+  <const H extends AnyHandlers>(handlers: H): (value: Expr<unknown>) => MatchResult<H>;
+  <const H extends AnyHandlers>(value: Expr<unknown>, handlers: H): MatchResult<H>;
+} = dual<
+  <const H extends AnyHandlers>(handlers: H) => (value: Expr<unknown>) => MatchResult<H>,
+  <const H extends AnyHandlers>(value: Expr<unknown>, handlers: H) => MatchResult<H>
+>(2, (value, handlers) => matchTags(value, handlers));
 
 /** `Struct.get(key)(self)` / `Struct.get(self, key)`. */
 const get: {

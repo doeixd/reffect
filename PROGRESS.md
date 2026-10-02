@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — Records and tagged unions, part 1b
+
+- Added effectful tagged-union branching: `match`/`valueTags` handlers that all return Computations build a Computation `MatchTags` (channels joined like `R.Match.bool`), with checking, substitution, both reference evaluators, scope analysis and native lowering over borrowed case values, including across `.await`.
+- Validation (focused): `records.test.ts` 3/3, adding sync and async effectful branching against official `TaggedUnion.match` and native debug/release on Tokio under both frame policies. `effect`, `error-recovery`, `flow`, `async-effect`, `rust-emission-output`, `failure-frames`, `string-profile` and `frame-policy` pass 24/24 in 8 files. Strict package TypeScript and `vp check` pass.
+
 ## 2026-10-02 — Records and tagged unions, part 1a
 
 - Probed pinned RC.118 Schema/RPC decoding for structs, tagged unions and literals, and recorded refined decisions REC-001–006 in [records and tagged unions](docs/research/records-unions.md) before implementation.
