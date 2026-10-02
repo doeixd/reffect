@@ -101,4 +101,12 @@ test("construction admits omitted optional keys only", () => {
       return Wide.make({ c: R.Bool.literal(true), b });
     }),
   ).toThrow("every declared field");
+  const effectful = {
+    onUndefined: () => R.Effect.succeed(R.Bool.literal(true)),
+    onDefined: () => R.Bool.literal(false),
+  };
+  expect(() =>
+    // @ts-expect-error handlers return pure expressions in this profile
+    R.fn([Wide], R.Bool, (w) => R.UndefinedOr.match(R.Struct.get(w, "a"), effectful)),
+  ).toThrow("pure expressions");
 });

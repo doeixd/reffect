@@ -419,14 +419,15 @@ const undefinedOrMatch = <A, B>(
     throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr.match", "match requires UndefinedOr");
   const binder = Symbol("reffect/undefinedOr/defined");
   const onDefined = options.onDefined(Expr.parameter(item as IRType<A>, binder, 0));
-  if (!(onDefined instanceof Expr))
+  const onUndefined = options.onUndefined();
+  if (!(onDefined instanceof Expr) || !(onUndefined instanceof Expr))
     throw fail(
       "TYPE_MISMATCH",
       "authoring",
       "UndefinedOr.match",
       "Handlers must return pure expressions in this profile",
     );
-  return Expr.matchUndefined(self, binder, onDefined, options.onUndefined());
+  return Expr.matchUndefined(self, binder, onDefined, onUndefined);
 };
 /** Effect `UndefinedOr.match(self, { onUndefined, onDefined })`, data-first or data-last. */
 const undefinedOrMatchDual: {
