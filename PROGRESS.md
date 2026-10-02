@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-10-02 — Remote wire contract compiles natively
+
+- Vendored the `foldkit-remote` 0.9.0 wire module (MIT) as a [test fixture](packages/reffect/tests/fixtures/foldkit-remote-wire.ts). Only the Effect 4.0.0 import paths, class self types and an unrolled `relationLevel` changed; the schemas are identical.
+- Added `NativeRpc.witness(schema, { position })`, which derives the R witness that a contract schema maps onto, plus the `WireValue` type. Handlers read Remote's large request types (eight nested relation levels) through it. R-built result witnesses intern to the same contract witnesses, which the test asserts.
+- `NativeRpc` now refuses streaming procedures by name (`Live`, NR-006) instead of failing on the stream schema. The binding types already reject any R handler for a stream success.
+- Moved the order-preserving JSON reader into `tests/raw-json.ts`.
+- Validation (focused):
+  - `remote-wire-rpc.test.ts` 3/3. Read (version check → `RemoteProtocolError`; settled fields), Mutate (Unknown output; `Insert` connection with a literal position) and Query (`Cursor` boundary; `RemoteQueryError`) run over 22 raw requests, all strictly equal to the official server, raw key order included. Coverage: nested relations to the last level and beyond, 257 fields, invalid page sizes, wrong versions and missing keys.
+  - A stock `RpcClient` for the unchanged contract round-trips and receives class instances.
+  - `unknown-rpc` and `native-rpc` pass, as does `vp check`.
+
 ## 2026-10-02 — String literal unions
 
 - Recorded [literal-union decisions](docs/research/literal-unions.md) (LIT-001–003) from Remote's `position: "prepend" | "append"` and probes on Effect 4.0.0. Mismatches read `Expected "a" | "b"`, and inside `optional` only non-strings gain `| null`.

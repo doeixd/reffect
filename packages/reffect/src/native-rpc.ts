@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit, Match, Option, Schema, SchemaAST, SchemaIssue } from "effect";
-import { Rpc, type RpcGroup } from "effect/rpc";
+import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, type Plan } from "./compiler.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -124,9 +124,9 @@ export interface RpcBinding<F extends AnyFn = AnyFn> {
   readonly services: readonly Service[];
 }
 type NativeValue<A> = [A] extends [never] ? never : [A] extends [undefined] ? void : A;
-// TaggedError classes reach R as their data: `_tag` plus fields (TE-002).
-type ErrorData<S> = S extends { readonly members: infer M extends ReadonlyArray<unknown> }
-  ? ErrorData<M[number]>
+/** The R value of a contract schema: TaggedError classes reach R as their data (TE-002). */
+export type WireValue<S> = S extends { readonly members: infer M extends ReadonlyArray<unknown> }
+  ? WireValue<M[number]>
   : S extends { readonly fields: infer F extends Schema.Struct.Fields }
     ? Schema.Struct<F>["Type"]
     : S extends Schema.Top
@@ -135,7 +135,7 @@ type ErrorData<S> = S extends { readonly members: infer M extends ReadonlyArray<
 type HandlerError<P extends Rpc.Any> = P extends {
   readonly errorSchema: infer E extends Schema.Top;
 }
-  ? ErrorData<E>
+  ? WireValue<E>
   : never;
 type HasMiddleware<P extends Rpc.Any> = [Rpc.Middleware<P>] extends [never] ? false : true;
 type Bindings<Rpcs extends Rpc.Any> = {
@@ -944,6 +944,11 @@ const compile = <Rpcs extends Rpc.Any>(
               "Protected procedures cannot also bind server services yet",
             );
           const positions = services.map((service) => servicePosition(service, procedure));
+          if (RpcSchema.isStreamSchema(rpc.successSchema))
+            throw unsupported(
+              procedure,
+              "Streaming procedures are not supported until milestones 6–7 (NR-006)",
+            );
           if (rpc.defectSchema.ast !== Schema.Defect().ast)
             throw unsupported(procedure, "Custom defect codecs are unsupported");
           const success = codec(
@@ -1410,6 +1415,19 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
   });
 
 /** Generate a native unary JSON/HTTP server for the checked sync/async scalar profiles. */
+/**
+ * The R witness a contract schema maps onto, so handlers can read contract values without
+ * restating them. `result` admits classes and refuses decode-only checks, as success and
+ * error schemas do. Structurally equal R witnesses are the same interned witness.
+ */
+const contractWitness = <S extends Schema.Top>(
+  schema: S,
+  options?: { readonly position?: "payload" | "result" },
+): IRType<WireValue<S>> =>
+  witnessOf(
+    codec(schema.ast, "witness", false, new Map(), (options?.position ?? "payload") === "payload"),
+  ) as IRType<WireValue<S>>;
+
 export const NativeRpc = Object.freeze({
   U64Json,
   StringJson,
@@ -1418,6 +1436,7 @@ export const NativeRpc = Object.freeze({
   bindServices,
   bearer: RpcBearer.make,
   compile,
+  witness: contractWitness,
 });
 
 /** Generated serde_json decoders/encoders for contract composites, with official messages. */

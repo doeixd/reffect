@@ -78,7 +78,18 @@ Checked 2026-10-02 with `npm view` and a scratch install:
 
 ## Order of work
 
-1. Wire features (NR-002), each as a small NativeRpc codec slice, ending with the full `RemoteRpc` Read/Query payloads compiling with parity.
+1. Wire features (NR-002), each as a small NativeRpc codec slice, ending with the full `RemoteRpc` Read/Query payloads compiling with parity. **Done 2026-10-02.** The slices were:
+   - [numbers](number-profile.md);
+   - [optional fields](optional-fields.md);
+   - [records](records-js-order.md);
+   - [length checks](array-length.md);
+   - [TaggedError](tagged-errors.md);
+   - [Unknown](unknown-json.md);
+   - [literal unions](literal-unions.md);
+   - plain `Schema.String` (STR-008).
+
+   The vendored, unchanged contract ([fixture](../../packages/reffect/tests/fixtures/foldkit-remote-wire.ts)) compiles for Read, Mutate and Query, and matches the official server ([remote-wire-rpc.test.ts](../../packages/reffect/tests/remote-wire-rpc.test.ts)). `Live` is refused as a streaming procedure (NR-006). `NativeRpc.witness(schema)` derives the R witness of any contract schema for handlers and the engine.
+
 2. Move the oracle pin to Effect 4.0.0, then the engine port and memory backend for Read (NR-001, NR-003, NR-004), with the differential harness against the upgraded foldkit-plus releases (NR-007).
 3. Query with the Query evaluator, then query `select`.
 4. Compiled Sources, authorization and mutations (NR-005).

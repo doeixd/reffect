@@ -135,7 +135,7 @@ export { NativeDiagnostic } from "./cargo-diagnostics.ts";
 export type { OriginRecord, OccurrenceRecord, ProvenanceSnapshot } from "./provenance.ts";
 
 export { NativeRpc } from "./native-rpc.ts";
-export type { RpcBinding, RpcArtifact } from "./native-rpc.ts";
+export type { RpcBinding, RpcArtifact, WireValue } from "./native-rpc.ts";
 export { RpcCodecs } from "./rpc-codecs.ts";
 
 export { RpcBearer } from "./rpc-auth.ts";
