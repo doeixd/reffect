@@ -179,7 +179,9 @@ export type Layout =
   /** A plain `T | undefined` (OPT-001). */
   | { readonly _tag: "UndefinedOr"; readonly item: IRType<unknown> }
   /** A string-keyed record in JS own-property order (RECJS-001). */
-  | { readonly _tag: "Record"; readonly value: IRType<unknown> };
+  | { readonly _tag: "Record"; readonly value: IRType<unknown> }
+  /** A union of string literals, natively a unit-variant enum (LIT-001). */
+  | { readonly _tag: "Literals"; readonly literals: readonly string[] };
 export class IRType<A> extends Pipeable.Class {
   protected constructor(
     readonly ref: SemanticRef<"type">,
@@ -444,6 +446,14 @@ export const undefinedOrItem = (type: IRType<unknown>): IRType<unknown> | undefi
     ? undefined
     : Match.value(type.layout).pipe(
         Match.tag("UndefinedOr", (layout) => layout.item),
+        Match.orElse(() => undefined),
+      );
+/** The literals of a string literal union, or undefined for any other witness. */
+export const literalsOf = (type: IRType<unknown>): readonly string[] | undefined =>
+  type.layout === undefined
+    ? undefined
+    : Match.value(type.layout).pipe(
+        Match.tag("Literals", (layout) => layout.literals),
         Match.orElse(() => undefined),
       );
 /** The value witness of a string-keyed record, or undefined for any other witness. */
@@ -1126,6 +1136,7 @@ export const reachesUnknown = (type: IRType<unknown>): boolean =>
         Array: (array) => reachesUnknown(array.item),
         UndefinedOr: (option) => reachesUnknown(option.item),
         Record: (record) => reachesUnknown(record.value),
+        Literals: () => false,
       }),
     ));
 export const AddNumber = Operation.make(

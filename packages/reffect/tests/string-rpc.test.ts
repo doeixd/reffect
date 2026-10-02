@@ -79,7 +79,9 @@ const oracle = Effect.gen(function* () {
 
 test("plain Schema.String maps onto R.String in payloads and results (STR-008)", async () => {
   const Plain = RpcGroup.make(Rpc.make("Echo", { payload: Schema.String, success: Schema.String }));
-  const artifact = await Effect.runPromise(NativeRpc.compile(Plain, { Echo: NativeRpc.bind(echo) }));
+  const artifact = await Effect.runPromise(
+    NativeRpc.compile(Plain, { Echo: NativeRpc.bind(echo) }),
+  );
   expect(artifact.files["src/main.rs"]).toContain("string_arg");
 });
 

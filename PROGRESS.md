@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-02 — String literal unions
+
+- Recorded [literal-union decisions](docs/research/literal-unions.md) (LIT-001–003) from Remote's `position: "prepend" | "append"` and probes on Effect 4.0.0. Mismatches read `Expected "a" | "b"`, and inside `optional` only non-strings gain `| null`.
+- Added `R.Literals([...])` (string literals; a Copy unit-variant Rust enum; values from `.literal(...)`). `NativeRpc` maps plain string literal unions and single string literals onto it, with Effect's own mismatch text.
+- Validation (focused):
+  - `literals-rpc.test.ts` 2/2: 32 raw requests at the top level, in fields and in `optional` fields, plus handler-built literals, all strictly equal to the official server. Numeric literals are refused.
+  - Records, TaggedError, records reference and compiler suites pass (18 tests), as does `vp check`.
+
 ## 2026-10-02 — Plain Schema.String in requests (STR-008)
 
 - Per the user's decision (option 1), `NativeRpc` now decodes plain `Schema.String` onto `R.String`, as Remote's requests require. It is recorded as [STR-008](docs/research/string-profile.md#plain-schemastring-in-requests-2026-10-02): the official server accepts lone-surrogate escapes and runs the handler, while the native server refuses the whole body (`Invalid JSON`). `StringJson` remains the exact choice for new contracts.

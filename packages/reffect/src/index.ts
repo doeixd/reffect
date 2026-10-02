@@ -46,6 +46,8 @@ export {
   UndefinedOrType,
   RecordIR,
   RecordType,
+  Literals,
+  LiteralsType,
   optional,
   optionalKey,
 } from "./records.ts";

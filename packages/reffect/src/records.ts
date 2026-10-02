@@ -724,3 +724,39 @@ export const RecordIR = Object.freeze(
     { keys: recordKeys, values: recordValues, size: recordSize, has: recordHas },
   ),
 );
+
+/** Native variant names for literals: the literal when it is a Rust identifier, else positional. */
+export const rustLiteralVariants = (literals: readonly string[]): readonly string[] => {
+  const names = literals.map((literal, i) => rustIdent(literal) ?? `V${i}`);
+  return new Set(names).size === names.length ? names : literals.map((_, i) => `V${i}`);
+};
+/** `Schema.Literals([...])` over strings: a Copy unit-variant enum (LIT-001). */
+export class LiteralsType<L extends string> extends IRType<L> {
+  private constructor(readonly literals: readonly L[]) {
+    const key = JSON.stringify(literals);
+    super(
+      SemanticRef.type(`reffect/literals@1/${digest(key)}`),
+      freeze(Schema.Literals(literals)) as unknown as Schema.Codec<L>,
+      Object.freeze({ target: Targets.RustStd, type: `Literals_${digest(key)}` }),
+      Object.freeze([Traits.Copyable, Traits.Cloneable, Traits.Eq]),
+      Object.freeze({ _tag: "Literals" as const, literals: Object.freeze([...literals]) }),
+    );
+    Object.freeze(this);
+  }
+  static of<const L extends string>(literals: readonly [L, ...L[]]): LiteralsType<L> {
+    if (
+      !Array.isArray(literals) ||
+      literals.length === 0 ||
+      literals.some((literal) => typeof literal !== "string") ||
+      new Set(literals).size !== literals.length
+    )
+      throw fail("TYPE_MISMATCH", "authoring", "Literals", "Literals are distinct strings");
+    return intern(["literals", ...literals], () => new LiteralsType(literals));
+  }
+  /** A literal value of this union. */
+  literal(value: L): Expr<L> {
+    return Expr.literal(this, value);
+  }
+}
+export const Literals = <const L extends string>(literals: readonly [L, ...L[]]): LiteralsType<L> =>
+  LiteralsType.of(literals);

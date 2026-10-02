@@ -20,8 +20,9 @@ import {
   structLayout,
   unionCases,
   undefinedOrItem,
+  literalsOf,
 } from "./kernel.ts";
-import { rustFieldNames, rustVariantName } from "./records.ts";
+import { rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
 import type { Expr, OperationRef, Program, RecordQuery } from "./kernel.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
@@ -83,6 +84,8 @@ export type RustExpr = (
   | { readonly _tag: "Undefined" }
   /** An `optional` field read: presence and definedness collapse to `Option<T>`. */
   | { readonly _tag: "Flatten"; readonly base: RustExpr }
+  /** A unit enum variant of a literal union (LIT-001). */
+  | { readonly _tag: "Variant"; readonly text: string }
   /** A `Record` query over `Vec<(String, V)>` in JS order (RECJS-002). */
   | {
       readonly _tag: "RecordQuery";
@@ -556,6 +559,12 @@ export function lowerFunctions(
                 const literal = RustExpr.literal(
                   n.value as bigint | boolean | string | number | void,
                 );
+                const literals = literalsOf(e.type);
+                if (literals)
+                  return Object.freeze({
+                    _tag: "Variant",
+                    text: `${e.type.native.type}::${rustLiteralVariants(literals)[literals.indexOf(n.value as string)]}`,
+                  });
                 if (!undefinedOrItem(e.type)) return literal;
                 return n.value === undefined
                   ? Object.freeze({ _tag: "Undefined" })
@@ -1554,6 +1563,7 @@ export const emitFunctions = (
                 },
                 Defined: (n) => joinFragments(["Some(", render(n.value), ")"]),
                 Undefined: () => textFragment("None"),
+                Variant: (n) => textFragment(n.text),
                 RecordQuery: (n) =>
                   Match.value(n.query).pipe(
                     Match.when("Keys", () =>
@@ -2528,6 +2538,7 @@ const writeCompositeTypes = (
         Array: (array) => visit(array.item),
         UndefinedOr: (option) => visit(option.item),
         Record: (record) => visit(record.value),
+        Literals: () => undefined,
       }),
     );
     const previous = names.get(type.native.type);
@@ -2591,6 +2602,14 @@ const writeCompositeTypes = (
         Array: () => undefined,
         UndefinedOr: () => undefined,
         Record: () => undefined,
+        Literals: (union) =>
+          write(
+            `#[derive(Clone, Copy, Debug, PartialEq)]\n#[allow(non_camel_case_types)]\npub enum ${type.native.type} {${rustLiteralVariants(
+              union.literals,
+            )
+              .map((name) => ` ${name},`)
+              .join("")} }\n\n`,
+          ),
       }),
     );
 };

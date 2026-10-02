@@ -29,7 +29,9 @@ import {
   TaggedUnion,
   optional as optionalField,
   optionalKey as optionalKeyField,
+  Literals,
   rustFieldNames,
+  rustLiteralVariants,
   rustVariantName,
 } from "./records.ts";
 import {
@@ -84,6 +86,8 @@ interface Composite {
   readonly record?: Codec;
   /** `Schema.Unknown` carried as normalized JSON data (UNK-002). */
   readonly json?: true;
+  /** A union of string literals, in declaration order (LIT-002). */
+  readonly literals?: readonly string[];
   /** A JS number: plain JSON numbers when finite-only, plus verified checks (NUM-002). */
   readonly number?: {
     readonly finiteOnly: boolean;
@@ -218,6 +222,7 @@ const kindsOf = (
         };
   if (codec.item) return { kinds: ["array"], expected: codec.expected };
   if (codec.record) return { kinds: ["object"], expected: codec.expected };
+  if (codec.literals) return { kinds: ["string"], expected: codec.expected };
   if (codec.json)
     throw unsupported(path, "optional(Unknown) is not supported: null matches Unknown first");
   if (codec.cases.length === 0 && codec.fields.length === 0)
@@ -294,6 +299,34 @@ const withoutContext = (ast: SchemaAST.AST): SchemaAST.AST => {
     }),
   );
 };
+// A plain union of string literals, or one string literal (LIT-002); others stay refused.
+const stringLiterals = (ast: SchemaAST.AST): readonly [string, ...string[]] | undefined => {
+  const plain = (node: SchemaAST.AST) =>
+    SchemaAST.isLiteral(node) &&
+    typeof node.literal === "string" &&
+    !node.checks &&
+    !node.encoding &&
+    !node.context &&
+    !node.annotations;
+  if (plain(ast) && SchemaAST.isLiteral(ast) && typeof ast.literal === "string")
+    return [ast.literal];
+  if (
+    !SchemaAST.isUnion(ast) ||
+    ast.checks ||
+    ast.encoding ||
+    ast.context ||
+    ast.annotations ||
+    !ast.types.every(plain)
+  )
+    return undefined;
+  const values = ast.types.flatMap((node) =>
+    SchemaAST.isLiteral(node) && typeof node.literal === "string" ? [node.literal] : [],
+  );
+  const [first, ...rest] = values;
+  return first === undefined || new Set(values).size !== values.length
+    ? undefined
+    : [first, ...rest];
+};
 // Schema.TaggedError: a Declaration encoded through exactly its tagged struct (TE-001).
 const taggedClass = (
   ast: SchemaAST.Declaration,
@@ -327,6 +360,7 @@ const sampleOf = (codec: Codec, path: string): unknown => {
       }),
     );
   if (codec.number) return 1.5;
+  if (codec.literals) return codec.literals[0];
   if (codec.json) return null;
   if (codec.item) return [];
   if (codec.record) return {};
@@ -498,6 +532,17 @@ const composite = (
       ...(lengths.length ? { lengths } : {}),
     });
   }
+  const literals = stringLiterals(ast);
+  if (literals) {
+    const type = Literals(literals);
+    return register(registry, type.native.type, {
+      type,
+      fields: [],
+      cases: [],
+      literals,
+      expected: expectedOf(type),
+    });
+  }
   if (SchemaAST.isUnion(ast) || SchemaAST.isDeclaration(ast)) {
     if (SchemaAST.isUnion(ast) && (ast.checks || ast.encoding || ast.context || ast.annotations))
       throw unsupported(path, "Annotated or checked unions are not supported");
@@ -540,6 +585,7 @@ const register = (registry: Registry, base: string, shape: Omit<Composite, "name
     shape.number ?? null,
     shape.lengths ?? null,
     shape.json ?? null,
+    shape.literals ?? null,
   ]);
   const name = `${base}_${digest(signature)}`;
   const existing = registry.get(name);
@@ -725,7 +771,8 @@ const codec = (
     SchemaAST.isObjects(ast) ||
     SchemaAST.isUnion(ast) ||
     SchemaAST.isArrays(ast) ||
-    SchemaAST.isDeclaration(ast)
+    SchemaAST.isDeclaration(ast) ||
+    SchemaAST.isLiteral(ast)
   )
     return composite(ast, path, registry, decodeOnly);
   if (ast.checks || ast.encoding || ast.context || ast.annotations)
@@ -1486,6 +1533,24 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
           .join("") +
         `    Ok(x)\n}\n` +
         `fn encode_${name}(value: &f64) -> Value { js_number(*value) }\n`
+      );
+    }
+    if (shape.literals) {
+      const variants = rustLiteralVariants(shape.literals);
+      const type = rustType(shape.type);
+      return (
+        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${type}, String> {\n    match value.as_str() {\n${shape.literals
+          .map(
+            (literal, i) =>
+              `        Some(${Rs.stringLiteral(literal).text}) => Ok(${type}::${variants[i]}),\n`,
+          )
+          .join("")}        _ => Err(at(${expected}, path)),\n    }\n}\n` +
+        `fn encode_${name}(value: &${type}) -> Value {\n    Value::String(match value {\n${shape.literals
+          .map(
+            (literal, i) =>
+              `        ${type}::${variants[i]} => ${Rs.stringLiteral(literal).text},\n`,
+          )
+          .join("")}    }.to_string())\n}\n`
       );
     }
     if (shape.json)
