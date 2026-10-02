@@ -97,6 +97,18 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 [Foldkit-Plus issue record](research/foldkit-plus-issues.md) documents confirmed upstream discrepancies, traversal/mutability/reporting limitations, and package compatibility findings with reproductions.
 
+## Effect ecosystem reference
+
+Pinned external API/ecosystem surveys used for research and design checks. They describe upstream packages and third-party projects, not implemented reffect support; verify claims against the installed dependency version before acting on them.
+
+[Effect v4 API scope](effect-v4-api-scope.md) maps `effect@4.0.0-rc.115` modules, v3→v4 renames, idioms and companion packages.
+
+[Effect Schema](effect-schema.md) covers the v4 Schema API and ecosystem, including the standalone-to-core history and decode/encode split.
+
+[Effect ecosystem](effect-ecosystem.md) maps official v4 packages and verified community libraries (jobs, Cloudflare, Alchemy, agents, durable streams, SQL, TUI, frontend), plus a weekly-digest digest.
+
+[Effect-adjacent projects](effect-adjacent-projects.md) surveys auth, payments, infrastructure, database and agent projects for stack fit against Effect v4.
+
 ## Migration tooling and research
 
 [Compiler-guided migration tooling](migration-tooling.md) integrates the migration conversation: an external codemod engine, compiler-owned compatibility reports, target reachability, mechanical/guided/architectural transformations, diagnostic-linked fixes, JSON/editor/agent workflows, and semantic validation. Commands, packages, and the future migration skill are proposals.
