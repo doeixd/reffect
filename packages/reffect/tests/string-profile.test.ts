@@ -49,7 +49,15 @@ const contains = R.fn([R.String, R.String], R.Bool, (self, search) =>
 const pick = R.fn([R.String, R.String], R.String, (left, right) =>
   R.Match.bool(R.String.eq(left, right), left, R.String.replaceAll(right, "a", "b")),
 );
-const program = R.program({ text, attribute, contains, pick });
+// A borrowed parameter, a literal and a computed string, joined both ways.
+const joined = R.fn([R.String, R.String], R.String, (left, right) =>
+  left.pipe(
+    R.String.concat(R.String.literal(":")),
+    R.String.concat(R.String.replaceAll(right, "a", "b")),
+    R.String.concat(left),
+  ),
+);
+const program = R.program({ text, attribute, contains, pick, joined });
 
 const wellFormed = [
   "",
@@ -186,6 +194,21 @@ test(
                     profile,
                   ),
                 ).toEqual(yield* Effect.exit(Reference.run(contains, [self, search])));
+              for (const [left, right] of [
+                ["", ""],
+                ["Project", "p1"],
+                ["😀é", "日本a"],
+              ] as const)
+                expect(
+                  yield* NativeRunner.run(
+                    artifact,
+                    directory,
+                    "joined",
+                    joined,
+                    [left, right],
+                    profile,
+                  ),
+                ).toEqual(yield* Effect.exit(Reference.run(joined, [left, right])));
               for (const [left, right] of [
                 ["same", "same"],
                 ["left", "banana"],

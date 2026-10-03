@@ -48,6 +48,7 @@ import {
   reachesUnknown,
   IncludesString,
   ReplaceAllString,
+  ConcatString,
   StringType,
   NotBool,
   checkFunction,
@@ -80,6 +81,7 @@ export interface Implementation {
     | "not"
     | "contains"
     | "replace"
+    | "concat"
     | "add"
     | "json";
 }
@@ -147,6 +149,7 @@ const implementations = Object.freeze([
   implementation(EqString as AnyOperation, "eq"),
   implementation(IncludesString as AnyOperation, "contains"),
   implementation(ReplaceAllString as AnyOperation, "replace"),
+  implementation(ConcatString as AnyOperation, "concat"),
   implementation(AddNumber as AnyOperation, "add"),
   implementation(EqNumber as AnyOperation, "eq"),
   implementation(LtNumber as AnyOperation, "lt"),

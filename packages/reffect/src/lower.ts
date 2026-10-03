@@ -1734,6 +1734,14 @@ export const emitFunctions = (
                 },
                 Call: (n) => {
                   if (n.method === "not") return joinFragments(["!(", operand(n.args[0]), ")"]);
+                  if (n.method === "concat")
+                    return joinFragments([
+                      'format!("{}{}", ',
+                      operand(n.args[0]),
+                      ", ",
+                      operand(n.args[1]),
+                      ")",
+                    ]);
                   if (n.method === "json")
                     return joinFragments([
                       `crate::reffect_json::${Rs.ident(n.encoder!).text}(&(`,

@@ -1038,6 +1038,11 @@ class StringWitness extends IRType<string> {
     (that: Expr<string>): (self: Expr<string>) => Expr<boolean>;
     (self: Expr<string>, that: Expr<string>): Expr<boolean>;
   } = dual(2, (a: Expr<string>, b: Expr<string>) => Expr.apply(EqString, a, b));
+  /** Effect `String.concat(that)(self)`: `self` followed by `that`. */
+  readonly concat: {
+    (that: Expr<string>): (self: Expr<string>) => Expr<string>;
+    (self: Expr<string>, that: Expr<string>): Expr<string>;
+  } = dual(2, (self: Expr<string>, that: Expr<string>) => Expr.apply(ConcatString, self, that));
   /** Effect `String.includes(searchString)(self)`; the position argument is not admitted. */
   readonly includes: {
     (searchString: Expr<string>): (self: Expr<string>) => Expr<boolean>;
@@ -1171,6 +1176,13 @@ export const IncludesString = Operation.make(
   BoolType,
   (self, search) => self.includes(search),
 ).pipe(Operation.withCapabilities([Capabilities.String, Capabilities.Bool]));
+// Joining well-formed strings keeps them well-formed, so no check is needed (STR-001).
+export const ConcatString = Operation.make(
+  SemanticRef.operation("reffect/string.concat@1"),
+  [StringType, StringType],
+  StringType,
+  (self, that) => self + that,
+).pipe(Operation.withCapabilities([Capabilities.String]));
 export const ReplaceAllString = Operation.make(
   SemanticRef.operation("reffect/string.replace-all-literal@1"),
   [StringType, StringType, StringType],
