@@ -1,6 +1,6 @@
 # Named function calls and recursion in the IR
 
-Status: **deferred design record, not a plan.** Written 2026-10-02, following the `R.flow` work in [flow-composition.md](flow-composition.md). This captures the long-term question "should reffect grow function calls (Option D)?" so the decision is recorded rather than rediscovered. It changes no milestones and admits no capability.
+Status: **historical design analysis; decision updated 2026-10-03.** Written 2026-10-02 after `R.flow`. The per-pass blast-radius analysis remains useful, but [R language direction](../r-language.md) now promotes **D1 named monomorphic calls** into the planned language foundation and adds proper-tail-recursion lowering. **D2 first-class function values remains out of scope.**
 
 ## The distinction that matters
 
