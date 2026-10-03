@@ -149,6 +149,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
+    // Like Node's HTTP server, disable Nagle: delayed ACKs otherwise stall multi-segment responses.
+    let listener = axum::serve::ListenerExt::tap_io(listener, |stream: &mut tokio::net::TcpStream| { let _ = stream.set_nodelay(true); });
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -225,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = stdin_eof => {} }
         let _ = shutdown.send(true);
     };
+    let listener = axum::serve::ListenerExt::tap_io(listener, |stream: &mut tokio::net::TcpStream| { let _ = stream.set_nodelay(true); });
     axum::serve(listener, app).with_graceful_shutdown(signal).await?;
     let _ = stop_launch.send(true);
     let _ = launch.await;

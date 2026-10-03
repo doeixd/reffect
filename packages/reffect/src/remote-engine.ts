@@ -31,6 +31,9 @@ mod remote_engine {
     impl<T: Clone> JsObject<T> {
         pub fn new() -> Self { JsObject { entries: Vec::new() } }
         pub fn get(&self, key: &str) -> Option<&T> { self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v) }
+        pub fn get_mut(&mut self, key: &str) -> Option<&mut T> { self.entries.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v) }
+        /// Moves a value out, leaving the key absent.
+        pub fn take(&mut self, key: &str) -> Option<T> { let at = self.entries.iter().position(|(k, _)| k == key)?; Some(self.entries.remove(at).1) }
         pub fn has(&self, key: &str) -> bool { self.entries.iter().any(|(k, _)| k == key) }
         pub fn len(&self) -> usize { self.entries.len() }
         pub fn is_empty(&self) -> bool { self.entries.is_empty() }
@@ -192,27 +195,29 @@ mod remote_engine {
             _ => Vec::new(),
         }
     }
-    fn merge_relation(current: &Relation, next: &Relation) -> Relation {
-        let mut fields = current.fields.clone();
-        let mut seen: HashSet<String> = fields.iter().cloned().collect();
-        for field in &next.fields { if seen.insert(field.clone()) { fields.push(field.clone()); } }
-        let windows = match (&current.windows, &next.windows) {
-            (None, None) => JsObject::new(),
-            (Some(a), None) => a.clone(),
-            (None, Some(b)) => JsObject::new().spread(b),
-            (Some(a), Some(b)) => a.spread(b),
-        };
-        Relation { entity: current.entity.clone(), fields, windows: if windows.is_empty() { None } else { Some(windows) }, relations: merge_relations(&current.relations, &next.relations) }
-    }
-    fn merge_relations(current: &Option<JsObject<Relation>>, next: &Option<JsObject<Relation>>) -> Option<JsObject<Relation>> {
-        let Some(current) = current else { return next.clone() };
-        let Some(next) = next else { return Some(current.clone()) };
-        let mut merged = current.clone();
-        for (field, relation) in next.iter() {
-            let value = match merged.get(field) { None => relation.clone(), Some(existing) => merge_relation(existing, relation) };
-            merged.set(field.clone(), value);
+    /// ` +
+  "`target = mergeRelation(target, next)`" +
+  String.raw`, in place: unseen fields appended, windows
+    /// spread (a reassigned key keeps its position; an empty result is absent), relations merged.
+    fn merge_into(target: &mut Relation, fields: &[String], windows: &Option<JsObject<Window>>, relations: &Option<JsObject<Relation>>) {
+        for field in fields { if !target.fields.contains(field) { target.fields.push(field.clone()); } }
+        if let Some(windows) = windows {
+            let own = target.windows.get_or_insert_with(JsObject::new);
+            for (key, window) in windows.iter() { own.set(key.clone(), window.clone()); }
         }
-        Some(merged)
+        if target.windows.as_ref().map(JsObject::is_empty).unwrap_or(false) { target.windows = None; }
+        match (&mut target.relations, relations) {
+            (_, None) => {}
+            (None, Some(next)) => target.relations = Some(next.clone()),
+            (Some(own), Some(next)) => {
+                for (field, relation) in next.iter() {
+                    match own.get_mut(field) {
+                        Some(existing) => merge_into(existing, &relation.fields, &relation.windows, &relation.relations),
+                        None => own.set(field.clone(), relation.clone()),
+                    }
+                }
+            }
+        }
     }
 
     // ---- remote-server helpers.
@@ -259,21 +264,26 @@ mod remote_engine {
         for request in requests.iter().flat_map(split_aliases) {
             let renames = request.renames.clone().unwrap_or_default();
             let key = format!("{}\u{0}{}\u{0}{}", request.entity, stable_windows(&request.windows), stable_renames(&request.renames));
-            let as_relation = Relation { entity: request.entity.clone(), fields: request.fields.clone(), windows: request.windows.clone(), relations: request.relations.clone() };
             match grouped.get_mut(&key) {
                 None => {
                     let mut ids = Ordered::new();
                     let mut asked = OrderedSet::default();
                     for field in &request.fields { asked.add(field); }
                     ids.set(request.id.clone(), asked);
-                    let empty = Relation { entity: request.entity.clone(), fields: Vec::new(), windows: None, relations: None };
-                    grouped.set(key, EntityGroup { ids, slice: merge_relation(&empty, &as_relation), renames });
+                    let mut slice = Relation { entity: request.entity.clone(), fields: Vec::new(), windows: None, relations: None };
+                    merge_into(&mut slice, &request.fields, &request.windows, &request.relations);
+                    grouped.set(key, EntityGroup { ids, slice, renames });
                 }
                 Some(group) => {
-                    let mut asked = group.ids.get(&request.id).cloned().unwrap_or_default();
-                    for field in &request.fields { asked.add(field); }
-                    group.ids.set(request.id.clone(), asked);
-                    group.slice = merge_relation(&group.slice, &as_relation);
+                    match group.ids.get_mut(&request.id) {
+                        Some(asked) => for field in &request.fields { asked.add(field); },
+                        None => {
+                            let mut asked = OrderedSet::default();
+                            for field in &request.fields { asked.add(field); }
+                            group.ids.set(request.id.clone(), asked);
+                        }
+                    }
+                    merge_into(&mut group.slice, &request.fields, &request.windows, &request.relations);
                 }
             }
         }
@@ -406,9 +416,9 @@ mod remote_engine {
     }
 
     fn read_error(message: String) -> Value { json!({ "_tag": "RemoteReadError", "message": message }) }
-    fn js_object(object: &JsObject<Value>) -> Value {
+    fn into_object(object: JsObject<Value>) -> Value {
         let mut map = Map::new();
-        for (key, value) in object.iter() { map.insert(key.clone(), value.clone()); }
+        for (key, value) in object.entries { map.insert(key, value); }
         Value::Object(map)
     }
 
@@ -444,23 +454,26 @@ mod remote_engine {
                 let windows = windows_of(&group.slice.windows, &allowed);
                 let mut records = Vec::new();
                 for chunk in id_list.chunks(MAX_IDS_PER_ENTITY) { records.extend(server.read(&name, chunk, &allowed, &windows)); }
-                for record in records {
+                for mut record in records {
                     let mut values: JsObject<Value> = JsObject::new();
                     let mut omitted = Vec::new();
                     let asked = group.ids.get(&record.id);
                     for field in &allowed {
-                        if let Some(value) = record.values.get(field) { values.set(rename(field), value.clone()); }
+                        if let Some(value) = record.values.take(field) { values.set(rename(field), value); }
                         else if asked.map(|asked| asked.has(field)).unwrap_or(false) { omitted.push(rename(field)); }
                     }
-                    entities.push(json!({ "entity": name, "id": record.id, "values": js_object(&values) }));
                     settle(&mut settled, &name, &record.id, &omitted);
                     let key = format!("{}:{}", name, record.id);
                     let known = fetched.entry(key.clone()).or_default();
                     for field in &allowed { known.insert(rename(field)); }
-                    let merged = fetched_values.get(&key).map(|old| old.spread(&values)).unwrap_or_else(|| values.clone());
-                    fetched_values.insert(key, merged);
+                    match fetched_values.get_mut(&key) {
+                        Some(old) => for (field, value) in values.iter() { old.set(field.clone(), value.clone()); },
+                        None => { fetched_values.insert(key, values.clone()); }
+                    }
                     let empty = JsObject::new();
                     follow(&values, group.slice.relations.as_ref().unwrap_or(&empty), &fetched, &fetched_values, &mut next);
+                    // Pushed last: following only extends the next level, so the order of entities is unchanged.
+                    entities.push(json!({ "entity": name, "id": record.id, "values": into_object(values) }));
                 }
             }
             pending = next.into_iter().filter_map(|mut request| {
@@ -530,6 +543,9 @@ mod remote_engine {
         /// The order-only twin's own slots: without the predicates it reads fewer of them.
         pub order_fields: &'static [&'static str],
         pub order_inputs: &'static [&'static str],
+        /// The table's evaluator cells, built once: memory rows are fixed until mutations land
+        /// (RM-002 must invalidate this when the store becomes writable).
+        pub cells: std::sync::OnceLock<Vec<Vec<Cell>>>,
     }
     /// A row or input value as the evaluator sees it; an absent field is null (` +
   "`isNull`" +
@@ -569,8 +585,8 @@ mod remote_engine {
         let table = server.tables.get(def.entity).unwrap_or(&empty);
         let rows: Vec<(&String, &Map<String, Value>)> = table.iter().collect();
         let encoded: Vec<Cell> = def.inputs.iter().map(|key| cell(input.get(*key))).collect();
-        let cells: Vec<Vec<Cell>> = rows.iter().map(|(_, row)| def.fields.iter().map(|field| cell(row.get(*field))).collect()).collect();
-        let matched = (def.run)(&encoded, &cells).map_err(|error| query_error(error.to_string()))?;
+        let cells = def.cells.get_or_init(|| rows.iter().map(|(_, row)| def.fields.iter().map(|field| cell(row.get(*field))).collect()).collect());
+        let matched = (def.run)(&encoded, cells).map_err(|error| query_error(error.to_string()))?;
         // A cursor row that no longer matches still has a place in the order, as a keyset has it.
         let locate = |cursor: &str| -> Result<Position, String> {
             let Some(found) = rows.iter().position(|(id, _)| id.as_str() == cursor) else {

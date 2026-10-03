@@ -1,0 +1,69 @@
+{
+  "checked": "2026-10-03",
+  "target": "win32/x64",
+  "node": "v24.21.0",
+  "rust": "rustc 1.90.0 (1159e78c4 2025-09-14)",
+  "effect": "4.0.0",
+  "foldkitRemoteServer": "0.10.0",
+  "setup": {
+    "rows": {
+      "User": 500,
+      "Project": 5000
+    },
+    "requests": 4000,
+    "concurrency": 32,
+    "warmup": 300,
+    "client": "node fetch (keep-alive) in 4 worker threads, same machine"
+  },
+  "peakServerMemoryMiB": {
+    "native": 20.1,
+    "official": 269.4
+  },
+  "results": {
+    "read-one": {
+      "responseBytes": 235,
+      "native": {
+        "requestsPerSecond": 2713,
+        "p50ms": 10.06,
+        "p95ms": 17.208,
+        "p99ms": 26.376
+      },
+      "official": {
+        "requestsPerSecond": 1830,
+        "p50ms": 14.408,
+        "p95ms": 32.429,
+        "p99ms": 50.344
+      }
+    },
+    "read-batch-50": {
+      "responseBytes": 8244,
+      "native": {
+        "requestsPerSecond": 454,
+        "p50ms": 67.631,
+        "p95ms": 145.399,
+        "p99ms": 162.768
+      },
+      "official": {
+        "requestsPerSecond": 403,
+        "p50ms": 79.169,
+        "p95ms": 92.859,
+        "p99ms": 116.764
+      }
+    },
+    "query-page-20": {
+      "responseBytes": 4166,
+      "native": {
+        "requestsPerSecond": 400,
+        "p50ms": 69.024,
+        "p95ms": 141.202,
+        "p99ms": 155.395
+      },
+      "official": {
+        "requestsPerSecond": 280,
+        "p50ms": 116.203,
+        "p95ms": 131.871,
+        "p99ms": 143.551
+      }
+    }
+  }
+}

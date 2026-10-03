@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-03 — First native versus official Remote measurements
+
+- Added a benchmark ([remote-bench.md](docs/research/remote-bench.md)): both servers in separate processes, the same workloads, and answers checked equal first. **Peak memory: native 20 MiB versus official about 270 MiB.**
+- Over HTTP, native is never slower, but the numbers are bound by the Node client (a Windows timer-tick floor of about 15.6 ms per `fetch`, the same for both servers). Throughput claims wait for a native load generator or a Linux host.
+- Engine timed in-process against V8 (official handlers in-process):
+  - The literal port started **2× slower** on Read (660 versus 334 µs).
+  - Fixed: per-request evaluator cells are now cached per query (HTTP query 103 → 400 req/s); grouping merges in place; record values move instead of being cloned three times (Read 660 → 568 µs).
+  - Allocation dominates the rest: with `mimalloc`, Read is 287 µs and Query 405 µs, ahead of V8 (334/885). The allocator choice is recorded as an option, not adopted.
+- The native server now sets `TCP_NODELAY` like Node's HTTP server. Remote read, query and acceptance suites pass (6/6) after each change.
+
 ## 2026-10-03 — Request limits, depth and upstream findings
 
 - Probed transport limits against the official server. 1–8 MB bodies are accepted officially; natively they were refused (connection reset at the 64 KiB hardening limit). Payloads nested about 127+ levels deep are accepted officially, but refused whole natively by `serde_json`'s recursion limit. Both are now in the [divergence register](docs/native-divergences.md), along with the 64-request batch limit.

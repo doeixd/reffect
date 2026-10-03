@@ -172,7 +172,7 @@ const compile = <Rpcs extends Rpc.Any>(
             `&[${slots.map((slot) => Rs.stringLiteral(slot.key).text).join(", ")}]`;
           return {
             validator: inputValidator(query.name, query.Input, i),
-            definition: `remote_engine::QueryDef { name: ${Rs.stringLiteral(query.name).text}, entity: ${Rs.stringLiteral(entity).text}, valid: remote_query_valid_${i}, fields: ${list(analysis.fields)}, inputs: ${list(analysis.inputs)}, run: foldkit_eval::r_q${i}, order: foldkit_eval::r_q${i}_order, order_fields: ${list(twin.fields)}, order_inputs: ${list(twin.inputs)} }`,
+            definition: `remote_engine::QueryDef { name: ${Rs.stringLiteral(query.name).text}, entity: ${Rs.stringLiteral(entity).text}, valid: remote_query_valid_${i}, fields: ${list(analysis.fields)}, inputs: ${list(analysis.inputs)}, run: foldkit_eval::r_q${i}, order: foldkit_eval::r_q${i}_order, order_fields: ${list(twin.fields)}, order_inputs: ${list(twin.inputs)}, cells: std::sync::OnceLock::new() }`,
           };
         });
         return {
@@ -192,7 +192,7 @@ fn remote_memory() -> &'static remote_engine::Memory {
     REMOTE_MEMORY.get_or_init(|| remote_engine::Memory::new(vec![${names.join(", ")}], &serde_json::from_str(REMOTE_ROWS).expect("embedded rows are JSON")))
 }
 ${prepared.definitions.map((definition) => definition.validator).join("\n")}
-static REMOTE_QUERIES: &[remote_engine::QueryDef] = &[${prepared.definitions.map((definition) => definition.definition).join(", ")}];
+static REMOTE_QUERIES: [remote_engine::QueryDef; ${prepared.definitions.length}] = [${prepared.definitions.map((definition) => definition.definition).join(", ")}];
 #[allow(dead_code)]
 mod foldkit_eval {
 ${prepared.evaluator || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, PartialEq)]\npub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }"}
@@ -202,7 +202,7 @@ ${prepared.evaluator || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, Par
       procedures[READ] = { call: "remote_engine::read(remote_memory(), payload)" };
     if (group.requests.has(QUERY))
       procedures[QUERY] = {
-        call: "remote_engine::query(remote_memory(), REMOTE_QUERIES, payload)",
+        call: "remote_engine::query(remote_memory(), &REMOTE_QUERIES, payload)",
       };
     return yield* compileServer(
       group,
