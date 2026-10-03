@@ -76,7 +76,23 @@ A stream's successful `Exit` carries `"value":null`.
 
 ## Order of work and acceptance
 
-1. **Stream IR and native pull lowering** for the STREAM-005 subset. Done when it agrees with official `Stream.runCollect` and with `Stream.chunks` boundaries for every constructor and operator, including failures part-way.
+1. **Done for the pure subset (2026-10-03).** `R.Stream` provides `make`, `fromIterable`, `range`, `empty`, `fail`, `map`, `filter`, `take`, `rechunk`, `concat`, `chunks` and `runCollect` ([stream.ts](../../packages/reffect/src/stream.ts), [stream-ir.ts](../../packages/reffect/src/stream-ir.ts)).
+   - **Push fusion, not a pull struct.** Natively the pipeline is one fused chunk loop. Each stage hands its non-empty chunks to the next.
+     - `map` and `filter` run the verified Array loops over a borrowed chunk.
+     - `take` and `rechunk` keep local state and leave through labelled blocks.
+     - A failure breaks out past `rechunk`'s flush, as Effect drops the buffer.
+     - `range` reproduces `Arr.range`'s chunks, including fractional and `NaN` bounds.
+
+     This replaces the pull-struct sketch of CHAN-002 with the same fusion it asked for. The async consumers in steps 3–4 continue it, with a continuation that awaits.
+
+   - **Validation:** [stream.test.ts](../../packages/reffect/tests/stream.test.ts) compares 24 cases with the official server as `runCollect(chunks(…))`, so every boundary is checked.
+   - **Costs noted:**
+     - `make`/`fromIterable` clone their array once (`to_vec`);
+     - `concat` duplicates its downstream code per branch.
+   - **Remaining in STREAM-005:** `mapEffect`, `fromSchedule`, `ensuring` and `runForEach`, which need the async consumer and come with steps 3–4.
+
+   Original step: **Stream IR and native pull lowering** for the STREAM-005 subset. Done when it agrees with official `Stream.runCollect` and with `Stream.chunks` boundaries for every constructor and operator, including failures part-way.
+
 2. **NDJSON serialization** for NativeRpc (STREAM-001), unary first. Done when native answers equal an official `layerNdjson` server's, byte for byte, across the existing unary corpora.
 3. **Streaming procedures** (STREAM-006). Done when native responses equal the official server's byte for byte for the probe's table, under NDJSON and JSON, and a stock `RpcClient` over `layerNdjson` consumes a native stream incrementally (the first chunk arrives before the stream ends).
 4. **Interruption** (STREAM-003). Done when a client that aborts mid-stream makes the native handler run its finalizers exactly once, observed as the official probe observed `Stream.ensuring`, and the server keeps serving. A full buffer must suspend the producer (STREAM-002).

@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-03 — Milestone 6 step 1: finite Stream pipelines
+
+- **`R.Stream`** mirrors Effect v4: `make`, `fromIterable`, `range`, `empty`, `fail`, `map`, `filter`, `take`, `rechunk`, `concat`, `chunks` and `runCollect`.
+  - A pipeline is data, consumed by a `StreamRunCollect` computation.
+  - The reference rebuilds it with official `Stream`.
+  - Natively it is one push-fused chunk loop that keeps Effect's chunk boundaries (STREAM-004).
+- **Validation:** `vp test tests/stream.test.ts` passed, comparing 24 cases with the official server, every chunk boundary included. The effect, array, combinator and schema-json suites also pass (5 files, 16 tests).
+- **Next:** NDJSON serialization (step 2), then streaming procedures with the async, effectful operators. [streaming-rpc.md](docs/research/streaming-rpc.md#order-of-work-and-acceptance)
+
 ## 2026-10-03 — Milestone 6 research and design
 
 - [streaming-rpc.md](docs/research/streaming-rpc.md) records the Effect 4.0.0 HTTP stream protocol, read from the installed `effect/rpc` sources and captured from the official server:
