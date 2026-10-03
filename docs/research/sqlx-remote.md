@@ -1,6 +1,6 @@
 # Milestone 5: Remote over SQL with SQLx
 
-Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation milestones §22](../implementation-milestones.md#22-milestone-5--native-query--sqlx) and [Foldkit Remote and SQL](../foldkit-remote.md#remote-drizzle-becomes-remote-sqlx-conceptually). It builds on the accepted [native RemoteServer](native-remote.md) (milestone 4), the [store design](remote-mutations.md#rm-002-refined-remotestore-as-a-service-implementation-2026-10-03) (RS-001..006) and the [milestone-1 Query adapter](foldkit-query.md).
+Status: **implemented (2026-10-03)**, steps 1–5 on SQLite and Postgres. Scope: [implementation milestones §22](../implementation-milestones.md#22-milestone-5--native-query--sqlx) and [Foldkit Remote and SQL](../foldkit-remote.md#remote-drizzle-becomes-remote-sqlx-conceptually). It builds on the accepted [native RemoteServer](native-remote.md) (milestone 4), the [store design](remote-mutations.md#rm-002-refined-remotestore-as-a-service-implementation-2026-10-03) (RS-001..006) and the [milestone-1 Query adapter](foldkit-query.md).
 
 ## Sources (checked 2026-10-03)
 
@@ -139,7 +139,14 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
      Each server mutates its own copy of the seed. Path assertions confirm every outcome.
 
    - **Stock-client acceptance (2026-10-03):** a stock `Remote.clientLayer` session runs over the native SQL server and over the official server. Each server has its own seeded SQLite file, and upstream's `RemoteServer.handlers` serves as the client transport, so no HTTP is involved on the official side. The session prefetches a page, applies `mutateInto` for rename, create and archive, sends a refused mutation, then reloads. Every model read matches the official one with `toStrictEqual`. Assertions on the official run confirm that each step observes its effect, so the comparison cannot pass vacuously.
-5. Postgres as a second dialect, executed. Design below ([step 5](#step-5-postgres-as-a-second-dialect)).
+5. **Done (2026-10-03):** Postgres as a second dialect, executed. Design below ([step 5](#step-5-postgres-as-a-second-dialect)).
+   - `NativeRemote.compile(…, { sql: { dialect: "postgres", … } })` plans `$N` SQL, emits a `remote_sql` module over `sqlx::Postgres` (decoding by wire type, binding typed nulls), and depends on SQLx's `postgres` feature only. Mutations run in `BEGIN ISOLATION LEVEL SERIALIZABLE`.
+   - The test fixtures give each dialect a seeded database, a Drizzle layer and an oracle transaction ([sql-database.ts](../../packages/reffect/tests/fixtures/sql-database.ts)). A Postgres test starts its own `postgres:18.6-alpine` container ([postgres.ts](../../packages/reffect/tests/fixtures/postgres.ts)).
+   - **Validation (2026-10-03, Docker 29.1.3, Windows), all on both dialects:**
+     - [sql-plan.test.ts](../../packages/reffect/tests/sql-plan.test.ts) (5 tests): the conformance cases and the tie-heavy set agree with upstream's query source over node-postgres, including a Unicode search only Postgres folds, and the column allowlist refuses `real` and cross-dialect bindings.
+     - [remote-sql.test.ts](../../packages/reffect/tests/remote-sql.test.ts) (2 tests): 24 Read/Query wire steps match upstream's Drizzle sources over the same database.
+     - [remote-sql-mutate.test.ts](../../packages/reffect/tests/remote-sql-mutate.test.ts) (4 tests): 17 stateful mutation steps, including both rollback kinds, and the stock-client session.
+   - Found while testing: the oracle store's SQLite statements used positional `?`, which bound the id where the first value belonged once the update put values first. Both placeholders are now numbered.
 
 ## Step 5: Postgres as a second dialect
 
@@ -174,6 +181,7 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
     - `numeric`/`bigint` strings, dates, json and arrays.
 
     The first word of `dataType` still gives the kind.
+
   - This also tightens SQLite, which previously admitted any `string …`/`number …` data type.
 - **SQLX-011 — typed binding.**
   - A parameter binds as its context's kind, and a null binds as a typed null of that kind.

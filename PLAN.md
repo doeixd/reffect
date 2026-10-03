@@ -80,7 +80,7 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Next: milestone 5 (SQLx).**
+**Milestone 5 (SQLx) is implemented on SQLite and Postgres. Next: `RemoteStore.get` (item 3), then [milestone 6](docs/implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption) (streaming RPC and real interruption).**
 
 Milestone 4 on the memory backend: the full `RemoteRpc` contract compiles with official-server codec parity (the wire features are recorded in the [native RemoteServer design](docs/research/native-remote.md)). Read, Query (paging, keyset cursors, `select`) and Mutate match `foldkit-remote-server` over the wire. A stock `Remote.clientLayer` reads, queries and mutates through the native server with upstream's results ([remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts)). Mutations are R sources over a writable store, with typed values encoded as `Schema.toCodecJson` does ([remote-mutations.md](docs/research/remote-mutations.md)). Measured costs are in [remote-bench.md](docs/research/remote-bench.md).
 
@@ -91,7 +91,7 @@ Remaining, in order, driven by `examples/todo-remote` (native Remote server plus
 3. `RemoteStore.get` with typed decoding, so mutations can read the rows they change.
 4. Done: authentication by the bearer adapter, field authorization as compiled R functions, and the principal in mutation sources (RM-004).
 5. Done: milestone 4 is accepted within the memory profile, including a stock Foldkit app in Chrome ([status](docs/research/native-remote.md#milestone-4-status-2026-10-03)).
-6. Next: milestone 5, designed in [sqlx-remote.md](docs/research/sqlx-remote.md) (accepted: SQLx 0.9.0, with the Drizzle-backed server as oracle). Earlier note: It compiles Query to SQL with Drizzle parity and gives the store an SQLx implementation (RS-003), including transactions and an isolation policy for mutations (RS-004).
+6. Done: milestone 5 ([sqlx-remote.md](docs/research/sqlx-remote.md)). Remote Read, Query and Mutate over SQLite and Postgres 18 through SQLx 0.9.0 match the Drizzle-backed official server, with one transaction per mutation (`BEGIN IMMEDIATE` / `SERIALIZABLE`), and a stock client session matches on both dialects. Not yet native: `many`/`manyToMany`/computed relations, `visible` rules, numeric ids, nullable sort columns, and TLS to the database (SQLX-015).
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

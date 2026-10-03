@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-10-03 — Milestone 5 step 5: Postgres as the second SQL dialect
+
+- The SQL planner and the native `remote_sql` module are dialect-explicit (SQLX-009..011). `NativeRemote.compile` takes `sql.dialect` (`"sqlite"` or `"postgres"`), and only that dialect's SQLx driver becomes a dependency.
+  - Postgres plans use `$N` placeholders and a boolean `CASE WHEN` fold.
+  - Every parameter binds as the kind its context gives it, so nulls are typed.
+  - Values decode by wire type.
+  - Mutations run in `SERIALIZABLE` transactions, without retries (SQLX-012).
+- Columns are admitted by a per-dialect allowlist of Drizzle column types (SQLX-010). This also tightens SQLite.
+- The reference store may return an Effect, for asynchronous drivers (SQLX-016).
+- Validation by execution against `postgres:18.6-alpine`, with the builtin `PG_UNICODE_FAST` locale. Each test starts its own container and is skipped when Docker is unavailable. The commands, each run on both dialects:
+  - `vp test tests/sql-plan.test.ts`: 5 passed;
+  - `vp test tests/remote-sql.test.ts`: 2 passed;
+  - `vp test tests/remote-sql-mutate.test.ts`: 4 passed.
+- The Postgres untyped-parameter edge is registered in [native divergences](docs/native-divergences.md), as are the SQL-versus-memory differences that SQLX-002 promised.
+- Design and findings: [sqlx-remote.md, step 5](docs/research/sqlx-remote.md#step-5-postgres-as-a-second-dialect). Milestone 5's order of work is complete.
+
 ## 2026-10-03 — Milestone 5 step 4: SQL mutations in one transaction each
 
 - The Remote store is now a per-mutation session: an `Arc<dyn RemoteStore>` with async operations, plus `finish`/`failure`. The host commits it on success and rolls it back on failure or interruption.
