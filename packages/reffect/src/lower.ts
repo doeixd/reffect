@@ -1585,6 +1585,8 @@ export const emitFunctions = (
   const writer = new SourceWriter("src/lib.rs", !SourceArtifacts.isNone(module.sourceArtifacts));
   // Set when a reachable witness renders as serde_json::Value (UNK-003).
   let usesJson = false;
+  // Set when a number is written as JS text (SSR-012).
+  let usesRyu = false;
   const rsTypeOf = (type: IRType<unknown>): RsType => {
     const content = refContent(type);
     if (content) return rsTypeOf(content);
@@ -2082,6 +2084,14 @@ export const emitFunctions = (
                       operand(n.args[1]),
                       ")",
                     ]);
+                  if (n.method === "js_string") {
+                    usesRyu = true;
+                    return joinFragments([
+                      "ryu_js::Buffer::new().format(",
+                      operand(n.args[0]),
+                      ").to_string()",
+                    ]);
+                  }
                   if (n.method === "json")
                     return joinFragments([
                       `crate::reffect_json::${Rs.ident(n.encoder!).text}(&(`,
@@ -3353,13 +3363,14 @@ export const emitFunctions = (
   const files = Object.freeze({
     "Cargo.toml":
       '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n' +
-      (hasAsync || usesJson ? "\n[dependencies]\n" : "") +
+      (hasAsync || usesJson || usesRyu ? "\n[dependencies]\n" : "") +
       (hasAsync
         ? 'tokio = { version = "=1.53.1", features = ["macros", "rt", "time", "sync"] }\n'
         : "") +
       (usesJson
         ? 'serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'
-        : ""),
+        : "") +
+      (usesRyu ? 'ryu-js = { version = "=1.0.3", default-features = false }\n' : ""),
     "src/lib.rs": writer.text,
     "src/main.rs": `${usesStrings ? stringBoundary : ""}${
       (hasAsync

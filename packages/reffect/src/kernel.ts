@@ -1062,6 +1062,10 @@ class StringWitness extends IRType<string> {
     if (problem) throw fail("LITERAL_ARGUMENT", "authoring", "String.replaceAll", problem);
     return Expr.apply(ReplaceAllString, self, this.literal(search), this.literal(replacement));
   });
+  /** A number as JS `String(n)` writes it: `NaN`, `-0` as `0`, `1e+21` (SSR-012). */
+  fromNumber(value: Expr<number>): Expr<string> {
+    return Expr.apply(NumberToString, value);
+  }
 }
 const replacementProblem = (values: readonly unknown[]): string | undefined => {
   const [search, replacement] = values;
@@ -1164,6 +1168,13 @@ export const LtNumber = Operation.make(
   BoolType,
   (a, b) => a < b,
 ).pipe(Operation.withCapabilities([Capabilities.Number, Capabilities.Bool]));
+// JS Number#toString: well-formed by construction (SSR-012).
+export const NumberToString = Operation.make(
+  SemanticRef.operation("reffect/number.to-string@1"),
+  [NumberType],
+  StringType,
+  (value) => String(value),
+).pipe(Operation.withCapabilities([Capabilities.Number, Capabilities.String]));
 export const EqString = Operation.make(
   SemanticRef.operation("reffect/string.eq@1"),
   [StringType, StringType],

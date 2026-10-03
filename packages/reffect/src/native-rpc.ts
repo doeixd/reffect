@@ -1652,7 +1652,8 @@ export const compileServer = (
     // preserve_order, UNK-003). Refuse other core crates until composition supports them.
     if (
       core.explanation.crates.some(
-        (crate) => crate !== "tokio@1.53.1" && crate !== "serde_json@1.0.151",
+        (crate) =>
+          crate !== "tokio@1.53.1" && crate !== "serde_json@1.0.151" && crate !== "ryu-js@1.0.3",
       )
     )
       return yield* unsupported(
@@ -1727,7 +1728,7 @@ export const compileServer = (
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("Schema.toCodecJson", String(cause)),
     });
-    const ryuJs = encoders.stable;
+    const ryuJs = encoders.stable || core.explanation.crates.includes("ryu-js@1.0.3");
     const hasLogs = core.explanation.analysis.effects.includes(SyncEffects.Log);
     // Live signals travel through the store session, so they need it too (LIVE-001).
     const usesLive = core.explanation.analysis.effects.includes(AsyncEffects.LiveHub);

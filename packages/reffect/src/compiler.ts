@@ -68,6 +68,7 @@ import {
   IncludesString,
   ReplaceAllString,
   ConcatString,
+  NumberToString,
   StringType,
   NotBool,
   checkFunction,
@@ -101,6 +102,7 @@ export interface Implementation {
     | "contains"
     | "replace"
     | "concat"
+    | "js_string"
     | "add"
     | "json";
 }
@@ -172,6 +174,11 @@ const implementations = Object.freeze([
   implementation(AddNumber as AnyOperation, "add"),
   implementation(EqNumber as AnyOperation, "eq"),
   implementation(LtNumber as AnyOperation, "lt"),
+  Object.freeze({
+    ...implementation(NumberToString as AnyOperation, "js_string"),
+    crates: Object.freeze(["ryu-js@1.0.3"]),
+    rationale: "ryu-js writes a double exactly as ECMAScript Number#toString does",
+  }),
 ]);
 const syncResultAdapter = Object.freeze({
   ref: SemanticRef.runtime("rust/std-result@1"),
