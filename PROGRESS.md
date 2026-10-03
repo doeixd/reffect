@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-03 — Native test build cache: measured, not adopted
+
+- Tried `sccache` 0.18.0 (Scoop) on a typical generated NativeRpc crate on Windows:
+  - no cache: 15 s;
+  - cold cache: 18 s;
+  - warm cache in a fresh directory: 14 s, with all 40 cacheable crates hitting.
+- `cargo --timings` breakdown:
+  - About 47 s of compilation across 58 units runs in parallel to 14 s of wall time, led by `windows-sys`, `syn`, `serde_core`, `axum`, `tokio` and `futures-util`.
+  - Rebuilding only the generated crate takes 2 s.
+  - The cache's per-crate overhead on Windows cancels its gain, so it is not wired in and was uninstalled.
+- The lever that would pay off is compiling the pinned dependencies once: a shared target directory, which needs unique generated crate and binary names and a `CargoApi` binary-path helper for the tests. That would bring each native test's build close to the 2 s floor. Deferred until the suite's runtime blocks work.
+
 ## 2026-10-03 — Milestone 5 research and design
 
 - Researched SQLx 0.9.0, SQLite and Postgres semantics, and upstream `foldkit-remote-drizzle` 0.9.0 against primary sources, and recorded the design in [sqlx-remote.md](docs/research/sqlx-remote.md) (SQLX-001..007).
