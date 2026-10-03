@@ -162,4 +162,13 @@ Read from `foldkit-remote-server` 0.10.0 (`handlers.FoldkitRemoteQuery`, `memory
    - `FoldkitRemoteMutate` matches the published handler over upstream's own `MemoryStore` in a 23-step stateful corpus.
    - Authorization (RM-004) and connection changes (RM-005) remain.
 
-**Acceptance (2026-10-03):** for Read and Query, a stock `Remote.clientLayer` over an Effect RPC HTTP client reads and queries through the native server, and its projections equal upstream `RemoteServer.memory(...).layer` ([remote-acceptance.test.ts](../../packages/reffect/tests/remote-acceptance.test.ts)). Mutations and Live remain.
+**Acceptance (2026-10-03):** a stock `Remote.clientLayer` over an Effect RPC HTTP client reads and queries through the native server, and its projections equal upstream `RemoteServer.memory(...).layer` ([remote-acceptance.test.ts](../../packages/reffect/tests/remote-acceptance.test.ts)).
+
+It also **mutates**:
+
+- `Remote.mutateInto` reconciles a native rename into the model.
+- A refused rename returns its message.
+- A store-free source (compiled synchronously) echoes its input.
+- A fresh read sees the write.
+
+All of it equals upstream's memory layer, whose sources run the same R functions over its own `MemoryStore`. Authorization, connection changes and Live remain.

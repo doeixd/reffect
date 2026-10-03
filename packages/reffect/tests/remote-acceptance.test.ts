@@ -1,6 +1,7 @@
 /**
- * Milestone 4 acceptance (Read and Query): the stock Foldkit Remote client, unchanged, reading
- * through `Remote.clientLayer` over an ordinary Effect RPC HTTP client from the native server.
+ * Milestone 4 acceptance: the stock Foldkit Remote client, unchanged, reading, querying and
+ * mutating through `Remote.clientLayer` over an ordinary Effect RPC HTTP client from the native
+ * server.
  * The reference is upstream's own `RemoteServer.memory(...).layer`: the same client code over the
  * official in-process backend, with no vendored code on either side.
  */
@@ -11,12 +12,20 @@ import { RpcClient, RpcSerialization } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { defineMessageUnion } from "foldkit/message";
 import { Entity, Expr, Order, Relation } from "foldkit-entity";
-import { Query, Remote, RemoteRpc } from "foldkit-remote";
+import { Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
 import type { RemoteRpcClient } from "foldkit-remote";
-import { RemoteServer } from "foldkit-remote-server";
+import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import { Surface } from "foldkit-surface";
 import { expect, test } from "vite-plus/test";
-import { CargoApi, NativeRemote } from "../src/index.ts";
+import {
+  CargoApi,
+  CompileError,
+  NativeRemote,
+  R,
+  Reference,
+  RemoteStoreHost,
+} from "../src/index.ts";
+import type { NativeRemoteMutation, RemoteStoreApi } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 
 // The domain of foldkit-remote-server's memory test, plus a paged to-many relation.
@@ -108,6 +117,49 @@ const session = Effect.gen(function* () {
   };
 });
 
+/** Builds and starts the native server, and returns a stock `RemoteClient` over HTTP to it. */
+const nativeClient = (artifact: Parameters<typeof CargoApi.write>[0]) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-remote-acceptance-" });
+    const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+    yield* CargoApi.fetch(directory);
+    yield* CargoApi.build(directory, "debug");
+    const child = yield* ChildProcess.make(
+      `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+      ["--port", "0"],
+    );
+    yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+    const ready = yield* Stream.runHead(Stream.splitLines(Stream.decodeText(child.stdout))).pipe(
+      Effect.timeout("10 seconds"),
+    );
+    if (!Option.isSome(ready)) throw new Error("Missing ready record");
+    const { address } = Schema.decodeUnknownSync(
+      Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
+    )(JSON.parse(ready.value));
+    // An ordinary Effect RPC HTTP client for the published contract: no native-specific code.
+    const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
+      Effect.provide(
+        RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
+          Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]),
+        ),
+      ),
+    );
+    // RemoteRpcClient admits only Remote's own errors, so any Effect RPC transport turns its
+    // RpcClientError into a defect; upstream's examples use hand-written transports instead.
+    const transport: RemoteRpcClient = {
+      FoldkitRemoteRead: (payload) =>
+        rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
+      FoldkitRemoteQuery: (payload) =>
+        rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
+      FoldkitRemoteMutate: (payload) =>
+        rpc.FoldkitRemoteMutate(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
+      FoldkitRemoteLive: (payload) =>
+        rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
+    };
+    return yield* Layer.build(Remote.clientLayer(transport));
+  });
+
 test(
   "a stock Remote.clientLayer reads and queries through the native server",
   async () => {
@@ -124,52 +176,152 @@ test(
     const native = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const parent = yield* fs.makeTempDirectoryScoped({
-            prefix: "reffect-remote-acceptance-",
-          });
           const group = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteLive");
           const artifact = yield* NativeRemote.compile(group, { domain: Data, rows });
-          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-          yield* CargoApi.fetch(directory);
-          yield* CargoApi.build(directory, "debug");
-          const child = yield* ChildProcess.make(
-            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-            ["--port", "0"],
-          );
-          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-          const ready = yield* Stream.runHead(
-            Stream.splitLines(Stream.decodeText(child.stdout)),
-          ).pipe(Effect.timeout("10 seconds"));
-          if (!Option.isSome(ready)) throw new Error("Missing ready record");
-          const { address } = Schema.decodeUnknownSync(
-            Schema.Struct({
-              schema: Schema.Literal("reffect.rpc.ready@1"),
-              address: Schema.String,
-            }),
-          )(JSON.parse(ready.value));
-          // An ordinary Effect RPC HTTP client for the published contract: no native-specific code.
-          const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
-            Effect.provide(
-              RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
-                Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]),
+          const client = yield* nativeClient(artifact);
+          return yield* session.pipe(Effect.provideContext(client));
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+    expect(native).toStrictEqual(official);
+  },
+  nativeTestBudget(0) + 180000,
+);
+
+// Mutations (RM-001): the same R sources run natively and, in the reference, over upstream's own
+// MemoryStore through `RemoteServer.memory`'s `mutations`.
+const Rename = Mutation.make("Rename", {
+  Input: { id: Schema.String, name: Schema.String },
+  Output: { id: Schema.String },
+});
+const Echo = Mutation.make("Echo", {
+  Input: { text: Schema.String },
+  Output: { text: Schema.String },
+});
+const text = (value: string) => R.literal(R.String, value);
+const Named = R.Struct({ name: R.String });
+const rename = NativeRemote.mutation(Rename, (input) => {
+  const id = R.Struct.get(input, "id");
+  const name = R.Struct.get(input, "name");
+  const values = Named.make({ name });
+  return R.Match.bool(
+    R.String.eq(name, text("")),
+    R.Effect.fail(NativeRemote.ServerError.make({ message: text("Name required") })),
+    R.Effect.flatMap(R.RemoteStore.write("Project", id, values), () =>
+      R.Effect.succeed(
+        NativeRemote.outcome(Rename).make({
+          output: R.Struct({ id: R.String }).make({ id }),
+          entities: R.Array.make(NativeRemote.patch(Project, id, values)),
+        }),
+      ),
+    ),
+  );
+});
+// Never touches the store, so it compiles to a synchronous source.
+const echo = NativeRemote.mutation(Echo, (input) =>
+  R.Effect.succeed(
+    NativeRemote.outcome(Echo).make({
+      output: R.Struct({ text: R.String }).make({ text: R.Struct.get(input, "text") }),
+    }),
+  ),
+);
+const Mutable = Remote.make({
+  model: App.model.remote,
+  entities: [User, Project, Comment, Post],
+  queries: [ByStatus],
+  mutations: [Rename, Echo],
+});
+const editing = Effect.gen(function* () {
+  const loaded = yield* Mutable.prefetch(initial, project);
+  const renamed = yield* Remote.mutateInto(
+    Mutable,
+    loaded,
+    Rename,
+    { id: "p1", name: "Zephyr" },
+    "r1",
+  );
+  const refused = yield* Remote.mutate(Rename, { id: "p2", name: "" }, "r2").pipe(Effect.flip);
+  const echoed = yield* Remote.mutate(Echo, { text: "héllo" }, "r3");
+  // A fresh model reads what the server now holds.
+  const refetched = yield* Mutable.prefetch(initial, project);
+  return {
+    output: renamed.output,
+    reconciled: project.read(renamed.model),
+    refused: refused.message,
+    echoed: echoed.output,
+    refetched: project.read(refetched),
+  };
+});
+/** A reference source: the R function over upstream's store, its outcome as upstream types it. */
+const referenceRun =
+  (native: NativeRemoteMutation, store: RemoteStoreApi) =>
+  ({ input }: { readonly input: unknown }) =>
+    Reference.run(native.fn, [input]).pipe(
+      Effect.provideService(RemoteStoreHost, store),
+      Effect.catch((error) =>
+        error instanceof CompileError
+          ? Effect.die(error)
+          : Effect.fail(
+              new RemoteServerError({
+                message: Schema.decodeUnknownSync(Schema.Struct({ message: Schema.String }))(error)
+                  .message,
+              }),
+            ),
+      ),
+      Effect.map((outcome) =>
+        Schema.decodeUnknownSync(
+          Schema.Struct({
+            output: Schema.Unknown,
+            entities: Schema.optionalKey(
+              Schema.Array(
+                Schema.Struct({
+                  entity: Schema.String,
+                  id: Schema.String,
+                  values: Schema.Record(Schema.String, Schema.Unknown),
+                }),
               ),
             ),
-          );
-          // RemoteRpcClient admits only Remote's own errors, so any Effect RPC transport turns its
-          // RpcClientError into a defect; upstream's examples use hand-written transports instead.
-          const transport: RemoteRpcClient = {
-            FoldkitRemoteRead: (payload) =>
-              rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-            FoldkitRemoteQuery: (payload) =>
-              rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-            FoldkitRemoteMutate: (payload) =>
-              rpc.FoldkitRemoteMutate(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-            FoldkitRemoteLive: (payload) =>
-              rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
-          };
-          const client = yield* Layer.build(Remote.clientLayer(transport));
-          return yield* session.pipe(Effect.provideContext(client));
+          }),
+        )(outcome),
+      ),
+    );
+
+test(
+  "a stock Remote client mutates through the native server",
+  async () => {
+    const official = await Effect.runPromise(
+      editing.pipe(
+        Effect.provide(
+          RemoteServer.memory({
+            domain: Mutable,
+            rows,
+            mutations: (store) => [
+              RemoteServer.mutation(Rename, referenceRun(rename, store)),
+              RemoteServer.mutation(Echo, referenceRun(echo, store)),
+            ],
+          }).layer,
+        ),
+      ),
+    );
+    // Sanity: the reference run sees the rename, the refusal and the echo.
+    expect(official.refetched).toEqual({
+      _tag: "Ready",
+      value: { name: "Zephyr", owner: { name: "Ada" } },
+    });
+    expect(official.refused).toBe("Name required");
+    expect(official.echoed).toEqual({ text: "héllo" });
+
+    const native = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const group = RemoteRpc.omit("FoldkitRemoteLive");
+          const artifact = yield* NativeRemote.compile(group, {
+            domain: Mutable,
+            rows,
+            mutations: [rename, echo],
+          });
+          const client = yield* nativeClient(artifact);
+          return yield* editing.pipe(Effect.provideContext(client));
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );

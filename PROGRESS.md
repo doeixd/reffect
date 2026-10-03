@@ -13,7 +13,8 @@
 - **Validation:**
   - [remote-mutate.test.ts](packages/reffect/tests/remote-mutate.test.ts) passes 2/2. It runs a 23-step stateful corpus against the published handler over `MemoryStore`, compares raw key order, and asserts that each path is reached.
   - Regression suites pass: remote-read, remote-query, remote-acceptance, async-rpc, server-layer and async-effect (13 tests). One stale refusal assertion in remote-read was updated, because Mutate is now served.
-- **Remaining for milestone 4:** authorization as compiled R functions (RM-004), connection changes (RM-005), and `Data.mutate` acceptance through the stock client.
+- **Acceptance through the stock client:** [remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts) passes 2/2. `Remote.mutateInto`, a refusal, a synchronous (store-free) source and a fresh read all equal upstream's memory layer running the same R sources over its `MemoryStore`.
+- **Remaining for milestone 4:** authorization as compiled R functions (RM-004) and connection changes (RM-005).
 
 ## 2026-10-03 — Linux measurements and the writable store
 
