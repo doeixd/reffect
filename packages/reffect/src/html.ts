@@ -11,90 +11,54 @@
  * Only the bounded 8A profile (SSR-002) is admitted.
  */
 import { Effect, Schema } from "effect";
-import type { Document, Html as FoldkitHtml, HtmlBuilder } from "foldkit/html";
-import {
-  BoolType,
-  Expr,
-  IRType,
-  Operation,
-  SemanticRef,
-  StringType,
-  Targets,
-  Traits,
-  fail,
-} from "./kernel.ts";
-import type { AnyOperation, Fn } from "./kernel.ts";
-import { ArrayIR, Struct } from "./records.ts";
+import type { Document, HtmlBuilder } from "foldkit/html";
+import { BoolType, EqString, Expr, IRType, StringType, fail } from "./kernel.ts";
+import type { Fn } from "./kernel.ts";
+import { Struct, UndefinedOr } from "./records.ts";
+import { ResultIR } from "./result.ts";
+import type { ResultValue } from "./result.ts";
 import { Reference } from "./reference.ts";
 import { NativeRpc } from "./native-rpc.ts";
+import {
+  BOOLEAN_ATTRIBUTES,
+  DocumentType,
+  EVENT_ATTRIBUTES,
+  EmptyOperation,
+  HtmlArray,
+  HtmlType,
+  RenderErrorType,
+  RenderFailureOperation,
+  RenderOperation,
+  RenderedType,
+  RootKindOperation,
+  STRING_ATTRIBUTES,
+  TextOperation,
+  elementOperation,
+  toFoldkit,
+} from "./html-ir.ts";
+import type {
+  BooleanAttribute,
+  ElementShape,
+  EventAttribute,
+  HtmlValue,
+  MessageFields,
+  MessageVariant,
+  StringAttribute,
+} from "./html-ir.ts";
+export {
+  DocumentType,
+  HtmlType,
+  RenderErrorType,
+  RenderedType,
+  elementShapeOf,
+} from "./html-ir.ts";
+export type { ElementShape, HtmlValue, MessageVariant } from "./html-ir.ts";
 
-/** The reference value of an `Html` expression: what the view describes, before Foldkit sees it. */
-export type HtmlValue =
-  | {
-      readonly _tag: "Element";
-      readonly tag: string;
-      readonly attributes: ReadonlyArray<AttributeValue>;
-      readonly children: ReadonlyArray<HtmlValue>;
-    }
-  | { readonly _tag: "Text"; readonly text: string }
-  | { readonly _tag: "Empty" };
-type AttributeValue =
-  | { readonly name: StringAttribute; readonly value: string }
-  | { readonly name: BooleanAttribute; readonly value: boolean }
-  | { readonly name: "DataAttribute"; readonly key: string; readonly value: string }
-  | { readonly name: EventAttribute; readonly message: unknown };
-
-const HtmlCapability = SemanticRef.capability("reffect/capability/foldkit-html@1");
-const isHtmlValue = (value: unknown): value is HtmlValue =>
-  typeof value === "object" && value !== null && "_tag" in value;
-/** A Foldkit view fragment. Natively a serialized fragment (SSR-003). */
-export const HtmlType: IRType<HtmlValue> = IRType.make(
-  SemanticRef.type("reffect/foldkit-html@1"),
-  Schema.declare(isHtmlValue),
-  { target: Targets.RustStd, type: "crate::foldkit_html::Html" },
-).pipe(IRType.withTraits([Traits.Cloneable]));
-const HtmlArray = ArrayIR(HtmlType);
-
-/** Attributes the 8A profile admits (SSR-002), by the value Foldkit's constructor takes. */
-const STRING_ATTRIBUTES = [
-  "Key",
-  "Class",
-  "Id",
-  "Href",
-  "Title",
-  "Type",
-  "Name",
-  "Placeholder",
-  "For",
-  "Value",
-] as const;
-const BOOLEAN_ATTRIBUTES = ["Checked", "Disabled"] as const;
-/** Event attributes take a Message; they leave no trace in server HTML (SSR-010). */
-const EVENT_ATTRIBUTES = ["OnClick", "OnDoubleClick", "OnSubmit"] as const;
-type StringAttribute = (typeof STRING_ATTRIBUTES)[number];
-type BooleanAttribute = (typeof BOOLEAN_ATTRIBUTES)[number];
-type EventAttribute = (typeof EVENT_ATTRIBUTES)[number];
-
-/** A variant of a `defineMessageUnion` Message: a tagged struct schema that constructs itself. */
-export type MessageVariant = Schema.Top &
-  ((value: never) => { readonly _tag: string }) & { readonly fields: Schema.Struct.Fields };
-type MessageFields<V extends MessageVariant> = {
-  readonly [K in Exclude<keyof Schema.Schema.Type<V>, "_tag">]: Expr<Schema.Schema.Type<V>[K]>;
-};
 /** A Message to construct when an event fires: the app's variant and its fields as R values. */
 export interface MessageExpr {
   readonly variant: MessageVariant;
   readonly fields: ReadonlyArray<{ readonly name: string; readonly value: Expr<unknown> }>;
 }
-const variantIds = new WeakMap<MessageVariant, number>();
-let nextVariantId = 0;
-const variantId = (variant: MessageVariant): number => {
-  const known = variantIds.get(variant);
-  if (known !== undefined) return known;
-  nextVariantId += 1;
-  variantIds.set(variant, nextVariantId);
-  return nextVariantId;
-};
 /**
  * `R.Html.message(Message.ClickedToggle, { id })`: each field is checked against the variant's
  * own schema, so the whole Message union never needs an R witness (SSR-010).
@@ -170,103 +134,6 @@ const DATA_KEY = /^[a-z][a-z0-9-]*$/;
 export type Child = Expr<HtmlValue> | Expr<string> | string;
 /** Children: a list, or one mapped `Array<Html>` (Foldkit views pass `items.map(...)`). */
 export type Children = ReadonlyArray<Child> | Expr<ReadonlyArray<HtmlValue>>;
-
-const TextOperation = Operation.make(
-  SemanticRef.operation("reffect/foldkit-html.text@1"),
-  [StringType],
-  HtmlType,
-  (text): HtmlValue => ({ _tag: "Text", text }),
-).pipe(Operation.withCapabilities([HtmlCapability]));
-const EmptyOperation = Operation.make(
-  SemanticRef.operation("reffect/foldkit-html.empty@1"),
-  [],
-  HtmlType,
-  (): HtmlValue => ({ _tag: "Empty" }),
-).pipe(Operation.withCapabilities([HtmlCapability]));
-
-/** What an element operation builds: its tag and its attributes' names, in authored order. */
-export interface ElementShape {
-  readonly tag: string;
-  readonly attributes: ReadonlyArray<
-    | { readonly name: StringAttribute | BooleanAttribute }
-    | { readonly name: "DataAttribute"; readonly key: string }
-    /** Its Message's field values are reference-only arguments: native rendering erases them. */
-    | {
-        readonly name: EventAttribute;
-        readonly variant: MessageVariant;
-        readonly fields: ReadonlyArray<{ readonly name: string; readonly type: IRType<unknown> }>;
-      }
-  >;
-  readonly isVoid: boolean;
-}
-const elementShapes = new WeakMap<AnyOperation, ElementShape>();
-const elementOperations = new Map<string, AnyOperation>();
-/** The shape an element operation was interned for, if it is one. */
-export const elementShapeOf = (operation: AnyOperation): ElementShape | undefined =>
-  elementShapes.get(operation);
-export const isHtmlTextOperation = (operation: AnyOperation): boolean =>
-  operation === TextOperation;
-export const isHtmlEmptyOperation = (operation: AnyOperation): boolean =>
-  operation === EmptyOperation;
-
-const shapeKey = (shape: ElementShape): string =>
-  `${shape.tag}(${shape.attributes
-    .map((attribute) =>
-      "key" in attribute
-        ? `data:${attribute.key}`
-        : "variant" in attribute
-          ? `${attribute.name}:${variantId(attribute.variant)}{${attribute.fields.map((field) => field.name).join(",")}}`
-          : attribute.name,
-    )
-    .join(",")})`;
-/** One interned operation per element shape: attribute values, then the children array. */
-const elementOperation = (shape: ElementShape): AnyOperation => {
-  const key = shapeKey(shape);
-  const known = elementOperations.get(key);
-  if (known) return known;
-  const inputs: IRType<unknown>[] = shape.attributes.flatMap((attribute) =>
-    "variant" in attribute
-      ? attribute.fields.map((field) => field.type)
-      : [attribute.name === "Checked" || attribute.name === "Disabled" ? BoolType : StringType],
-  );
-  inputs.push(HtmlArray);
-  const operation = Operation.make(
-    SemanticRef.operation(`reffect/foldkit-html.element@1/${key}`),
-    inputs,
-    HtmlType,
-    (...args: ReadonlyArray<unknown>): HtmlValue => {
-      let next = 0;
-      const attributes = shape.attributes.map((attribute): AttributeValue => {
-        if ("variant" in attribute) {
-          const fields = Object.fromEntries(
-            attribute.fields.map((field) => [field.name, args[next++]]),
-          );
-          return {
-            name: attribute.name,
-            message: Reflect.apply(attribute.variant, undefined, [fields]),
-          };
-        }
-        const value = args[next++];
-        if ("key" in attribute)
-          return { name: "DataAttribute", key: attribute.key, value: String(value) };
-        if (attribute.name === "Checked" || attribute.name === "Disabled")
-          return { name: attribute.name, value: value === true };
-        return { name: attribute.name, value: String(value) };
-      });
-      return {
-        _tag: "Element",
-        tag: shape.tag,
-        attributes,
-        children: (args[next] as ReadonlyArray<HtmlValue>).filter(
-          (child) => child._tag !== "Empty",
-        ),
-      };
-    },
-  ).pipe(Operation.withCapabilities([HtmlCapability]));
-  elementShapes.set(operation, shape);
-  elementOperations.set(key, operation);
-  return operation;
-};
 
 const childExpr = (child: Child, at: string): Expr<HtmlValue> => {
   if (typeof child === "string") return Expr.apply(TextOperation, Expr.literal(StringType, child));
@@ -359,32 +226,6 @@ const VOID_ELEMENTS = ["br", "hr", "input"] as const;
 type Element = (attributes: ReadonlyArray<Attribute>, children?: Children) => Expr<HtmlValue>;
 type VoidElement = (attributes: ReadonlyArray<Attribute>) => Expr<HtmlValue>;
 
-/** `{ title, body }` as a view returns it; lang, dir and canonical wait for the profile. */
-export const DocumentType = Struct({ title: StringType, body: HtmlType });
-
-/** The Foldkit VNode an Html value describes, built with the runtime's own `h`. */
-const toFoldkit = <Message>(value: HtmlValue, h: HtmlBuilder<Message>): FoldkitHtml | string => {
-  if (value._tag === "Text") return value.text;
-  if (value._tag === "Empty") return h.empty;
-  const attributes = value.attributes.map((attribute) =>
-    "message" in attribute
-      ? h[attribute.name](attribute.message as Message)
-      : "key" in attribute
-        ? h.DataAttribute(attribute.key, attribute.value)
-        : attribute.name === "Checked" || attribute.name === "Disabled"
-          ? h[attribute.name](attribute.value === true)
-          : h[attribute.name](String(attribute.value)),
-  );
-  const build = Reflect.get(h, value.tag) as (
-    attributes: ReadonlyArray<unknown>,
-    children?: ReadonlyArray<FoldkitHtml | string>,
-  ) => FoldkitHtml;
-  return build(
-    attributes,
-    value.children.map((child) => toFoldkit(child, h)),
-  );
-};
-
 /**
  * A Foldkit `view` from an R view: the reference evaluates the R function and builds VNodes with
  * the `h` Foldkit passes, so the browser and upstream `renderToString` render this exact view.
@@ -401,6 +242,58 @@ const toFoldkitView =
       throw fail("INVALID_DOCUMENT", "reference", "Html.Document.body", "The body is an element");
     return { title: document.title, body };
   };
+
+/**
+ * `renderToString` of a document, hydratable: `InvalidHydrationRoot` when the body is not an
+ * element, then `SerializationError` (a NUL), else the stamped `html` and the `title`. The
+ * reference of each step is upstream `renderToString` itself; natively it is the ported
+ * serializer (SSR-003).
+ */
+const renderToString = (
+  document: Expr<{ readonly title: string; readonly body: HtmlValue }>,
+  options: { readonly buildId: string; readonly runtimeId?: string },
+): Expr<
+  ResultValue<
+    { readonly html: string; readonly title: string },
+    Schema.Schema.Type<typeof RenderErrorType.schema>
+  >
+> => {
+  const runtimeId = options.runtimeId ?? "app";
+  if (runtimeId === "")
+    throw fail("INVALID_RUNTIME_ID", "authoring", "Html.renderToString", "runtimeId is nonempty");
+  if (options.buildId === "")
+    throw fail(
+      "MISSING_BUILD_ID",
+      "authoring",
+      "Html.renderToString",
+      "A hydratable render needs a buildId",
+    );
+  const body = Struct.get(document, "body");
+  const ids = [
+    Expr.literal(StringType, runtimeId),
+    Expr.literal(StringType, options.buildId),
+  ] as const;
+  const kind = Expr.apply(RootKindOperation, body);
+  return Expr.match(
+    Expr.apply(EqString, kind, Expr.literal(StringType, "Element")),
+    UndefinedOr.match(Expr.apply(RenderFailureOperation, body, ...ids), {
+      onUndefined: () =>
+        ResultIR.succeed(
+          RenderedType.make({
+            html: Expr.apply(RenderOperation, body, ...ids),
+            title: Struct.get(document, "title"),
+          }),
+          RenderErrorType,
+        ),
+      onDefined: (message) =>
+        ResultIR.fail(RenderErrorType.cases.SerializationError.make({ message }), RenderedType),
+    }),
+    ResultIR.fail(
+      RenderErrorType.cases.InvalidHydrationRoot.make({ rootKind: kind }),
+      RenderedType,
+    ),
+  );
+};
 
 export const HtmlIR = Object.freeze({
   ...(Object.fromEntries(ELEMENTS.map((tag) => [tag, element(tag, false)])) as Record<
@@ -441,4 +334,7 @@ export const HtmlIR = Object.freeze({
   /** The Html witness (`Type` is Foldkit's `type` attribute). */
   Node: HtmlType,
   toFoldkitView,
+  renderToString,
+  Rendered: RenderedType,
+  RenderError: RenderErrorType,
 });

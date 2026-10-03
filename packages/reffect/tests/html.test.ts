@@ -3,7 +3,7 @@ import { defineMessageUnion } from "foldkit/message";
 import type { Document, HtmlBuilder } from "foldkit/html";
 import { renderToString } from "foldkit/experimental/server";
 import { expect, test } from "vite-plus/test";
-import { CompileError, R, Reference } from "../src/index.ts";
+import { CompileError, Expr, R, Reference } from "../src/index.ts";
 import type { Value } from "../src/index.ts";
 
 // SSR-009 step 2: an R view, run by the reference and handed to Foldkit as a view, renders through
@@ -18,7 +18,8 @@ const Message = defineMessageUnion({
 });
 type Message = typeof Message.Type;
 
-const view = R.fn([Model], H.Document, (model) =>
+// The view body is build-time TypeScript, so the page below can reuse it.
+const viewBody = (model: Expr<Model>) =>
   H.Document.make({
     title: R.Struct.get(model, "heading"),
     body: H.main(
@@ -53,8 +54,8 @@ const view = R.fn([Model], H.Document, (model) =>
         H.form([H.OnSubmit(H.message(Message.SubmittedDraft, {}))], [H.button([], ["Add"])]),
       ],
     ),
-  }),
-);
+  });
+const view = R.fn([Model], H.Document, viewBody);
 
 /** The same view written directly against Foldkit's builder. */
 const handWritten = (model: Model, h: HtmlBuilder<Message>): Document => ({
@@ -144,4 +145,47 @@ test("Message fields are checked against the variant's own schema", () => {
 test("the profile refuses what it does not admit", () => {
   expect(() => H.div([H.Class("a"), H.Class("b")])).toThrow(CompileError);
   expect(() => H.DataAttribute("Bad Key", "x")).toThrow(CompileError);
+});
+
+// renderToString in R: its reference is upstream renderToString, and its outcome is typed.
+const page = R.fn([Model], R.Result(H.Rendered, H.RenderError), (model) =>
+  H.renderToString(viewBody(model), { buildId: "b" }),
+);
+const titleOnly = R.fn([R.String], R.Result(H.Rendered, H.RenderError), (text) =>
+  H.renderToString(H.Document.make({ title: text, body: H.text(text) }), { buildId: "b" }),
+);
+const emptyBody = R.fn([R.String], R.Result(H.Rendered, H.RenderError), (text) =>
+  H.renderToString(H.Document.make({ title: text, body: H.empty }), { buildId: "b" }),
+);
+const nulInside = R.fn([R.String], R.Result(H.Rendered, H.RenderError), (text) =>
+  H.renderToString(H.Document.make({ title: R.String.literal("t"), body: H.p([], [text]) }), {
+    buildId: "b",
+  }),
+);
+
+test("R.Html.renderToString answers as upstream renderToString", async () => {
+  for (const model of models) {
+    const expected = await render(handWritten, model);
+    expect(await Effect.runPromise(Reference.run(page, [model]))).toEqual({
+      _tag: "Success",
+      success: { html: expected.html, title: expected.title },
+    });
+  }
+  expect(await Effect.runPromise(Reference.run(titleOnly, ["x"]))).toEqual({
+    _tag: "Failure",
+    failure: { _tag: "InvalidHydrationRoot", rootKind: "Text" },
+  });
+  expect(await Effect.runPromise(Reference.run(emptyBody, ["x"]))).toEqual({
+    _tag: "Failure",
+    failure: { _tag: "InvalidHydrationRoot", rootKind: "Empty" },
+  });
+  expect(await Effect.runPromise(Reference.run(nulInside, ["a\u0000b"]))).toMatchObject({
+    _tag: "Failure",
+    failure: { _tag: "SerializationError", message: expect.stringContaining("NUL") },
+  });
+  expect(() =>
+    H.renderToString(H.Document.make({ title: R.String.literal("t"), body: H.empty }), {
+      buildId: "",
+    }),
+  ).toThrow(CompileError);
 });
