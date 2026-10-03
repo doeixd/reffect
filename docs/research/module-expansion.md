@@ -4,7 +4,7 @@ Checked 2026-10-02 before implementation planning. The user requested parallel w
 
 ## Evidence and priorities
 
-The installed `effect` and `@effect/platform-node` dependencies remain **4.0.0-rc.118**. The [published package manifest](https://unpkg.com/effect@4.0.0-rc.118/package.json) was fetched online and confirms that version. The older API-scope reference is historical; stable-version migration belongs to coordinated dependency work, not these helpers. Each module record verifies its own pinned upstream source and behavior.
+Initial preparation used installed `effect` and `@effect/platform-node` **4.0.0-rc.118**. The [published package manifest](https://unpkg.com/effect@4.0.0-rc.118/package.json) was fetched online and confirms that version. Remote synchronization on 2026-10-03 brought the coordinated migration to **4.0.0 stable**; integrated tests now use stable. The older API-scope reference is historical. Each module record verifies its own pinned upstream source and behavior.
 
 Existing code already represents scalars, structs/tagged unions, arrays, records and undefined-or values, with official reference execution and generated Rust. It also supports checked computation composition, typed recovery, bounded sequential resource scopes and resource-bearing Layers. Those foundations permit useful missing modules to specialize into existing IR without a new runtime or changes to native scalar layout.
 
@@ -19,3 +19,5 @@ The first priority is Option and Result: explicit optional/result values unblock
 ## Validation obligations
 
 Use meaningful differential tests for constructors, branches, callback behavior and edge cases; include native debug/release execution for generated operations. Preserve typed failure versus interruption, scope lifetime and source/frame policies. Do not add author casts, unconditional crates or per-value metadata. Coordinate Cargo builds to avoid resource contention. Integrate cross-module tests, formatting/lint, strict TypeScript and builds; reread committed changes and repeat required checks before publication.
+
+The stable source audit verifies unchanged Duration, Result, Ref, Clock and Random implementations and unchanged helpers used by this batch. Option partitionMap changes tuple order, but is not admitted here. Internal interruption cleanup changes require the integrated suite. Root/group export names remain unchanged (138/213).

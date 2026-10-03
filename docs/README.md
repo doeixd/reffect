@@ -6,7 +6,7 @@ The roadmap governs current sequencing and the active frontier. The [design revi
 
 [Parallel Effect module work](effect-modules.md) tracks the resource lifetime, Context/Layer, error recovery and Schema implementation batch, with per-module decision records for later review.
 
-[Effect v4 coverage and priorities](effect-module-coverage.md) inventories every installed module namespace and orders remaining work by semantic dependencies, independently of the core roadmap. [Module expansion preparation](research/module-expansion.md) records this batch's coordination and admission decisions. [Lexical Ref preparation](research/ref-module.md) defines the next sequential state profile and its ownership gates.
+[Effect v4 coverage and priorities](effect-module-coverage.md) inventories every installed module namespace and orders remaining work by semantic dependencies, independently of the core roadmap. [Module expansion preparation](research/module-expansion.md) records this batch's coordination and admission decisions. [Lexical Ref implementation](research/ref-module.md) defines the bounded sequential state profile and its ownership gates.
 
 The next-family records define [Clock/Random](research/clock-random-modules.md), [coordination](research/coordination-modules.md), [channels/streaming](research/channel-stream-modules.md) and [configuration/caching](research/config-cache-modules.md). These are implementation designs and semantic gates, not runtime support claims.
 

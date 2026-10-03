@@ -1,6 +1,6 @@
 # Effect control-flow helpers
 
-Preparation checked 2026-10-02 against installed Effect **4.0.0-rc.118**, its [public API](https://cdn.jsdelivr.net/npm/effect@4.0.0-rc.118/src/Effect.ts) and [internal implementation](https://cdn.jsdelivr.net/npm/effect@4.0.0-rc.118/src/internal/effect.ts). Online source was downloaded before implementation; installed dependency remains the oracle despite the roadmap's proposed move to stable. Existing [typed recovery](error-recovery.md), [resource registration](resource-scope-registration.md), and `ScopedIR.andThen` provide the relevant checked primitives. No new semantic nodes or native runtime are required.
+Preparation checked 2026-10-02 against installed Effect **4.0.0-rc.118**, its [public API](https://cdn.jsdelivr.net/npm/effect@4.0.0-rc.118/src/Effect.ts) and [internal implementation](https://cdn.jsdelivr.net/npm/effect@4.0.0-rc.118/src/internal/effect.ts). Online source was downloaded before implementation; initial focused evidence used rc.118. The coordinated remote migration subsequently installed Effect 4.0.0 stable; the combined seven-suite regression passes 19/19 on stable. Existing [typed recovery](error-recovery.md), [resource registration](resource-scope-registration.md), and `ScopedIR.andThen` provide the relevant checked primitives. No new semantic nodes or native runtime are required.
 
 ## Decisions
 
