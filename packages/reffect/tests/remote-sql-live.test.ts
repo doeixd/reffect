@@ -6,6 +6,7 @@ import { NodeServices } from "@effect/platform-node";
 import { Mutation, Remote, RemoteRpc } from "foldkit-remote";
 import { query, source } from "foldkit-remote-drizzle";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
+import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "vite-plus/test";
 import {
   CargoApi,
@@ -35,10 +36,14 @@ const RenameThenRefuse = Mutation.make("RenameThenRefuse", {
   Output: {},
 });
 const Archive = Mutation.make("Archive", { Input: { id: Schema.String }, Output: {} });
+const Restatus = Mutation.make("Restatus", {
+  Input: { id: Schema.String, status: Schema.String },
+  Output: {},
+});
 const domain = Remote.define({
   entities: [domainEntities.User, Project],
   queries: [ByStatus, Search],
-  mutations: [Rename, RenameThenRefuse, Archive],
+  mutations: [Rename, RenameThenRefuse, Archive, Restatus],
 });
 
 const Named = R.Struct({ name: R.String });
@@ -74,7 +79,25 @@ const archive = NativeRemote.mutation(Archive, ({ input }) => {
     ),
   );
 });
-const mutations: readonly NativeRemoteMutation[] = [rename, renameThenRefuse, archive];
+// Two signals: the first re-reads `name`, which the LIVE-007 test makes unreadable.
+const restatus = NativeRemote.mutation(Restatus, ({ input }) => {
+  const id = R.Struct.get(input, "id");
+  const ref = { entity: "Project", id };
+  return R.Effect.flatMap(
+    R.RemoteStore.write(
+      "Project",
+      id,
+      R.Struct({ status: R.String }).make({ status: R.Struct.get(input, "status") }),
+    ),
+    () =>
+      R.Effect.flatMap(R.LiveHub.changed(ref, ["name"]), () =>
+        R.Effect.flatMap(R.LiveHub.changed(ref, ["status"]), () =>
+          R.Effect.succeed(NativeRemote.outcome(Restatus).make({ output: empty.make({}) })),
+        ),
+      ),
+  );
+});
+const mutations: readonly NativeRemoteMutation[] = [rename, renameThenRefuse, archive, restatus];
 
 const message = (tag: string, payload: unknown) =>
   `${JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] })}\n`;
@@ -158,6 +181,7 @@ const official = (db: SqlDatabase, bindings: SqlBackend["bindings"]) =>
         RemoteServer.mutation(Rename, run(rename)),
         RemoteServer.mutation(RenameThenRefuse, run(renameThenRefuse)),
         RemoteServer.mutation(Archive, run(archive)),
+        RemoteServer.mutation(Restatus, run(restatus)),
       ],
     });
     const liveHub = yield* RemoteServer.liveHub([...server.entities.values()]);
@@ -183,6 +207,45 @@ const official = (db: SqlDatabase, bindings: SqlBackend["bindings"]) =>
     );
     return HttpEffect.toWebHandler(http);
   });
+/** The native SQL server with a live hub over `db`; its address and its stderr records. */
+const startNative = (backend: SqlBackend, db: SqlDatabase) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sql-live-" });
+    const artifact = yield* NativeRemote.compile(RemoteRpc, {
+      domain,
+      sql: {
+        dialect: backend.dialect,
+        bindings: backend.bindings,
+        databaseUrlEnv: "REFFECT_DATABASE_URL",
+      },
+      mutations,
+      live: true,
+      serialization: "ndjson",
+    });
+    const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+    yield* CargoApi.fetch(directory);
+    yield* CargoApi.build(directory, "debug");
+    const child = yield* ChildProcess.make(
+      `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+      ["--port", "0"],
+      { env: { REFFECT_DATABASE_URL: db.url }, extendEnv: true },
+    );
+    const records: string[] = [];
+    yield* Stream.splitLines(Stream.decodeText(child.stderr)).pipe(
+      Stream.runForEach((record) => Effect.sync(() => void records.push(record))),
+      Effect.forkScoped,
+    );
+    const ready = yield* Stream.runHead(Stream.splitLines(Stream.decodeText(child.stdout))).pipe(
+      Effect.timeout("10 seconds"),
+    );
+    if (!Option.isSome(ready)) throw new Error("Missing ready record");
+    const { address } = Schema.decodeUnknownSync(
+      Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
+    )(JSON.parse(ready.value));
+    return { address, records };
+  });
+
 for (const backend of sqlBackends)
   test.skipIf(backend.unavailable !== undefined)(
     `native ${backend.dialect} live signals apply after commit, as upstream's hub called after commit`,
@@ -199,38 +262,7 @@ for (const backend of sqlBackends)
             );
 
             const nativeDb = yield* open("native");
-            const fs = yield* FileSystem.FileSystem;
-            const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sql-live-" });
-            const artifact = yield* NativeRemote.compile(RemoteRpc, {
-              domain,
-              sql: {
-                dialect: backend.dialect,
-                bindings: backend.bindings,
-                databaseUrlEnv: "REFFECT_DATABASE_URL",
-              },
-              mutations,
-              live: true,
-              serialization: "ndjson",
-            });
-            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-            yield* CargoApi.fetch(directory);
-            yield* CargoApi.build(directory, "debug");
-            const child = yield* ChildProcess.make(
-              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-              ["--port", "0"],
-              { env: { REFFECT_DATABASE_URL: nativeDb.url }, extendEnv: true },
-            );
-            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-            const ready = yield* Stream.runHead(
-              Stream.splitLines(Stream.decodeText(child.stdout)),
-            ).pipe(Effect.timeout("10 seconds"));
-            if (!Option.isSome(ready)) throw new Error("Missing ready record");
-            const { address } = Schema.decodeUnknownSync(
-              Schema.Struct({
-                schema: Schema.Literal("reffect.rpc.ready@1"),
-                address: Schema.String,
-              }),
-            )(JSON.parse(ready.value));
+            const { address } = yield* startNative(backend, nativeDb);
             const nativeRun = yield* Effect.promise(() =>
               exercise((body, signal) =>
                 fetch(`http://${address}/rpc`, { method: "POST", body, signal }),
@@ -253,3 +285,50 @@ for (const backend of sqlBackends)
     },
     nativeTestBudget(0) + 300000,
   );
+
+// LIVE-007: a re-read that fails after commit answers the mutation truthfully, applies its other
+// signals, and consumes the subscriber's cursor so the stock client sees a gap.
+const sqlite = sqlBackends.find((backend) => backend.dialect === "sqlite");
+test.skipIf(sqlite?.unavailable !== undefined)(
+  "a failed live re-read after a SQL commit becomes a cursor gap",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const backend = sqlite!;
+          const open = yield* backend.databases;
+          const db = yield* open("gap");
+          // The selected `name` column disappears under the server; `status` stays writable.
+          const file = new DatabaseSync(db.url.slice("sqlite:".length));
+          file.exec("alter table projects rename column name to title");
+          file.close();
+          const { address, records } = yield* startNative(backend, db);
+          const post: Post = (body, signal) =>
+            fetch(`http://${address}/rpc`, { method: "POST", body, signal });
+          const listener = listen(
+            post,
+            message("FoldkitRemoteLive", {
+              version: 4,
+              requirements: [{ entity: "Project", id: "p01", fields: ["name", "status"] }],
+              after: 0,
+            }),
+          );
+          yield* Effect.promise(() => pause(300));
+          const answer = yield* Effect.promise(() =>
+            post(mutate("Restatus", { id: "p01", status: "shipped" })).then((r) => r.text()),
+          );
+          yield* Effect.promise(() => pause(300));
+          const lines = listener.lines();
+          yield* Effect.promise(() => listener.close());
+
+          expect(answer).toContain('"_tag":"Success"');
+          expect(lines).toEqual([
+            '{"_tag":"Chunk","requestId":"1","values":[{"_tag":"EntityPatched","cursor":2,"entity":"Project","id":"p01","values":{"status":"shipped"},"changed":["status"]}]}',
+          ]);
+          expect(records.some((record) => record.includes('"event":"reread-failed"'))).toBe(true);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(0) + 300000,
+);

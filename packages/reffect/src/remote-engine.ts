@@ -683,6 +683,10 @@ mod remote_engine {
             drop(subscribers);
             Ok(Subscription { events, guard: Unsubscribe { hub: Some(self), id } })
         }
+        /// Consumes a cursor number without an event, which the client classifies as a gap.
+        fn skip(subscriber: &Subscriber) {
+            *subscriber.cursor.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) += 1.0;
+        }
         /// Numbers the change on the subscriber's own cursor; a closed stream drops it.
         fn emit(subscriber: &Subscriber, tag: &str, entity: &str, id: &str, rest: Option<(Value, Vec<String>)>) {
             let mut cursor = subscriber.cursor.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -700,8 +704,8 @@ mod remote_engine {
   "`hub.changed(ref, fields)`" +
   String.raw`: each subscriber selecting the row gets the fields it
         /// selected, re-read once per principal and window group, authorized under that principal.
-        pub async fn changed<S: Source>(&self, server: &S, authorize: fn(Option<u64>, &str, &[String]) -> Vec<String>, entity: &str, id: &str, fields: &[String]) -> Result<(), String> {
-            if !server.has_source(entity) { return Ok(()); }
+        pub async fn changed<S: Source>(&self, server: &S, authorize: fn(Option<u64>, &str, &[String]) -> Vec<String>, entity: &str, id: &str, fields: &[String]) {
+            if !server.has_source(entity) { return; }
             struct Group { windows: JsObject<Window>, renames: JsObject<String>, entries: Vec<(Arc<Subscriber>, Vec<String>)> }
             let key = format!("{}:{}", entity, id);
             let subscribers: Vec<Arc<Subscriber>> = self.lock().clone();
@@ -744,7 +748,16 @@ mod remote_engine {
                     if allowed.is_empty() { continue; }
                     let allowed_set: HashSet<&String> = allowed.iter().collect();
                     let windows = windows_of(&Some(group.windows.clone()), &allowed);
-                    let records = server.read(entity, &[id.to_string()], &allowed, &windows).await?;
+                    // A failed re-read must not undo a committed mutation or stop its other signals.
+                    // Skipping the cursor lets Foldkit's classifyLive see a gap and resync (LIVE-007).
+                    let records = match server.read(entity, &[id.to_string()], &allowed, &windows).await {
+                        Ok(records) => records,
+                        Err(message) => {
+                            eprintln!("{}", json!({ "schema": "reffect.live@1", "event": "reread-failed", "entity": entity, "id": id, "message": message }));
+                            for (subscriber, _) in &group.entries { Hub::skip(subscriber); }
+                            continue;
+                        }
+                    };
                     let Some(record) = records.into_iter().find(|record| record.id == id) else { continue };
                     for (subscriber, wanted) in &group.entries {
                         let mut values: JsObject<Value> = JsObject::new();
@@ -758,7 +771,6 @@ mod remote_engine {
                     }
                 }
             }
-            Ok(())
         }
         /// ` +
   "`hub.deleted(ref)`" +

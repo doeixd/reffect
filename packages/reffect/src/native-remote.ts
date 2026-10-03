@@ -606,7 +606,7 @@ const compile = <Rpcs extends Rpc.Any>(
             if commit {
                 for (entity, id, fields) in self.take_signals() {
                     match fields {
-                        Some(fields) => remote_hub().changed(&REMOTE_SQL, remote_authorize_for, &entity, &id, &fields).await?,
+                        Some(fields) => remote_hub().changed(&REMOTE_SQL, remote_authorize_for, &entity, &id, &fields).await,
                         None => remote_hub().deleted(&entity, &id),
                     }
                 }
@@ -694,7 +694,7 @@ impl reffect_generated::RemoteStore for MemorySession {
     fn live<'a>(&'a self, entity: &'a str, id: &'a str, fields: Option<Vec<String>>) -> reffect_generated::StoreFuture<'a> {
         Box::pin(async move {
             match fields {
-                Some(fields) => remote_hub().changed(self.0, remote_authorize_for, entity, id, &fields).await,
+                Some(fields) => { remote_hub().changed(self.0, remote_authorize_for, entity, id, &fields).await; Ok(()) }
                 None => { remote_hub().deleted(entity, id); Ok(()) }
             }
         })
