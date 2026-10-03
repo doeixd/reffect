@@ -122,6 +122,17 @@ Hydration is therefore tolerant. **Byte equality with upstream is the right acce
 2. **`R.Html` and the reference view.**
    - Add element and attribute builders and `R.Html.document`.
    - The reference produces a Foldkit `view`, whose `renderToString` output is the oracle.
+     **Delivered 2026-10-03.**
+   - [html.ts](../../packages/reffect/src/html.ts) provides `R.Html`: 22 elements and 3 void elements, string, boolean and `data-*` attributes, `Key`, text, `empty`, and `Document` (`{ title, body }`).
+   - Values are operations over an `Html` witness, one interned element operation per shape.
+   - Event attributes (`OnClick`, `OnDoubleClick`, `OnSubmit`) take `R.Html.message(variant, fields)`. Its fields are reference-only arguments, recorded in the shape for native erasure.
+   - `toFoldkitView` turns an R view into a Foldkit `view`.
+   - [html.test.ts](../../packages/reffect/tests/html.test.ts) checks that:
+     - an R view renders through upstream `renderToString` exactly as the same view hand-written against `h`, with keys, data attributes, booleans, escaping and erased events;
+     - the reference builds the app's own Messages;
+     - wrong, missing and extra Message fields are refused, at the type level and at run time;
+     - duplicate attributes and invalid data keys are refused.
+
 3. **Native rendering.**
    - Lower R views to a Rust writer with folded static fragments.
    - A corpus of views and models must produce byte-equal `RenderedApplication` values, natively and through upstream `renderToString`, hydratable and static, with and without Flags and keys.

@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Milestone 8A step 2: `R.Html` and the reference view
+
+- **Change.** `R.Html` builders mirror Foldkit's `h` (SSR-009), and event attributes construct the app's own Messages per variant (SSR-010). `toFoldkitView` hands an R view to Foldkit.
+- **Validation.**
+  - `vp test tests/html.test.ts` passed (4 tests). An R view's `renderToString` output equals the hand-written Foldkit view's.
+  - `vp check` is clean.
+- **Next:** native rendering (step 3): lower `Html` operations to a Rust writer and compare byte for byte with `renderToString`.
+
 ## 2026-10-03 — SSR-012: `R.String.fromNumber`
 
 - **Change.** `R.String.fromNumber(n)` writes JS `String(n)` text, natively through the pinned `ryu-js`. The crate enters the plan, the core manifest and the RPC manifest only when the operation is reachable.
