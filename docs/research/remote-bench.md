@@ -50,4 +50,13 @@ Status: **measured 2026-10-03** on win32/x64 (Node 24.21 under `vp exec`, rustc 
 | Fewer allocations in the engine                        | Borrow request strings, use `Arc<str>` for row values and field names, intern group keys. Portable, but more engine code — which a compiled-in-R engine would replace anyway |
 | Multi-threaded Tokio                                   | Scales across cores, which Node cannot do in one process. It changes the execution profile (Send bounds, shared state), so it needs its own decision                         |
 
-Recommendation: expose an `allocator: "system" | "mimalloc"` build option (default `system`, with the choice recorded in the plan explanation) when a workload needs it. Measure on Linux with a native load generator before making any throughput claim. Keep the memory finding (about 13×) as the solid result.
+## Decision (2026-10-03)
+
+- **BENCH-001 — no allocator change now.** Don't switch generated servers to `mimalloc`, either by default or as an option, yet:
+  - The evidence is one Windows workload, and Rust's system allocator on Windows (HeapAlloc) is known to be slower than glibc's.
+  - Memory with mimalloc is unmeasured, and memory is this benchmark's solid result.
+  - Every fast allocator adds C code (mimalloc, jemalloc, snmalloc, rpmalloc).
+  - If adopted later, it is an opt-in for **server binaries only**, never for generated libraries (AGENTS.md: no globals from libraries), with the crate listed in the plan explanation.
+  - Revisit when a Linux measurement shows a meaningful gain without a memory regression.
+- **BENCH-002 — allocation belongs to the ownership stage.** The general lowering clones non-Copy values in value positions (REC-004), so compiled code, including a future R-authored engine, would allocate as much as the port. The lasting fix is ownership work: borrow read-only values, share immutable strings and composites (`Arc<str>`/`Rc`), and intern repeated names. Start it with the mutation and Store code (RM-001/002), the next workload whose value flow is still being designed. Only trivial allocation fixes go into the hand-ported engine.
+- **BENCH-003 — throughput claims need a fair harness.** Measure on Linux with a native load generator (for example `oha`), recording CPU time and resident memory together, before stating server throughput.
