@@ -80,18 +80,17 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Next: continue milestone 4 preparation in roadmap order.**
-The "Before milestone 4" gate requires a portable Schema subset, owned
-strings/records, explicit unions, wire validation and Remote authorization
-semantics. [Well-formed strings](docs/research/string-profile.md) are the
-first piece. [Server-lifetime RPC services](docs/research/server-layer.md)
-closed the current 3B workload. The [north-star review](docs/research/north-star-review.md)
-is context only; the roadmap order stands.
+**Next: finish milestone 4 against a real workload, then milestone 5 (SQLx).**
 
-1. Done: `NativeRpc.StringJson` payloads/results match the official server ([STR-006/007](docs/research/string-profile.md#rpc-boundary-2026-10-02)).
-2. Done: [records and tagged unions](docs/research/records-unions.md), including pure/effectful matching and RPC codecs with exact invalid-input parity.
-3. Done: [arrays and structured iteration](docs/research/arrays.md), including `Effect.forEach` and RPC array codecs.
-4. Next: the [native RemoteServer design](docs/research/native-remote.md) (proposed). Its order of work starts with the wire codec features. Done: [`Schema.Number`](docs/research/number-profile.md), [optional fields](docs/research/optional-fields.md), [JS-ordered `Record`](docs/research/records-js-order.md), [array length checks](docs/research/array-length.md) and [`TaggedError` error unions](docs/research/tagged-errors.md). Also done: [raw `Unknown`](docs/research/unknown-json.md). Before the full `RemoteRpc` contract compiles, the generic gaps are closed: [literal unions](docs/research/literal-unions.md) landed, and plain `Schema.String` decoding is the recorded STR-008 divergence. The full `RemoteRpc` Read/Mutate/Query contract now compiles from a vendored wire fixture with official-server parity (step 1 done). The native read engine and memory backend now match `foldkit-remote-server` over the wire. Query now matches too (paging, keyset cursors, `select`). Next: mutations, compiled Sources and authorization (NR-005), then the stock `Remote.clientLayer` acceptance. Then comes the engine port and memory backend for Read with a differential harness. Versions (NR-007): foldkit-plus is assumed to move to Effect 4.0.0 stable; reffect moved its oracle pin from rc.118 to 4.0.0 on 2026-10-02.
+Milestone 4 on the memory backend: the full `RemoteRpc` contract compiles with official-server codec parity (the wire features are recorded in the [native RemoteServer design](docs/research/native-remote.md)). Read, Query (paging, keyset cursors, `select`) and Mutate match `foldkit-remote-server` over the wire. A stock `Remote.clientLayer` reads, queries and mutates through the native server with upstream's results ([remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts)). Mutations are R sources over a writable store, with typed values encoded as `Schema.toCodecJson` does ([remote-mutations.md](docs/research/remote-mutations.md)). Measured costs are in [remote-bench.md](docs/research/remote-bench.md).
+
+Remaining, in order, driven by `examples/todo-remote` (native Remote server plus a stock Foldkit client):
+
+1. The example itself: a `Todo` entity, a list query, add/toggle/delete mutations. It decides which of the next items it needs first.
+2. Connection changes in mutation outcomes (RM-005), so created rows join the lists that show them.
+3. `RemoteStore.get` with typed decoding, so mutations can read the rows they change.
+4. Authorization as compiled R functions (RM-004), after researching how the principal reaches the native Remote server.
+5. Declare milestone 4 accepted within the memory profile; then milestone 5 compiles Query to SQL and gives the store an SQLx implementation (RS-003).
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 
