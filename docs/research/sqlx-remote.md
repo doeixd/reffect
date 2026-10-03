@@ -214,6 +214,11 @@ Status: **implemented (2026-10-03)**, steps 1–5 on SQLite and Postgres. Scope:
 - Text containing NUL is refused by Postgres on both sides.
 - A written value whose JSON type differs from its column's (a number into a text column): SQLx binds the JSON type and Postgres refuses the assignment (`Database query failed`), while node-postgres sends text that Postgres coerces. R's typed values match their entity schema, so an admitted mutation does not reach this.
 
+### foldkit-plus 0.14.0 adoption (2026-10-03)
+
+- **SQLX-018 — NUL searches.** `foldkit-remote-drizzle` 0.9.1 refuses a search holding NUL, but throws it as a `QueryCompileError`, which the RPC server answers as a protocol `Defect`. Its memory backend refuses the same input as a typed `RemoteQueryError`. The native SQL source answers a `RemoteQueryError` with the Drizzle compiler's exact message, and the planner refuses a literal NUL search while compiling. This is registered in [native divergences](../native-divergences.md) and recorded as a candidate upstream issue.
+- **Postgres folding.** Upstream's evaluator now folds `contains` in ASCII only, but its Drizzle SQL still uses `lower()`, which folds by the database collation. Native follows the Drizzle source (SQLX-002), so on Postgres the new "accented capital" conformance case differs from the evaluator's expectation. [sql-plan.test.ts](../../packages/reffect/tests/sql-plan.test.ts) asserts that it differs, so the exemption fails once upstream aligns the two.
+
 ### Acceptance (step 5)
 
 The SQLite acceptance, repeated over Postgres 18.6: planned SQL agrees with upstream's query source for the shared conformance cases and the tie-heavy set; Read/Query/Mutate match the official server over the wire; a stock client session matches; rollbacks leave no rows.

@@ -8,7 +8,6 @@ Everything still to be done, collected from the design and research records on 2
 
 ## Frontier
 
-- Upgrade to foldkit-plus 0.14.0 (`foldkit-entity` 0.7.0, `foldkit-remote`/`-server` 0.11.0, `foldkit-remote-drizzle` 0.9.1), which fixes all nine filed issues, and take up what it unblocks: retire the vendored memory fixture and the `RpcClientError` adapters, port the deterministic ordering refusal (NR-017), admit ASCII-folded non-ASCII containment and refuse NUL searches, close the `Object.prototype` read divergence, re-run the conformance and SQL suites (two new `contains` cases) ([foldkit-plus-issues](research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03))
 - `RemoteStore.get` with typed decoding, so mutations can read what they change; test a read-modify-write conflict under Postgres `SERIALIZABLE` ([PLAN item 3](../PLAN.md#current-frontier), [remote-mutations](research/remote-mutations.md#typed-values-refined-2026-10-03))
 - `examples/todo-remote` on SQLite/Postgres, toggling through `get` ([sqlx-remote](research/sqlx-remote.md#order-of-work))
 - Milestone 6 research and design: streaming RPC and real interruption ([milestones §23](implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption))
@@ -82,7 +81,7 @@ These block many items below.
 - Domain-specialized engine — entity/field enums, selection bitsets, generated dispatch — replacing the literal port (NR-001, R-3); later an engine authored in R (R-1) ([native-remote](research/native-remote.md#options))
 - Compiled R entity read sources beyond memory and SQL _(verify)_ (NR-005) ([native-remote](research/native-remote.md#decisions-proposed))
 - Declarative authorization rule as an alternative to compiled `authorize` functions; upstream portable authorization ([foldkit-remote](foldkit-remote.md#authorization-should-probably-move-in-the-same-direction), [milestones §21](implementation-milestones.md#21-authorization-must-become-portable))
-- Re-diff and retire the vendored `foldkit-remote-wire`/`-memory` fixtures (5 tests use them); unblocked by foldkit-plus 0.14.0 (#140) ([native-remote](research/native-remote.md#open-questions))
+- The authorization test keeps a vendored memory read, because `RemoteServer.memory` takes no per-entity `authorize`; ask upstream for that hook or build the auth oracle another way ([fixture](../packages/reffect/tests/fixtures/foldkit-remote-memory.ts))
 - Open question: may native `entities` order differ where the client cache ignores order? ([native-remote](research/native-remote.md#open-questions))
 - Query inputs beyond Structs of primitives; checked finite numeric inputs (NR-015) ([native-remote](research/native-remote.md#query-design-step-3-accepted-2026-10-02))
 - Query sources get no principal in the memory profile (RM-004c) ([remote-mutations](research/remote-mutations.md#rm-004ab-as-implemented-2026-10-03))
@@ -110,9 +109,8 @@ These block many items below.
 
 ### Query evaluator
 
-- Unicode collation, structured-value equality, automatic domain encoding; native containment over non-ASCII text, now admissible with ASCII folding since foldkit-entity 0.7.0 folds ASCII only, with NUL searches refused (#136) ([foldkit-query](research/foldkit-query.md#semantics-and-boundaries))
+- Unicode collation, structured-value equality, automatic domain encoding ([foldkit-query](research/foldkit-query.md#semantics-and-boundaries))
 - Upstream's Postgres SQL still folds `contains` by collation while its evaluator folds ASCII only; a candidate upstream issue, not filed ([foldkit-plus-issues](research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03))
-- Revisit the test-only Drizzle `compile.ts` snapshot now that `foldkit-remote-drizzle` 0.9.0 is a dependency ([foldkit-query](research/foldkit-query.md#acceptance-and-validation))
 
 ## SSR, HTML and migration
 
@@ -236,8 +234,6 @@ Possible fixes for registered [native divergences](native-divergences.md#runtime
 
 - Parse the RPC envelope as `serde_json` `RawValue` and decode per request: lone surrogates (STR-007), plain `Schema.String` with a UTF-16 profile (STR-008), out-of-range numbers (NUM-005b)
 - `ryu-js`-formatted numbers in RPC and Unknown encoding, after a differential corpus against V8 (NUM-004) ([native-types](research/native-types.md#open-questions))
-- Upstream's ordering-refusal text, now deterministic upstream (foldkit-plus#142, 0.14.0) (NR-017)
-- Remote `contains` with non-ASCII operands: ASCII folding, matching foldkit-entity 0.7.0 (#136); `Object.prototype` field names: upstream now reads own keys only (#143), so the read divergence should close on upgrade
 - Body/batch limits raised per workload; an explicit JSON depth limit via `serde_stacker`
 - Refuse or null-encode non-finite numbers at the store/patch boundary (RM-001)
 - Immediate finalizer run on a closed scope, once explicit scopes exist (SCOPER-004)
@@ -258,9 +254,11 @@ Possible fixes for registered [native divergences](native-divergences.md#runtime
 
 ## Upstream foldkit-plus issues
 
-All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0; the follow-up is the upgrade under [Frontier](#frontier) ([resolution](research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03)).
+All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reffect adopted on 2026-10-03 ([resolution](research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03)).
 
-- Candidate, not filed: upstream's Postgres `contains` folds by collation while its evaluator folds ASCII only
+- Candidate, not filed: upstream's Postgres `contains` folds by collation while its evaluator folds ASCII only (SQLX-018 notes)
+- Candidate, not filed: a NUL search is a protocol `Defect` from the Drizzle source but a typed `RemoteQueryError` from the memory backend (SQLX-018)
+- Candidate, not filed: `RemoteServer.memory` takes no per-entity `authorize`
 - Not filed: Drizzle RC.4 declarations fail TypeScript 7, so `skipLibCheck` stays ([note](research/foldkit-plus-issues.md#dependency-declaration-compatibility-note))
 
 ## Repository and document hygiene

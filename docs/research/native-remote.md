@@ -127,7 +127,7 @@ Read from `foldkit-remote-server` 0.10.0 (`handlers.FoldkitRemoteQuery`, `memory
   - the select page limit → `Too many pages of "<entity>.<field>" in one query select`;
   - the source run, then `pageOf` with `locate`. Window conflicts, missing cursors and `Cursor "<c>" names a row that no longer exists` all become `RemoteQueryError` with the reference text;
   - edges `{ entity, id, key }`, then `select` through the read engine. Read errors become `RemoteQueryError` with the same message.
-- **NR-017 — recorded divergence: evaluation refusal text.**
+- **NR-017 — recorded divergence: evaluation refusal text.** _Closed 2026-10-03 by foldkit-entity 0.7.0 (foldkit-plus#142, #136): the refusals are now byte-identical and non-ASCII containment is admitted with ASCII folding._
   - The milestone-1 runtime refuses exactly when upstream `evaluate` throws, in this profile: ordering when two or more matched rows have a null or mixed-kind key. Its message differs, because upstream names the first pair its sort happened to compare. The error class and the absence of results are identical.
   - Non-ASCII containment, which upstream evaluates with `toLowerCase`, is refused natively (milestone-1 three-interpreter profile).
 
@@ -143,7 +143,7 @@ Read from `foldkit-remote-server` 0.10.0 (`handlers.FoldkitRemoteQuery`, `memory
    - [literal unions](literal-unions.md);
    - plain `Schema.String` (STR-008).
 
-   The vendored, unchanged contract ([fixture](../../packages/reffect/tests/fixtures/foldkit-remote-wire.ts)) compiles for Read, Mutate and Query, and matches the official server ([remote-wire-rpc.test.ts](../../packages/reffect/tests/remote-wire-rpc.test.ts)). `Live` is refused as a streaming procedure (NR-006). `NativeRpc.witness(schema)` derives the R witness of any contract schema for handlers and the engine.
+   The vendored, unchanged contract (a test fixture, retired 2026-10-03 for the published `foldkit-remote` exports) compiles for Read, Mutate and Query, and matches the official server ([remote-wire-rpc.test.ts](../../packages/reffect/tests/remote-wire-rpc.test.ts)). `Live` is refused as a streaming procedure (NR-006). `NativeRpc.witness(schema)` derives the R witness of any contract schema for handlers and the engine.
 
 2. Move the oracle pin to Effect 4.0.0, then the engine port and memory backend for Read (NR-001, NR-003, NR-004), with the differential harness against the upgraded foldkit-plus releases (NR-007). **Read done 2026-10-02:**
    - [`remote-engine.ts`](../../packages/reffect/src/remote-engine.ts) ports `readHelper`, alias splitting, grouping, limits and the memory backend's paging into a Rust module.

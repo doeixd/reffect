@@ -1,5 +1,29 @@
 # Progress
 
+## 2026-10-03 — foldkit-plus 0.14.0 adopted
+
+- **Upgrade.** reffect pins `foldkit-entity` 0.7.0, `foldkit-remote`/`-server` 0.11.0 and `foldkit-remote-drizzle` 0.9.1. These fix every issue reffect filed (#135–#143).
+- **Native Query semantics follow upstream:**
+  - containment folds ASCII only, admits non-ASCII text and refuses NUL with upstream's message (#136);
+  - an ordering over a null key is refused before sorting, naming the first null in row order (#142).
+
+  Three divergences close: NR-017 (refusals are now byte-identical), non-ASCII containment, and `Object.prototype` field names (#143).
+
+- **Retired workarounds:**
+  - the `RpcClientError` transport adapters in tests and `examples/todo-remote` (#141);
+  - the vendored wire contract;
+  - the Drizzle `compile.ts` snapshot;
+  - the vendored memory read, except in the authorization test, because `memory` takes no `authorize`.
+
+  The read, query, mutation and wire suites and the bench scripts serve `RemoteServer.memory(...).server` (#140), which also brings `locate` into the oracle.
+
+- **Tests.** Tests that pinned the upstream bugs now pin their fixes. Fixtures that mutated now-frozen nodes build altered copies (#138).
+- **New divergence, SQLX-018.** A NUL search is a protocol `Defect` from upstream's Drizzle source; native answers a typed `RemoteQueryError` with the same message. On Postgres, upstream's own SQL still folds `contains` by collation; that conformance case is asserted to differ there. Both are candidate upstream issues, not filed.
+- **Validation:**
+  - `foldkit` (6), `foldkit-upstream` (4), `remote-read`/`remote-wire-rpc` (5), `remote-query` (2), `remote-mutate` (3), `remote-auth`;
+  - `sql-plan`, `remote-sql`, `remote-sql-mutate` and `remote-acceptance` (13, SQLite and Postgres);
+  - `examples/todo-remote` equals upstream.
+
 ## 2026-10-03 — Upstream issues fixed in foldkit-plus 0.14.0
 
 - All nine foldkit-plus issues reffect filed (#135–#143) were closed as completed by three upstream commits, released in v0.14.0: `foldkit-entity` 0.7.0, `foldkit-remote`/`-server` 0.11.0 and `foldkit-remote-drizzle` 0.9.1. reffect still pins the previous versions.
