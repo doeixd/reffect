@@ -2,6 +2,8 @@
 
 Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. Use [PROGRESS.md](../PROGRESS.md) for implementation status.
 
+**[Open work](open-work.md)** registers everything still to be done — deferred slices, open questions, refusals expected to widen, owed measurements and future milestones — each linked to the record that owns it.
+
 The roadmap governs current sequencing and the active frontier. The [design revision overview](op-expr-revision-convo.md) explains historical changes; use it as architecture background, not a prerequisite archaeology exercise.
 
 [Parallel Effect module work](effect-modules.md) tracks the resource lifetime, Context/Layer, error recovery and Schema implementation batch, with per-module decision records for later review.

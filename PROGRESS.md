@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-03 — Open work register
+
+- [docs/open-work.md](docs/open-work.md) collects every still-open item from the design and research records, PROGRESS entries, native divergences and milestones 6–15, each linked to its owning record (158 links, all anchors checked).
+- It also lists stale records to refresh and notes that the foldkit-plus findings older entries call "not posted" are now filed (#135–#143).
+- AGENTS.md now asks that deferred work be added there and removed when done.
+
 ## 2026-10-03 — Milestone 5 step 5: Postgres as the second SQL dialect
 
 - The SQL planner and the native `remote_sql` module are dialect-explicit (SQLX-009..011). `NativeRemote.compile` takes `sql.dialect` (`"sqlite"` or `"postgres"`), and only that dialect's SQLx driver becomes a dependency.

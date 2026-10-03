@@ -144,6 +144,7 @@ Keep the record proportional to the work: concise evidence and design decisions 
 - Git commit hooks are intentionally disabled. Keep checks explicit; do not add pre/post-commit hooks or reinstall a hook dispatcher without a user request.
 - Prefix commits addressing review findings with `review(<scope>):`, for example `review(docs): fix milestone navigation`.
 - Update PROGRESS.md with completed work, validation, remaining questions, and review outcomes. Keep PLAN.md, AGENTS.md, and the docs index aligned when design direction changes.
+- Keep [docs/open-work.md](docs/open-work.md) current: add a linked line whenever work is deferred, refused for later or left open, and delete it when the work is done.
 - Preserve original discussion content during document migrations. Extraction scripts are one-time tools; maintain split documents directly and verify links, contents anchors, and precedence notes.
 
 ## Commit cadence

@@ -102,7 +102,7 @@ The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`
 3. Compare reference/native shared versus fresh acquisition, failed acquisition and interruption, teardown order and lifetime-safe service use under both diagnostic policies. Measure record/future/context growth and registration allocations.
 4. Admit one complete resource-bearing provider path after those gates pass; defer concurrent merge, dynamic registries and wider Scope services until their own lifetime/conformance work.
 
-Replace this section as the frontier moves. Detailed acceptance and unresolved limits belong in the task’s research record; completed history belongs in PROGRESS.md.
+Replace this section as the frontier moves. Detailed acceptance and unresolved limits belong in the task’s research record; completed history belongs in PROGRESS.md. Everything still open across features is indexed in the [open work register](docs/open-work.md).
 
 ## Cross-cutting requirements
 
