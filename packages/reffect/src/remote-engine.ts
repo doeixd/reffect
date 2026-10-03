@@ -73,7 +73,9 @@ mod remote_engine {
             self.values.insert(key, value);
         }
         fn iter(&self) -> impl Iterator<Item = (&String, &V)> { self.keys.iter().map(move |key| (key, &self.values[key])) }
-        /// ` + "`Map.prototype.delete`" + String.raw`: setting the key again appends it.
+        /// ` +
+  "`Map.prototype.delete`" +
+  String.raw`: setting the key again appends it.
         fn remove(&mut self, key: &str) {
             if self.values.remove(key).is_some() { self.keys.retain(|existing| existing != key); }
         }
@@ -330,11 +332,15 @@ mod remote_engine {
     /// A row as the memory backend holds it: a plain object, shared until a write replaces it.
     pub type Row = Arc<JsObject<Value>>;
     struct Tables { version: u64, tables: HashMap<String, Ordered<Row>> }
-    /// The memory backend's ` + "`MemoryStore`" + String.raw` (RS-003..006): one server-lifetime store behind a lock,
+    /// The memory backend's ` +
+  "`MemoryStore`" +
+  String.raw` (RS-003..006): one server-lifetime store behind a lock,
     /// taken once per operation. Every write bumps the version, which invalidates query caches.
     pub struct Memory { entities: Vec<String>, state: RwLock<Tables> }
     impl Memory {
-        /// ` + "`rows`" + String.raw`: entity -> [[String(id), row]] in table order, as the memory backend keys them.
+        /// ` +
+  "`rows`" +
+  String.raw`: entity -> [[String(id), row]] in table order, as the memory backend keys them.
         pub fn new(entities: Vec<String>, rows: &Value) -> Memory {
             let mut tables = HashMap::new();
             if let Some(object) = rows.as_object() {
@@ -370,11 +376,21 @@ mod remote_engine {
                 Some(EntityRecord { id: id.clone(), values })
             }).collect()
         }
-        /// The row ` + "`rows(entity)`" + String.raw` holds under ` + "`id`" + String.raw`, if any.
+        /// The row ` +
+  "`rows(entity)`" +
+  String.raw` holds under ` +
+  "`id`" +
+  String.raw`, if any.
         #[allow(dead_code)]
         pub fn get(&self, entity: &str, id: &str) -> Option<Row> { self.tables().tables.get(entity)?.get(id).cloned() }
-        /// ` + "`write(entity, id, values)`" + String.raw`: the row becomes ` + "`{ ...existing, id, ...values }`" + String.raw`; a new row
-        /// goes last. ` + "`values`" + String.raw` are in JS own-property order.
+        /// ` +
+  "`write(entity, id, values)`" +
+  String.raw`: the row becomes ` +
+  "`{ ...existing, id, ...values }`" +
+  String.raw`; a new row
+        /// goes last. ` +
+  "`values`" +
+  String.raw` are in JS own-property order.
         #[allow(dead_code)]
         pub fn write(&self, entity: &str, id: &str, values: Vec<(String, Value)>) {
             let mut state = self.tables_mut();
@@ -385,7 +401,9 @@ mod remote_engine {
             for (key, value) in values { row.set(key, value); }
             table.set(id.to_string(), Arc::new(row));
         }
-        /// ` + "`remove(entity, id)`" + String.raw`; removing an absent row changes nothing.
+        /// ` +
+  "`remove(entity, id)`" +
+  String.raw`; removing an absent row changes nothing.
         #[allow(dead_code)]
         pub fn remove(&self, entity: &str, id: &str) {
             let mut state = self.tables_mut();
