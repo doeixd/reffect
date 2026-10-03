@@ -256,9 +256,9 @@ Possible fixes for registered [native divergences](native-divergences.md#runtime
 
 All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reffect adopted on 2026-10-03 ([resolution](research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03)).
 
-- Candidate, not filed: upstream's Postgres `contains` folds by collation while its evaluator folds ASCII only (SQLX-018 notes)
-- Candidate, not filed: a NUL search is a protocol `Defect` from the Drizzle source but a typed `RemoteQueryError` from the memory backend (SQLX-018)
-- Candidate, not filed: `RemoteServer.memory` takes no per-entity `authorize`
+- [foldkit-plus#145](https://github.com/doeixd/foldkit-plus/issues/145): upstream's Postgres `contains` folds by collation while its evaluator folds ASCII only
+- [foldkit-plus#146](https://github.com/doeixd/foldkit-plus/issues/146): a NUL search is a protocol `Defect` from the Drizzle source but a typed `RemoteQueryError` from the memory backend (SQLX-018)
+- [foldkit-plus#147](https://github.com/doeixd/foldkit-plus/issues/147): `RemoteServer.memory` takes no per-entity `authorize`
 - Not filed: Drizzle RC.4 declarations fail TypeScript 7, so `skipLibCheck` stays ([note](research/foldkit-plus-issues.md#dependency-declaration-compatibility-note))
 
 ## Repository and document hygiene
