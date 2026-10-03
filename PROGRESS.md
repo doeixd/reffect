@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-03 — Milestone 7 step 3: stock live client and a live todo example
+
+- **Stock client.** Remote's stock `RemoteClient.live`, over a stock `RpcClient` with NDJSON, decodes native Live into the same `LiveEvent`s as over upstream's handlers.
+- **Example.** `examples/todo-remote` serves Live natively. Its session watches two todos while another screen toggles and deletes them.
+- **Validation.**
+  - `vp test tests/remote-live.test.ts` passed (3 tests).
+  - `vp exec node --experimental-transform-types examples/todo-remote/main.ts` printed `watched live #1 t2 {"done":true} #2 t1 deleted` and "native screens equal upstream's memory backend".
+  - `vp check` is clean.
+- **Open:** browser-side live rendering needs per-item `Data.live` projections ([remote-live](docs/research/remote-live.md#order-of-work-and-acceptance)).
+
 ## 2026-10-03 — Milestone 7 step 2: live signals after SQL commits
 
 - **Change.** On the SQL backend, `R.LiveHub` signals are queued in the mutation's session and applied after commit; a rollback drops them (LIVE-003).
