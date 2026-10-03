@@ -159,6 +159,17 @@ Hydration is therefore tolerant. **Byte equality with upstream is the right acce
    - A browser (or a DOM library) loads native HTML, and the stock `Runtime.hydrate`, using the same R view through the reference, adopts it.
    - Evidence that no subtree was rebuilt: element identity preserved across hydrate.
    - **Open decision:** add `happy-dom` (or jsdom) as a dev dependency for a headless test, or keep this check as a recorded browser run.
+     **Delivered 2026-10-03.**
+   - `happy-dom` 20.14.5 is an exact dev dependency, enabled per file.
+   - [html-hydrate.test.ts](../../packages/reffect/tests/html-hydrate.test.ts) runs these steps:
+     1. A NativeRpc server renders the todo view of [ssr-todos.ts](../../packages/reffect/tests/fixtures/ssr-todos.ts), fetched over `node:http` because happy-dom replaces `fetch`.
+     2. The HTML is put into `document.body`.
+     3. The stock `Runtime.hydrate`, with the same R view through `toFoldkitView`, adopts it.
+     4. The stamp leaves the still-connected server root, and every server `<li>` is the same object afterwards.
+     5. A click on an adopted node reaches `update`, and the same `<input>` becomes checked.
+   - Rewriting one `<span>` to `<em>` in the served HTML fails the test, so it detects rebuilding.
+   - **Found on the way.** Under a DOM environment the compiler module is not served from a `file:` URL, and the LIVE-010 version guard threw. It now starts from the working directory there.
+
 5. **Page serving.** The template splice and `handleRequest` rules, as a native route beside `/rpc`.
 6. **Example.** `examples/todo-remote` renders its first screen natively. This also needs Remote data in SSR, which is milestone 9 (`Data.satisfy`). Until then the example's SSR shows the initial Model only.
 

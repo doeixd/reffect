@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-10-03 — Milestone 8A step 4: the stock client hydrates native HTML
+
+- **Change.** With `happy-dom` 20.14.5, foldkit's own test DOM, the stock `Runtime.hydrate` adopts HTML from a native server. Every server node is kept, and a click on an adopted node updates it.
+- **Fault check.** A markup mismatch makes the test fail.
+- **Fix.** The upstream version guard no longer throws when the compiler module is not loaded from a file URL.
+- **Validation.**
+  - `vp test tests/html-hydrate.test.ts` passed.
+  - `ported-runtime` and `html` pass.
+  - `vp check` is clean.
+- **Next:** page serving (step 5): template splicing and `handleRequest`'s rules, beside `/rpc`.
+
 ## 2026-10-03 — Milestone 8A step 3: native rendering, byte-equal to `renderToString`
 
 - **Change.** R views lower to a Rust serializer, ported from Foldkit's handling of the admitted attributes as measured against `renderToString`. `R.Html.renderToString` returns a typed `Result`, with upstream `renderToString` as its reference.
