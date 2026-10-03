@@ -1,10 +1,10 @@
-import { Context, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
-import { HttpEffect } from "effect/http";
+import { Context, Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import { FetchHttpClient, HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
-import { RpcMiddleware, RpcSerialization, RpcServer } from "effect/rpc";
+import { RpcClient, RpcMiddleware, RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { Entity } from "foldkit-entity";
-import { Mutation, Remote, RemoteRpc } from "foldkit-remote";
+import { Mutation, Remote, RemoteClient, RemoteRpc } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
 import type { LiveHub, MemoryStore } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
@@ -192,8 +192,24 @@ const official = Effect.gen(function* () {
     Effect.provide([RemoteRpc.toLayer(handlers), RpcSerialization.layerNdjson]),
   );
   const handler = HttpEffect.toWebHandler(http);
-  return { handler, size: liveHub.size };
+  return { handler, handlers, size: liveHub.size };
 });
+
+/**
+ * The stock client's view (milestone 7 acceptance): `RemoteClient.live`, as Remote's live entries
+ * call it, decoding the wire into `LiveEvent`s while mutations land through `post`.
+ */
+const stockSession = (post: (body: string) => Promise<string>) =>
+  Effect.gen(function* () {
+    const client = yield* RemoteClient;
+    const events = yield* client
+      .live({ requirements: [{ entity: "Project", id: "p1", fields: ["name", "rank"] }], after: 5 })
+      .pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped);
+    yield* Effect.sleep("300 millis");
+    yield* Effect.promise(() => post(mutate("Rename", { id: "p1", name: "Stock" })));
+    yield* Effect.promise(() => post(mutate("Drop", { id: "p1" })));
+    return [...(yield* Fiber.join(events).pipe(Effect.timeout("10 seconds")))];
+  }).pipe(Effect.scoped);
 
 test("LiveHub signals need a live hub", async () => {
   const error = await Effect.runPromise(
@@ -219,6 +235,13 @@ test(
           );
           // Every subscriber left the official hub when its client went away.
           expect(yield* reference.size).toBe(0);
+          const officialPost = (body: string) =>
+            reference
+              .handler(new Request("http://reffect.test/rpc", { method: "POST", body }))
+              .then((response) => response.text());
+          const officialStock = yield* stockSession(officialPost).pipe(
+            Effect.provide(Remote.clientLayer(reference.handlers)),
+          );
 
           const fs = yield* FileSystem.FileSystem;
           const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-remote-live-" });
@@ -256,6 +279,23 @@ test(
           expect(nativeRun.aLines).toEqual(officialRun.aLines);
           expect(nativeRun.bLines).toEqual(officialRun.bLines);
           expect(nativeRun.answers).toEqual(officialRun.answers);
+          // A stock RpcClient over NDJSON, under Remote's client layer, decodes the same events.
+          const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
+            Effect.provide(
+              RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
+                Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+              ),
+            ),
+          );
+          const nativeStock = yield* stockSession((body) =>
+            fetch(`http://${address}/rpc`, { method: "POST", body }).then((r) => r.text()),
+          ).pipe(Effect.provide(Remote.clientLayer(rpc)));
+          // Upstream's in-process events hold null-prototype records; compare them as data.
+          expect(JSON.stringify(nativeStock)).toBe(JSON.stringify(officialStock));
+          expect(officialStock).toMatchObject([
+            { _tag: "EntityPatched", cursor: 6, values: { name: "Stock" }, changed: ["name"] },
+            { _tag: "EntityDeleted", cursor: 7 },
+          ]);
           // The compared streams carry what the scenario is about.
           const a = officialRun.aLines.join("\n");
           const b = officialRun.bLines.join("\n");
