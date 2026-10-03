@@ -171,6 +171,7 @@ export type {
 } from "./native-remote.ts";
 export { RemoteStoreHost } from "./remote-store-host.ts";
 export type { RemoteStoreApi } from "./remote-store-host.ts";
+export type { SqlDialect } from "./sql-plan.ts";
 export { RpcCodecs } from "./rpc-codecs.ts";
 
 export { RpcBearer } from "./rpc-auth.ts";
