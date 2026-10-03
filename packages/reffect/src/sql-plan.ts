@@ -107,9 +107,14 @@ export const storageOf = (binding: BindingLike): SqlStorage => {
   if (!id || id.nullable)
     throw unsupported(`${at}.id`, "A Remote entity needs a non-null id column");
   const relations = Object.entries(binding.relations).map(([field, relation]): SqlRelation => {
-    if (relation.kind !== "one" || typeof relation.field !== "string")
+    if (relation.kind !== "one")
       throw unsupported(`${at}.${field}`, `${relation.kind} relations are not native yet`);
-    const column = columnOf(Reflect.get(binding.table, relation.field));
+    // The foreign key is the column itself, or its key on the table.
+    const column =
+      columnOf(relation.field) ??
+      (typeof relation.field === "string"
+        ? columnOf(Reflect.get(binding.table, relation.field))
+        : undefined);
     const target: unknown =
       typeof relation.entity === "object" && relation.entity !== null
         ? Reflect.get(relation.entity, "name")

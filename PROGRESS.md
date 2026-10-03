@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-03 — Milestone 5 step 3: Remote Read and Query over SQLite with SQLx
+
+- `NativeRemote` gains an `sql` backend: `foldkit-remote-drizzle` bindings plus a database-URL environment variable. It is served by a SQLx 0.9.0 / bundled SQLite 3.51.3 source ([sql-runtime.ts](packages/reffect/src/sql-runtime.ts)).
+  - Reads mirror upstream `source`; pages run the build-time statements and port upstream's window and page logic.
+  - The engine's `Source::declares` now withholds undeclared fields.
+- [remote-sql.test.ts](packages/reffect/tests/remote-sql.test.ts) passes. Its 23 wire steps match the official server using upstream's Drizzle sources over the same SQLite file. Details are in [sqlx-remote.md](docs/research/sqlx-remote.md#order-of-work).
+- Probe findings recorded:
+  - SQLx's SQLite decoder is strict about storage classes, so values are decoded by class.
+  - The bundled SQLite builds with MSVC in about 28 s cold.
+
 ## 2026-10-03 — Milestone 5 step 2: async engine over a Source trait
 
 - The Remote engine now reads and pages through an async `Source` trait, and the memory backend implements it with ready futures (SQLX-007). NativeRemote servers are always asynchronous. Details are in [sqlx-remote.md](docs/research/sqlx-remote.md#order-of-work).

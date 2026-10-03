@@ -335,6 +335,8 @@ mod remote_engine {
     /// upstream's handlers own: limits, grouping, authorization, settling, relations, select.
     pub trait Source: Sync {
         fn has_source(&self, entity: &str) -> bool;
+        /// Whether the source declares a field; an undeclared one is withheld, never read.
+        fn declares(&self, _entity: &str, _field: &str) -> bool { true }
         /// A source failure is its RemoteServerError message.
         fn read(&self, entity: &str, ids: &[String], fields: &[String], windows: &Option<JsObject<Window>>) -> impl std::future::Future<Output = Result<Vec<EntityRecord>, String>> + Send;
         /// In upstream's order: an unknown query, then input the Input schema refuses. The query's entity.
@@ -500,11 +502,11 @@ mod remote_engine {
   String.raw`: requested fields ` +
   "`authorize`" +
   String.raw` permits, in request order; it can only remove.
-    fn allowed_fields(authorize: Authorize, entity: &str, requested: &[String]) -> Vec<String> {
-        // The memory backend declares no fields, so every requested field is declared.
-        if requested.is_empty() { return Vec::new(); }
-        let permitted: HashSet<String> = authorize(entity, requested).into_iter().collect();
-        requested.iter().filter(|field| permitted.contains(*field)).cloned().collect()
+    fn allowed_fields<S: Source>(server: &S, authorize: Authorize, entity: &str, requested: &[String]) -> Vec<String> {
+        let declared: Vec<String> = requested.iter().filter(|field| server.declares(entity, field)).cloned().collect();
+        if declared.is_empty() { return Vec::new(); }
+        let permitted: HashSet<String> = authorize(entity, &declared).into_iter().collect();
+        declared.into_iter().filter(|field| permitted.contains(field)).collect()
     }
     async fn read_helper<S: Source>(server: &S, authorize: Authorize<'_>, requests: Vec<Requirement>) -> Result<Value, Value> {
         let mut entities: Vec<Value> = Vec::new();
@@ -522,7 +524,7 @@ mod remote_engine {
             for group in group_by_entity(&pending) {
                 let name = group.slice.entity.clone();
                 if !server.has_source(&name) { continue; }
-                let allowed: Vec<String> = allowed_fields(authorize, &name, &group.slice.fields);
+                let allowed: Vec<String> = allowed_fields(server, authorize, &name, &group.slice.fields);
                 let allowed_set: HashSet<&String> = allowed.iter().collect();
                 let rename = |field: &String| -> String { group.renames.get(field).cloned().unwrap_or_else(|| field.clone()) };
                 let id_list: Vec<String> = group.ids.keys.clone();

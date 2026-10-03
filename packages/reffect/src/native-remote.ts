@@ -1,4 +1,4 @@
-import { Effect, Schema, SchemaAST } from "effect";
+import { Effect, Match, Schema, SchemaAST } from "effect";
 import { Rpc, type RpcGroup } from "effect/rpc";
 import type { AnyQuery } from "foldkit-entity";
 import { EffectFn, EffectIR, type Computation } from "./effect-ir.ts";
@@ -22,6 +22,9 @@ import { RpcBearer } from "./rpc-auth.ts";
 import type { RpcArtifact, WireValue } from "./native-rpc.ts";
 import { ArrayIR, Literals, Struct, TaggedUnion, optionalKey } from "./records.ts";
 import { SchemaIR, StableStringify } from "./schema-json.ts";
+import { planQuery, storageOf } from "./sql-plan.ts";
+import type { BindingLike, SqlParam, SqlStatement, SqlStorage } from "./sql-plan.ts";
+import { sqlRuntime } from "./sql-runtime.ts";
 import { remoteEngineRuntime } from "./remote-engine.ts";
 import { Rs } from "./rust-emit.ts";
 
@@ -43,7 +46,16 @@ export interface RemoteDomain {
 }
 export interface NativeRemoteOptions {
   readonly domain: RemoteDomain;
-  readonly rows: MemoryRows;
+  /** The memory backend's rows, as `RemoteServer.memory` takes them. Exclusive with `sql`. */
+  readonly rows?: MemoryRows;
+  /**
+   * A SQLite backend (milestone 5, SQLX-001..007): `foldkit-remote-drizzle` bindings by entity,
+   * and the environment variable holding the database URL at run time (never compiled in).
+   */
+  readonly sql?: {
+    readonly bindings: Readonly<Record<string, BindingLike>>;
+    readonly databaseUrlEnv: string;
+  };
   /** Mutation sources, as `RemoteServer.memory`'s `mutations` gives them (RM-001). */
   readonly mutations?: ReadonlyArray<NativeRemoteMutation>;
   /**
@@ -374,6 +386,83 @@ const checkRows = (
  * `FoldkitRemoteQuery` are served by the ported engine; mutations wait for step 4, and streaming
  * `Live` for milestones 6–7.
  */
+const rustParam = (param: SqlParam): string =>
+  Match.value(param).pipe(
+    Match.tagsExhaustive({
+      Input: (input) => `remote_sql::Param::Input(${Rs.stringLiteral(input.key).text})`,
+      Literal: (literal) =>
+        literal.value === null
+          ? "remote_sql::Param::Null"
+          : typeof literal.value === "string"
+            ? `remote_sql::Param::Text(${Rs.stringLiteral(literal.value).text})`
+            : typeof literal.value === "boolean"
+              ? `remote_sql::Param::Bool(${literal.value})`
+              : `remote_sql::Param::Number(f64::from_bits(0x${Buffer.from(
+                  new Float64Array([literal.value]).buffer,
+                )
+                  .reverse()
+                  .toString("hex")}))`,
+      Pattern: (pattern) =>
+        Match.value(pattern.search).pipe(
+          Match.tag(
+            "Input",
+            (input) => `remote_sql::Param::PatternInput(${Rs.stringLiteral(input.key).text})`,
+          ),
+          Match.tag("Literal", (literal) =>
+            typeof literal.value === "string"
+              ? `remote_sql::Param::PatternText(${Rs.stringLiteral(literal.value).text})`
+              : "remote_sql::Param::Null",
+          ),
+          Match.orElse(() => {
+            throw unsupported("sql", "A search pattern reads an input or a literal");
+          }),
+        ),
+      Cursor: (cursor) => `remote_sql::Param::Cursor(${cursor.index})`,
+      CursorId: () => "remote_sql::Param::CursorId",
+      Limit: () => "remote_sql::Param::Limit",
+    }),
+  );
+const rustStatement = (statement: SqlStatement): string =>
+  `remote_sql::Statement { sql: ${Rs.stringLiteral(statement.sql).text}, params: &[${statement.params.map(rustParam).join(", ")}] }`;
+const KIND = { string: "Text", number: "Number", boolean: "Boolean" } as const;
+/** The SQL backend's statics: entity storage, planned queries and the pool's URL variable. */
+const sqlServer = (
+  storages: ReadonlyArray<SqlStorage>,
+  plans: ReadonlyArray<{
+    readonly validator: string;
+    readonly plan: ReturnType<typeof planQuery>;
+    readonly index: number;
+  }>,
+  urlEnv: string,
+): string => {
+  const entities = storages.map(
+    (storage) =>
+      `remote_sql::Entity { name: ${Rs.stringLiteral(storage.entity).text}, table: ${Rs.stringLiteral(storage.table).text}, id: ${Rs.stringLiteral(storage.id).text}, columns: &[${storage.columns
+        .map(
+          (column) =>
+            `remote_sql::Column { field: ${Rs.stringLiteral(column.field).text}, column: ${Rs.stringLiteral(column.column).text}, kind: remote_sql::Kind::${KIND[column.kind]} }`,
+        )
+        .join(", ")}], relations: &[${storage.relations
+        .map(
+          (one) =>
+            `remote_sql::One { field: ${Rs.stringLiteral(one.field).text}, column: ${Rs.stringLiteral(one.column).text}, target: ${Rs.stringLiteral(one.target).text} }`,
+        )
+        .join(", ")}] }`,
+  );
+  const queries = plans.map(
+    ({ plan, index }) =>
+      `remote_sql::Query { name: ${Rs.stringLiteral(plan.query).text}, entity: ${Rs.stringLiteral(plan.entity).text}, valid: remote_query_valid_${index}, cursor_row: ${rustStatement(plan.cursorRow)}, forward: ${rustStatement(plan.forward)}, forward_after: ${rustStatement(plan.forwardAfter)}, backward: ${rustStatement(plan.backward)}, backward_before: ${rustStatement(plan.backwardBefore)} }`,
+  );
+  return `${plans.map((plan) => plan.validator).join("\n")}
+static REMOTE_SQL: remote_sql::Sql = remote_sql::Sql { entities: &[${entities.join(", ")}], queries: &[${queries.join(", ")}], url_env: ${Rs.stringLiteral(urlEnv).text}, pool: std::sync::OnceLock::new() };
+// The engine's memory backend names the evaluator's cell type; SQL runs no evaluator.
+#[allow(dead_code)]
+mod foldkit_eval {
+pub use std::cmp::Ordering;
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }
+}`;
+};
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
   options: NativeRemoteOptions,
@@ -442,14 +531,58 @@ const compile = <Rpcs extends Rpc.Any>(
           sourced.add(source.name);
         }
         const entities = Array.from(options.domain.registry.entities.keys());
-        const rowTables = tables(options.rows);
         const queries = Array.from(options.domain.registry.queries.values());
+        if ((options.rows === undefined) === (options.sql === undefined))
+          throw unsupported("backend", "Give exactly one backend: rows (memory) or sql");
         const bodiless = queries.filter((query) => query.body === undefined);
         if (bodiless.length)
           throw unsupported(
             "queries",
             `${bodiless.map((query) => `"${query.name}"`).join(", ")} ${bodiless.length === 1 ? "has" : "have"} no body to run`,
           );
+        if (options.sql !== undefined) {
+          const sql = options.sql;
+          if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(sql.databaseUrlEnv))
+            throw unsupported("sql.databaseUrlEnv", "Name an uppercase environment variable");
+          if (mutations.length)
+            throw unsupported(
+              "mutations",
+              "Mutations over SQL arrive with transactions (SQLX-006)",
+            );
+          const storages = new Map<string, SqlStorage>();
+          for (const [entity, binding] of Object.entries(sql.bindings)) {
+            if (!options.domain.registry.entities.has(entity) || binding.name !== entity)
+              throw unsupported(
+                `sql.bindings.${entity}`,
+                `The domain declares no entity ${entity}`,
+              );
+            const storage = storageOf(binding);
+            for (const field of [...storage.columns, ...storage.relations])
+              if (field.column.length === 0)
+                throw unsupported(`sql.bindings.${entity}`, "Empty column name");
+            if (storage.columns.find((column) => column.field === "id")?.kind !== "string")
+              throw unsupported(`sql.bindings.${entity}.id`, "Text ids only in this profile");
+            storages.set(entity, storage);
+          }
+          const plans = queries.map((query, i) => {
+            const entity = query.body!.entity.name;
+            const storage = storages.get(entity);
+            if (!storage) throw unsupported(`queries.${query.name}`, `No binding for ${entity}`);
+            return {
+              validator: inputValidator(query.name, query.Input, i),
+              plan: planQuery(query.name, query.body!, storage),
+              index: i,
+            };
+          });
+          return {
+            backend: "sql" as const,
+            source: "&REMOTE_SQL",
+            server: sqlServer(Array.from(storages.values()), plans, sql.databaseUrlEnv),
+            mutations,
+            authorize,
+          };
+        }
+        const rowTables = tables(options.rows!);
         // Each body and its order-only twin (for keyset `locate`) through the milestone-1 adapter.
         const bodies: Record<string, AnyQuery> = {};
         queries.forEach((query, i) => {
@@ -475,11 +608,23 @@ const compile = <Rpcs extends Rpc.Any>(
             definition: `remote_engine::QueryDef { name: ${Rs.stringLiteral(query.name).text}, entity: ${Rs.stringLiteral(entity).text}, valid: remote_query_valid_${i}, fields: ${list(analysis.fields)}, inputs: ${list(analysis.inputs)}, run: foldkit_eval::r_q${i}, order: foldkit_eval::r_q${i}_order, order_fields: ${list(twin.fields)}, order_inputs: ${list(twin.inputs)}, cells: std::sync::Mutex::new(None) }`,
           };
         });
+        const names = entities.map((entity) => `${Rs.stringLiteral(entity).text}.to_string()`);
+        const rows = JSON.stringify(Object.fromEntries(rowTables));
+        const server = `static REMOTE_ROWS: &str = ${Rs.stringLiteral(rows).text};
+static REMOTE_MEMORY: std::sync::OnceLock<remote_engine::Memory> = std::sync::OnceLock::new();
+fn remote_memory() -> &'static remote_engine::Memory {
+    REMOTE_MEMORY.get_or_init(|| remote_engine::Memory::new(vec![${names.join(", ")}], &serde_json::from_str(REMOTE_ROWS).expect("embedded rows are JSON"), &REMOTE_QUERIES))
+}
+${definitions.map((definition) => definition.validator).join("\n")}
+static REMOTE_QUERIES: [remote_engine::QueryDef; ${definitions.length}] = [${definitions.map((definition) => definition.definition).join(", ")}];
+#[allow(dead_code)]
+mod foldkit_eval {
+${embedded.rust || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, PartialEq)]\npub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }"}
+}`;
         return {
-          entities,
-          rows: JSON.stringify(Object.fromEntries(rowTables)),
-          evaluator: embedded.rust,
-          definitions,
+          backend: "memory" as const,
+          source: "remote_memory()",
+          server,
           mutations,
           authorize,
         };
@@ -487,18 +632,6 @@ const compile = <Rpcs extends Rpc.Any>(
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("remote", String(cause)),
     });
-    const names = prepared.entities.map((entity) => `${Rs.stringLiteral(entity).text}.to_string()`);
-    const server = `static REMOTE_ROWS: &str = ${Rs.stringLiteral(prepared.rows).text};
-static REMOTE_MEMORY: std::sync::OnceLock<remote_engine::Memory> = std::sync::OnceLock::new();
-fn remote_memory() -> &'static remote_engine::Memory {
-    REMOTE_MEMORY.get_or_init(|| remote_engine::Memory::new(vec![${names.join(", ")}], &serde_json::from_str(REMOTE_ROWS).expect("embedded rows are JSON"), &REMOTE_QUERIES))
-}
-${prepared.definitions.map((definition) => definition.validator).join("\n")}
-static REMOTE_QUERIES: [remote_engine::QueryDef; ${prepared.definitions.length}] = [${prepared.definitions.map((definition) => definition.definition).join(", ")}];
-#[allow(dead_code)]
-mod foldkit_eval {
-${prepared.evaluator || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, PartialEq)]\npub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }"}
-}`;
     // Upstream order: unknown mutation, then input decoding, then the run (RM-001).
     const arms = prepared.mutations
       .map(
@@ -541,11 +674,11 @@ ${prepared.authorize
       procedures[MUTATE] = { call: "remote_mutate(context, cancellation, payload).await" };
     if (group.requests.has(READ))
       procedures[READ] = {
-        call: "remote_engine::read(remote_memory(), &remote_authorize(context.principal), payload).await",
+        call: `remote_engine::read(${prepared.source}, &remote_authorize(context.principal), payload).await`,
       };
     if (group.requests.has(QUERY))
       procedures[QUERY] = {
-        call: "remote_engine::query(remote_memory(), &remote_authorize(context.principal), payload).await",
+        call: `remote_engine::query(${prepared.source}, &remote_authorize(context.principal), payload).await`,
       };
     return yield* compileServer(
       group,
@@ -560,7 +693,8 @@ ${prepared.authorize
         asynchronous: true,
         modules: [
           remoteEngineRuntime,
-          server,
+          ...(prepared.backend === "sql" ? [sqlRuntime] : []),
+          prepared.server,
           authorizer,
           ...(group.requests.has(MUTATE) ? [mutate] : []),
         ],
@@ -572,7 +706,7 @@ ${prepared.authorize
           ]),
         ),
         store: {
-          expr: "remote_memory()",
+          expr: prepared.source,
           impl: `impl reffect_generated::RemoteStore for remote_engine::Memory {
     fn write(&self, entity: &str, id: &str, values: serde_json::Value) {
         let serde_json::Value::Object(values) = values else { return };
@@ -581,8 +715,19 @@ ${prepared.authorize
     fn remove(&self, entity: &str, id: &str) { remote_engine::Memory::remove(self, entity, id) }
 }`,
         },
-        dependencies: ['ryu-js = { version = "=1.0.3", default-features = false }\n'],
-        crates: ["ryu-js@1.0.3"],
+        dependencies: [
+          'ryu-js = { version = "=1.0.3", default-features = false }\n',
+          ...(prepared.backend === "sql"
+            ? [
+                'sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "sqlite-bundled"] }\n',
+                'libsqlite3-sys = "=0.37.0"\n',
+              ]
+            : []),
+        ],
+        crates: [
+          "ryu-js@1.0.3",
+          ...(prepared.backend === "sql" ? ["sqlx@0.9.0", "libsqlite3-sys@0.37.0"] : []),
+        ],
       },
     );
   });

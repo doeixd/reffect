@@ -108,7 +108,20 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
    - `Memory` implements `Source` with ready futures, so no lock is held across an await, and owns its query definitions.
    - `Authorize` is `Sync`, and `NativeRemote` servers are always asynchronous (`RpcRuntime.asynchronous`).
    - No behaviour change: remote-read, -query, -mutate, -auth, -acceptance and -wire pass (6 files, 15 tests), and the todo example still equals upstream.
-3. SQLx reads and queries over SQLite, compared over the wire with `RemoteServer.handlers` using `foldkit-remote-drizzle` sources over a `node:sqlite` copy of the same database. Also run the shared `foldkit-entity/conformance` cases.
+3. **Done (2026-10-03):** SQLx reads and queries over SQLite.
+   - `NativeRemote.compile(…, { sql: { bindings, databaseUrlEnv } })`, as an alternative to `rows`, emits a `remote_sql::Sql` source ([sql-runtime.ts](../../packages/reffect/src/sql-runtime.ts)) with SQLx 0.9.0, bundled SQLite 3.51.3 and a lazy server-lifetime pool from the named environment variable.
+   - **Reads** mirror upstream `source`:
+     - `select id, cols from t where t.id in (?1…)` per chunk; the placeholder list is generated text holding no data (`AssertSqlSafe`), and the shape is upstream's, so SQLite returns rows in the same order.
+     - Values are decoded by storage class, because SQLx's SQLite decoder will not read an INTEGER as `f64`. Booleans are 0/1; JS number text applies.
+     - A foreign key becomes `Target:id` or null. A window on a `one` relation fails as upstream does.
+     - Every driver error is logged and answered as `Database query failed`.
+     - Undeclared fields are withheld through the new `Source::declares`, as `allowedFields` does.
+   - **Pages** run the planned statements and port `shapeWindow` (default 20, max 100, fallback for a non-integer size), the window-conflict refusal, the cursor-row re-read ("The query cursor no longer resolves to a row"), `LIMIT n+1`, `buildPage` and `toQueryPage`.
+   - Integral numbers from inputs bind as integers, as the JS driver does. The probe showed an INTEGER 2 never matches a TEXT id.
+   - **Validation:** [remote-sql.test.ts](../../packages/reffect/tests/remote-sql.test.ts) passes, with 23 wire steps against `RemoteServer.handlers` using upstream `source`/`query` over `node:sqlite` and the native server reading the same file read-only. Parsed JSON and raw key order match.
+     - Reads: a relation through its foreign key, a mixed-order batch with a missing id, nulls, undeclared fields, the id field, a singular-relation window, an unknown entity.
+     - Queries: default, first, after, last, before, a cursor outside the query, a gone cursor, first plus last, first 0, a fractional size, `select` through the owner, ASCII-folded and wildcard-escaped searches, wrong input, an unknown query.
+   - **Not yet:** writes (step 4), Postgres (step 5), `many`/`manyToMany`/computed relations, and numeric ids or foreign keys.
 4. Writes and transactions through mutation sources; stock-client acceptance over SQL.
 5. Postgres as a second dialect, executed.
 

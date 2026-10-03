@@ -1,0 +1,277 @@
+/**
+ * The native SQL source (SQLX-004, SQLX-005): a `remote_engine::Source` over SQLx and SQLite,
+ * running the statements `sql-plan.ts` fixed at build time. Reads, window shaping and page
+ * boundaries port `foldkit-remote-drizzle` 0.9.0's `source` and `query` (`shapeWindow`, `buildPage`,
+ * `toQueryPage`). Upstream: foldkit-plus `packages/remote-drizzle/src`, MIT, Copyright (c) 2026
+ * Patrick Glenn; its keyset logic is adapted from fate (MIT, Nakazawa Tech).
+ */
+export const sqlRuntime = String.raw`
+mod remote_sql {
+    use super::remote_engine::{Boundary, EntityRecord, JsObject, PageIds, Source, Window};
+    use serde_json::Value;
+    use sqlx::sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow};
+    use sqlx::{Row, TypeInfo, ValueRef};
+
+    #[derive(Clone, Copy, PartialEq)]
+    pub enum Kind { Text, Number, Boolean }
+    pub struct Column { pub field: &'static str, pub column: &'static str, pub kind: Kind }
+    /// A one relation: the owner's foreign key, read back as Target:id.
+    pub struct One { pub field: &'static str, pub column: &'static str, pub target: &'static str }
+    pub struct Entity {
+        pub name: &'static str,
+        pub table: &'static str,
+        pub id: &'static str,
+        pub columns: &'static [Column],
+        pub relations: &'static [One],
+    }
+    /// A statement parameter, bound per request (sql-plan.ts SqlParam).
+    pub enum Param {
+        Input(&'static str),
+        Text(&'static str),
+        Number(f64),
+        Bool(bool),
+        Null,
+        /// upstream escapeLike over an input or a literal search; None stays null.
+        PatternInput(&'static str),
+        PatternText(&'static str),
+        Cursor(usize),
+        CursorId,
+        Limit,
+    }
+    pub struct Statement { pub sql: &'static str, pub params: &'static [Param] }
+    pub struct Query {
+        pub name: &'static str,
+        pub entity: &'static str,
+        pub valid: fn(&Value) -> bool,
+        pub cursor_row: Statement,
+        pub forward: Statement,
+        pub forward_after: Statement,
+        pub backward: Statement,
+        pub backward_before: Statement,
+    }
+    pub struct Sql {
+        pub entities: &'static [Entity],
+        pub queries: &'static [Query],
+        pub url_env: &'static str,
+        pub pool: std::sync::OnceLock<Option<SqlitePool>>,
+    }
+
+    const FAILED: &str = "Database query failed";
+    const DEFAULT_PAGE_SIZE: f64 = 20.0;
+    const MAX_PAGE_SIZE: f64 = 100.0;
+
+    /// A value as SQLite holds it, decoded by its storage class and bound back the same way.
+    #[derive(Clone)]
+    enum Cell { Null, Integer(i64), Real(f64), Text(String) }
+    fn cell(row: &SqliteRow, index: usize) -> Result<Cell, sqlx::Error> {
+        let raw = row.try_get_raw(index)?;
+        if raw.is_null() { return Ok(Cell::Null); }
+        let class = raw.type_info().name().to_string();
+        Ok(match class.as_str() {
+            "INTEGER" => Cell::Integer(row.try_get(index)?),
+            "REAL" => Cell::Real(row.try_get(index)?),
+            "TEXT" => Cell::Text(row.try_get(index)?),
+            _ => Cell::Null,
+        })
+    }
+    fn text_of(cell: &Cell) -> String {
+        match cell {
+            Cell::Text(text) => text.clone(),
+            Cell::Integer(n) => n.to_string(),
+            Cell::Real(x) => x.to_string(),
+            Cell::Null => String::new(),
+        }
+    }
+    /// A JS number as the JSON wire writes it: safe integers without a fraction (NUM-004 applies).
+    fn number(x: f64) -> Value {
+        if x == 0.0 { return Value::from(0); }
+        if x.fract() == 0.0 && x.abs() < 9007199254740992.0 { return Value::from(x as i64); }
+        serde_json::Number::from_f64(x).map(Value::Number).unwrap_or(Value::Null)
+    }
+    /// What Drizzle's column mapping hands upstream: text, a JS number, or a boolean mode's 0/1.
+    fn json_of(cell: &Cell, kind: Kind) -> Value {
+        match (cell, kind) {
+            (Cell::Null, _) => Value::Null,
+            (Cell::Integer(n), Kind::Boolean) => Value::Bool(*n != 0),
+            (Cell::Integer(n), _) => number(*n as f64),
+            (Cell::Real(x), _) => number(*x),
+            (Cell::Text(text), _) => Value::String(text.clone()),
+        }
+    }
+
+    type Query1<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>;
+    fn bind_json<'q>(query: Query1<'q>, value: Option<&Value>) -> Query1<'q> {
+        match value {
+            Some(Value::String(text)) => query.bind(text.clone()),
+            Some(Value::Bool(flag)) => query.bind(*flag),
+            Some(Value::Number(n)) => {
+                let x = n.as_f64().unwrap_or(f64::NAN);
+                if x.fract() == 0.0 && x.abs() < 9007199254740992.0 { query.bind(x as i64) } else { query.bind(x) }
+            }
+            _ => query.bind(Option::<String>::None),
+        }
+    }
+    fn bind_cell<'q>(query: Query1<'q>, cell: &Cell) -> Query1<'q> {
+        match cell {
+            Cell::Null => query.bind(Option::<String>::None),
+            Cell::Integer(n) => query.bind(*n),
+            Cell::Real(x) => query.bind(*x),
+            Cell::Text(text) => query.bind(text.clone()),
+        }
+    }
+    /// upstream escapeLike: backslash, percent and underscore are escaped with a backslash.
+    fn like_pattern(search: &str) -> String {
+        let mut out = String::from("%");
+        for c in search.chars() {
+            if c == '\\' || c == '%' || c == '_' { out.push('\\'); }
+            out.push(c);
+        }
+        out.push('%');
+        out
+    }
+    struct Bindings<'a> { input: &'a Value, cursor: &'a [Cell], cursor_id: &'a str, limit: i64 }
+    fn bound<'q>(statement: &'q Statement, values: &Bindings) -> Query1<'q> {
+        let mut query = sqlx::query(statement.sql);
+        for param in statement.params {
+            query = match param {
+                Param::Input(key) => bind_json(query, values.input.get(*key)),
+                Param::Text(text) => query.bind(*text),
+                Param::Number(x) => bind_json(query, serde_json::Number::from_f64(*x).map(Value::Number).as_ref()),
+                Param::Bool(flag) => query.bind(*flag),
+                Param::Null => query.bind(Option::<String>::None),
+                Param::PatternInput(key) => match values.input.get(*key).and_then(Value::as_str) {
+                    Some(search) => query.bind(like_pattern(search)),
+                    None => query.bind(Option::<String>::None),
+                },
+                Param::PatternText(search) => query.bind(like_pattern(search)),
+                Param::Cursor(index) => bind_cell(query, values.cursor.get(*index).unwrap_or(&Cell::Null)),
+                Param::CursorId => query.bind(values.cursor_id.to_string()),
+                Param::Limit => query.bind(values.limit),
+            };
+        }
+        query
+    }
+
+    impl Sql {
+        fn pool(&self) -> Result<&SqlitePool, String> {
+            let pool = self.pool.get_or_init(|| {
+                let url = std::env::var(self.url_env).unwrap_or_default();
+                match SqlitePoolOptions::new().connect_lazy(&url) {
+                    Ok(pool) => Some(pool),
+                    Err(error) => { eprintln!("[reffect] database {} is not usable: {}", self.url_env, error); None }
+                }
+            });
+            pool.as_ref().ok_or_else(|| FAILED.to_string())
+        }
+        fn entity(&self, name: &str) -> Option<&'static Entity> { self.entities.iter().find(|entity| entity.name == name) }
+    }
+    // Every driver failure is logged and answered without SQL or schema, as upstream's selectRows.
+    fn failed(error: sqlx::Error) -> String {
+        eprintln!("[reffect] database query failed: {}", error);
+        FAILED.to_string()
+    }
+
+    impl Source for Sql {
+        fn has_source(&self, entity: &str) -> bool { self.entity(entity).is_some() }
+        fn declares(&self, entity: &str, field: &str) -> bool {
+            self.entity(entity).is_some_and(|entity| entity.columns.iter().any(|column| column.field == field) || entity.relations.iter().any(|one| one.field == field))
+        }
+        async fn read(&self, entity: &str, ids: &[String], fields: &[String], windows: &Option<JsObject<Window>>) -> Result<Vec<EntityRecord>, String> {
+            let Some(entity) = self.entity(entity) else { return Ok(Vec::new()) };
+            if ids.is_empty() { return Ok(Vec::new()); }
+            // selectColumns: the id first, then each requested column or foreign key in request order.
+            enum Selected { Column(&'static Column), One(&'static One) }
+            let selected: Vec<(&String, Selected)> = fields.iter().filter_map(|field| {
+                if let Some(column) = entity.columns.iter().find(|column| column.field == field.as_str()) { return Some((field, Selected::Column(column))); }
+                entity.relations.iter().find(|one| one.field == field.as_str()).map(|one| (field, Selected::One(one)))
+            }).collect();
+            if selected.is_empty() { return Ok(Vec::new()); }
+            let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+            let columns: Vec<String> = std::iter::once(quote(entity.id)).chain(selected.iter().map(|(_, selected)| match selected {
+                Selected::Column(column) => quote(column.column),
+                Selected::One(one) => quote(one.column),
+            })).collect();
+            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+            // The generated text holds placeholders only; every value is bound.
+            let sql = format!("select {} from {} where {}.{} in ({})", columns.join(", "), quote(entity.table), quote(entity.table), quote(entity.id), placeholders.join(", "));
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+            for id in ids { query = query.bind(id.clone()); }
+            let rows = query.fetch_all(self.pool()?).await.map_err(failed)?;
+            for (field, selected) in &selected {
+                if let Selected::One(_) = selected {
+                    if windows.as_ref().and_then(|windows| windows.get(field.as_str())).is_some() {
+                        return Err(format!("Relation \"{}\" is singular and cannot be windowed", field));
+                    }
+                }
+            }
+            let mut records = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let id = text_of(&cell(row, 0).map_err(failed)?);
+                let mut values = JsObject::new();
+                for (index, (field, selected)) in selected.iter().enumerate() {
+                    let value = cell(row, index + 1).map_err(failed)?;
+                    let json = match selected {
+                        Selected::Column(column) => json_of(&value, column.kind),
+                        Selected::One(one) => match value {
+                            Cell::Null => Value::Null,
+                            other => Value::String(format!("{}:{}", one.target, text_of(&other))),
+                        },
+                    };
+                    values.set((*field).clone(), json);
+                }
+                records.push(EntityRecord { id, values });
+            }
+            Ok(records)
+        }
+        fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String> {
+            let Some(def) = self.queries.iter().find(|def| def.name == query) else { return Err(format!("Unknown query: {}", query)) };
+            if !(def.valid)(input) { return Err("Invalid query input".to_string()); }
+            Ok(def.entity)
+        }
+        async fn page(&self, query: &str, input: &Value, window: &Window) -> Result<PageIds, String> {
+            let Some(def) = self.queries.iter().find(|def| def.name == query) else { return Err(format!("Unknown query: {}", query)) };
+            if (window.after.is_some() && window.before.is_some()) || (window.first.is_some() && window.last.is_some()) {
+                return Err("A query window cannot combine after with before, or first with last".to_string());
+            }
+            // shapeWindow
+            let requested = window.first.or(window.last);
+            let size = match requested { Some(n) if n.is_finite() && n.fract() == 0.0 && n >= 0.0 => n, _ => DEFAULT_PAGE_SIZE }.min(MAX_PAGE_SIZE) as i64;
+            let backward = window.before.is_some() || window.last.is_some();
+            let cursor = if backward { window.before.clone() } else { window.after.clone() };
+            let pool = self.pool()?;
+            let mut values = Bindings { input, cursor: &[], cursor_id: "", limit: size + 1 };
+            let cursor_cells: Vec<Cell>;
+            let statement = match &cursor {
+                None => if backward { &def.backward } else { &def.forward },
+                Some(id) => {
+                    values.cursor_id = id;
+                    let row = bound(&def.cursor_row, &values).fetch_optional(pool).await.map_err(failed)?;
+                    let Some(row) = row else { return Err("The query cursor no longer resolves to a row".to_string()) };
+                    cursor_cells = (0..row.len()).map(|index| cell(&row, index)).collect::<Result<_, _>>().map_err(failed)?;
+                    values.cursor = &cursor_cells;
+                    if backward { &def.backward_before } else { &def.forward_after }
+                }
+            };
+            let rows = bound(statement, &values).fetch_all(pool).await.map_err(failed)?;
+            let mut ids: Vec<String> = rows.iter().map(|row| cell(row, 0).map(|id| text_of(&id))).collect::<Result<_, _>>().map_err(failed)?;
+            if backward { ids.reverse(); }
+            // buildPage and toQueryPage
+            let page_size = size as usize;
+            let has_more = ids.len() > page_size;
+            let limited: Vec<String> = if backward { ids[ids.len().saturating_sub(page_size)..].to_vec() } else { ids.into_iter().take(page_size).collect() };
+            let has_next = if backward { cursor.is_some() } else { has_more };
+            let has_previous = if backward { has_more } else { cursor.is_some() };
+            let first = limited.first().cloned();
+            let last = limited.last().cloned();
+            let (start, end) = if backward {
+                (match (has_previous, first) { (true, Some(id)) => Boundary::Cursor(id), _ => Boundary::Terminal },
+                 match &cursor { Some(id) => Boundary::Cursor(id.clone()), None => Boundary::Terminal })
+            } else {
+                (match &cursor { Some(id) => Boundary::Cursor(id.clone()), None => Boundary::Terminal },
+                 match (has_next, last) { (true, Some(id)) => Boundary::Cursor(id), _ => Boundary::Terminal })
+            };
+            Ok(PageIds { ids: limited, start, end })
+        }
+    }
+}
+`;
