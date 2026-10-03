@@ -5,6 +5,9 @@ const DIALECT = {
   sqlite: {
     db: "sqlx::Sqlite",
     placeholder: "?",
+    // Backticks: an unknown double-quoted name is a string literal in SQLite (DQS), so a missing
+    // column would read as its own name instead of failing.
+    quote: String.raw`format!("{}{}{}", '\x60', name.replace('\x60', "\x60\x60"), '\x60')`,
     begin: "BEGIN IMMEDIATE",
     // SQLx's SQLite decoder is strict, so a value is read by its storage class.
     cell: `let class = raw.type_info().name().to_string();
@@ -18,6 +21,7 @@ const DIALECT = {
   postgres: {
     db: "sqlx::Postgres",
     placeholder: "$",
+    quote: String.raw`format!("\"{}\"", name.replace('"', "\"\""))`,
     begin: "BEGIN ISOLATION LEVEL SERIALIZABLE",
     // Postgres values are typed on the wire; only the admitted column types decode (SQLX-010).
     cell: `let name = raw.type_info().name().to_string();
@@ -51,6 +55,7 @@ mod remote_sql {
     type DbRow = <Db as sqlx::Database>::Row;
     /// The n-th (1-based) placeholder of runtime-built statements.
     fn placeholder(n: usize) -> String { format!("${DIALECT[dialect].placeholder}{}", n) }
+    fn quote(name: &str) -> String { ${DIALECT[dialect].quote} }
 
     #[derive(Clone, Copy, PartialEq)]
     pub enum Kind { Text, Number, Boolean }
@@ -259,7 +264,6 @@ mod remote_sql {
         }
         async fn get_now(&self, entity: &str, id: &str) -> Result<Option<Value>, String> {
             let entity = self.entity(entity)?;
-            let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
             let columns: Vec<String> = entity.columns.iter().map(|column| quote(column.column)).chain(entity.relations.iter().map(|one| quote(one.column))).collect();
             // Identifiers come from build-time storage; the ID is bound.
             let sql = format!("SELECT {} FROM {} WHERE {} = {}", columns.join(", "), quote(entity.table), quote(entity.id), placeholder(1));
@@ -287,7 +291,6 @@ mod remote_sql {
         async fn write_now(&self, entity: &str, id: &str, values: Value) -> Result<(), String> {
             let entity = self.entity(entity)?;
             let Value::Object(values) = values else { return Err(FAILED.to_string()) };
-            let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
             let mut columns: Vec<String> = Vec::new();
             let mut bound: Vec<(Value, Kind)> = Vec::new();
             for (field, value) in values {
@@ -337,8 +340,7 @@ mod remote_sql {
         pub async fn remove(&self, entity: &str, id: &str) -> Result<(), String> {
             let result = async {
                 let entity = self.entity(entity)?;
-                let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
-                let sql = format!("DELETE FROM {} WHERE {} = {}", quote(entity.table), quote(entity.id), placeholder(1));
+                    let sql = format!("DELETE FROM {} WHERE {} = {}", quote(entity.table), quote(entity.id), placeholder(1));
                 self.run(sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id.to_string())).await.map(|_| ())
             }.await;
             result.map_err(|message| self.fail(message))
@@ -373,7 +375,6 @@ mod remote_sql {
                 entity.relations.iter().find(|one| one.field == field.as_str()).map(|one| (field, Selected::One(one)))
             }).collect();
             if selected.is_empty() { return Ok(Vec::new()); }
-            let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
             let columns: Vec<String> = std::iter::once(quote(entity.id)).chain(selected.iter().map(|(_, selected)| match selected {
                 Selected::Column(column) => quote(column.column),
                 Selected::One(one) => quote(one.column),

@@ -189,7 +189,16 @@ export interface QueryPlan {
   readonly backwardBefore: SqlStatement;
 }
 
-const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+/**
+ * A quoted identifier. SQLite takes backticks: an unknown double-quoted name is a string literal
+ * there (DQS), so a missing column would compare as its own name instead of failing.
+ */
+const quoteIn =
+  (dialect: SqlDialect) =>
+  (name: string): string =>
+    dialect === "postgres"
+      ? `"${name.replaceAll('"', '""')}"`
+      : `\`${name.replaceAll("`", "``")}\``;
 
 /** Collects parameters for one statement, numbering placeholders `?1` (SQLite) or `$1` (Postgres). */
 class Params {
@@ -214,6 +223,7 @@ export const planQuery = (
   dialect: SqlDialect = "sqlite",
 ): QueryPlan => {
   const at = `queries.${name}`;
+  const quote = quoteIn(dialect);
   if (body.entity.name !== storage.entity)
     throw unsupported(
       at,
