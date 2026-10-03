@@ -95,6 +95,13 @@ export const PortedRuntimes = Object.freeze({
     ["tests/ssr-serialize.test.ts"],
     "renderToString's text and attribute escaping, NUL refusal and hydration key fingerprint",
   ),
+  SsrHost: port(
+    "foldkit/ssr-host@1",
+    [foldkit],
+    ["foldkit/experimental/server:handleRequest"],
+    ["tests/html-page.test.ts"],
+    "handleRequest's methods, asset classification, Accept negotiation, Vary and template splice",
+  ),
 });
 
 /** Whether the build checked its ports' pins against the installed packages. */

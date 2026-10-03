@@ -208,6 +208,13 @@ pub mod foldkit_html {
         }
         Html { markup, kind: Kind::Element, own_end, error }
     }
+    /// Text as ` +
+  "`escapeText`" +
+  String.raw` writes it, or its NUL refusal; the page title goes through it.
+    pub fn escape_text(value: &str) -> Result<String, String> {
+        let mut out = String::new();
+        foldkit_ssr::escape_text(value, &mut out).map(|()| out)
+    }
     pub fn root_kind(body: &Html) -> String {
         match body.kind { Kind::Element => "Element", Kind::Text => "Text", Kind::Empty => "Empty" }.to_string()
     }

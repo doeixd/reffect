@@ -4,6 +4,8 @@ import type { StreamFn } from "./stream-ir.ts";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
 import { PortedRuntimes, verifyUpstream } from "./ported-runtime.ts";
+import { PageSchema, pageRuntime, splitTemplate } from "./ssr-page.ts";
+import type { TemplatePart } from "./ssr-page.ts";
 import type { PortedRuntime, UpstreamCheck } from "./ported-runtime.ts";
 import {
   StableStringify,
@@ -947,6 +949,16 @@ type CompileOptions = {
    * one JSON value per body, or one message per line. Defaults to JSON.
    */
   readonly serialization?: "json" | "ndjson";
+  /**
+   * Server-rendered pages beside the RPC path (SSR-007), as foldkit's `handleRequest` serves them:
+   * `render` is a pure R function returning `R.Result(R.Html.Rendered, R.Html.RenderError)`, and
+   * `template` holds one `<div id="root"></div>` (or `containerId`) and one `<title>`.
+   */
+  readonly pages?: {
+    readonly template: string;
+    readonly render: Fn<readonly [], unknown>;
+    readonly containerId?: string;
+  };
 };
 const limitOf = (value: number | undefined, fallback: number, path: string): number => {
   if (value === undefined) return fallback;
@@ -1600,6 +1612,24 @@ export const compileServer = (
           return { pat: Rs.stringPat(rpc._tag), body: Rs.block(statements, Rs.ok(result)) };
         });
         if (auth && protectedCount === 0) throw unsupported("auth", "Bearer adapter is unused");
+        let pages:
+          | { readonly kind: Codec; readonly parts: ReadonlyArray<TemplatePart> }
+          | undefined;
+        if (options.pages) {
+          const { render, template, containerId } = options.pages;
+          if (!(render instanceof Fn) || render.input.length !== 0)
+            throw unsupported("pages.render", "The page is a pure R function of no inputs");
+          const kind = codec(PageSchema.ast, "pages.render", false, registry, false);
+          if (!IRType.same(render.output, witnessOf(kind)))
+            throw unsupported(
+              "pages.render",
+              "The page returns R.Result(R.Html.Rendered, R.Html.RenderError)",
+            );
+          if (Object.hasOwn(functions, "ssr_page"))
+            throw unsupported("pages.render", "ssr_page is reserved for the page");
+          functions.ssr_page = render;
+          pages = { kind, parts: splitTemplate(template, containerId) };
+        }
         if (layer)
           functions.launch = EffectFn.make([], NeverType, layer.error, () =>
             StaticLayer.provide(layer, (context) =>
@@ -1624,6 +1654,7 @@ export const compileServer = (
               : functions,
           ),
           arms,
+          pages,
           layered: layer !== undefined,
           services: serverServices.map((service) => service.id),
           runtimeFunctions,
@@ -1854,6 +1885,19 @@ ${
         Rs.verbatimItem(contextRuntime),
         ...(executionRuntime ? [Rs.verbatimItem(executionRuntime)] : []),
         ...(servedRuntime ? [Rs.verbatimItem(servedRuntime)] : []),
+        ...(prepared.pages
+          ? [
+              Rs.verbatimItem(
+                pageRuntime(
+                  prepared.pages.parts,
+                  encode(
+                    prepared.pages.kind,
+                    Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident("r_ssr_page"), []),
+                  ).text,
+                ),
+              ),
+            ]
+          : []),
         ...(usesStore ? [Rs.verbatimItem(runtime!.store!.impl)] : []),
         Rs.verbatimItem(authRuntime),
         ...(runtime?.modules ?? []).map((module) => Rs.verbatimItem(module)),
@@ -1864,12 +1908,20 @@ ${
             prepared.ranges,
             prepared.layered,
             options.serialization === "ndjson",
+            prepared.pages !== undefined,
           ),
         ),
       ],
       "\n",
     ).text;
-    const ported = Object.freeze([PortedRuntimes.RpcHttp, ...(runtime?.ported ?? [])]);
+    const ported = Object.freeze([
+      PortedRuntimes.RpcHttp,
+      ...(runtime?.ported ?? []),
+      ...(core.explanation.selections.some((s) => s.selected.method === "html")
+        ? [PortedRuntimes.SsrSerialize]
+        : []),
+      ...(prepared.pages ? [PortedRuntimes.SsrHost] : []),
+    ]);
     const upstream = yield* verifyUpstream(ported);
     return Object.freeze({
       sourceArtifacts: SourceArtifacts.None,
@@ -1889,6 +1941,7 @@ ${
           ) +
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
+          (prepared.pages ? 'url = "=2.5.8"\n' : "") +
           (runtime?.dependencies ?? []).join("") +
           (ryuJs && !runtime?.crates.includes("ryu-js@1.0.3")
             ? 'ryu-js = { version = "=1.0.3", default-features = false }\n'
@@ -1901,6 +1954,7 @@ ${
         crates: Object.freeze(
           ["axum@0.8.9", "tokio@1.53.1", "serde_json@1.0.151"].concat(
             prepared.auth ? ["subtle@2.6.1"] : [],
+            prepared.pages ? ["url@2.5.8"] : [],
             prepared.asynchronous ? ["http-body@1.0.1"] : [],
             runtime?.crates ?? [],
             ryuJs && !runtime?.crates.includes("ryu-js@1.0.3") ? ["ryu-js@1.0.3"] : [],

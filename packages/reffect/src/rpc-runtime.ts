@@ -56,6 +56,7 @@ export const rpcRuntime = (
   ranges = false,
   layered = false,
   ndjson = false,
+  pages = false,
 ): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use axum::response::{Response, IntoResponse};
@@ -216,7 +217,12 @@ ${
 }
 `
 }
-${layered ? layeredMain : plainMain}`;
+${withPages(layered ? layeredMain : plainMain, pages)}`;
+
+/** Pages take every path and method the RPC routes do not (SSR-007). */
+const ROUTES = 'if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }';
+const withPages = (main: string, pages: boolean): string =>
+  pages ? main.replace(ROUTES, `${ROUTES}\n    let app = app.fallback(ssr_page);`) : main;
 
 const plainMain = String.raw`#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
