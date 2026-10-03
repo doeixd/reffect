@@ -55,7 +55,7 @@ Part 1b delivered the same day: `match`/`valueTags` handlers may all return Comp
 
 Evidence: [records-rpc.test.ts](../../packages/reffect/tests/records-rpc.test.ts) passes 2/2. 28 raw requests produce response JSON identical to the official server: union cases; wrong, missing or numeric `_tag`; non-object, null and array payloads; excess properties; nested paths through projected fields; identifier messages; typed composite errors; u64::MAX; batches. The stock client round-trips unions, structs and typed union errors. `CaseType` is an explicit interface so TypeScript 5.9 and 7 agree on `cases.X.make` returning the union type.
 
-Known byte-level divergence (REC-005): serde_json orders object keys alphabetically while the official encoder follows schema order; decoded values are identical. One known extra copy: a field read from a local that is used only once is cloned rather than moved.
+Known byte-level divergence (REC-005), **closed 2026-10-03**: serde_json used to order object keys alphabetically while the official encoder follows schema order. Every NativeRpc crate now enables `preserve_order`, and `records-rpc.test.ts` compares raw response bytes. One known extra copy: a field read from a local that is used only once is cloned rather than moved.
 
 ## Open questions
 

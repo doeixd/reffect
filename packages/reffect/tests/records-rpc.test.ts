@@ -181,8 +181,17 @@ test(
               const response = await fetch(url, { method: "POST", body });
               return { status: response.status, body: await response.json() };
             });
-          for (const [label, body] of corpus)
+          const raw = (target: string, body: string) =>
+            Effect.promise(async () => (await fetch(target, { method: "POST", body })).text());
+          for (const [label, body] of corpus) {
             expect(yield* post(body), label).toEqual(yield* officialPost(body));
+            // Byte-identical: schema key order and the same JSON text (REC-005 closed).
+            expect(yield* raw(url, body), `${label} bytes`).toBe(
+              yield* Effect.promise(async () =>
+                (await official(new Request("http://reffect.test/rpc", { method: "POST", body }))).text(),
+              ),
+            );
+          }
 
           const client = yield* RpcClient.make(Group, { disableTracing: true }).pipe(
             Effect.provide(

@@ -18,6 +18,8 @@ The module records cover [Option](research/option-module.md), [Result](research/
 
 ## Revised design and implementation references
 
+**[Native divergences](native-divergences.md)** is the one register of observable differences between native artifacts and official Effect/Foldkit, with closed entries and the compile-time profile. Check it before deploying, and add to it whenever a decision accepts a difference.
+
 The later [runtime lowering reference](runtime-lowering.md) integrates the supplied Rust-substrate conversation once. It extends implementation selection and registry guidance while retaining the revised milestone sequence.
 
 | Document                                                          | Focus                                                                                       |

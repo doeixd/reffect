@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-03 — Divergence register; byte-identical key order
+
+- Added [native divergences](docs/native-divergences.md), the single register of observable differences from official Effect/Foldkit: 9 runtime differences with their decisions and possible fixes, closed entries, and the compile-time profile. It is linked from the docs index and AGENTS.md; new accepted differences must be added there.
+- Closed REC-005. Every NativeRpc crate enables `serde_json`'s `preserve_order`, so envelopes and structs keep schema/insertion order. `records-rpc.test.ts` now asserts raw response bytes equal to the official server's; removing the feature fails it (the envelope's `requestId` position already differed).
+
 ## 2026-10-03 — Milestone 4 acceptance for Read and Query
 
 - [remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts) runs the stock Foldkit Remote client flow (`Data.prefetch`, `projection.read`, `Data.more`) twice:

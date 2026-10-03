@@ -107,6 +107,7 @@ Keep the record proportional to the work: concise evidence and design decisions 
 ## Compiler planning and native execution
 
 - Follow `check → derive → normalize → plan → verify → optimize → ownership → lower → emit → build`. Expose stages through the public Effect API and keep diagnostics as structured values.
+- Record every accepted observable difference from official Effect/Foldkit in [native divergences](docs/native-divergences.md), as well as in its decision record.
 - Record selected implementations, rejected candidates, and fallback reasons. Verify capabilities, traits, laws, and compatibility before accepting a plan. Fallback must preserve behavior, bounds, security, and the requested protocol; expose later JS-host requirements explicitly.
 - Start ownership conservatively: copy primitives, move single-use values, borrow read-only inputs, use obvious exclusive mutation, and clone only for necessary duplicated ownership. Add complex scope/fiber lifetime inference when real concurrency workloads exist.
 - Use Tokio, Axum/Hyper/Tower, Serde, and SQLx for execution facilities. Keep native runtime code focused on Effect-specific semantics that cannot be erased.
