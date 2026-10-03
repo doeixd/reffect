@@ -514,7 +514,7 @@ async fn main(){
  let setup_allocations=ALLOCS.load(Ordering::SeqCst)-before;
  let retained=LIVE.load(Ordering::SeqCst) as isize-live as isize;
  assert_eq!(context_allocations,0);assert_eq!(construction_allocations,0);assert_eq!(retained,0);
- ${group ? 'assert!(setup_allocations>=200,"two child watch tokens per group are included");' : ""}
+ ${group ? 'assert_eq!(setup_allocations,200,"quiet two-child setup has a two-allocation budget per group");' : ""}
  println!("cost:context={},future={},context_allocations={},unpolled_allocations={},groups=${group ? "100" : "0"},setup_allocations={},retained={}",std::mem::size_of_val(&ctx),bytes,context_allocations,construction_allocations,setup_allocations,retained);
 }
 `;
