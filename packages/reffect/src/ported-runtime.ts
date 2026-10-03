@@ -43,6 +43,7 @@ const remote: UpstreamPin = { package: "foldkit-remote", version: "0.11.0" };
 const remoteServer: UpstreamPin = { package: "foldkit-remote-server", version: "0.11.0" };
 const entity: UpstreamPin = { package: "foldkit-entity", version: "0.7.0" };
 const drizzle: UpstreamPin = { package: "foldkit-remote-drizzle", version: "0.9.1" };
+const foldkit: UpstreamPin = { package: "foldkit", version: "0.165.0" };
 
 export const PortedRuntimes = Object.freeze({
   RpcHttp: port(
@@ -86,6 +87,13 @@ export const PortedRuntimes = Object.freeze({
     ["rpc:FoldkitRemoteLive", "reffect/effect/live-hub@1"],
     ["tests/remote-live.test.ts", "tests/remote-sql-live.test.ts"],
     "liveHub's selection, grouping, re-authorization, re-reads and per-stream cursors",
+  ),
+  SsrSerialize: port(
+    "foldkit/ssr-serialize@1",
+    [foldkit],
+    ["foldkit/experimental/server:renderToString"],
+    ["tests/ssr-serialize.test.ts"],
+    "renderToString's text and attribute escaping, NUL refusal and hydration key fingerprint",
   ),
 });
 
