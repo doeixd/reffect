@@ -4,6 +4,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Streaming RPC and interruption](research/streaming-rpc.md)** is the milestone 6 research and design: the Effect v4 HTTP stream wire format, NDJSON framing, disconnect as interruption, and the first Stream subset.
 
+**[Native Remote Live](research/remote-live.md)** is the milestone 7 research and design: upstream's `liveHub` semantics, `R.LiveHub` signals, the native hub and the runtime-served `FoldkitRemoteLive` stream.
+
 **[Open work](open-work.md)** registers everything still to be done — deferred slices, open questions, refusals expected to widen, owed measurements and future milestones — each linked to the record that owns it.
 
 The roadmap governs current sequencing and the active frontier. The [design revision overview](op-expr-revision-convo.md) explains historical changes; use it as architecture background, not a prerequisite archaeology exercise.

@@ -10,7 +10,6 @@ Everything still to be done, collected from the design and research records on 2
 
 - `examples/todo-remote` on SQLite/Postgres (it toggles through `get` since RS-007) ([remote-mutations](research/remote-mutations.md#rs-007-reading-stored-rows-2026-10-03))
 - Milestone 6 ([streaming-rpc](research/streaming-rpc.md#order-of-work-and-acceptance)): steps 1–4 done. Remaining:
-  - the `FoldkitRemoteLive` skeleton (step 5);
   - `ensuring` beyond the outermost operator;
   - finalizers that read the stream function's inputs in `Reference.stream`;
   - `fromSchedule` beyond `spaced`;
@@ -21,7 +20,7 @@ Everything still to be done, collected from the design and research records on 2
 
 - M6: streaming RPC — Stream to Rust stream to NDJSON chunks, acks/backpressure, interrupt protocol, cancellation ([§23](implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption), [rpc-protocol](rpc-protocol.md#streams))
 - M6 companion: native Scope runtime — children, finalizers, Exit, cancellation ([§24](implementation-milestones.md#24-native-scope-runtime))
-- M7: Remote live — subscriptions, cursors, changed/deleted, field interest, re-authorization, minimal re-reads, patches, cancel on drop ([§25](implementation-milestones.md#25-milestone-7--native-foldkit-remote-live), NR-006)
+- M7: Remote live — subscriptions, cursors, changed/deleted, field interest, re-authorization, minimal re-reads, patches, cancel on drop ([§25](implementation-milestones.md#25-milestone-7--native-foldkit-remote-live), NR-006; designed in [remote-live](research/remote-live.md#order-of-work-and-acceptance): memory hub and Live procedure, SQL after-commit signals, stock `Data.live` client; per-entity `RemoteServer.live` sources deferred)
 - M8A: hand-authored R native SSR matching `renderToString` and hydrating with the stock client; M8B: mechanically transformed upstream SSR under the same acceptance ([§26](implementation-milestones.md#26-milestone-8--native-foldkit-ssr))
 - M8 companion: HTML compilation — Html IR, serializer, static folding, direct writes, streaming to Hyper ([§27](implementation-milestones.md#27-html-compilation))
 - M9: SSR with `Data.satisfy` and resume payload; direct RemoteServer call during SSR ([§28](implementation-milestones.md#28-milestone-9--ssr--remote-datasatisfy--resume))

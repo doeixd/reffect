@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-03 — Milestone 7 design: native Remote Live
+
+- [remote-live.md](docs/research/remote-live.md) records upstream's `liveHub` and `FoldkitRemoteLive` semantics (foldkit-plus 0.14.0), read from the installed sources. It covers subscriber selection, grouping by principal and windows, re-authorization, re-reads, per-stream cursors, limits, the protocol check and `takeAll` chunking.
+- **Decisions LIVE-001..006:**
+  - `R.LiveHub.changed/deleted` effect nodes. The reference runs them on upstream's own hub.
+  - A native hub ported into the Remote engine.
+  - Memory signals apply inline; SQL signals apply after commit.
+  - A runtime-served Live stream, enabled by `live: true`.
+- Milestone 6 step 5 (the Live skeleton) is absorbed into milestone 7 step 1.
+
 ## 2026-10-03 — Milestone 6 step 4: interruption by disconnect
 
 - **New stream operators:**
