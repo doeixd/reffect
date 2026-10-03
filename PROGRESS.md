@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-03 — Native test parallelism
+
+- Every native test runs a `cargo build` that already uses all cores, so default Vitest parallelism oversubscribed the CPU: earlier, six heavy suites hit their budgets. A shared Cargo target directory was rejected because Cargo reports only the uplifted binary path, which would collide between crates.
+- `packages/reffect/vite.config.ts` now sets `maxWorkers: 4`. Full suite: **188/188 tests in 56 files pass, 572 s, no timeouts** (`vp test --maxWorkers=4`, Effect 4.0.0).
+
 ## 2026-10-03 — Divergence register; byte-identical key order
 
 - Added [native divergences](docs/native-divergences.md), the single register of observable differences from official Effect/Foldkit: 9 runtime differences with their decisions and possible fixes, closed entries, and the compile-time profile. It is linked from the docs index and AGENTS.md; new accepted differences must be added there.
