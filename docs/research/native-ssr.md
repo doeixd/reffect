@@ -133,9 +133,44 @@ Hydration is therefore tolerant. **Byte equality with upstream is the right acce
 5. **Page serving.** The template splice and `handleRequest` rules, as a native route beside `/rpc`.
 6. **Example.** `examples/todo-remote` renders its first screen natively. This also needs Remote data in SSR, which is milestone 9 (`Data.satisfy`). Until then the example's SSR shows the initial Model only.
 
-## Open questions
+## Open questions resolved (2026-10-03)
 
-- **Builder shape.** Should `R.Html` be data-first (`R.Html.div([attrs], [children])`, as Foldkit's `h.div`) or curried? It should mirror `h` exactly.
-- **Typing event Messages.** Message unions use `defineMessageUnion`; the R witness for an app's Message schema needs checking against the current `TaggedUnion` support.
-- **The headless hydration dependency** (step 4).
-- **Whether `Key` values of number type** should be admitted before SSR-008 delivers JS number text. The `n:` fingerprint input uses that text.
+The four open questions are settled. The checks behind each are listed below.
+
+- **SSR-009: `R.Html` mirrors `h` exactly.** Foldkit's builder is data-first:
+  - `ElementFunction = (attributes, children?) => Html`; void elements take attributes only;
+  - attributes are constructors (`Class(value)`, `OnClick(message, options?)`, `Attribute(key, value)`, `DataAttribute(key, value)`);
+  - `keyed(tag)(key, attributes?, children?)`, `empty: null`, and children `Html | string` (`html/index.d.ts:1145-1160,1372-1460,2295-2300,2719`).
+
+  `R.Html` keeps these names and argument orders:
+  - `R.Html.li(attributes, children)` and `R.Html.Class(expr)`;
+  - `R.Html.keyed("li")(key, attributes, children)`;
+  - `R.Html.empty`.
+
+  One difference is unavoidable. Foldkit views splice `items.map(...)` into children with JS arrays, which R cannot. So `children` is either a list of children (`Expr<Html>`, `Expr<string>` or a string literal) or one `Expr<ReadonlyArray<Html>>` from `R.Array.map`, mirroring the common `h.ul([], items.map(...))`.
+
+  Natively an `Html` value is a serialized fragment plus the offset where its start tag's own attributes end. The root's `data-foldkit-app`/`data-foldkit-build` then go after the authored attributes and before the key marker, in upstream's order. Static fragments fold at compile time.
+
+- **SSR-010: event Messages are constructed per variant and erased natively.**
+  - **The obstacle.** `NativeRpc.witness` accepts a small `defineMessageUnion` (three plain variants), but refuses the todo app's real `Message` (``_tag` is admitted only as a string union discriminant``), because it embeds Remote's message schema. A single variant's `fields` include `_tag`, so it cannot be witnessed as a struct either. Whole-union witnesses are therefore not a viable requirement.
+  - **The answer.** `R.Html.OnClick(R.Html.message(Message.ClickedToggle, { id }))` takes the app's own variant constructor and an object of field expressions. Each field is checked against that variant's field schema (witnessed per field, `_tag` excluded).
+  - The reference calls the constructor with the evaluated fields. Native lowering drops event attributes before lowering their payloads, as upstream's serializer drops `data.on`.
+  - Message nodes are therefore reference-only, and the checker refuses them anywhere except inside an event attribute.
+- **SSR-011: headless hydration with `happy-dom` 20.14.5.**
+  - foldkit 0.165.0's own test suite runs in `happy-dom` (`devDependencies: "happy-dom": "^20.14.5"`, `vitest.config.ts` `environment: 'happy-dom'`; upstream checkout `0b2a4fd`). 20.14.5 is also the latest release (npm, checked 2026-10-03).
+  - Its `runtime/hydrateBoot.test.ts` ("adopts the server DOM and replays the flags payload") is the acceptance pattern:
+    1. assign `renderToString` output to `document.body.innerHTML`;
+    2. hydrate the stock client;
+    3. assert the server's element objects survive (`getElementById('count')` is the same node), and events still dispatch.
+  - So add `happy-dom` as an exact (`=20.14.5`) dev dependency of `packages/reffect`, enabled per file with `// @vitest-environment happy-dom`, so other tests keep the Node environment. A Chrome run remains a manual cross-check, not the evidence.
+- **SSR-012: `R.Number.toString` via `ryu-js`.**
+  - The native code already writes doubles as JS `Number#toString` does with the pinned `ryu-js` 1.0.3 (`native-rpc.ts`, for foldkit-remote's `stableStringify`; `remote-engine.ts`, for protocol messages).
+  - `R.Number.toString(n)` lowers to `ryu_js::Buffer::format` (including `NaN`, `Infinity` and `-0` → `"0"`), and the reference uses `String(n)`.
+  - A differential corpus covers `-0`, `NaN`, `±Infinity`, `1e21`, `1e-7`, `5e-324`, `0.1 + 0.2` and integers around 2^53.
+  - Number keys then fingerprint `n:${text}`. This lifts the SSR-008 restriction once delivered.
+
+**Remaining order:**
+
+- step 2 is `R.Html` (SSR-009/010) with its reference view;
+- `R.Number.toString` (SSR-012) can land before or alongside it;
+- step 4 adds `happy-dom` (SSR-011).

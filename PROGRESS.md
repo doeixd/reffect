@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Milestone 8A open questions resolved (SSR-009..012)
+
+- **SSR-009.** `R.Html` mirrors Foldkit's data-first `h` (`html/index.d.ts`). Children are a list, or one mapped array.
+- **SSR-010.** Event Messages are built per variant with the app's own constructor and erased natively. A whole-union witness fails for a real app's Message (measured on the todo app).
+- **SSR-011.** Headless hydration uses `happy-dom` 20.14.5. That is what foldkit 0.165.0 itself tests hydration with (`runtime/hydrateBoot.test.ts`, which keeps server node identity), and it is the latest release.
+- **SSR-012.** `R.Number.toString` lowers to the already pinned `ryu-js`, which the native code uses for JS number text.
+- Recorded in [native-ssr.md](docs/research/native-ssr.md#open-questions-resolved-2026-10-03).
+
 ## 2026-10-03 — Milestone 8A step 1: SSR escaping and key markers
 
 - **Change.** The native ports of Foldkit's `escapeText`/`escapeAttributeValue` (with NUL refusal) and the hydration key fingerprint (FNV-1a over UTF-16) are registered as `foldkit/ssr-serialize@1` (foldkit 0.165.0).
