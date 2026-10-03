@@ -20,7 +20,7 @@ Everything still to be done, collected from the design and research records on 2
 
 - M6: streaming RPC — Stream to Rust stream to NDJSON chunks, acks/backpressure, interrupt protocol, cancellation ([§23](implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption), [rpc-protocol](rpc-protocol.md#streams))
 - M6 companion: native Scope runtime — children, finalizers, Exit, cancellation ([§24](implementation-milestones.md#24-native-scope-runtime))
-- M7: Remote live — subscriptions, cursors, changed/deleted, field interest, re-authorization, minimal re-reads, patches, cancel on drop ([§25](implementation-milestones.md#25-milestone-7--native-foldkit-remote-live), NR-006; designed in [remote-live](research/remote-live.md#order-of-work-and-acceptance): memory hub and Live procedure, SQL after-commit signals, stock `Data.live` client; per-entity `RemoteServer.live` sources deferred)
+- M7: Remote live — subscriptions, cursors, changed/deleted, field interest, re-authorization, minimal re-reads, patches, cancel on drop ([§25](implementation-milestones.md#25-milestone-7--native-foldkit-remote-live), NR-006; [remote-live](research/remote-live.md#order-of-work-and-acceptance): the memory hub and Live procedure are delivered. Remaining: an `authorize` differential test with two principals (LIVE-006), SQL after-commit signals (LIVE-003), a stock `Data.live` client and live `todo-remote`. Per-entity `RemoteServer.live` sources are deferred)
 - M8A: hand-authored R native SSR matching `renderToString` and hydrating with the stock client; M8B: mechanically transformed upstream SSR under the same acceptance ([§26](implementation-milestones.md#26-milestone-8--native-foldkit-ssr))
 - M8 companion: HTML compilation — Html IR, serializer, static folding, direct writes, streaming to Hyper ([§27](implementation-milestones.md#27-html-compilation))
 - M9: SSR with `Data.satisfy` and resume payload; direct RemoteServer call during SSR ([§28](implementation-milestones.md#28-milestone-9--ssr--remote-datasatisfy--resume))
@@ -81,7 +81,7 @@ These block many items below.
 
 ### Engine
 
-- `FoldkitRemoteLive` (M6–7) and live re-authorization ([native-remote](research/native-remote.md#decisions-proposed), NR-006, RM-004)
+- Live re-authorization coverage (LIVE-006), Live on SQL, per-entity live sources ([remote-live](research/remote-live.md#order-of-work-and-acceptance))
 - Domain-specialized engine — entity/field enums, selection bitsets, generated dispatch — replacing the literal port (NR-001, R-3); later an engine authored in R (R-1) ([native-remote](research/native-remote.md#options))
 - Compiled R entity read sources beyond memory and SQL _(verify)_ (NR-005) ([native-remote](research/native-remote.md#decisions-proposed))
 - Declarative authorization rule as an alternative to compiled `authorize` functions; upstream portable authorization ([foldkit-remote](foldkit-remote.md#authorization-should-probably-move-in-the-same-direction), [milestones §21](implementation-milestones.md#21-authorization-must-become-portable))

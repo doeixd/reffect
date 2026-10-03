@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Milestone 7 step 1: native Remote Live on the memory backend
+
+- **Signals and hub.** `R.LiveHub.changed(ref, fields)` and `R.LiveHub.deleted(ref)` signal a native port of `RemoteServer.liveHub` from R mutations. `NativeRemote.compile(..., { live: true, serialization: "ndjson" })` serves `FoldkitRemoteLive` from it. Without `live`, Live is an empty stream, as `handlers` serves it without a hub. NativeRpc gains runtime-served streaming procedures.
+- **Validation.**
+  - `vp test tests/remote-live.test.ts` passed. It compares raw Chunk lines with upstream's own hub across selected, unselected and missing fields, windowed aliases (three events in one chunk), deletes, resume cursors (`after`), disconnect, the protocol check and the id limit.
+  - `remote-mutate` and `remote-read` pass. `stream-rpc`, `stream-interrupt`, `stream`, `remote-auth`, `remote-sql-mutate`, `remote-wire-rpc` and `remote-acceptance` pass. `tsc`, `vp lint` and `vp fmt --check` are clean.
+- **Open:** an `authorize` differential test (LIVE-006), SQL after-commit signals and the stock-client step ([remote-live](docs/research/remote-live.md#order-of-work-and-acceptance)).
+
 ## 2026-10-03 — Milestone 7 design: native Remote Live
 
 - [remote-live.md](docs/research/remote-live.md) records upstream's `liveHub` and `FoldkitRemoteLive` semantics (foldkit-plus 0.14.0), read from the installed sources. It covers subscriber selection, grouping by principal and windows, re-authorization, re-reads, per-stream cursors, limits, the protocol check and `takeAll` chunking.

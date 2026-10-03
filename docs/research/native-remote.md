@@ -39,7 +39,7 @@ Order is observable. Read order and the order of returned `entities` follow JS o
 - **NR-003 — JS ordering.** The runtime uses an ordered map with JS own-property order (canonical array-index keys below 2^32 − 1 first, numerically; others in insertion order), and `stableStringify` compares keys by UTF-16 code units, not by Rust's byte order.
 - **NR-004 — the first backend is the memory backend.** `NativeRemote` takes the `foldkit-remote` domain descriptor and its rows at build time. Queries declared with `Query.define` reuse the milestone-1 Query adapter's Rust evaluator. Read and Query come first; memory mutations (JS callbacks) wait for compiled Sources.
 - **NR-005 — compiled Sources and authorization come next.** Entity reads become R functions returning typed rows (`R.Struct` of the entity's declared fields, with optional fields for omission), projected and encoded by the engine with per-entity field codecs. Mutation and query Sources become R `EffectFn`s with typed Input/Output. `authorize` becomes a compiled function or a declarative rule (milestone §21). The principal flows from the existing checked bearer adapter.
-- **NR-006 — Live is deferred** to milestones 6–7; the native server refuses `FoldkitRemoteLive` explicitly rather than returning an empty stream.
+- **NR-006 — Live is deferred** to milestones 6–7; the native server refuses `FoldkitRemoteLive` explicitly rather than returning an empty stream. **Superseded 2026-10-03** by [remote-live](remote-live.md) (LIVE-001..006): Live is served by a native hub with `live: true`, and as an empty stream without one.
 
 - **NR-007 — versions: assume foldkit-plus moves to Effect 4.0.0 stable.** This is an assumption, not yet a published fact (recorded 2026-10-02). See [Versions](#versions).
 
