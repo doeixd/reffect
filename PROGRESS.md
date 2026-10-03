@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Milestone 5 step 1: storage metadata and SQL planning
+
+- Added [sql-plan.ts](packages/reffect/src/sql-plan.ts).
+  - `storageOf` extracts static storage from `foldkit-remote-drizzle` bindings and refuses `visible`, computed members and relations other than `one`.
+  - `planQuery` compiles `Query.define` bodies to fixed SQLite statements with a typed parameter plan, using upstream's lowering and keyset paging. Nullable sort columns are refused (SQLX-005).
+- [sql-plan.test.ts](packages/reffect/tests/sql-plan.test.ts) passes 3/3. The planned SQL runs on `node:sqlite` against upstream's own `query` source: all 27 shared conformance cases and a tie-heavy custom set, with every cursor checked both ways, plus refusals.
+- Toolchain: local stable Rust 1.99.0 (SQLX-008).
+
 ## 2026-10-03 — Native test build cache: measured, not adopted
 
 - Tried `sccache` 0.18.0 (Scoop) on a typical generated NativeRpc crate on Windows:

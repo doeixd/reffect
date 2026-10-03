@@ -91,7 +91,17 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
 
 ## Order of work
 
-1. Storage metadata extraction from bindings, with refusals; SQL text for reads and queries checked against Drizzle's own `toSQL()` for the same bodies.
+1. **Done (2026-10-03):** storage metadata and the query planner ([sql-plan.ts](../../packages/reffect/src/sql-plan.ts)).
+   - `storageOf` reads `foldkit-remote-drizzle` bindings structurally:
+     - the table name comes from `Symbol.for("drizzle:Name")`, so `drizzle-orm` stays build-time only;
+     - each column's kind is the first word of Drizzle 1.0's `dataType`;
+     - `one` relations become owner foreign keys;
+     - `visible`, computed members and other relation kinds are refused.
+   - `planQuery` emits fixed SQLite SQL with `?N` placeholders and a typed parameter plan, in five statements: the cursor row, forward, forward after a cursor, backward, and backward before a cursor.
+   - Upstream decides a predicate compared to an _input_ boolean per request. Here it compiles to `CASE ?n WHEN 1 THEN (P) WHEN 0 THEN (NOT P) END`, which is unknown for null, as upstream is.
+   - Validation runs the planned SQL on `node:sqlite` rather than comparing SQL text. It is checked against upstream's own `query` source over the same database: the full order, the backward order, and every cursor in both directions ([sql-plan.test.ts](../../packages/reffect/tests/sql-plan.test.ts), 3/3).
+     - All 27 shared `foldkit-entity/conformance` cases plan, with no refusal needed, and match upstream's expected order.
+     - A 23-row tie-heavy set covers equal ranks, descending terms, `_`/`%`/empty/null searches over non-ASCII names, a boolean literal, and an input-folded null check with true, false and null inputs.
 2. An async source trait in the engine, with memory moved onto it (no behaviour change; the milestone 4 suites stay green).
 3. SQLx reads and queries over SQLite, compared over the wire with `RemoteServer.handlers` using `foldkit-remote-drizzle` sources over a `node:sqlite` copy of the same database. Also run the shared `foldkit-entity/conformance` cases.
 4. Writes and transactions through mutation sources; stock-client acceptance over SQL.
