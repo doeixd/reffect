@@ -1,5 +1,18 @@
 # Progress
 
+## 2026-10-03 — Live review fixes LR-1, LR-2 and LR-4
+
+- **LR-4.** `live: true` requires NDJSON serialization.
+- **LR-2 with LIVE-009.** One `forward_chunks` serves R streams and Live. An opt-in `REFFECT_LIVE_TRACE` record now shows native disconnects unsubscribing (counts 1, 2, 1, 0).
+- **LR-1 with LIVE-007.** A failed live re-read skips the cursor (a client-visible gap) instead of failing the committed mutation, and later signals still apply. This is registered as a divergence.
+- **SQLX-019, found by the LR-1 test.** SQLite read a missing double-quoted column as a string literal. SQLite identifiers are now backtick-quoted.
+- **Validation.**
+  - `vp test` of `remote-live`, `stream-rpc` and `stream-interrupt` passed.
+  - `sql-plan`, `remote-sql`, `remote-sql-mutate` and `remote-sql-live` passed: 16 tests on SQLite and Postgres.
+  - `vp check` is clean.
+- **Process note.** `5a1d12d` fixed formatting that `350c67f` committed, because `vp check | tail` hid the failing status.
+- **Next:** LR-3 (`Data.live` end to end).
+
 ## 2026-10-03 — Milestone 7 assessment and improvement plan
 
 - [remote-live.md § Improvement plan](docs/research/remote-live.md#improvement-plan-2026-10-03) assesses the design.

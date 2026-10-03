@@ -216,6 +216,7 @@ Status: **implemented (2026-10-03)**, steps 1–5 on SQLite and Postgres. Scope:
 
 ### foldkit-plus 0.14.0 adoption (2026-10-03)
 
+- **SQLX-019 — identifier quoting (fixed 2026-10-03).** SQLite treats an unknown double-quoted identifier as a string literal (its DQS misfeature). So a dropped or renamed column read as its own name: a live re-read returned `{"name":"name"}` in the LIVE-007 test. Generated SQLite SQL now quotes identifiers with backticks, which are always identifiers; Postgres keeps double quotes. The SQL suites pass on both databases.
 - **SQLX-018 — NUL searches.** `foldkit-remote-drizzle` 0.9.1 refuses a search holding NUL, but throws it as a `QueryCompileError`, which the RPC server answers as a protocol `Defect`. Its memory backend refuses the same input as a typed `RemoteQueryError`. The native SQL source answers a `RemoteQueryError` with the Drizzle compiler's exact message, and the planner refuses a literal NUL search while compiling. This is registered in [native divergences](../native-divergences.md) and recorded as a candidate upstream issue.
 - **Postgres folding.** Upstream's evaluator now folds `contains` in ASCII only, but its Drizzle SQL still uses `lower()`, which folds by the database collation. Native follows the Drizzle source (SQLX-002), so on Postgres the new "accented capital" conformance case differs from the evaluator's expectation. [sql-plan.test.ts](../../packages/reffect/tests/sql-plan.test.ts) asserts that it differs, so the exemption fails once upstream aligns the two.
 

@@ -1,6 +1,6 @@
 # Native Remote Live (milestone 7)
 
-Status: **steps 1–3 delivered (2026-10-03)**, with open review findings: native unsubscription is not yet evidenced (LR-2), SQL post-commit signal failures misreport mutations (LR-1), and live rendering in the `todo-remote` browser app is missing. See [Review](#review-2026-10-03) and the [improvement plan](#improvement-plan-2026-10-03). It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
+Status: **steps 1–3 delivered (2026-10-03)**. Review fixes LR-1, LR-2 and LR-4 are delivered. LR-3 is open: Foldkit's `Data.live` subscriptions and the browser app have not run end to end. See [Review](#review-2026-10-03) and the [improvement plan](#improvement-plan-2026-10-03). It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
 
 Sources, read 2026-10-03 from the installed packages (foldkit-plus 0.14.0):
 
@@ -198,6 +198,21 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
   - signals carried by the `RemoteStore` node and session;
   - long Rust snippets in TypeScript template strings.
 - **Coherent:** with the Remote milestones (NR-001, a semantic port checked differentially), yes. With the project's core principle, that the compiler knows what each operation means and why an implementation was chosen, less so. The hub, Read engine and SQL session are opaque to planning and explanation, and each milestone adds another such runtime with no stated path back into the compiler.
+
+### Review fixes delivered (2026-10-03)
+
+- **LR-4.** `NativeRemote.compile` refuses `live: true` unless `serialization: "ndjson"`. Tested in `remote-live.test.ts`.
+- **LR-2 with LIVE-009.**
+  - R stream procedures and runtime-served streams share `forward_chunks` in `rpc-runtime`. It stops on a closed response or cancellation, and its chunk sources are the R sink and the hub queue (`takeAll`).
+  - With `REFFECT_LIVE_TRACE` set, the hub writes `reffect.live@1` records with its subscriber count on subscribe and unsubscribe.
+  - `remote-live.test.ts` asserts the counts 1, 2, 1, 0 natively, as `hub.size` shows officially.
+- **LR-1 with LIVE-007.**
+  - `Hub::changed` no longer fails. A failed re-read writes a `reread-failed` record and skips the cursor of each subscriber in that group, and the remaining groups and signals continue.
+  - SQL `finish` reports only commit failures.
+  - `remote-sql-live.test.ts` renames a selected column under the native SQLite server. The mutation still succeeds, and the subscriber receives its second signal at cursor 2 (a gap).
+  - This is registered in [native divergences](../native-divergences.md).
+- **Limit of LIVE-007.** Foldkit's `classifyLive` is `cursor <= state.cursor ? duplicate : state.cursor === 0 || cursor === state.cursor + 1 ? applied : gap`. A skip is therefore noticed only when a later event arrives, and never before the client has applied one.
+- **Found on the way: SQLX-019.** SQLite read the renamed column as the literal `"name"`, because an unknown double-quoted identifier is a string in SQLite. SQLite identifiers are now backtick-quoted ([sqlx-remote](sqlx-remote.md#decisions)).
 
 ### Proposed decisions
 

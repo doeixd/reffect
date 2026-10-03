@@ -83,13 +83,9 @@ These block many items below.
 
 - Per-entity live sources ([remote-live](research/remote-live.md#order-of-work-and-acceptance))
 - Live review fixes ([review](research/remote-live.md#review-2026-10-03)):
-  - LR-1: after a SQL commit, apply every signal and never fail the committed mutation; a failed re-read becomes a cursor gap (LIVE-007);
-  - LR-2: evidence native unsubscription on disconnect;
-  - LR-3: run Foldkit's `Data.live` subscriptions and the browser example end to end;
-  - LR-4: refuse `live: true` without NDJSON.
+  - LR-3: run Foldkit's `Data.live` subscriptions and the browser example end to end.
 - Live improvement plan ([plan](research/remote-live.md#improvement-plan-2026-10-03)):
   - LIVE-008: an after-commit session hook and a separate LiveHub node and service;
-  - LIVE-009: one stream forwarder for R streams and runtime-served streams;
   - LIVE-010: a semantic runtime registry in plan explanations, with upstream version guards;
   - LIVE-011: typed, domain-checked signals;
   - LIVE-012: runtime Rust as `.rs` files with rustfmt, clippy and unit tests;
