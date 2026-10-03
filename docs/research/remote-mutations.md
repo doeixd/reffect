@@ -118,6 +118,34 @@ Checked against `foldkit-remote` 0.10.0 `index.d.mts`: `Remote.patch(entity, id,
   - [remote-mutate.test.ts](../../packages/reffect/tests/remote-mutate.test.ts) compares native Insert/Remove changes (string and boolean inputs, escaping and key order) with the published handler over the wire.
   - Native number formatting in identities is not exercised over the wire yet: query-serving still refuses checked (finite) numeric inputs (NR-015). Its `ryu-js` path is the same one the read engine uses for messages.
 
+## RM-004 refined: authentication and field authorization (2026-10-03)
+
+Checked against `foldkit-remote-server` 0.10.0: README "Authentication vs authorization", `allowedFields` and `readHelper`.
+
+- **Upstream contract.**
+  - Authentication is the application's (Effect RPC middleware); `RemoteServer.handlers(server, principal)` receives a resolved principal.
+  - `allowedFields` keeps requested fields the source declares, passes them to `authorize(principal, declared)`, and keeps only requested fields that `authorize` permitted, in request order (it can remove, never add).
+  - `readHelper` settles withheld fields, never reads an ID whose fields are all withheld, and never follows a relation the principal may not read.
+  - Query `select` reads through the same path. Mutation and query policy belong to their sources, which receive the principal.
+- **RM-004a — authentication by the existing checked bearer adapter.**
+  - The application adds its bearer middleware to the Remote contract (`RemoteRpc.middleware(Authentication)`), as an Effect RPC deployment of `handlers` must.
+  - `NativeRemote.compile(…, { auth: NativeRpc.bearer(…) })` authenticates runtime-served procedures exactly as protected NativeRpc handlers are authenticated: a denial literal, credentials from the environment, a `u64` principal.
+  - The reference builds `RemoteServer.handlers(server, principal)` per request from the middleware's principal service.
+  - The principal profile is `u64`, narrower than upstream's arbitrary principal type.
+- **RM-004b — `authorize` as a compiled R function.**
+  - `authorize: { [entity]: R.fn([R.U64, R.Array(R.String)], R.Array(R.String), …) }` mirrors `RemoteServer.entity(…, { authorize })`. The engine ports `allowedFields` around it: it keeps the requested order, and any extra field `authorize` returns is ignored.
+  - `authorize` requires `auth`, because upstream calls it with the bound principal and an unauthenticated native server has none.
+  - The memory profile declares no fields, as `memory` does.
+- **RM-004c — principal in mutation sources.** Mutation sources may take the principal as a second argument, for source-level policy. This waits until RM-004a/b pass.
+- **Validation.** Compare against `RemoteServer.handlers` with the same R `authorize` run by the reference, over a protected `RemoteRpc`:
+  - fields withheld and settled;
+  - an ID with every field withheld is neither read nor contributed;
+  - a relation that may not be read is not followed;
+  - nested levels authorized separately, as in upstream's `nested.test.ts`;
+  - query `select` filtered;
+  - two principals, missing or wrong tokens denied.
+- **Not covered.** Live reauthorization (milestone 7) and arbitrary principal types.
+
 ## Order of work
 
 1. RM-002 store with read/query sharing it (no behaviour change). **Done (phase A).**
