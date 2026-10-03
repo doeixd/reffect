@@ -76,6 +76,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 - [Array length checks](research/array-length.md): decode-only `isMaxLength`/`isMinLength`/`isBetweenLength` on `Schema.Array`, verified against Effect filters; checks run after elements, and the first failure wins.
 - [String-keyed records](research/records-js-order.md): `R.Record(R.String, V)` with `keys`/`values`/`size`/`has`, JS own-property key order natively (`preserve_order` plus index-key partitioning), and record codecs.
 - [Optional fields](research/optional-fields.md): `R.optional`/`R.optionalKey` struct fields and `R.UndefinedOr`, native presence (`Option`/`Option<Option>`), and the verified `| null` mismatch text of `Schema.optional` JSON codecs.
+- [Milestone 5: Remote over SQL with SQLx](research/sqlx-remote.md) (proposed): SQLite first with the Drizzle-backed server as oracle, storage metadata from `foldkit-remote-drizzle` bindings, keyset paging, upserts in per-mutation transactions; open SQLx version/toolchain decision.
 - [Native RemoteServer design](research/native-remote.md): proposed semantic-port engine, generated wire codecs, JS ordering rules, memory backend first and the differential harness.
 - [Milestone 4 gap analysis](research/remote-gap-analysis.md): Remote wire features still missing, probed Number/optional/Record semantics, and why the native engine design comes next.
 - [Arrays and structured iteration](research/arrays.md): `R.Array` mirroring `effect/Array`/`Schema.Array`, structured loops, `Effect.forEach` and exact RPC array codecs.

@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-03 — Milestone 5 research and design
+
+- Researched SQLx 0.9.0, SQLite and Postgres semantics, and upstream `foldkit-remote-drizzle` 0.9.0 against primary sources, and recorded the design in [sqlx-remote.md](docs/research/sqlx-remote.md) (SQLX-001..007).
+  - SQLite comes first, and the Drizzle-backed official server is the oracle.
+  - Storage metadata comes from upstream bindings at build time; callbacks are refused.
+  - Nullable sort columns are refused, because upstream's keyset predicate is wrong for them on SQLite.
+  - Writes are upserts, with one transaction per mutation.
+- Added `foldkit-remote-drizzle` 0.9.0 as an exact devDependency. It depends on exactly our pinned Foldkit versions and imports on Effect 4.0.0, replacing the vendored compiler snapshot as a future oracle.
+- Open owner decisions: SQLx 0.9.0 (needs Rust ≥ 1.94; local 1.90.0) or 0.8.6; and which oracle governs SQL behaviour.
+
 ## 2026-10-03 — Bounded structured task kernel
 
 - [Stable-source preparation](docs/research/structured-concurrency.md) records TASK-001–007. Parallel agents implemented checked IR/reference/planning, native context/lowering and independent conformance. Static Unit/Never All (two/three children) and Race (two children) use independent child contexts and cancellation channels, inline futures and awaited cleanup. No task metadata accompanies scalar values or dependency is added to programs without groups. Core PLAN.md remains owned by the other instance; synced its Remote authentication/field-authorization through 6b6f59d.

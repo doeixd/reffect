@@ -91,7 +91,7 @@ Remaining, in order, driven by `examples/todo-remote` (native Remote server plus
 3. `RemoteStore.get` with typed decoding, so mutations can read the rows they change.
 4. Done: authentication by the bearer adapter, field authorization as compiled R functions, and the principal in mutation sources (RM-004).
 5. Done: milestone 4 is accepted within the memory profile, including a stock Foldkit app in Chrome ([status](docs/research/native-remote.md#milestone-4-status-2026-10-03)).
-6. Next: milestone 5 research. It compiles Query to SQL with Drizzle parity and gives the store an SQLx implementation (RS-003), including transactions and an isolation policy for mutations (RS-004).
+6. Next: milestone 5, designed in [sqlx-remote.md](docs/research/sqlx-remote.md) (proposed; SQLx version/toolchain and the governing oracle are open owner decisions). Earlier note: It compiles Query to SQL with Drizzle parity and gives the store an SQLx implementation (RS-003), including transactions and an isolation policy for mutations (RS-004).
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 
