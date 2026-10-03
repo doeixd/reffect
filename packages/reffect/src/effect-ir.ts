@@ -12,6 +12,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
+import { StreamSinkHost } from "./stream-host.ts";
 import { checkedMilliseconds } from "./duration.ts";
 import type { Scope } from "effect";
 import { Schedule as ScheduleValue, validSchedulePlan, validTimes } from "./schedule.ts";
@@ -81,6 +82,7 @@ export const AsyncEffects = Object.freeze({
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
   Launch: SemanticRef.effect("reffect/effect/launch@1"),
   RemoteStore: SemanticRef.effect("reffect/effect/remote-store@1"),
+  StreamEmit: SemanticRef.effect("reffect/stream/emit@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
   AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
   FileScope: SemanticRef.effect("reffect/effect/scoped-file@1"),
@@ -207,6 +209,16 @@ export type ComputationNode =
     }
   /** `Stream.runCollect` over a finite pipeline (STREAM-005); output is the Array of elements. */
   | { readonly _tag: "StreamRunCollect"; readonly stream: StreamIR<unknown, unknown> }
+  /**
+   * A streaming procedure's body (STREAM-006): every chunk, its elements JSON-encoded by
+   * `encoded` (reading the element through `item`), handed to the host's sink.
+   */
+  | {
+      readonly _tag: "StreamEmit";
+      readonly stream: StreamIR<unknown, unknown>;
+      readonly item: symbol;
+      readonly encoded: Expr<unknown>;
+    }
   | { readonly _tag: "Succeed"; readonly value: Expr<unknown> }
   | { readonly _tag: "Fail"; readonly error: Expr<unknown> }
   | {
@@ -372,6 +384,13 @@ export const substituteComputation = (
           const stream = mapStreamExpressions(n.stream, substituting);
           return stream === n.stream ? self : rebuild({ _tag: "StreamRunCollect", stream });
         },
+        StreamEmit: (n) => {
+          const stream = mapStreamExpressions(n.stream, substituting);
+          const encoded = substituting(n.encoded);
+          return stream === n.stream && encoded === n.encoded
+            ? self
+            : rebuild({ ...n, stream, encoded });
+        },
         Succeed: (n) => {
           const value = substituting(n.value);
           return value === n.value ? self : rebuild({ _tag: "Succeed", value });
@@ -510,6 +529,14 @@ export const remoteStore = (
   values: Expr<unknown> | undefined,
 ): Computation<void, never> =>
   Computation.make(UnitType, NeverType, { _tag: "RemoteStore", op, entity, id, values });
+/** A streaming procedure's body; a stream that cannot fail may widen to the declared error. */
+export const streamEmit = (
+  stream: StreamIR<unknown, unknown>,
+  item: symbol,
+  encoded: Expr<unknown>,
+  error: IRType<unknown>,
+): Computation<void, unknown> =>
+  Computation.make(UnitType, error, { _tag: "StreamEmit", stream, item, encoded });
 /** `Stream.runCollect(stream)`; `output` is the Array witness of the stream's elements. */
 export const streamRunCollect = (
   stream: StreamIR<unknown, unknown>,
@@ -529,6 +556,35 @@ export const remoteStoreGet = (
     id,
     values: undefined,
   });
+/** Every chunk, encoded, to the reference's sink; without one the body cannot run. */
+const emitReference = (
+  n: {
+    readonly stream: StreamIR<unknown, unknown>;
+    readonly item: symbol;
+    readonly encoded: Expr<unknown>;
+  },
+  bindings: ReadonlyMap<symbol, readonly unknown[]>,
+): Effect.Effect<void, unknown> =>
+  Effect.serviceOption(StreamSinkHost).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.die(new Error("A streaming body needs a StreamSinkHost in the reference")),
+        onSome: (sink) =>
+          Stream.runForEachArray(
+            toEffectStream(n.stream, bindings, evaluateExpression, (outer, binder, value) =>
+              new Map(outer).set(binder, [value]),
+            ),
+            (values) =>
+              sink.emit(
+                values.map((value) =>
+                  evaluateExpression(n.encoded, new Map(bindings).set(n.item, [value])),
+                ),
+              ),
+          ),
+      }),
+    ),
+  );
 const remoteStoreReference = (
   op: "Get" | "Write" | "Remove",
   entity: string,
@@ -696,6 +752,8 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         AcquireUseRelease: () => true,
         // A finite pure pipeline runs to completion without suspending.
         StreamRunCollect: () => false,
+        // Handing a chunk to the host waits for room, and a closed sink interrupts.
+        StreamEmit: () => true,
         Succeed: () => false,
         Fail: () => false,
         Log: () => false,
@@ -1145,6 +1203,25 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
             issues.push(...checkExpression(expr, nested, `${at}.${path}`));
           }
         },
+        StreamEmit: (n) => {
+          if (
+            !IRType.same(c.output, UnitType) ||
+            (!IRType.same(c.error, n.stream.error) && !IRType.same(n.stream.error, NeverType))
+          )
+            add(at, "A streaming body yields Unit and fails with its stream's error");
+          for (const { expr, binder, path } of streamExpressions(n.stream)) {
+            const nested = new Map(bindings);
+            if (binder) nested.set(binder.symbol, [binder.type]);
+            issues.push(...checkExpression(expr, nested, `${at}.${path}`));
+          }
+          issues.push(
+            ...checkExpression(
+              n.encoded,
+              new Map(bindings).set(n.item, [n.stream.item]),
+              `${at}.encoded`,
+            ),
+          );
+        },
         Succeed: (n) => {
           if (!IRType.same(c.output, n.value.type) || !IRType.same(c.error, NeverType))
             add(at, "Succeed channel witnesses are inconsistent");
@@ -1447,6 +1524,7 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
                 new Map(outer).set(binder, [value]),
               ),
             ).pipe(Effect.map((elements) => [...elements])),
+          StreamEmit: (n) => emitReference(n, bindings),
           Succeed: (n) => expression(n.value).pipe(Effect.flatMap(Effect.succeed)),
           Fail: (n) => expression(n.error).pipe(Effect.flatMap(Effect.fail)),
           Map: (n) =>
@@ -1652,6 +1730,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.finalizer, `${path}.finalizer`);
         },
         StreamRunCollect: () => {},
+        StreamEmit: () => {},
         Succeed: () => {},
         Fail: () => {},
         Map: (n) => {
@@ -1921,6 +2000,15 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             evaluate(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
               Effect.mapError((failure) => outward(failure, "ensuring")),
+            ),
+          StreamEmit: (n) =>
+            emitReference(n, bindings).pipe(
+              Effect.mapError((error): FramedFailure => ({
+                _tag: "Domain",
+                error,
+                frames: [frame(path, "fail")],
+                omitted: 0,
+              })),
             ),
           // A stream's typed failure leaves the consumer with one frame there, as natively.
           StreamRunCollect: (n) =>

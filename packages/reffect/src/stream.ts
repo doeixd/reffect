@@ -3,10 +3,22 @@
  * and operators build a `StreamIR`; `runCollect` consumes it as an Effect.
  */
 import { dual } from "effect/Function";
-import { Computation, joinType, streamRunCollect } from "./effect-ir.ts";
-import { BoolType, Expr, IRType, NeverType, NumberType, arrayItem, fail } from "./kernel.ts";
+import { Computation, EffectFn, joinType, streamEmit, streamRunCollect } from "./effect-ir.ts";
+import { SchemaIR } from "./schema-json.ts";
+import {
+  BoolType,
+  Expr,
+  IRType,
+  NeverType,
+  NumberType,
+  UnitType,
+  arrayItem,
+  fail,
+} from "./kernel.ts";
+import type { Symbols } from "./kernel.ts";
 import { ArrayType } from "./records.ts";
 import { StreamIR } from "./stream-ir.ts";
+import type { StreamFn } from "./stream-ir.ts";
 
 const at = (operation: string) => `Stream.${operation}`;
 const sameItem = (a: IRType<unknown>, b: IRType<unknown>, operation: string) => {
@@ -139,7 +151,38 @@ const runCollect = <A, E>(self: StreamIR<A, E>): Computation<ReadonlyArray<A>, E
     E
   >;
 
+/**
+ * A streaming procedure (STREAM-006): `Stream.fn(inputs, error, build)` returns the stream a
+ * `stream: true` RPC answers with. Elements are encoded as `Schema.toCodecJson` encodes them.
+ */
+const fn = <const I extends readonly IRType<unknown>[], A, E>(
+  input: I,
+  error: IRType<E>,
+  build: (...args: Symbols<I>) => StreamIR<A, E>,
+): StreamFn<I, A, E> =>
+  EffectFn.make(input, UnitType, error, (...args) => {
+    const stream = build(...args);
+    if (!(stream instanceof StreamIR))
+      throw fail("TYPE_MISMATCH", "authoring", at("fn"), "A streaming function returns a Stream");
+    if (!IRType.same(stream.error, error) && !IRType.same(stream.error, NeverType))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        at("fn"),
+        "The stream fails with the declared error",
+      );
+    const item = Symbol("reffect/stream/encoded");
+    const encoded = SchemaIR.encodeSync(SchemaIR.toCodecJson(stream.item))(
+      Expr.parameter(stream.item, item, 0),
+    );
+    return streamEmit(stream as StreamIR<unknown, unknown>, item, encoded, error) as Computation<
+      void,
+      E
+    >;
+  });
+
 export const StreamAuthoring = Object.freeze({
+  fn,
   make,
   fromIterable,
   range,

@@ -306,6 +306,12 @@ type HelperBody =
       readonly plan: StreamPlan;
       readonly item: IRType<unknown>;
       readonly error: IRType<unknown>;
+      /** Hand each encoded chunk to the host's sink instead of collecting (STREAM-006). */
+      readonly emit?: {
+        readonly chunk: string;
+        readonly input: IRType<unknown>;
+        readonly transform: RustBlock;
+      };
     }
   | { readonly _tag: "Pure"; readonly block: RustBlock }
   | { readonly _tag: "Succeed"; readonly block: RustBlock }
@@ -605,6 +611,10 @@ export function lowerFunctions(
               Succeed: (n) => expression(n.value),
               StreamRunCollect: (n) =>
                 streamExpressions(n.stream).forEach(({ expr }) => expression(expr)),
+              StreamEmit: (n) => {
+                streamExpressions(n.stream).forEach(({ expr }) => expression(expr));
+                expression(n.encoded);
+              },
               Fail: (n) => expression(n.error),
               Log: (n) => n.attributes.forEach(([, value]) => expression(value)),
               Sleep: () => {},
@@ -863,6 +873,82 @@ export function lowerFunctions(
         channels.set(error, index);
         scopes.set(scope, channels);
         effectMemo.set(c.node, scopes);
+        // Stream pipelines plan once per consumer (STREAM-004).
+        // A per-element operator runs as its Array operation over a bound chunk.
+        const transform = (
+          filter: boolean,
+          m: {
+            readonly source: StreamIR<unknown, unknown>;
+            readonly item: symbol;
+            readonly body: Expr<unknown>;
+          },
+          output: IRType<unknown>,
+          at: string,
+        ): StreamPlan => {
+          const input = ArrayType.of(m.source.item);
+          const chunk = Symbol("reffect/stream/chunk");
+          const chunkScope = caseScope(scope, chunk, input);
+          const loop = Expr.arrayLoop(
+            filter ? { _tag: "Filter" } : { _tag: "Map" },
+            filter ? input : ArrayType.of(output),
+            Expr.parameter(input, chunk, 0),
+            m.item,
+            Symbol("reffect/stream/index"),
+            m.body,
+          );
+          return {
+            _tag: "Transform",
+            filter,
+            source: planStream(m.source, `${at}.source`),
+            chunk: chunkScope.input[chunkScope.input.length - 1].name,
+            input,
+            output: filter ? input : ArrayType.of(output),
+            transform: block(loop, chunkScope, `${at}.body`),
+          };
+        };
+        const planStream = (stream: StreamIR<unknown, unknown>, at: string): StreamPlan =>
+          Match.value(stream.node).pipe(
+            Match.tagsExhaustive({
+              FromArray: (m): StreamPlan => ({
+                _tag: "FromArray",
+                values: block(m.values, scope, `${at}.values`),
+                item: stream.item,
+              }),
+              Range: (m): StreamPlan => ({
+                _tag: "Range",
+                min: block(m.min, scope, `${at}.min`),
+                max: block(m.max, scope, `${at}.max`),
+              }),
+              Empty: (): StreamPlan => ({ _tag: "Empty" }),
+              Fail: (m): StreamPlan => ({
+                _tag: "Fail",
+                error: block(m.error, scope, `${at}.error`),
+              }),
+              Map: (m) => transform(false, m, stream.item, at),
+              Filter: (m) => transform(true, m, stream.item, at),
+              Take: (m): StreamPlan => ({
+                _tag: "Take",
+                source: planStream(m.source, `${at}.source`),
+                count: m.count,
+              }),
+              Rechunk: (m): StreamPlan => ({
+                _tag: "Rechunk",
+                source: planStream(m.source, `${at}.source`),
+                size: m.size,
+                item: stream.item,
+              }),
+              Concat: (m): StreamPlan => ({
+                _tag: "Concat",
+                first: planStream(m.first, `${at}.first`),
+                second: planStream(m.second, `${at}.second`),
+              }),
+              Chunks: (m): StreamPlan => ({
+                _tag: "Chunks",
+                source: planStream(m.source, `${at}.source`),
+                item: m.source.item,
+              }),
+            }),
+          );
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
             TaskGroup: (n): HelperBody => ({
@@ -1048,86 +1134,36 @@ export function lowerFunctions(
               block: block(n.error, scope, `${path}.error`),
             }),
             StreamRunCollect: (n): HelperBody => {
-              // A per-element operator runs as its Array operation over a bound chunk.
-              const transform = (
-                filter: boolean,
-                m: {
-                  readonly source: StreamIR<unknown, unknown>;
-                  readonly item: symbol;
-                  readonly body: Expr<unknown>;
-                },
-                output: IRType<unknown>,
-                at: string,
-              ): StreamPlan => {
-                const input = ArrayType.of(m.source.item);
-                const chunk = Symbol("reffect/stream/chunk");
-                const chunkScope = caseScope(scope, chunk, input);
-                const loop = Expr.arrayLoop(
-                  filter ? { _tag: "Filter" } : { _tag: "Map" },
-                  filter ? input : ArrayType.of(output),
-                  Expr.parameter(input, chunk, 0),
-                  m.item,
-                  Symbol("reffect/stream/index"),
-                  m.body,
-                );
-                return {
-                  _tag: "Transform",
-                  filter,
-                  source: plan(m.source, `${at}.source`),
-                  chunk: chunkScope.input[chunkScope.input.length - 1].name,
-                  input,
-                  output: filter ? input : ArrayType.of(output),
-                  transform: block(loop, chunkScope, `${at}.body`),
-                };
-              };
-              const plan = (stream: StreamIR<unknown, unknown>, at: string): StreamPlan =>
-                Match.value(stream.node).pipe(
-                  Match.tagsExhaustive({
-                    FromArray: (m): StreamPlan => ({
-                      _tag: "FromArray",
-                      values: block(m.values, scope, `${at}.values`),
-                      item: stream.item,
-                    }),
-                    Range: (m): StreamPlan => ({
-                      _tag: "Range",
-                      min: block(m.min, scope, `${at}.min`),
-                      max: block(m.max, scope, `${at}.max`),
-                    }),
-                    Empty: (): StreamPlan => ({ _tag: "Empty" }),
-                    Fail: (m): StreamPlan => ({
-                      _tag: "Fail",
-                      error: block(m.error, scope, `${at}.error`),
-                    }),
-                    Map: (m) => transform(false, m, stream.item, at),
-                    Filter: (m) => transform(true, m, stream.item, at),
-                    Take: (m): StreamPlan => ({
-                      _tag: "Take",
-                      source: plan(m.source, `${at}.source`),
-                      count: m.count,
-                    }),
-                    Rechunk: (m): StreamPlan => ({
-                      _tag: "Rechunk",
-                      source: plan(m.source, `${at}.source`),
-                      size: m.size,
-                      item: stream.item,
-                    }),
-                    Concat: (m): StreamPlan => ({
-                      _tag: "Concat",
-                      first: plan(m.first, `${at}.first`),
-                      second: plan(m.second, `${at}.second`),
-                    }),
-                    Chunks: (m): StreamPlan => ({
-                      _tag: "Chunks",
-                      source: plan(m.source, `${at}.source`),
-                      item: m.source.item,
-                    }),
-                  }),
-                );
               return {
                 _tag: "StreamCollect",
-                plan: plan(n.stream, `${path}.stream`),
+                plan: planStream(n.stream, `${path}.stream`),
                 item: n.stream.item,
                 error: n.stream.error,
+              };
+            },
+            // Each chunk is encoded element by element, then handed to the host (STREAM-006).
+            StreamEmit: (n): HelperBody => {
+              const input = ArrayType.of(n.stream.item);
+              const chunk = Symbol("reffect/stream/chunk");
+              const chunkScope = caseScope(scope, chunk, input);
+              const encode = Expr.arrayLoop(
+                { _tag: "Map" },
+                ArrayType.of(UnknownType),
+                Expr.parameter(input, chunk, 0),
+                n.item,
+                Symbol("reffect/stream/index"),
+                n.encoded,
+              );
+              return {
+                _tag: "StreamCollect",
+                plan: planStream(n.stream, `${path}.stream`),
+                item: n.stream.item,
+                error: n.stream.error,
+                emit: {
+                  chunk: chunkScope.input[chunkScope.input.length - 1].name,
+                  input,
+                  transform: block(encode, chunkScope, `${path}.encoded`),
+                },
               };
             },
             Map: (n): HelperBody => ({
@@ -1226,7 +1262,7 @@ export function lowerFunctions(
             files: scope.fileInputs,
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
-                StreamCollect: () => false,
+                StreamCollect: (n) => n.emit !== undefined,
                 TaskGroup: () => true,
                 Scope: () => true,
                 AddFinalizer: () => true,
@@ -1697,6 +1733,14 @@ export const emitFunctions = (
       ),
     ),
   );
+  const usesStreams = module.functions.some((f) =>
+    f.helpers.some((helper) =>
+      Match.value(helper.body).pipe(
+        Match.tag("StreamCollect", (n) => n.emit !== undefined),
+        Match.orElse(() => false),
+      ),
+    ),
+  );
   const taskArities = module.functions.flatMap((f) =>
     f.helpers.flatMap((helper) =>
       Match.value(helper.body).pipe(
@@ -1716,6 +1760,7 @@ export const emitFunctions = (
         usesStore,
         asyncServices,
         taskArities.length > 0,
+        usesStreams,
       ),
     );
   if (taskArities.length) write(structuredRuntime(taskArities));
@@ -2646,11 +2691,47 @@ export const emitFunctions = (
               );
             const failing = fails(n.plan);
             const out = name("out");
+            const sink = n.emit;
+            const consume = (chunk: string): MappedFragment =>
+              sink
+                ? joinFragments([
+                    `{ let ${sink.chunk}: &${vec(arrayItem(sink.input)!)} = &${chunk}; let encoded: Vec<serde_json::Value> = `,
+                    renderBlock(sink.transform),
+                    `; if let Err(error) = ctx.stream_chunk(encoded).await { stopped = Some(error); break ${root}; } }`,
+                  ])
+                : textFragment(`${out}.extend(${chunk});`);
+            const wrap = (error: string) =>
+              joinFragments([
+                mapFragment(helper.origin, undefined, textFragment("Err")),
+                captureFrames ? "((" : "(",
+                error,
+                captureFrames
+                  ? `, ${Rs.pathCall(rsSegments("FrameTrail"), Rs.ident("new"), [frameOf(helper, "fail")]).text}))`
+                  : ")",
+              ]);
+            if (sink)
+              return joinFragments([
+                "{ let mut stopped = None; ",
+                failing ? `let mut failure: Option<${typeName(n.error)}> = None; ` : "",
+                `#[allow(unused_labels)] ${root}: { `,
+                emit(n.plan, consume),
+                " } if let Some(error) = stopped { ",
+                wrap("error"),
+                " } ",
+                failing
+                  ? joinFragments([
+                      "else if let Some(error) = failure { ",
+                      wrap("AsyncError::Fail(error)"),
+                      " } ",
+                    ])
+                  : "",
+                "else { Ok(()) } }",
+              ]);
             return joinFragments([
               `{ let mut ${out}: ${vec(n.item)} = Vec::new(); `,
               failing ? `let mut failure: Option<${typeName(n.error)}> = None; ` : "",
               `#[allow(unused_labels)] ${root}: { `,
-              emit(n.plan, (chunk) => textFragment(`${out}.extend(${chunk});`)),
+              emit(n.plan, consume),
               " } ",
               failing
                 ? joinFragments([

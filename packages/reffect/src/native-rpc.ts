@@ -1,4 +1,6 @@
 import { Cause, Effect, Exit, Match, Option, Schema, SchemaAST, SchemaIssue } from "effect";
+import type { Stream as EffectStream } from "effect";
+import type { StreamFn } from "./stream-ir.ts";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
 import {
@@ -151,14 +153,18 @@ type HandlerError<P extends Rpc.Any> = P extends {
 type HasMiddleware<P extends Rpc.Any> = [Rpc.Middleware<P>] extends [never] ? false : true;
 type Bindings<Rpcs extends Rpc.Any> = {
   readonly [Tag in Rpcs["_tag"]]: RpcBinding<
-    | ([HandlerError<Rpc.ExtractTag<Rpcs, Tag>>] extends [never]
-        ? Fn<readonly IRType<unknown>[], NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>>
-        : never)
-    | EffectFn<
-        readonly IRType<unknown>[],
-        NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>,
-        NativeValue<HandlerError<Rpc.ExtractTag<Rpcs, Tag>>>
-      >
+    // A `stream: true` procedure binds an R.Stream.fn of its elements and failures (STREAM-006).
+    Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>> extends EffectStream.Stream<infer A, infer E, infer _R>
+      ? StreamFn<readonly IRType<unknown>[], NativeValue<A>, NativeValue<E>>
+      :
+          | ([HandlerError<Rpc.ExtractTag<Rpcs, Tag>>] extends [never]
+              ? Fn<readonly IRType<unknown>[], NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>>
+              : never)
+          | EffectFn<
+              readonly IRType<unknown>[],
+              NativeValue<Rpc.Success<Rpc.ExtractTag<Rpcs, Tag>>>,
+              NativeValue<HandlerError<Rpc.ExtractTag<Rpcs, Tag>>>
+            >
   > & {
     readonly principal: HasMiddleware<Rpc.ExtractTag<Rpcs, Tag>>;
     readonly fields: Rpc.Payload<Rpc.ExtractTag<Rpcs, Tag>> extends Readonly<
@@ -1276,24 +1282,40 @@ export const compileServer = (
               "Protected procedures cannot also bind server services yet",
             );
           const positions = services.map((service) => servicePosition(service, procedure));
-          if (RpcSchema.isStreamSchema(rpc.successSchema))
-            throw unsupported(
-              procedure,
-              "Streaming procedures are not supported until milestones 6–7 (NR-006)",
-            );
+          // A streaming procedure's elements and failures come from its stream schema (STREAM-006).
+          const streamed = RpcSchema.isStreamSchema(rpc.successSchema)
+            ? { success: rpc.successSchema.success, error: rpc.successSchema.error }
+            : undefined;
           if (rpc.defectSchema.ast !== Schema.Defect().ast)
             throw unsupported(procedure, "Custom defect codecs are unsupported");
           const success = codec(
-            rpc.successSchema.ast,
+            (streamed?.success ?? rpc.successSchema).ast,
             `${procedure}.success`,
             false,
             registry,
             false,
           );
-          const error = codec(rpc.errorSchema.ast, `${procedure}.error`, false, registry, false);
+          const error = codec(
+            (streamed?.error ?? rpc.errorSchema).ast,
+            `${procedure}.error`,
+            false,
+            registry,
+            false,
+          );
           const fn = binding.fn;
+          const streamItem =
+            fn instanceof EffectFn
+              ? Match.value(fn.body.node).pipe(
+                  Match.tag("StreamEmit", (n) => n.stream.item),
+                  Match.orElse(() => undefined),
+                )
+              : undefined;
+          if (streamed !== undefined && streamItem === undefined)
+            throw unsupported(procedure, "A streaming procedure binds an R.Stream.fn");
+          if (streamed === undefined && streamItem !== undefined)
+            throw unsupported(procedure, "An R.Stream.fn answers a stream: true procedure");
           if (
-            !IRType.same(fn.output, witnessOf(success)) ||
+            !IRType.same(streamItem ?? fn.output, witnessOf(success)) ||
             !IRType.same(fn instanceof EffectFn ? fn.error : NeverType, witnessOf(error))
           )
             throw unsupported(
@@ -1475,6 +1497,37 @@ export const compileServer = (
                 local("context"),
                 Rs.closureTyped([], undefined, compiledCall),
               );
+          if (streamItem !== undefined) {
+            const failed =
+              error === "never"
+                ? "match error {}"
+                : callLocal("failure", encode(error, local("error"))).text;
+            statements.push(
+              Rs.verbatimStmt(
+                [
+                  "let (sink, mut chunks) = tokio::sync::mpsc::channel::<Vec<Value>>(1);",
+                  "execution.set_stream_sink(sink);",
+                  "let (out, id) = (context.out, context.id);",
+                  // Each future owns its end: when the client goes away the forwarder stops, its
+                  // receiver drops, and the producer's next send interrupts it (STREAM-003).
+                  `let run = async move { let result = ${compiledCall.text}.await; drop(execution); result };`,
+                  'let forward = async move { while let Some(values) = chunks.recv().await { if out.send(Outgoing::Message(json!({"_tag":"Chunk", "requestId":id, "values":values}))).await.is_err() { break; } } };',
+                  "let (result, ()) = tokio::join!(run, forward);",
+                ].join(" "),
+              ),
+            );
+            return {
+              pat: Rs.stringPat(rpc._tag),
+              body: Rs.block(
+                statements,
+                Rs.ok(
+                  Rs.verbatimExpr(
+                    `match result { Ok(()) => success(Value::Null), Err(reffect_generated::AsyncError::Fail(error)) => ${failed}, Err(reffect_generated::AsyncError::Interrupted) => interrupted() }`,
+                  ),
+                ),
+              ),
+            };
+          }
           const result =
             fn instanceof EffectFn
               ? Rs.match_(call, [

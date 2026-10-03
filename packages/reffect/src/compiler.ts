@@ -661,6 +661,17 @@ const derive = Effect.fn("Compile.derive")(function* (
           effectRefs.add(SyncEffects.Succeed);
           walk(n.value);
         },
+        StreamEmit: (n) => {
+          effectRefs.add(AsyncEffects.StreamEmit);
+          const stages = (stream: StreamIR<unknown, unknown>): void => {
+            types.add(stream.item);
+            types.add(stream.error);
+            streamSources(stream.node).forEach(stages);
+          };
+          stages(n.stream);
+          streamExpressions(n.stream).forEach(({ expr }) => walk(expr));
+          walk(n.encoded);
+        },
         StreamRunCollect: (n) => {
           effectRefs.add(SyncEffects.StreamRunCollect);
           // Every stage's elements and chunks are native values (STREAM-004).

@@ -109,6 +109,7 @@ export const analyzeTaskGroups = (
         FileSize: () => {},
         Succeed: () => {},
         StreamRunCollect: () => {},
+        StreamEmit: () => {},
         Fail: () => {},
         Sleep: () => {},
         Log: () => {},

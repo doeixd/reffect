@@ -280,6 +280,11 @@ export const analyzeScopes = (
           streamExpressions(n.stream).forEach(({ expr, path }) => expression(expr, path));
           return 0;
         },
+        StreamEmit: (n) => {
+          streamExpressions(n.stream).forEach(({ expr, path }) => expression(expr, path));
+          expression(n.encoded, "encoded");
+          return 0;
+        },
         Fail: (n) => {
           expression(n.error, "error");
           return 0;

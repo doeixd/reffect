@@ -116,6 +116,10 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       Succeed: (n) => [edge("value", n.value)],
       StreamRunCollect: (n) =>
         streamExpressions(n.stream).map(({ expr, path }) => edge(path, expr)),
+      StreamEmit: (n) =>
+        streamExpressions(n.stream)
+          .map(({ expr, path }) => edge(path, expr))
+          .concat([edge("encoded", n.encoded)]),
       Fail: (n) => [edge("error", n.error)],
       Map: (n) => [edge("source", n.source), edge("body", n.body)],
       FlatMap: (n) => [edge("source", n.source), edge("body", n.body)],

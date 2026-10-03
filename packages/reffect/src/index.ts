@@ -190,3 +190,6 @@ export { ScopedFile, FileIR } from "./file-resource.ts";
 export { ReferenceFiles } from "./reference-files.ts";
 export { FileLease } from "./file-model.ts";
 export { StreamIR } from "./stream-ir.ts";
+export type { StreamFn } from "./stream-ir.ts";
+export { StreamSinkHost } from "./stream-host.ts";
+export type { StreamSinkApi } from "./stream-host.ts";

@@ -8,6 +8,7 @@ import { Match, Stream } from "effect";
 import { pipeArguments } from "effect/Pipeable";
 import type { Pipeable } from "effect/Pipeable";
 import type { Expr, IRType } from "./kernel.ts";
+import type { EffectFn } from "./effect-ir.ts";
 
 export type StreamNode =
   /** `Stream.make(...values)` and `Stream.fromIterable(array)`: one chunk, none when empty. */
@@ -41,6 +42,17 @@ export type StreamNode =
     }
   /** `Stream.chunks`: each chunk becomes one element. */
   | { readonly _tag: "Chunks"; readonly source: StreamIR<unknown, unknown> };
+
+declare const StreamElement: unique symbol;
+/**
+ * A streaming procedure (STREAM-006): an effect function whose body hands its chunks to the
+ * host, typed by the elements it streams.
+ */
+export type StreamFn<
+  I extends readonly IRType<unknown>[] = readonly IRType<unknown>[],
+  A = unknown,
+  E = unknown,
+> = EffectFn<I, void, E> & { readonly [StreamElement]?: A };
 
 /** A `Stream<A, E>` description: the element and error witnesses, and the pipeline. */
 export class StreamIR<A, E> implements Pipeable {

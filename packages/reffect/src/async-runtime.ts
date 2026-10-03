@@ -14,6 +14,7 @@ export const asyncRuntime = (
   store = false,
   services: RuntimeServiceUsage = { clock: false, random: false },
   taskGroups = false,
+  streams = false,
 ): string => `
 #[derive(Debug)]
 pub enum AsyncError<E> { Fail(E), Interrupted }
@@ -63,6 +64,7 @@ pub trait RemoteStore: Send + Sync {
     ${scopeDepth ? `scopes: [Option<ScopeFrame>; ${scopeDepth}], scope_depth: usize,` : ""}
     ${launch ? "launch: Option<tokio::sync::oneshot::Sender<LaunchValues>>," : ""}
     ${store ? "store: Option<std::sync::Arc<dyn RemoteStore>>," : ""}
+    ${streams ? "stream_sink: Option<tokio::sync::mpsc::Sender<Vec<serde_json::Value>>>," : ""}
 }
 impl AsyncContext {
     pub fn new(cancellation: tokio::sync::watch::Receiver<bool>) -> Self {
@@ -73,6 +75,7 @@ impl AsyncContext {
             ${scopeDepth ? "scopes: std::array::from_fn(|_| None), scope_depth: 0," : ""}
             ${launch ? "launch: None," : ""}
             ${store ? "store: None," : ""}
+            ${streams ? "stream_sink: None," : ""}
         }
     }
     ${runtimeServiceMethods(services)}
@@ -83,6 +86,7 @@ impl AsyncContext {
         child.interruptible = race || self.interruptible;
         ${logging ? "child.annos = self.annos.clone(); child.spans = self.spans.clone(); child.request = self.request.clone();" : ""}
         ${store ? "child.store = self.store.clone();" : ""}
+        ${streams ? "child.stream_sink = self.stream_sink.clone();" : ""}
         child
     }`
         : ""
@@ -91,6 +95,23 @@ impl AsyncContext {
         self.interruptible && (*self.cancellation.borrow() || self.cancellation.has_changed().is_err())
     }
     ${logging ? "pub fn set_request(&mut self, request: String) { self.request = Some(request); }" : ""}
+    ${
+      streams
+        ? `pub fn set_stream_sink(&mut self, sink: tokio::sync::mpsc::Sender<Vec<serde_json::Value>>) { self.stream_sink = Some(sink); }
+    /// Hands one encoded chunk to the host (STREAM-002/003): a full buffer waits, and a closed sink
+    /// or cancellation interrupts, so the stream unwinds through its finalizers.
+    async fn stream_chunk<E>(&mut self, values: Vec<serde_json::Value>) -> Result<(), AsyncError<E>> {
+        let Some(sink) = self.stream_sink.clone() else { return Err(AsyncError::Interrupted) };
+        if self.is_cancelled() { return Err(AsyncError::Interrupted); }
+        if !self.interruptible { return sink.send(values).await.map_err(|_| AsyncError::Interrupted); }
+        tokio::select! {
+            biased;
+            _ = self.cancellation.changed() => Err(AsyncError::Interrupted),
+            sent = sink.send(values) => sent.map_err(|_| AsyncError::Interrupted),
+        }
+    }`
+        : ""
+    }
     ${
       store
         ? `pub fn set_remote_store(&mut self, store: std::sync::Arc<dyn RemoteStore>) { self.store = Some(store); }

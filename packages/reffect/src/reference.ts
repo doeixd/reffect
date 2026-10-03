@@ -1,9 +1,11 @@
-import { Fn, PureReference, fail } from "./kernel.ts";
+import { Fn, PureReference, evaluateExpression, fail } from "./kernel.ts";
+import { toEffectStream } from "./stream-ir.ts";
+import type { StreamFn } from "./stream-ir.ts";
 import type { CompileError, IRType, Inputs } from "./kernel.ts";
 import { EffectFn, EffectReference } from "./effect-ir.ts";
 import type { FramedExit } from "./effect-ir.ts";
 import { containsRef } from "./ref-model.ts";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Match, Stream } from "effect";
 
 function runUnknown<I extends readonly IRType<unknown>[], A>(
   f: Fn<I, A>,
@@ -97,4 +99,33 @@ function runWithFrames(
 ): Effect.Effect<FramedExit<unknown, unknown>, CompileError> {
   return runWithFramesUnknown(f as Fn, args, basePath);
 }
-export const Reference = Object.freeze({ run, runUnknown, runWithFrames, runWithFramesUnknown });
+/**
+ * The official Stream a streaming procedure describes (STREAM-006), for an RPC oracle whose
+ * handler returns a Stream; the RPC server encodes its elements.
+ */
+const stream = <I extends readonly IRType<unknown>[], A, E>(
+  f: StreamFn<I, A, E>,
+  args: Inputs<I>,
+): Stream.Stream<A, E> =>
+  Match.value(f.body.node).pipe(
+    Match.tag(
+      "StreamEmit",
+      (n) =>
+        toEffectStream(
+          n.stream,
+          new Map<symbol, readonly unknown[]>([[f.binder, args]]),
+          evaluateExpression,
+          (outer, binder, value) => new Map(outer).set(binder, [value]),
+        ) as Stream.Stream<A, E>,
+    ),
+    Match.orElse(() =>
+      Stream.die(fail("NOT_A_STREAM", "reference", "stream", "Expected a streaming function")),
+    ),
+  );
+export const Reference = Object.freeze({
+  run,
+  runUnknown,
+  runWithFrames,
+  runWithFramesUnknown,
+  stream,
+});
