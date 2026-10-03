@@ -224,11 +224,13 @@ mod remote_sql {
         entities: &'static [Entity],
         tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, Db>>>,
         failure: std::sync::Mutex<Option<String>>,
+        /// Live signals held until the transaction commits (LIVE-003): entity, id, changed fields.
+        signals: std::sync::Mutex<Vec<(String, String, Option<Vec<String>>)>>,
     }
     impl Sql {
         pub async fn begin(&'static self) -> Result<Session, String> {
             let tx = self.pool()?.begin_with("${DIALECT[dialect].begin}").await.map_err(failed)?;
-            Ok(Session { entities: self.entities, tx: tokio::sync::Mutex::new(Some(tx)), failure: std::sync::Mutex::new(None) })
+            Ok(Session { entities: self.entities, tx: tokio::sync::Mutex::new(Some(tx)), failure: std::sync::Mutex::new(None), signals: std::sync::Mutex::new(Vec::new()) })
         }
     }
     impl Session {
@@ -340,6 +342,15 @@ mod remote_sql {
                 self.run(sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id.to_string())).await.map(|_| ())
             }.await;
             result.map_err(|message| self.fail(message))
+        }
+        #[allow(dead_code)]
+        pub fn signal(&self, entity: &str, id: &str, fields: Option<Vec<String>>) {
+            self.signals.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((entity.to_string(), id.to_string(), fields));
+        }
+        /// The signals of a committed session; a rolled-back one drops them.
+        #[allow(dead_code)]
+        pub fn take_signals(&self) -> Vec<(String, String, Option<Vec<String>>)> {
+            std::mem::take(&mut *self.signals.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
         }
         pub async fn finish(&self, commit: bool) -> Result<(), String> {
             let Some(tx) = self.tx.lock().await.take() else { return Ok(()) };

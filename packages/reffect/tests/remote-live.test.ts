@@ -22,6 +22,8 @@ import {
 import type { NativeRemoteMutation } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { memoryRead, memoryTables } from "./fixtures/foldkit-remote-memory.ts";
+import { listen, pause } from "./fixtures/live-stream.ts";
+import type { Post } from "./fixtures/live-stream.ts";
 
 // LIVE-001..004: R mutations signal upstream's own liveHub in the reference and the native hub
 // port natively; live subscriptions on both servers receive the same Chunk lines.
@@ -138,37 +140,6 @@ const once: ReadonlyArray<readonly [string, string]> = [
   ],
 ];
 
-type Post = (body: string, signal?: AbortSignal) => Promise<Response>;
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-/**
- * Collects a streaming response's lines as they arrive. The official web handler answers with
- * the first chunk, so the response is not awaited before the scenario goes on.
- */
-const listen = (post: Post, body: string) => {
-  const abort = new AbortController();
-  const decoder = new TextDecoder();
-  let text = "";
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  const reading = (async () => {
-    try {
-      reader = (await post(body, abort.signal)).body!.getReader();
-      for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())
-        text += decoder.decode(chunk.value, { stream: true });
-    } catch {
-      // Aborted.
-    }
-  })();
-  return {
-    lines: () => text.split("\n").filter((line) => line.length > 0),
-    // Cancelling the body is the disconnect the official handler observes (STREAM-003). A
-    // stream that never sent a chunk has no Response to cancel yet, so the wait is bounded.
-    close: async () => {
-      await reader?.cancel();
-      abort.abort();
-      await Promise.race([reading, pause(500)]);
-    },
-  };
-};
 /** What one server answers: each subscription's lines and every mutation's response. */
 const exercise = async (post: Post) => {
   const a = listen(post, subscriptionA);

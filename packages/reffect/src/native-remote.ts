@@ -83,7 +83,8 @@ export interface NativeRemoteOptions {
   /**
    * Serve `FoldkitRemoteLive` from a native port of `RemoteServer.liveHub` (LIVE-002), which
    * mutations signal with `R.LiveHub`; the reference passes its hub to `handlers` as `live`.
-   * Without it, Live answers as `handlers` without `live`: an empty stream. Memory backend only.
+   * Without it, Live answers as `handlers` without `live`: an empty stream. On SQL, signals apply
+   * after the mutation commits and are dropped on rollback (LIVE-003).
    */
   readonly live?: boolean;
   /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
@@ -485,8 +486,6 @@ const compile = <Rpcs extends Rpc.Any>(
         for (const tag of group.requests.keys())
           if (tag !== READ && tag !== QUERY && tag !== MUTATE && tag !== LIVE)
             throw unsupported(`rpc.${tag}`, "Only the Remote contract's procedures are served");
-        if (options.live && options.sql)
-          throw unsupported("live", "Live signals after SQL commits are not supported yet");
         const authorize = Object.entries(options.authorize ?? {});
         if (authorize.length && !options.auth)
           throw unsupported("authorize", "authorize needs an authenticated principal (auth)");
@@ -590,9 +589,33 @@ const compile = <Rpcs extends Rpc.Any>(
     fn get<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::RowFuture<'a> { Box::pin(remote_sql::Session::get(self, entity, id)) }
     fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::write(self, entity, id, values)) }
     fn remove<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::remove(self, entity, id)) }
-    fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(remote_sql::Session::finish(self, commit)) }
-    fn failure(&self) -> Option<String> { remote_sql::Session::failure(self) }
+    fn failure(&self) -> Option<String> { remote_sql::Session::failure(self) }${
+      options.live
+        ? `
+    // Signals wait for the commit, so subscribers re-read committed rows (LIVE-003).
+    fn live<'a>(&'a self, entity: &'a str, id: &'a str, fields: Option<Vec<String>>) -> reffect_generated::StoreFuture<'a> {
+        remote_sql::Session::signal(self, entity, id, fields);
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> {
+        Box::pin(async move {
+            remote_sql::Session::finish(self, commit).await?;
+            if commit {
+                for (entity, id, fields) in self.take_signals() {
+                    match fields {
+                        Some(fields) => remote_hub().changed(&REMOTE_SQL, remote_authorize_for, &entity, &id, &fields).await?,
+                        None => remote_hub().deleted(&entity, &id),
+                    }
+                }
+            }
+            Ok(())
+        })
+    }`
+        : `
+    fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(remote_sql::Session::finish(self, commit)) }`
+    }
 }`,
+              live: options.live === true,
             },
             mutations,
             authorize,
@@ -630,13 +653,7 @@ const compile = <Rpcs extends Rpc.Any>(
 static REMOTE_MEMORY: std::sync::OnceLock<remote_engine::Memory> = std::sync::OnceLock::new();
 fn remote_memory() -> &'static remote_engine::Memory {
     REMOTE_MEMORY.get_or_init(|| remote_engine::Memory::new(vec![${names.join(", ")}], &serde_json::from_str(REMOTE_ROWS).expect("embedded rows are JSON"), &REMOTE_QUERIES))
-}${
-          options.live
-            ? `
-static REMOTE_HUB: std::sync::OnceLock<remote_engine::Hub> = std::sync::OnceLock::new();
-fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }`
-            : ""
-        }
+}
 ${definitions.map((definition) => definition.validator).join("\n")}
 static REMOTE_QUERIES: [remote_engine::QueryDef; ${definitions.length}] = [${definitions.map((definition) => definition.definition).join(", ")}];
 #[allow(dead_code)]
@@ -765,6 +782,12 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
           remoteEngineRuntime,
           ...(prepared.backend === "sql" ? [sqlRuntime(prepared.dialect)] : []),
           prepared.server,
+          ...(options.live
+            ? [
+                `static REMOTE_HUB: std::sync::OnceLock<remote_engine::Hub> = std::sync::OnceLock::new();
+fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }`,
+              ]
+            : []),
           authorizer,
           ...(group.requests.has(MUTATE) ? [mutate] : []),
         ],
