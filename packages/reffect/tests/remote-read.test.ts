@@ -7,11 +7,9 @@ import { Entity } from "foldkit-entity";
 import { Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
-import { CargoApi, NativeRemote, NativeRpc } from "../src/index.ts";
+import { CargoApi, NativeRemote } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
-import { memoryRead, memoryTables } from "./fixtures/foldkit-remote-memory.ts";
-import * as Wire from "./fixtures/foldkit-remote-wire.ts";
 
 // The published contract, served for Read only (Mutate/Query are steps 3–4, Live is NR-006).
 const ReadGroup = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteQuery", "FoldkitRemoteLive");
@@ -35,7 +33,6 @@ const rows = {
       a: { y: 1, x: 2 },
     },
     { id: "u2", name: "Grace", friend: "User:u1" },
-    { id: 3, name: "Numeric id" },
     ...crowd,
   ],
   Project: [
@@ -89,7 +86,11 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
     read([req("User", "u1", ["name", "nope"]), req("User", "zz", ["name"])]),
   ],
   ["index-like and object values", read([req("User", "u1", ["z", "2", "a", "name"])])],
-  ["numeric row id", read([req("User", "3", ["name"])])],
+  // Own keys only, on both sides since foldkit-remote-server 0.11.0 (foldkit-plus#143).
+  [
+    "Object.prototype member names",
+    read([req("User", "u1", ["constructor", "toString", "__proto__", "hasOwnProperty", "name"])]),
+  ],
   ["unknown entity", read([req("Ghost", "g", ["x"]), req("User", "u2", ["name"])])],
   ["no requests", read([])],
   [
@@ -241,12 +242,8 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const oracle = Effect.gen(function* () {
-  const tables = memoryTables(rows);
-  const server = RemoteServer.make<undefined>({
-    entities: entities.map((name) =>
-      RemoteServer.entity<undefined>({ name }, { read: memoryRead(tables, name) }),
-    ),
-  });
+  // The published memory backend, served over a real RpcServer (foldkit-plus#140).
+  const server = RemoteServer.memory({ domain, rows }).server;
   const handlers = RemoteServer.handlers(server, undefined);
   const http = yield* RpcServer.toHttpEffect(ReadGroup, { disableTracing: true }).pipe(
     Effect.provide([
@@ -255,23 +252,6 @@ const oracle = Effect.gen(function* () {
     ]),
   );
   return HttpEffect.toWebHandler(http);
-});
-
-test("the vendored wire fixture derives the same witnesses as the published contract", () => {
-  for (const tag of ["FoldkitRemoteRead", "FoldkitRemoteMutate", "FoldkitRemoteQuery"] as const) {
-    const published = RemoteRpc.requests.get(tag)!;
-    const vendored = Wire.RemoteRpc.requests.get(tag)!;
-    expect(NativeRpc.witness(vendored.payloadSchema), tag).toBe(
-      NativeRpc.witness(published.payloadSchema),
-    );
-    const result = { position: "result" } as const;
-    expect(NativeRpc.witness(vendored.successSchema, result)).toBe(
-      NativeRpc.witness(published.successSchema, result),
-    );
-    expect(NativeRpc.witness(vendored.errorSchema, result)).toBe(
-      NativeRpc.witness(published.errorSchema, result),
-    );
-  }
 });
 
 test("streaming Live is refused until milestones 6–7", async () => {

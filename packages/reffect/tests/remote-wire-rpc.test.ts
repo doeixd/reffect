@@ -1,16 +1,17 @@
 import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
-import { RpcClient, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
+import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, NativeRpc, R, Reference } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
-import * as Wire from "./fixtures/foldkit-remote-wire.ts";
+import * as Wire from "foldkit-remote";
 
 // The unchanged foldkit-remote contract, without Live (streaming waits for milestones 6–7, NR-006).
-const Group = RpcGroup.make(Wire.Read, Wire.Mutate, Wire.QueryRpc);
+const Group = Wire.RemoteRpc.omit("FoldkitRemoteLive");
+const ReadErrorSchema = Schema.Union([Wire.RemoteReadError, Wire.RemoteProtocolError]);
 
 // Requests are read through witnesses derived from the contract; results are built from R
 // witnesses that intern to the same contract witnesses.
@@ -242,7 +243,7 @@ const oracle = Effect.gen(function* () {
       Effect.mapError((value) => Schema.decodeUnknownSync(error)(value)),
     );
   const handlers = Group.toLayer({
-    FoldkitRemoteRead: (batch) => run(Reference.run(read, [batch]), Wire.Read.errorSchema),
+    FoldkitRemoteRead: (batch) => run(Reference.run(read, [batch]), ReadErrorSchema),
     FoldkitRemoteMutate: (request) =>
       run(Reference.run(mutate, [request]), Wire.RemoteMutationError),
     FoldkitRemoteQuery: (request) => run(Reference.run(query, [request]), Wire.RemoteQueryError),
@@ -258,7 +259,7 @@ test("Remote result witnesses built in R intern to the contract witnesses", () =
   expect(ReadBatchResult).toBe(NativeRpc.witness(Wire.ReadBatchResult, result));
   expect(MutationResult).toBe(NativeRpc.witness(Wire.MutationResult, result));
   expect(QueryResult).toBe(NativeRpc.witness(Wire.QueryResult, result));
-  expect(ReadErrors).toBe(NativeRpc.witness(Wire.Read.errorSchema, result));
+  expect(ReadErrors).toBe(NativeRpc.witness(ReadErrorSchema, result));
   expect(MutationError).toBe(NativeRpc.witness(Wire.RemoteMutationError, result));
   expect(QueryError).toBe(NativeRpc.witness(Wire.RemoteQueryError, result));
 });

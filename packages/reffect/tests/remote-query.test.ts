@@ -10,7 +10,6 @@ import { expect, test } from "vite-plus/test";
 import { CargoApi, NativeRemote } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
-import { memoryQueryRun, memoryRead, memoryTables } from "./fixtures/foldkit-remote-memory.ts";
 
 // The published contract, served for Read and Query (mutations are step 4, Live is NR-006).
 const Group = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteLive");
@@ -123,17 +122,8 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const oracle = Effect.gen(function* () {
-  const tables = memoryTables(rows);
-  const server = RemoteServer.make<undefined>({
-    entities: ["User", "Project"].map((name) =>
-      RemoteServer.entity<undefined>({ name }, { read: memoryRead(tables, name) }),
-    ),
-    queries: [
-      RemoteServer.query(ByStatus, memoryQueryRun(tables, ByStatus)),
-      RemoteServer.query(Named, memoryQueryRun(tables, Named)),
-      RemoteServer.query(Ranked, memoryQueryRun(tables, Ranked)),
-    ],
-  });
+  // The published memory backend, served over a real RpcServer (foldkit-plus#140).
+  const server = RemoteServer.memory({ domain, rows }).server;
   const handlers = RemoteServer.handlers(server, undefined);
   const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
     Effect.provide([

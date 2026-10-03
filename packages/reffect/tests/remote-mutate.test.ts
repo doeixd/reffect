@@ -4,7 +4,7 @@ import { ChildProcess } from "effect/process";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { Entity, Expr, Order, Relation } from "foldkit-entity";
-import { Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
+import { ConnectionChangeSchema, Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import {
@@ -16,11 +16,9 @@ import {
   Reference,
   RemoteStoreHost,
 } from "../src/index.ts";
-import type { NativeRemoteMutation } from "../src/index.ts";
+import type { NativeRemoteMutation, RemoteStoreApi } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
-import { memoryQueryRun, memoryRead, storeTables } from "./fixtures/foldkit-remote-memory.ts";
-import { ConnectionChangeSchema } from "./fixtures/foldkit-remote-wire.ts";
 
 // RM-001: R mutation sources over the store, against the published handler and MemoryStore.
 const Group = RemoteRpc.omit("FoldkitRemoteLive");
@@ -221,14 +219,12 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const oracle = Effect.gen(function* () {
-  const backend = RemoteServer.memory({ domain, rows });
-  const tables = storeTables(backend);
   // The R source over upstream's store, its outcome as upstream types it.
   const run =
-    (native: NativeRemoteMutation) =>
+    (store: RemoteStoreApi, native: NativeRemoteMutation) =>
     ({ input }: { readonly input: unknown }) =>
       Reference.run(native.fn, [input]).pipe(
-        Effect.provideService(RemoteStoreHost, backend),
+        Effect.provideService(RemoteStoreHost, store),
         Effect.catch((error) =>
           error instanceof CompileError
             ? Effect.die(error)
@@ -261,21 +257,17 @@ const oracle = Effect.gen(function* () {
           )(outcome),
         ),
       );
-  const server = RemoteServer.make<undefined>({
-    entities: ["User", "Project"].map((name) =>
-      RemoteServer.entity<undefined>({ name }, { read: memoryRead(tables, name) }),
-    ),
-    queries: [
-      RemoteServer.query(ByStatus, memoryQueryRun(tables, ByStatus)),
-      RemoteServer.query(Labeled, memoryQueryRun(tables, Labeled)),
+  // The published memory backend and its MemoryStore, served over a real RpcServer (#140).
+  const server = RemoteServer.memory({
+    domain,
+    rows,
+    mutations: (store) => [
+      RemoteServer.mutation(Rename, run(store, rename)),
+      RemoteServer.mutation(Create, run(store, create)),
+      RemoteServer.mutation(Archive, run(store, archive)),
+      RemoteServer.mutation(Ping, run(store, ping)),
     ],
-    mutations: [
-      RemoteServer.mutation(Rename, run(rename)),
-      RemoteServer.mutation(Create, run(create)),
-      RemoteServer.mutation(Archive, run(archive)),
-      RemoteServer.mutation(Ping, run(ping)),
-    ],
-  });
+  }).server;
   const handlers = RemoteServer.handlers(server, undefined);
   const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
     Effect.provide([

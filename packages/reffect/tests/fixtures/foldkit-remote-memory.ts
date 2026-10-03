@@ -1,8 +1,8 @@
 /**
  * The read of `foldkit-remote-server` 0.10.0's memory backend (`memory`'s entity sources,
- * `valueFor` and `pageOf` without `locate`), vendored because `RemoteServer.memory` exposes only
- * an in-process client layer and not its server definition (NR-013). Everything else the
- * differential harness runs is the published `RemoteServer.handlers`.
+ * `valueFor` and `pageOf` without `locate`). Since 0.11.0 `RemoteServer.memory(...).server` is
+ * served directly (foldkit-plus#140); this copy remains only for the authorization test, because
+ * `memory` takes no per-entity `authorize`. Everything else is the published server.
  *
  * MIT License, Copyright (c) 2026 Patrick Glenn (https://github.com/doeixd/foldkit-plus,
  * packages/remote-server/src/index.ts). Permission is hereby granted, free of charge, to any
@@ -116,12 +116,6 @@ export interface MemoryTables {
     entity: string,
   ) => ReadonlyMap<string, Readonly<Record<string, unknown>>> | undefined;
 }
-/** A live view of upstream `MemoryStore` rows, so reads see its writes (RS-002). */
-export const storeTables = (store: {
-  readonly rows: (entity: string) => ReadonlyArray<Readonly<Record<string, unknown>>>;
-}): MemoryTables => ({
-  get: (entity) => new Map(store.rows(entity).map((row) => [String(row.id), row])),
-});
 
 /** The memory backend's tables: keyed by `String(row.id)`, rows copied, in insertion order. */
 export const memoryTables = (

@@ -9,20 +9,10 @@ import { HttpRouter, HttpServer } from "effect/http";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { RemoteServer } from "foldkit-remote-server";
-import {
-  memoryQueryRun,
-  memoryRead,
-  memoryTables,
-} from "../tests/fixtures/foldkit-remote-memory.ts";
-import { ByStatus, Group, rows } from "./remote-bench-domain.ts";
+import { Group, domain, rows } from "./remote-bench-domain.ts";
 
-const tables = memoryTables(rows);
-const server = RemoteServer.make<undefined>({
-  entities: ["User", "Project"].map((name) =>
-    RemoteServer.entity<undefined>({ name }, { read: memoryRead(tables, name) }),
-  ),
-  queries: [RemoteServer.query(ByStatus, memoryQueryRun(tables, ByStatus))],
-});
+// The published memory backend's server definition (foldkit-plus#140).
+const server = RemoteServer.memory({ domain, rows }).server;
 const handlers = RemoteServer.handlers(server, undefined);
 
 const Ready = Layer.effectDiscard(
