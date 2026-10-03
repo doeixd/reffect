@@ -184,3 +184,4 @@ export { StaticLayer, LayerIR } from "./layer.ts";
 export { ScopedFile, FileIR } from "./file-resource.ts";
 export { ReferenceFiles } from "./reference-files.ts";
 export { FileLease } from "./file-model.ts";
+export { StreamIR } from "./stream-ir.ts";

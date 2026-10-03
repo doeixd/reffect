@@ -1,4 +1,5 @@
 import { SchemaIR } from "./schema-json.ts";
+import { StreamAuthoring } from "./stream.ts";
 import { RemoteStoreIR } from "./remote-store.ts";
 import { Source } from "./source.ts";
 import { flow } from "./flow.ts";
@@ -127,6 +128,7 @@ export const R = Object.freeze({
   optional,
   optionalKey,
   Array: ArrayModule,
+  Stream: StreamAuthoring,
   Record: RecordModule,
   Option: OptionIR,
   Result: ResultIR,

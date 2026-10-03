@@ -1,4 +1,6 @@
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
+import { streamExpressions, streamSources } from "./stream-ir.ts";
+import type { StreamIR } from "./stream-ir.ts";
 import { SourceMaps } from "./source-artifact.ts";
 import type { SourceMap } from "./source-artifact.ts";
 import type { GeneratedFiles } from "./cargo.ts";
@@ -658,6 +660,17 @@ const derive = Effect.fn("Compile.derive")(function* (
         Succeed: (n) => {
           effectRefs.add(SyncEffects.Succeed);
           walk(n.value);
+        },
+        StreamRunCollect: (n) => {
+          effectRefs.add(SyncEffects.StreamRunCollect);
+          // Every stage's elements and chunks are native values (STREAM-004).
+          const stages = (stream: StreamIR<unknown, unknown>): void => {
+            types.add(stream.item);
+            types.add(stream.error);
+            streamSources(stream.node).forEach(stages);
+          };
+          stages(n.stream);
+          streamExpressions(n.stream).forEach(({ expr }) => walk(expr));
         },
         Fail: (n) => {
           effectRefs.add(SyncEffects.Fail);

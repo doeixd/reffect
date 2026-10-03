@@ -10,6 +10,7 @@ import {
   Random,
   Schema,
   Schedule,
+  Stream,
 } from "effect";
 import { checkedMilliseconds } from "./duration.ts";
 import type { Scope } from "effect";
@@ -43,6 +44,7 @@ import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
 import { LaunchHost } from "./launch-host.ts";
 import { RemoteStoreHost } from "./remote-store-host.ts";
+import { StreamIR, mapStreamExpressions, streamExpressions, toEffectStream } from "./stream-ir.ts";
 import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { analyzeScopes } from "./scope-analysis.ts";
 export { maxScopeFinalizers } from "./scope-analysis.ts";
@@ -58,6 +60,7 @@ export const SyncEffects = Object.freeze({
   CatchAll: SemanticRef.effect("reffect/effect/catch-all@1"),
   ForEach: SemanticRef.effect("reffect/effect/for-each@1"),
   Succeed: SemanticRef.effect("reffect/effect/succeed@1"),
+  StreamRunCollect: SemanticRef.effect("reffect/stream/run-collect@1"),
   Fail: SemanticRef.effect("reffect/effect/fail@1"),
   Map: SemanticRef.effect("reffect/effect/map@1"),
   FlatMap: SemanticRef.effect("reffect/effect/flatMap@1"),
@@ -202,6 +205,8 @@ export type ComputationNode =
       readonly body: Computation<unknown, unknown>;
       readonly finalizer: Computation<void, never>;
     }
+  /** `Stream.runCollect` over a finite pipeline (STREAM-005); output is the Array of elements. */
+  | { readonly _tag: "StreamRunCollect"; readonly stream: StreamIR<unknown, unknown> }
   | { readonly _tag: "Succeed"; readonly value: Expr<unknown> }
   | { readonly _tag: "Fail"; readonly error: Expr<unknown> }
   | {
@@ -363,6 +368,10 @@ export const substituteComputation = (
         ClockReadMillis: () => self,
         RandomDraw: () => self,
         FileSize: () => self,
+        StreamRunCollect: (n) => {
+          const stream = mapStreamExpressions(n.stream, substituting);
+          return stream === n.stream ? self : rebuild({ _tag: "StreamRunCollect", stream });
+        },
         Succeed: (n) => {
           const value = substituting(n.value);
           return value === n.value ? self : rebuild({ _tag: "Succeed", value });
@@ -501,6 +510,12 @@ export const remoteStore = (
   values: Expr<unknown> | undefined,
 ): Computation<void, never> =>
   Computation.make(UnitType, NeverType, { _tag: "RemoteStore", op, entity, id, values });
+/** `Stream.runCollect(stream)`; `output` is the Array witness of the stream's elements. */
+export const streamRunCollect = (
+  stream: StreamIR<unknown, unknown>,
+  output: IRType<unknown>,
+): Computation<unknown, unknown> =>
+  Computation.make(output, stream.error, { _tag: "StreamRunCollect", stream });
 /** The stored row, wire-shaped JSON (RS-007); `output` is the `UndefinedOr<Unknown>` witness. */
 export const remoteStoreGet = (
   entity: string,
@@ -679,6 +694,8 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         Retry: () => true,
         Ensuring: () => true,
         AcquireUseRelease: () => true,
+        // A finite pure pipeline runs to completion without suspending.
+        StreamRunCollect: () => false,
         Succeed: () => false,
         Fail: () => false,
         Log: () => false,
@@ -1119,6 +1136,15 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           walk(n.body, bindings, `${at}.body`);
           walk(n.finalizer, bindings, `${at}.finalizer`);
         },
+        StreamRunCollect: (n) => {
+          if (!IRType.same(c.error, n.stream.error))
+            add(at, "Stream.runCollect fails with the stream's error witness");
+          for (const { expr, binder, path } of streamExpressions(n.stream)) {
+            const nested = new Map(bindings);
+            if (binder) nested.set(binder.symbol, [binder.type]);
+            issues.push(...checkExpression(expr, nested, `${at}.${path}`));
+          }
+        },
         Succeed: (n) => {
           if (!IRType.same(c.output, n.value.type) || !IRType.same(c.error, NeverType))
             add(at, "Succeed channel witnesses are inconsistent");
@@ -1415,6 +1441,12 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
             evaluate(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
             ),
+          StreamRunCollect: (n) =>
+            Stream.runCollect(
+              toEffectStream(n.stream, bindings, evaluateExpression, (outer, binder, value) =>
+                new Map(outer).set(binder, [value]),
+              ),
+            ).pipe(Effect.map((elements) => [...elements])),
           Succeed: (n) => expression(n.value).pipe(Effect.flatMap(Effect.succeed)),
           Fail: (n) => expression(n.error).pipe(Effect.flatMap(Effect.fail)),
           Map: (n) =>
@@ -1619,6 +1651,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.finalizer, `${path}.finalizer`);
         },
+        StreamRunCollect: () => {},
         Succeed: () => {},
         Fail: () => {},
         Map: (n) => {
@@ -1888,6 +1921,21 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             evaluate(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
               Effect.mapError((failure) => outward(failure, "ensuring")),
+            ),
+          // A stream's typed failure leaves the consumer with one frame there, as natively.
+          StreamRunCollect: (n) =>
+            Stream.runCollect(
+              toEffectStream(n.stream, bindings, evaluateExpression, (outer, binder, value) =>
+                new Map(outer).set(binder, [value]),
+              ),
+            ).pipe(
+              Effect.map((elements) => [...elements]),
+              Effect.mapError((error): FramedFailure => ({
+                _tag: "Domain",
+                error,
+                frames: [frame(path, "fail")],
+                omitted: 0,
+              })),
             ),
           Succeed: (n) =>
             expression(n.value, `${path}.value`).pipe(

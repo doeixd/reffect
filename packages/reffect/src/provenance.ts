@@ -1,4 +1,5 @@
 import { Match } from "effect";
+import { streamExpressions } from "./stream-ir.ts";
 import { Expr, Fn, CompileError, fail } from "./kernel.ts";
 import type { Diagnostic, Program } from "./kernel.ts";
 import { Computation, EffectFn } from "./effect-ir.ts";
@@ -113,6 +114,8 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       Ensuring: (n) => [edge("body", n.body), edge("finalizer", n.finalizer)],
       Span: (n) => [edge("body", n.body)],
       Succeed: (n) => [edge("value", n.value)],
+      StreamRunCollect: (n) =>
+        streamExpressions(n.stream).map(({ expr, path }) => edge(path, expr)),
       Fail: (n) => [edge("error", n.error)],
       Map: (n) => [edge("source", n.source), edge("body", n.body)],
       FlatMap: (n) => [edge("source", n.source), edge("body", n.body)],

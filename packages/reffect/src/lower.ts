@@ -30,8 +30,11 @@ import type {
 } from "./runtime-service-model.ts";
 import { runtimeServicesPrelude } from "./runtime-services.ts";
 import type { RuntimeServiceUsage } from "./runtime-services.ts";
-import { rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
-import type { Expr, OperationRef, Program, RecordQuery } from "./kernel.ts";
+import { ArrayType, rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
+import { streamExpressions } from "./stream-ir.ts";
+import type { StreamIR } from "./stream-ir.ts";
+import { Expr } from "./kernel.ts";
+import type { OperationRef, Program, RecordQuery } from "./kernel.ts";
 import { hostFunctionOf } from "./schema-json.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
@@ -165,6 +168,33 @@ interface Parameter {
   readonly name: string;
   readonly type: IRType<unknown>;
 }
+/**
+ * A stream pipeline ready for emission: value blocks render in the consumer's scope, and a
+ * per-element operator is a block computing its Array operation over the chunk bound to `chunk`.
+ */
+type StreamPlan =
+  | { readonly _tag: "FromArray"; readonly values: RustBlock; readonly item: IRType<unknown> }
+  | { readonly _tag: "Range"; readonly min: RustBlock; readonly max: RustBlock }
+  | { readonly _tag: "Empty" }
+  | { readonly _tag: "Fail"; readonly error: RustBlock }
+  | {
+      readonly _tag: "Transform";
+      readonly filter: boolean;
+      readonly source: StreamPlan;
+      readonly chunk: string;
+      readonly input: IRType<unknown>;
+      readonly output: IRType<unknown>;
+      readonly transform: RustBlock;
+    }
+  | { readonly _tag: "Take"; readonly source: StreamPlan; readonly count: number }
+  | {
+      readonly _tag: "Rechunk";
+      readonly source: StreamPlan;
+      readonly size: number;
+      readonly item: IRType<unknown>;
+    }
+  | { readonly _tag: "Concat"; readonly first: StreamPlan; readonly second: StreamPlan }
+  | { readonly _tag: "Chunks"; readonly source: StreamPlan; readonly item: IRType<unknown> };
 type HelperBody =
   | { readonly _tag: "ClockReadMillis" }
   | { readonly _tag: "RandomDraw" }
@@ -270,6 +300,13 @@ type HelperBody =
       readonly values: RustBlock | undefined;
     }
   | { readonly _tag: "Ensuring"; readonly body: number; readonly finalizer: number }
+  /** `Stream.runCollect`, fused into one chunk loop (STREAM-004). */
+  | {
+      readonly _tag: "StreamCollect";
+      readonly plan: StreamPlan;
+      readonly item: IRType<unknown>;
+      readonly error: IRType<unknown>;
+    }
   | { readonly _tag: "Pure"; readonly block: RustBlock }
   | { readonly _tag: "Succeed"; readonly block: RustBlock }
   | { readonly _tag: "Fail"; readonly block: RustBlock }
@@ -566,6 +603,8 @@ export function lowerFunctions(
               Repeat: (n) => computation(n.body),
               Retry: (n) => computation(n.body),
               Succeed: (n) => expression(n.value),
+              StreamRunCollect: (n) =>
+                streamExpressions(n.stream).forEach(({ expr }) => expression(expr)),
               Fail: (n) => expression(n.error),
               Log: (n) => n.attributes.forEach(([, value]) => expression(value)),
               Sleep: () => {},
@@ -1008,6 +1047,89 @@ export function lowerFunctions(
               _tag: "Fail",
               block: block(n.error, scope, `${path}.error`),
             }),
+            StreamRunCollect: (n): HelperBody => {
+              // A per-element operator runs as its Array operation over a bound chunk.
+              const transform = (
+                filter: boolean,
+                m: {
+                  readonly source: StreamIR<unknown, unknown>;
+                  readonly item: symbol;
+                  readonly body: Expr<unknown>;
+                },
+                output: IRType<unknown>,
+                at: string,
+              ): StreamPlan => {
+                const input = ArrayType.of(m.source.item);
+                const chunk = Symbol("reffect/stream/chunk");
+                const chunkScope = caseScope(scope, chunk, input);
+                const loop = Expr.arrayLoop(
+                  filter ? { _tag: "Filter" } : { _tag: "Map" },
+                  filter ? input : ArrayType.of(output),
+                  Expr.parameter(input, chunk, 0),
+                  m.item,
+                  Symbol("reffect/stream/index"),
+                  m.body,
+                );
+                return {
+                  _tag: "Transform",
+                  filter,
+                  source: plan(m.source, `${at}.source`),
+                  chunk: chunkScope.input[chunkScope.input.length - 1].name,
+                  input,
+                  output: filter ? input : ArrayType.of(output),
+                  transform: block(loop, chunkScope, `${at}.body`),
+                };
+              };
+              const plan = (stream: StreamIR<unknown, unknown>, at: string): StreamPlan =>
+                Match.value(stream.node).pipe(
+                  Match.tagsExhaustive({
+                    FromArray: (m): StreamPlan => ({
+                      _tag: "FromArray",
+                      values: block(m.values, scope, `${at}.values`),
+                      item: stream.item,
+                    }),
+                    Range: (m): StreamPlan => ({
+                      _tag: "Range",
+                      min: block(m.min, scope, `${at}.min`),
+                      max: block(m.max, scope, `${at}.max`),
+                    }),
+                    Empty: (): StreamPlan => ({ _tag: "Empty" }),
+                    Fail: (m): StreamPlan => ({
+                      _tag: "Fail",
+                      error: block(m.error, scope, `${at}.error`),
+                    }),
+                    Map: (m) => transform(false, m, stream.item, at),
+                    Filter: (m) => transform(true, m, stream.item, at),
+                    Take: (m): StreamPlan => ({
+                      _tag: "Take",
+                      source: plan(m.source, `${at}.source`),
+                      count: m.count,
+                    }),
+                    Rechunk: (m): StreamPlan => ({
+                      _tag: "Rechunk",
+                      source: plan(m.source, `${at}.source`),
+                      size: m.size,
+                      item: stream.item,
+                    }),
+                    Concat: (m): StreamPlan => ({
+                      _tag: "Concat",
+                      first: plan(m.first, `${at}.first`),
+                      second: plan(m.second, `${at}.second`),
+                    }),
+                    Chunks: (m): StreamPlan => ({
+                      _tag: "Chunks",
+                      source: plan(m.source, `${at}.source`),
+                      item: m.source.item,
+                    }),
+                  }),
+                );
+              return {
+                _tag: "StreamCollect",
+                plan: plan(n.stream, `${path}.stream`),
+                item: n.stream.item,
+                error: n.stream.error,
+              };
+            },
             Map: (n): HelperBody => ({
               _tag: "Map",
               source: effectHelper(n.source, scope, error, `${path}.source`),
@@ -1104,6 +1226,7 @@ export function lowerFunctions(
             files: scope.fileInputs,
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
+                StreamCollect: () => false,
                 TaskGroup: () => true,
                 Scope: () => true,
                 AddFinalizer: () => true,
@@ -1481,6 +1604,7 @@ export const emitFunctions = (
         const child = (...children: number[]) => Math.max(0, ...children.map(depth));
         const result = Match.value(f.helpers[index].body).pipe(
           Match.tagsExhaustive({
+            StreamCollect: () => 0,
             TaskGroup: (n) => child(...n.children),
             Scope: (n) => 1 + depth(n.body),
             AddFinalizer: () => 0,
@@ -2387,6 +2511,163 @@ export const emitFunctions = (
               renderBlock(n.block),
               ") }",
             ]),
+          StreamCollect: (n) => {
+            // Push-fused chunk loop: each stage hands its non-empty chunks to the next (STREAM-004).
+            let fresh = 0;
+            const name = (prefix: string) => `${prefix}_${fresh++}`;
+            const root = name("'stream");
+            const vec = (type: IRType<unknown>) => `Vec<${typeName(type)}>`;
+            const emit = (
+              plan: StreamPlan,
+              next: (chunk: string) => MappedFragment,
+            ): MappedFragment =>
+              Match.value(plan).pipe(
+                Match.tagsExhaustive({
+                  FromArray: (m) => {
+                    const chunk = name("chunk");
+                    return joinFragments([
+                      `{ let ${chunk}: ${vec(m.item)} = (`,
+                      renderBlock(m.values),
+                      `).to_vec(); if !${chunk}.is_empty() { `,
+                      next(chunk),
+                      " } }",
+                    ]);
+                  },
+                  // Arr.range: chunks of 4096; the last has max(1, floor(remaining)) elements.
+                  Range: (m) => {
+                    const [min, max, start, remaining, count, chunk] = [
+                      "min",
+                      "max",
+                      "start",
+                      "remaining",
+                      "count",
+                      "chunk",
+                    ].map(name);
+                    return joinFragments([
+                      `{ let ${min}: f64 = `,
+                      renderBlock(m.min),
+                      `; let ${max}: f64 = `,
+                      renderBlock(m.max),
+                      `; if !(${min} > ${max}) { let mut ${start} = ${min}; loop { let ${remaining} = ${max} - ${start} + 1.0; if ${remaining} > 4096.0 { let ${chunk}: Vec<f64> = (0..4096usize).map(|i| ${start} + i as f64).collect(); ${start} += 4096.0; `,
+                      next(chunk),
+                      ` } else { let ${count}: usize = if ${remaining} >= 2.0 { ${remaining}.floor() as usize } else { 1 }; let ${chunk}: Vec<f64> = (0..${count}).map(|i| ${start} + i as f64).collect(); `,
+                      next(chunk),
+                      " break; } } } }",
+                    ]);
+                  },
+                  Empty: () => textFragment(""),
+                  Fail: (m) =>
+                    joinFragments([
+                      "{ failure = Some(",
+                      renderBlock(m.error),
+                      `); break ${root}; }`,
+                    ]),
+                  Transform: (m) => {
+                    const out = name("chunk");
+                    return emit(m.source, (chunk) =>
+                      joinFragments([
+                        // The element callback also reads its chunk, so the loop borrows it.
+                        `{ let ${m.chunk}: &${vec(arrayItem(m.input)!)} = &${chunk}; let ${out}: ${vec(arrayItem(m.output)!)} = `,
+                        renderBlock(m.transform),
+                        "; ",
+                        m.filter ? `if !${out}.is_empty() { ` : "",
+                        next(out),
+                        m.filter ? " } }" : " }",
+                      ]),
+                    );
+                  },
+                  // Stream.take: Infinity takes everything; 0 never starts the source.
+                  Take: (m) => {
+                    if (m.count === 0) return textFragment("");
+                    if (m.count === Infinity) return emit(m.source, next);
+                    const [remaining, label, taken] = ["remaining", "'take", "taken"].map(name);
+                    return joinFragments([
+                      `{ let mut ${remaining}: usize = ${m.count}; ${label}: { `,
+                      emit(m.source, (chunk) =>
+                        joinFragments([
+                          `{ let mut ${taken} = ${chunk}; if ${taken}.len() > ${remaining} { ${taken}.truncate(${remaining}); } ${remaining} -= ${taken}.len(); `,
+                          next(taken),
+                          ` if ${remaining} == 0 { break ${label}; } }`,
+                        ]),
+                      ),
+                      " } }",
+                    ]);
+                  },
+                  // Stream.rechunk: an exact chunk passes through; the remainder flushes only at
+                  // the end, so a failure drops it as Effect does.
+                  Rechunk: (m) => {
+                    const [buffer, incoming, element, full] = [
+                      "buffer",
+                      "incoming",
+                      "element",
+                      "full",
+                    ].map(name);
+                    return joinFragments([
+                      `{ let mut ${buffer}: ${vec(m.item)} = Vec::new(); `,
+                      emit(m.source, (chunk) =>
+                        joinFragments([
+                          `{ let ${incoming} = ${chunk}; if ${buffer}.is_empty() && ${incoming}.len() == ${m.size} { `,
+                          next(incoming),
+                          ` } else if ${buffer}.len() + ${incoming}.len() < ${m.size} { ${buffer}.extend(${incoming}); } else { for ${element} in ${incoming} { ${buffer}.push(${element}); if ${buffer}.len() == ${m.size} { let ${full} = std::mem::take(&mut ${buffer}); `,
+                          next(full),
+                          " } } } }",
+                        ]),
+                      ),
+                      ` if !${buffer}.is_empty() { let ${full} = std::mem::take(&mut ${buffer}); `,
+                      next(full),
+                      " } }",
+                    ]);
+                  },
+                  Concat: (m) => joinFragments([emit(m.first, next), emit(m.second, next)]),
+                  Chunks: (m) =>
+                    emit(m.source, (chunk) => {
+                      const wrapped = name("chunk");
+                      return joinFragments([
+                        `{ let ${wrapped}: Vec<${vec(m.item)}> = vec![${chunk}]; `,
+                        next(wrapped),
+                        " }",
+                      ]);
+                    }),
+                }),
+              );
+            const fails = (plan: StreamPlan): boolean =>
+              Match.value(plan).pipe(
+                Match.tagsExhaustive({
+                  FromArray: () => false,
+                  Range: () => false,
+                  Empty: () => false,
+                  Fail: () => true,
+                  Transform: (m) => fails(m.source),
+                  Take: (m) => fails(m.source),
+                  Rechunk: (m) => fails(m.source),
+                  Concat: (m) => fails(m.first) || fails(m.second),
+                  Chunks: (m) => fails(m.source),
+                }),
+              );
+            const failing = fails(n.plan);
+            const out = name("out");
+            return joinFragments([
+              `{ let mut ${out}: ${vec(n.item)} = Vec::new(); `,
+              failing ? `let mut failure: Option<${typeName(n.error)}> = None; ` : "",
+              `#[allow(unused_labels)] ${root}: { `,
+              emit(n.plan, (chunk) => textFragment(`${out}.extend(${chunk});`)),
+              " } ",
+              failing
+                ? joinFragments([
+                    "if let Some(error) = failure { ",
+                    mapFragment(helper.origin, undefined, textFragment("Err")),
+                    captureFrames ? "((" : "(",
+                    f.asynchronous ? "AsyncError::Fail(error)" : "error",
+                    captureFrames
+                      ? `, ${Rs.pathCall(rsSegments("FrameTrail"), Rs.ident("new"), [frameOf(helper, "fail")]).text}))`
+                      : ")",
+                    " } else { ",
+                  ])
+                : "",
+              `Ok(${out})`,
+              failing ? " } }" : " }",
+            ]);
+          },
           Fail: (n) =>
             joinFragments([
               "{ ",
