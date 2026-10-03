@@ -25,7 +25,7 @@ import {
 import { refContent, refType } from "./ref-model.ts";
 import { rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
 import type { Expr, OperationRef, Program, RecordQuery } from "./kernel.ts";
-import { jsonEncodedWitness, jsonEncoderName } from "./schema-json.ts";
+import { hostFunctionOf } from "./schema-json.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -613,14 +613,14 @@ export function lowerFunctions(
               },
               Apply: (n): RustExpr => {
                 const method = selected.get(n.operation.ref)!.method;
-                const encoded = jsonEncodedWitness(n.operation);
+                const host = hostFunctionOf(n.operation);
                 return Object.freeze({
                   _tag: "Call",
                   method,
                   args: Object.freeze(
                     n.args.map((arg, i) => expression(arg, `${path}.args[${i}]`)),
                   ),
-                  ...(method === "json" && encoded ? { encoder: jsonEncoderName(encoded) } : {}),
+                  ...(method === "json" && host ? { encoder: host } : {}),
                 });
               },
               Match: (n): RustExpr =>

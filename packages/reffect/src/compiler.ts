@@ -8,7 +8,7 @@ import { Foldkit } from "./foldkit.ts";
 import { EffectFn, SyncEffects, AsyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import { containsRef } from "./ref-model.ts";
-import { jsonEncodedWitness } from "./schema-json.ts";
+import { hostFunctionOf } from "./schema-json.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -119,10 +119,10 @@ const implementation = (
     method,
     rationale: `Verified primitive Rust ${method} implements ${operation.id} without coercion`,
   });
-const hostEncoders = new WeakMap<object, Implementation>();
-/** The host-supplied encoder for one witness (RM-006), selected only where JsonEncoders is. */
-const jsonImplementation = (operation: AnyOperation): Implementation => {
-  const known = hostEncoders.get(operation);
+const hostImplementations = new WeakMap<object, Implementation>();
+/** A host-supplied function (RM-006), selected only for targets with the JsonEncoders capability. */
+const hostImplementation = (operation: AnyOperation): Implementation => {
+  const known = hostImplementations.get(operation);
   if (known) return known;
   const created: Implementation = Object.freeze({
     id: `rust/${operation.id}`,
@@ -133,9 +133,9 @@ const jsonImplementation = (operation: AnyOperation): Implementation => {
     crates: Object.freeze([]),
     method: "json",
     rationale:
-      "The NativeRpc host's codec, verified against Schema.toCodecJson, encodes the witness",
+      "A NativeRpc host function, verified against the reference, implements the operation",
   });
-  hostEncoders.set(operation, created);
+  hostImplementations.set(operation, created);
   return created;
 };
 const implementations = Object.freeze([
@@ -652,9 +652,9 @@ const plan = Effect.fn("Compile.plan")(function* (
   for (const op of derived.operations) {
     const rejected: { id: string; reason: string }[] = [];
     let selected: Implementation | undefined;
-    const encoded = jsonEncodedWitness(op);
+    const encoded = hostFunctionOf(op);
     const candidates = encoded
-      ? [jsonImplementation(op)]
+      ? [hostImplementation(op)]
       : target.implementations.filter((i) => i.operation.id === op.id);
     for (const candidate of candidates) {
       const reason =

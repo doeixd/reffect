@@ -103,6 +103,21 @@ Checked against `foldkit-remote` 0.10.0 `index.d.mts`: `Remote.patch(entity, id,
 
   Explicit assertions confirm each path is reached, not only that failures agree.
 
+## Connection changes as implemented (RM-005, 2026-10-03)
+
+- **Identity.** Checked against `foldkit-remote` 0.10.0: `Query.ref(input).identity` is `` `${name}�${stableStringify(Schema.encodeSync(Input)(input))}` ``. `stableStringify` sorts object keys (JS `sort`, UTF-16 code units), drops `undefined` values and writes primitives as `JSON.stringify` does.
+  - `NativeRemote.connection(Query, input)` builds the identity from `R.String.concat` (new, mirroring Effect's `String.concat`) and a host `StableStringify` operation over the input's JSON encoding (RM-006).
+  - Inputs must be portable (finite numbers, no `optional`), where the JSON codec equals `encodeSync(Input)`.
+- **Native `stable_stringify`.**
+  - It lives in the library's `reffect_json` module, beside the encoders (host functions now generalize RM-006's encoders).
+  - Keys are sorted by `encode_utf16`; strings are escaped by `serde_json` (the same escape set as `JSON.stringify`); doubles are written with `ryu-js`, `0` for `±0` and `null` for non-finite values.
+  - NativeRpc adds `ryu-js` only when the operation is reachable.
+- **Changes.** `NativeRemote.prepend/append/remove(connection, ref)` mirror `RemoteServer.prepend/append/remove`, building `{ _tag, connection, position?, edge: { entity, id, key } }` with `key = entity:id`. Outcomes gain optional `connections`; the result defaults them to `[]`.
+- **Validation.**
+  - A unit test compares the reference identity with upstream's own `Query.ref(input).identity` for strings with quotes, controls, astral and line-separator characters, booleans, and numbers (`0.1`, `1e21`, `-0`, `5e-324`, large integers).
+  - [remote-mutate.test.ts](../../packages/reffect/tests/remote-mutate.test.ts) compares native Insert/Remove changes (string and boolean inputs, escaping and key order) with the published handler over the wire.
+  - Native number formatting in identities is not exercised over the wire yet: query-serving still refuses checked (finite) numeric inputs (NR-015). Its `ryu-js` path is the same one the read engine uses for messages.
+
 ## Order of work
 
 1. RM-002 store with read/query sharing it (no behaviour change). **Done (phase A).**

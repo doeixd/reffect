@@ -87,7 +87,7 @@ Milestone 4 on the memory backend: the full `RemoteRpc` contract compiles with o
 Remaining, in order, driven by `examples/todo-remote` (native Remote server plus a stock Foldkit client):
 
 1. The example itself: a `Todo` entity, a list query, add/toggle/delete mutations. It decides which of the next items it needs first.
-2. Connection changes in mutation outcomes (RM-005), so created rows join the lists that show them.
+2. Done: connection changes in mutation outcomes (RM-005), so created rows join the lists that show them.
 3. `RemoteStore.get` with typed decoding, so mutations can read the rows they change.
 4. Authorization as compiled R functions (RM-004), after researching how the principal reaches the native Remote server.
 5. Declare milestone 4 accepted within the memory profile; then milestone 5 compiles Query to SQL and gives the store an SQLx implementation (RS-003).

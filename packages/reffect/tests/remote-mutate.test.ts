@@ -11,6 +11,7 @@ import {
   CargoApi,
   CompileError,
   NativeRemote,
+  NativeRpc,
   R,
   Reference,
   RemoteStoreHost,
@@ -19,6 +20,7 @@ import type { NativeRemoteMutation } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
 import { memoryQueryRun, memoryRead, storeTables } from "./fixtures/foldkit-remote-memory.ts";
+import { ConnectionChangeSchema } from "./fixtures/foldkit-remote-wire.ts";
 
 // RM-001: R mutation sources over the store, against the published handler and MemoryStore.
 const Group = RemoteRpc.omit("FoldkitRemoteLive");
@@ -43,6 +45,15 @@ const ByStatus = Query.define("ByStatus", { status: Schema.String }, ({ input })
     Query.orderBy(Order.asc(Project.fields.name)),
   ),
 );
+const Labeled = Query.define(
+  "Labeled",
+  { label: Schema.String, open: Schema.Boolean },
+  ({ input }) => Query.from(Project).pipe(Query.where(Expr.eq(Project.fields.name, input.label))),
+);
+const Ping = Mutation.make("Ping", {
+  Input: { label: Schema.String, open: Schema.Boolean },
+  Output: {},
+});
 const Rename = Mutation.make("Rename", {
   Input: { id: Schema.String, name: Schema.String },
   Output: { id: Schema.String },
@@ -54,8 +65,8 @@ const Create = Mutation.make("Create", {
 const Archive = Mutation.make("Archive", { Input: { id: Schema.String }, Output: {} });
 const domain = Remote.define({
   entities: [User, Project],
-  queries: [ByStatus],
-  mutations: [Rename, Create, Archive],
+  queries: [ByStatus, Labeled],
+  mutations: [Rename, Create, Archive, Ping],
 });
 const rows = {
   User: [
@@ -90,6 +101,32 @@ const rename = NativeRemote.mutation(Rename, (input) => {
     ),
   );
 });
+const projectRef = (id: ReturnType<typeof text>) =>
+  NativeRemote.Ref.make({ entity: text("Project"), id });
+const drafts = NativeRemote.connection(
+  ByStatus,
+  R.Struct({ status: R.String }).make({ status: text("draft") }),
+);
+// Connection identities from a decoded input: key order, booleans and escaping (RM-005).
+const ping = NativeRemote.mutation(Ping, (input) => {
+  const labeled = NativeRemote.connection(Labeled, input);
+  return R.Effect.succeed(
+    NativeRemote.outcome(Ping).make({
+      output: R.Struct({}).make({}),
+      connections: R.Array.make(
+        NativeRemote.prepend(labeled, projectRef(text("p1"))),
+        NativeRemote.append(labeled, projectRef(text("p2"))),
+        NativeRemote.remove(
+          NativeRemote.connection(
+            ByStatus,
+            R.Struct({ status: R.String }).make({ status: R.Struct.get(input, "label") }),
+          ),
+          projectRef(text("p6")),
+        ),
+      ),
+    }),
+  );
+});
 const create = NativeRemote.mutation(Create, (input) => {
   const id = R.Struct.get(input, "id");
   const values = Created.make({
@@ -103,6 +140,7 @@ const create = NativeRemote.mutation(Create, (input) => {
       NativeRemote.outcome(Create).make({
         output: R.Struct({ id: R.String }).make({ id }),
         entities: R.Array.make(NativeRemote.patch(Project, id, values)),
+        connections: R.Array.make(NativeRemote.append(drafts, projectRef(id))),
       }),
     ),
   );
@@ -113,12 +151,13 @@ const archive = NativeRemote.mutation(Archive, (input) => {
     R.Effect.succeed(
       NativeRemote.outcome(Archive).make({
         output: R.Struct({}).make({}),
-        deleted: R.Array.make(NativeRemote.Ref.make({ entity: text("Project"), id })),
+        connections: R.Array.make(NativeRemote.remove(drafts, projectRef(id))),
+        deleted: R.Array.make(projectRef(id)),
       }),
     ),
   );
 });
-const mutations: readonly NativeRemoteMutation[] = [rename, create, archive];
+const mutations: readonly NativeRemoteMutation[] = [rename, create, archive, ping];
 
 const request = (tag: string, payload: unknown) =>
   JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] });
@@ -170,6 +209,8 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
   ],
   ["drafts after recreate", byStatus("draft")],
   ["unknown mutation", mutate("Nope", {})],
+  ["connection identities", mutate("Ping", { open: true, label: 'é "q"  😀  </' })],
+  ["connection identity, empty label", mutate("Ping", { label: "", open: false })],
   ["input of the wrong kind", mutate("Rename", { id: 5, name: "x" })],
   ["input missing a key", mutate("Rename", { id: "p1" })],
   ["input not an object", mutate("Archive", null)],
@@ -182,11 +223,10 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
 const oracle = Effect.gen(function* () {
   const backend = RemoteServer.memory({ domain, rows });
   const tables = storeTables(backend);
-  const source = <D extends typeof Rename | typeof Create | typeof Archive>(
-    definition: D,
-    native: NativeRemoteMutation,
-  ) =>
-    RemoteServer.mutation(definition, ({ input }) =>
+  // The R source over upstream's store, its outcome as upstream types it.
+  const run =
+    (native: NativeRemoteMutation) =>
+    ({ input }: { readonly input: unknown }) =>
       Reference.run(native.fn, [input]).pipe(
         Effect.provideService(RemoteStoreHost, backend),
         Effect.catch((error) =>
@@ -213,20 +253,28 @@ const oracle = Effect.gen(function* () {
                   }),
                 ),
               ),
+              connections: Schema.optionalKey(Schema.Array(ConnectionChangeSchema)),
               deleted: Schema.optionalKey(
                 Schema.Array(Schema.Struct({ entity: Schema.String, id: Schema.String })),
               ),
             }),
           )(outcome),
         ),
-      ),
-    );
+      );
   const server = RemoteServer.make<undefined>({
     entities: ["User", "Project"].map((name) =>
       RemoteServer.entity<undefined>({ name }, { read: memoryRead(tables, name) }),
     ),
-    queries: [RemoteServer.query(ByStatus, memoryQueryRun(tables, ByStatus))],
-    mutations: [source(Rename, rename), source(Create, create), source(Archive, archive)],
+    queries: [
+      RemoteServer.query(ByStatus, memoryQueryRun(tables, ByStatus)),
+      RemoteServer.query(Labeled, memoryQueryRun(tables, Labeled)),
+    ],
+    mutations: [
+      RemoteServer.mutation(Rename, run(rename)),
+      RemoteServer.mutation(Create, run(create)),
+      RemoteServer.mutation(Archive, run(archive)),
+      RemoteServer.mutation(Ping, run(ping)),
+    ],
   });
   const handlers = RemoteServer.handlers(server, undefined);
   const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
@@ -240,6 +288,27 @@ const oracle = Effect.gen(function* () {
     ]),
   );
   return HttpEffect.toWebHandler(http);
+});
+
+test("connection identities equal upstream Query.ref(input).identity", async () => {
+  const Mixed = Query.define(
+    "Mixed",
+    { b: Schema.Finite, a: Schema.String, c: Schema.Boolean },
+    ({ input }) => Query.from(Project).pipe(Query.where(Expr.eq(Project.fields.name, input.a))),
+  );
+  const identity = R.fn([NativeRpc.witness(Mixed.Input)], R.String, (input) =>
+    NativeRemote.connection(Mixed, input),
+  );
+  for (const input of [
+    { b: 0.1, a: "", c: true },
+    { b: 1e21, a: 'é "q"  😀  </', c: false },
+    { b: -0, a: " ", c: true },
+    { b: 5e-324, a: "10", c: false },
+    { b: 123456789012, a: "z", c: true },
+  ])
+    expect(await Effect.runPromise(Reference.run(identity, [input]))).toBe(
+      Mixed.ref(input).identity,
+    );
 });
 
 test("mutation schemas outside the portable subset are refused", () => {
@@ -343,6 +412,10 @@ test(
           expect(answer("read archived")).not.toContain("Europa");
           expect(answer("drafts after recreate")).toMatch(/p6.*p9.*p5/);
           expect(answer("unknown mutation")).toContain("Unknown mutation: Nope");
+          expect(answer("create")).toContain(
+            '"connections":[{"_tag":"Insert","connection":"ByStatus',
+          );
+          expect(answer("connection identities")).toContain('"position":"prepend"');
           for (const label of [
             "input of the wrong kind",
             "input missing a key",

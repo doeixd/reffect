@@ -1,7 +1,7 @@
 import { Cause, Effect, Exit, Match, Option, Schema, SchemaAST, SchemaIssue } from "effect";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
-import { jsonEncodedWitness, jsonEncoderName } from "./schema-json.ts";
+import { StableStringify, jsonEncodedWitness, jsonEncoderName } from "./schema-json.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
@@ -957,13 +957,58 @@ const contractSchemaOf = (type: IRType<unknown>, path: string): Schema.Top => {
     );
   throw unsupported(path, "No JSON codec for this witness");
 };
-/** The library's `reffect_json` module: one encoder per witness the program encodes. */
-const jsonModule = (plan: Plan): string => {
+// `foldkit-remote`'s stableStringify; ryu-js writes doubles as JS's Number#toString does.
+const stableStringifyRust = String.raw`
+/// stableStringify over JSON (RM-005): keys sorted by UTF-16 code units, JS number text.
+pub fn stable_stringify(value: &Value) -> String {
+    let mut out = String::new();
+    stable_into(value, &mut out);
+    out
+}
+fn stable_into(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        Value::Number(number) => {
+            let x = number.as_f64().unwrap_or(f64::NAN);
+            if !x.is_finite() { out.push_str("null") }
+            else if x == 0.0 { out.push('0') }
+            else { out.push_str(ryu_js::Buffer::new().format_finite(x)) }
+        }
+        Value::String(text) => out.push_str(&serde_json::to_string(text).expect("strings serialize")),
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 { out.push(','); }
+                stable_into(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(object) => {
+            let mut keys: Vec<&String> = object.keys().collect();
+            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            out.push('{');
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 { out.push(','); }
+                out.push_str(&serde_json::to_string(key).expect("strings serialize"));
+                out.push(':');
+                stable_into(&object[key.as_str()], out);
+            }
+            out.push('}');
+        }
+    }
+}
+`;
+/** The library's `reffect_json` module: the host functions the program reaches. */
+const jsonModule = (plan: Plan): { readonly text: string; readonly stable: boolean } => {
   const witnesses = plan.analysis.operations.flatMap((operation) => {
     const witness = jsonEncodedWitness(operation);
     return witness ? [witness] : [];
   });
-  if (witnesses.length === 0) return "";
+  const stable = plan.analysis.operations.some(
+    (operation) => operation.ref === StableStringify.ref,
+  );
+  if (witnesses.length === 0 && !stable) return { text: "", stable };
   const registry: Registry = new Map();
   const encoders = witnesses.map((type) => {
     const path = `Schema.toCodecJson(${type.id})`;
@@ -972,11 +1017,14 @@ const jsonModule = (plan: Plan): string => {
       throw unsupported(path, "No verified JSON codec maps back onto this witness");
     return { name: jsonEncoderName(type), type, codec: kind };
   });
-  return `
+  return {
+    text: `
 #[allow(non_snake_case)]
 pub mod reffect_json {
-${compositeCodecs(Array.from(registry.values()), encoders)}}
-`;
+${compositeCodecs(Array.from(registry.values()), encoders)}${stable ? stableStringifyRust : ""}}
+`,
+    stable,
+  };
 };
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
@@ -1522,6 +1570,7 @@ export const compileServer = (
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("Schema.toCodecJson", String(cause)),
     });
+    const ryuJs = encoders.stable;
     const hasLogs = core.explanation.analysis.effects.includes(SyncEffects.Log);
     const usesStore = core.explanation.analysis.effects.includes(AsyncEffects.RemoteStore);
     if (usesStore && !runtime?.store)
@@ -1644,8 +1693,11 @@ ${
           ) +
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
-          (runtime?.dependencies ?? []).join(""),
-        "src/lib.rs": core.files["src/lib.rs"] + encoders,
+          (runtime?.dependencies ?? []).join("") +
+          (ryuJs && !runtime?.crates.includes("ryu-js@1.0.3")
+            ? 'ryu-js = { version = "=1.0.3", default-features = false }\n'
+            : ""),
+        "src/lib.rs": core.files["src/lib.rs"] + encoders.text,
         "src/main.rs": main,
       }),
       runtime: Object.freeze({
@@ -1655,6 +1707,7 @@ ${
             prepared.auth ? ["subtle@2.6.1"] : [],
             prepared.asynchronous ? ["http-body@1.0.1"] : [],
             runtime?.crates ?? [],
+            ryuJs && !runtime?.crates.includes("ryu-js@1.0.3") ? ["ryu-js@1.0.3"] : [],
           ),
         ),
         handlerProfile: prepared.asynchronous ? "suspended-scalars" : "synchronous-scalars",

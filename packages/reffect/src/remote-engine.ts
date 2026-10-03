@@ -621,13 +621,14 @@ mod remote_engine {
   String.raw`'s result from the encoded ` +
   "`MutationOutcome`" +
   String.raw`: absent lists
-    /// default to empty, and connection changes wait for RM-005.
+    /// default to empty.
     pub fn mutation_result(mut outcome: Value) -> Value {
         let mut take = |key: &str| outcome.as_object_mut().and_then(|object| object.remove(key));
         let output = take("output").unwrap_or(Value::Null);
         let entities = take("entities").unwrap_or_else(|| json!([]));
+        let connections = take("connections").unwrap_or_else(|| json!([]));
         let deleted = take("deleted").unwrap_or_else(|| json!([]));
-        json!({ "output": output, "entities": entities, "connections": [], "deleted": deleted })
+        json!({ "output": output, "entities": entities, "connections": connections, "deleted": deleted })
     }
     fn boundary(boundary: &Boundary) -> Value {
         match boundary {

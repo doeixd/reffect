@@ -12,6 +12,7 @@ import {
   NeverType,
   Operation,
   SemanticRef,
+  StringType,
   UnknownType,
   fail,
   type AnyOperation,
@@ -20,6 +21,8 @@ import {
 type EncodeJson = Operation<readonly [IRType<unknown>], unknown>;
 const byWitness = new Map<string, EncodeJson>();
 const witnesses = new WeakMap<object, IRType<unknown>>();
+// Operations a host implements as `crate::reffect_json::<name>(&args...)`.
+const hostFunctions = new WeakMap<object, string>();
 
 const encodeOperation = (witness: IRType<unknown>): EncodeJson => {
   const known = byWitness.get(witness.id);
@@ -44,8 +47,37 @@ const encodeOperation = (witness: IRType<unknown>): EncodeJson => {
   ).pipe(Operation.withCapabilities([Capabilities.Json, Capabilities.JsonEncoders]));
   byWitness.set(witness.id, operation);
   witnesses.set(operation, witness);
+  hostFunctions.set(operation, jsonEncoderName(witness));
   return operation;
 };
+
+/** The host function implementing an operation, for operations a NativeRpc host supplies. */
+export const hostFunctionOf = (operation: AnyOperation): string | undefined =>
+  hostFunctions.get(operation);
+
+/**
+ * `foldkit-remote`'s `stableStringify` (0.10.0): object keys sorted by UTF-16 code units,
+ * `undefined` values dropped, primitives as `JSON.stringify` writes them. Connection identities
+ * are built from it (RM-005).
+ */
+export const stableStringify = (value: unknown): string => {
+  if (value === undefined) return "null";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const record = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(",")}}`;
+};
+export const StableStringify = Operation.make(
+  SemanticRef.operation("reffect/json.stable-stringify@1"),
+  [UnknownType] as const,
+  StringType,
+  stableStringify,
+).pipe(Operation.withCapabilities([Capabilities.Json, Capabilities.JsonEncoders]));
+hostFunctions.set(StableStringify, "stable_stringify");
 
 /** The witness an encode operation encodes, or undefined for any other operation. */
 export const jsonEncodedWitness = (operation: AnyOperation): IRType<unknown> | undefined =>

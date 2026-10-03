@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Connection changes (RM-005) and String.concat
+
+- `R.String.concat` mirrors Effect's `String.concat`. [string-profile.test.ts](packages/reffect/tests/string-profile.test.ts) passes 3/3, with native output equal to the reference in debug and release under both frame policies.
+- `NativeRemote.connection(Query, input)` equals upstream `Query.ref(input).identity`.
+  - It is built from `concat` and a host `stableStringify`, emitted beside the JSON encoders with `ryu-js` number text.
+  - Host functions generalize RM-006's encoder mechanism.
+- `NativeRemote.prepend/append/remove` and outcome `connections` mirror upstream. [remote-mutate.test.ts](packages/reffect/tests/remote-mutate.test.ts) passes 3/3: identity parity against upstream, and Insert/Remove changes over the wire (25 steps). Details are in [remote-mutations.md](docs/research/remote-mutations.md#connection-changes-as-implemented-rm-005-2026-10-03).
+
 ## 2026-10-03 — Native Remote mutations over a writable store
 
 - **Store effects (RS-001):** `R.RemoteStore.write(entity, id, values)` and `remove(entity, id)` are effect nodes.
