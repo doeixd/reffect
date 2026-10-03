@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — Remote sync and Deferred scheduling gate
+
+- Rebased the fallible task kernel onto upstream through bfb07c0, preserving Remote Live, SSR rendering/hydration/page serving and the separately owned core plan. Resolved the lowerer overlap by retaining RemoteStore live/Get branches and the fallible Repeat projection. Independent integration review found no blocker; NativeRpc's explicit fallible-group refusal covers its live/streaming/page consumers. The synced kernel is published as 2679649.
+- Merged validation: 9/9 tests across fallible concurrency/host refusal, Remote Live and HTML page serving (158.17s); strict TypeScript, formatting/lint and workspace builds pass. Post-commit kernel cost/admission/host tests also pass 5/5 (57.29s), retaining the disabled-frame allocation guarantees. The later remote changes were documentation only.
+- Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
+- Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
+
 ## 2026-10-03 — M9-1: pages read the request and carry Flags
 
 - **Change.** Native pages may read their request URL, resolved against a configured origin. `R.Html.renderToString` takes Flags and writes upstream's payload with a JS-exact JSON writer. Flags holding Numbers are refused.

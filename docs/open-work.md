@@ -35,7 +35,7 @@ Everything still to be done, collected from the design and research records on 2
 ## Cross-cutting gates
 
 - Compound fallible All/Race RPC wire causes, interruptor identities/reason annotations, and retained earlier-channel errors: NativeRpc refuses this new profile pending stock-client conformance ([fallible concurrency](research/fallible-concurrency.md#host-integration-decision)).
-- Lexical Deferred/Semaphore ownership, statically bounded waiter storage, and independent waiter cancellation before coordination admission ([lexical coordination](research/lexical-coordination.md)).
+- Lexical Deferred/Semaphore ownership, statically bounded waiter storage, independent waiter cancellation, and registration-ordered semantic continuation turns (including reentrant completion) before coordination admission ([lexical coordination](research/lexical-coordination.md)).
 
 These block many items below.
 
