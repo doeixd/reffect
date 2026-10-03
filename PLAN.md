@@ -80,7 +80,7 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Next: finish milestone 4 against a real workload, then milestone 5 (SQLx).**
+**Next: the milestone 4 browser run, then milestone 5 (SQLx).**
 
 Milestone 4 on the memory backend: the full `RemoteRpc` contract compiles with official-server codec parity (the wire features are recorded in the [native RemoteServer design](docs/research/native-remote.md)). Read, Query (paging, keyset cursors, `select`) and Mutate match `foldkit-remote-server` over the wire. A stock `Remote.clientLayer` reads, queries and mutates through the native server with upstream's results ([remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts)). Mutations are R sources over a writable store, with typed values encoded as `Schema.toCodecJson` does ([remote-mutations.md](docs/research/remote-mutations.md)). Measured costs are in [remote-bench.md](docs/research/remote-bench.md).
 
@@ -90,7 +90,8 @@ Remaining, in order, driven by `examples/todo-remote` (native Remote server plus
 2. Done: connection changes in mutation outcomes (RM-005), so created rows join the lists that show them.
 3. `RemoteStore.get` with typed decoding, so mutations can read the rows they change.
 4. Done: authentication by the bearer adapter, field authorization as compiled R functions, and the principal in mutation sources (RM-004).
-5. Declare milestone 4 accepted within the memory profile; then milestone 5 compiles Query to SQL and gives the store an SQLx implementation (RS-003).
+5. Milestone 4 is accepted in Node within the memory profile ([status](docs/research/native-remote.md#milestone-4-status-2026-10-03)). A real-browser run of a stock Foldkit app is the one outstanding acceptance item.
+6. Next: milestone 5 research. It compiles Query to SQL with Drizzle parity and gives the store an SQLx implementation (RS-003), including transactions and an isolation policy for mutations (RS-004).
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.
 

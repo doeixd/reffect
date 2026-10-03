@@ -172,3 +172,25 @@ It also **mutates**:
 - A fresh read sees the write.
 
 All of it equals upstream's memory layer, whose sources run the same R functions over its own `MemoryStore`. Authorization, connection changes and Live remain.
+
+## Milestone 4 status (2026-10-03)
+
+Checked against [implementation milestones §20](../implementation-milestones.md#20-milestone-4--native-foldkit-remoteserver), within the memory profile and the [divergence register](../native-divergences.md):
+
+| §20 scope                                                         | Evidence                                                                                                                                                                    |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Requirement validation, limits                                    | [remote-wire-rpc](../../packages/reffect/tests/remote-wire-rpc.test.ts), [remote-read](../../packages/reffect/tests/remote-read.test.ts)                                    |
+| Field grouping, ID deduplication, nested traversal, normalization | [remote-read](../../packages/reffect/tests/remote-read.test.ts) (28 scenarios)                                                                                              |
+| Field authorization (§21, compiled R functions)                   | [remote-auth](../../packages/reffect/tests/remote-auth.test.ts)                                                                                                             |
+| Query execution                                                   | [remote-query](../../packages/reffect/tests/remote-query.test.ts)                                                                                                           |
+| Mutations, connection changes, compiled sources                   | [remote-mutate](../../packages/reffect/tests/remote-mutate.test.ts)                                                                                                         |
+| Stock `Remote.clientLayer` with no native-specific client code    | [remote-acceptance](../../packages/reffect/tests/remote-acceptance.test.ts), [todo-remote example](../../examples/todo-remote/README.md): reads, queries, mutations in Node |
+
+**Accepted in Node, with one item outstanding:** a real browser running a stock Foldkit app against the native server. That needs CORS or a same-origin host, and has not been demonstrated yet.
+
+Out of milestone 4 by design:
+
+- `Live` (milestones 6–7);
+- SQL storage (milestone 5);
+- `RemoteStore.get`, which no workload has needed yet;
+- arbitrary principal types, beyond the `u64` bearer profile.
