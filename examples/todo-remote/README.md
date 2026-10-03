@@ -16,6 +16,7 @@ delete t1            [x] Compile it natively   [ ] Ship it
 add without a title  A todo needs a title
 reload               [x] Compile it natively   [ ] Ship it
 watched live         #1 t2 {"done":true}   #2 t1 deleted
+second screen        [x] Compile it natively
 native screens equal upstream's memory backend
 ```
 
@@ -48,7 +49,8 @@ Open the printed address. New todos get IDs from a per-tab session prefix passed
   2. `Remote.mutateInto` add, toggle and delete;
   3. a refused add;
   4. a fresh reload;
-  5. meanwhile, a second screen watches t1 and t2 through `RemoteClient.live`, the call Remote's live entries make, and shows the events it received.
+  5. meanwhile, the raw events of a `RemoteClient.live` call watching t1 and t2;
+  6. a second screen that reads t2 through `Data.live` and never refetches. Remote's own live Subscription entry (`Data.subscriptions`) subscribes, and the Messages it emits are folded with `Data.reduce`, so the screen shows the toggle.
 
   The same session runs against upstream's `RemoteServer.memory` with `RemoteServer.liveHub`. Its sources are the same R functions, run by the reference interpreter over its own `MemoryStore` and hub. The example fails unless every screen is equal.
 

@@ -44,6 +44,14 @@ const show = (screen: ReturnType<typeof list.read>): string =>
     Match.orElse((other) => `(${other._tag})`),
   );
 
+const watched = Data.live(Entity.select(Todo, { title: true, done: true }), "t2");
+/** One todo as a screen shows it. */
+const showTodo = (screen: ReturnType<typeof watched.read>): string =>
+  Match.value(screen).pipe(
+    Match.tag("Ready", ({ value }) => `${value.done ? "[x]" : "[ ]"} ${value.title}`),
+    Match.orElse((other) => `(${other._tag})`),
+  );
+
 /** A live event as a second screen watching the todos would apply it. */
 const showLive = (event: LiveEvent): string =>
   Match.value(event).pipe(
@@ -71,6 +79,16 @@ const session = Effect.gen(function* () {
       after: 0,
     })
     .pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped);
+  // A second screen reads t2 through `Data.live`: Remote's own live Subscription entry
+  // subscribes, and the Messages it emits fold into that screen's Model (LR-3).
+  const entries = Data.subscriptions({
+    watching: Data.active("Watching", () => Option.some(watched)),
+  });
+  const liveEntry = entries["watching.live"];
+  const other = yield* Data.prefetch(initial, watched);
+  const received = yield* liveEntry
+    .dependenciesToStream(liveEntry.modelToDependencies(other))
+    .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped);
   yield* Effect.sleep("200 millis");
   let model = yield* Data.prefetch(initial, list);
   screens.push(["start", show(list.read(model))]);
@@ -86,6 +104,13 @@ const session = Effect.gen(function* () {
   screens.push(["reload", show(list.read(yield* Data.prefetch(initial, list)))]);
   const live = yield* Fiber.join(watching).pipe(Effect.timeout("10 seconds"));
   screens.push(["watched live", [...live].map(showLive).join("   ")]);
+  const messages = yield* Fiber.join(received).pipe(Effect.timeout("10 seconds"));
+  screens.push([
+    "second screen",
+    showTodo(
+      watched.read([...messages].reduce((model, message) => Data.reduce(model, message), other)),
+    ),
+  ]);
   return screens;
 }).pipe(Effect.scoped);
 
