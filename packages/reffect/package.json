@@ -19,6 +19,9 @@
   "devDependencies": {
     "@types/node": "26.1.1",
     "drizzle-orm": "1.0.0-rc.4",
+    "foldkit": "0.165.0",
+    "foldkit-remote": "0.10.0",
+    "foldkit-remote-server": "0.10.0",
     "vite-plus": "0.3.2"
   }
 }

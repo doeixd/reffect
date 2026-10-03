@@ -12,7 +12,7 @@
   - 27 wire scenarios match `RemoteServer.handlers` with memory sources, raw key order included; a stock `RpcClient` reads through the native engine.
   - Mutations that drop window grouping or `ryu-js` number text fail.
   - NativeRpc, remote-wire, TaggedError, schema, auth and server-layer suites pass, as does `vp check`.
-- **Pending:** foldkit-plus 0.13.0 (`foldkit-remote`/`-server` 0.10.0, `foldkit-entity` 0.6.0) is committed upstream but not yet on npm. The test ran against packages packed from the local release commit `16af1778` and installed without saving. The devDependencies (`foldkit-remote`, `foldkit-remote-server`, `foldkit` 0.165.0) will be declared once they are published.
+- foldkit-plus 0.13.0 was published during this work. `foldkit-remote`/`foldkit-remote-server` 0.10.0 and `foldkit` 0.165.0 are now exact devDependencies, and `remote-read.test.ts` passes 3/3 against the npm packages, with a single Effect 4.0.0 copy. `foldkit-entity` 0.6.0 is nested under them; reffect's own pin stays 0.4.0 until the Query adapter recheck.
 
 ## 2026-10-02 — Remote wire contract compiles natively
 
