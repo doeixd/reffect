@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-03 — Milestone 7 assessment and improvement plan
+
+- [remote-live.md § Improvement plan](docs/research/remote-live.md#improvement-plan-2026-10-03) assesses the design.
+  - It is correct within the tested envelope, except LR-1 and LR-2.
+  - The SQL oracle checks self-consistency with LIVE-003, not equivalence with upstream.
+  - The surface is elegant, but the internals are expedient.
+  - It is coherent with the Remote ports, but ported runtimes are opaque to planning.
+- **Proposed decisions LIVE-007..014:**
+  - failed re-reads as cursor gaps;
+  - an after-commit hook and a separate LiveHub service;
+  - one stream forwarder;
+  - a semantic runtime registry with upstream version guards;
+  - typed signals;
+  - runtime Rust as `.rs` files;
+  - randomized hub conformance;
+  - a written boundary between R policy and ported protocol engines.
+- **Next:** the LR-1..4 fixes.
+
 ## 2026-10-03 — Milestone 7 review
 
 - [remote-live.md § Review](docs/research/remote-live.md#review-2026-10-03) records the review of the milestone 7 commits (`900322b`..`9ecd4ad`).

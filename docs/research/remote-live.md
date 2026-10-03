@@ -1,6 +1,6 @@
 # Native Remote Live (milestone 7)
 
-Status: **steps 1–3 delivered (2026-10-03)**, with open review findings: native unsubscription is not yet evidenced (LR-2), SQL post-commit signal failures misreport mutations (LR-1), and live rendering in the `todo-remote` browser app is missing. See [Review](#review-2026-10-03). It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
+Status: **steps 1–3 delivered (2026-10-03)**, with open review findings: native unsubscription is not yet evidenced (LR-2), SQL post-commit signal failures misreport mutations (LR-1), and live rendering in the `todo-remote` browser app is missing. See [Review](#review-2026-10-03) and the [improvement plan](#improvement-plan-2026-10-03). It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
 
 Sources, read 2026-10-03 from the installed packages (foldkit-plus 0.14.0):
 
@@ -181,6 +181,64 @@ This reviews commits `900322b`..`9ecd4ad` against this record and the code. Noth
 - **Exact comparison.** Raw NDJSON bytes, including key order and chunk boundaries, are compared across windowed aliases, two principals, rollback, and Postgres.
 - **Cursor order.** The cursor increment and the queue send happen under one lock, so queue order equals cursor order even when two mutations re-read concurrently on SQL.
 - **Shared checks.** Limits and authorization reuse the Read engine's `check_ids_per_entity`, `check_pages_per_relation` and `allowed_fields`, so there is no second implementation to drift.
+
+## Improvement plan (2026-10-03)
+
+Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
+
+- R's only `Ref` is lexical and sequential ([ref-module](ref-module.md)).
+- Queue and PubSub are not admitted; [coordination-modules](coordination-modules.md) is a proposal.
+- The compiler has no registry of ported runtimes; the plan explanation lists only crates.
+
+### Assessment
+
+- **Correct:** within the tested envelope. The exceptions are LR-1 and LR-2. The SQL oracle, which is upstream's hub called after a test-harness commit, checks self-consistency with LIVE-003; it does not check equivalence with any upstream behaviour.
+- **Elegant:** the surface is. `R.LiveHub` mirrors `hub.changed`/`deleted`, and the reference runs upstream's own hub. Several internals are expedient instead:
+  - two stream forwarders with different disconnect detection;
+  - signals carried by the `RemoteStore` node and session;
+  - long Rust snippets in TypeScript template strings.
+- **Coherent:** with the Remote milestones (NR-001, a semantic port checked differentially), yes. With the project's core principle, that the compiler knows what each operation means and why an implementation was chosen, less so. The hub, Read engine and SQL session are opaque to planning and explanation, and each milestone adds another such runtime with no stated path back into the compiler.
+
+### Proposed decisions
+
+- **LIVE-007: a failed re-read becomes a cursor gap.**
+  - A post-commit (or inline) re-read failure in `changed` increments the affected subscribers' cursors without emitting. Foldkit's `classifyLive` then reports a `gap`, so the stock client resyncs or refetches.
+  - The mutation's answer is unchanged and the remaining signals still apply.
+  - Upstream's `changed` would instead fail the mutation, so this is a [native divergence](../native-divergences.md) to record when implemented. It supersedes the LR-1 fix "log and drop".
+- **LIVE-008: a general after-commit hook and a separate LiveHub service.**
+  - The store session's `live()` gives way to `after_commit(action)`, which runs immediately on memory and is queued on SQL (run after `COMMIT`, dropped on `ROLLBACK`).
+  - Live signals get their own IR node and `LiveHub` requirement (LR-5). NativeRemote provides the service and schedules signals through the hook.
+  - LIVE-003 then reads "effects visible outside the transaction happen after commit". The same rule will serve outbox writes, cache invalidation and PubSub publishing.
+- **LIVE-009: one stream forwarder.** One `rpc-runtime` function owns chunking (`takeAll`), the 16-message buffer and disconnect detection (`out.closed()` plus cancellation). Both R stream procedures (the `StreamEmit` sink) and runtime-served streams feed it. The Live dispatch arm becomes one call, and the forwarder emits the "unsubscribed" record that LR-2's test asserts.
+- **LIVE-010: register ported runtimes as semantic runtime implementations.**
+  - Each port is an entry with its `id` (e.g. `foldkit-remote-server/liveHub`), the pinned upstream version, the effects/procedures it serves, its conformance tests and its crates.
+  - Plan explanations name it ("Live served by the ported liveHub runtime of foldkit-remote-server 0.11.0").
+  - Compilation checks the installed upstream version against the pin and refuses or warns on mismatch. The 0.14.0 upgrade changed behaviour that tests had pinned, with no such guard.
+  - This applies to the Remote engine, Query paging, the hub, the SQL session and the RPC runtime.
+- **LIVE-011: typed, domain-checked signals.**
+  - `R.LiveHub.changed({ entity: Project, id }, ["name"])` accepts the entity descriptor and constrains field names to its fields, which gives editor completion and build-time typos (LR-6).
+  - Upstream's string form remains, checked against the domain by NativeRemote.
+  - Literal field lists lower to a static slice (LR-11).
+- **LIVE-012: runtime Rust as Rust files.**
+  - Static runtime code (about 1,900 lines across `remote-engine.ts`, `sql-runtime.ts`, `rpc-runtime.ts` and `async-runtime.ts`) moves to `packages/reffect/runtime/*.rs`, loaded as raw text.
+  - Generated tables and dispatch arms stay in typed emission ([rust-emission](../rust-emission.md)).
+  - `rustfmt`, `clippy` and Rust unit tests (hub grouping, aliases, cursors) can then run on it.
+- **LIVE-013: randomized hub conformance.**
+  - A small stdin/stdout JSON driver exposes the native hub: subscribe, changed, deleted, drain events.
+  - fast-check scenarios compare it with upstream's in-process `liveHub` over the same rows and `authorize` rules.
+  - The HTTP tests then cover only transport (framing, disconnect, authentication, NDJSON) and wait for expected line counts instead of fixed pauses (LR-10, LR-12).
+- **LIVE-014: the boundary between R and ported runtimes.**
+  - R authors policy: mutation sources, `authorize`, signals, and later SSR views.
+  - Semantic runtimes provide protocol engines, ported from pinned upstream versions and checked differentially.
+  - The compiler plans, explains and verifies both (LIVE-010).
+  - Long term, once server-lifetime Ref, Queue and `Stream.fromQueue` are admitted (behind the deferred cross-fiber ownership gate), the hub is re-expressed in R. The port then stays as a specialization the planner may select because conformance tests show it matches.
+
+### Order
+
+1. **Defects.** LR-1 via LIVE-007, LR-2 via LIVE-009's "unsubscribed" record (or an interim record), LR-3 and LR-4.
+2. **Structure.** LIVE-009 (one forwarder), then LIVE-008 (after-commit hook, LiveHub node).
+3. **Explanation and API.** LIVE-010 (registry and version guard), LIVE-011 (typed signals) and LIVE-014 (written boundary).
+4. **Evidence and code layout.** LIVE-013 (randomized hub conformance), then LIVE-012 (Rust files), before milestone 8 adds another runtime.
 
 ## Open questions
 
