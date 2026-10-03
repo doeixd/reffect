@@ -1,6 +1,6 @@
 # Native Remote Live (milestone 7)
 
-Status: **step 1 delivered (2026-10-03)** except authorization coverage; steps 2–3 open. It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
+Status: **step 1 delivered (2026-10-03)**; steps 2–3 open. It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
 
 Sources, read 2026-10-03 from the installed packages (foldkit-plus 0.14.0):
 
@@ -112,7 +112,8 @@ With neither a per-entity source nor a hub, the merge is empty and the stream co
      - [remote-live.test.ts](../../packages/reffect/tests/remote-live.test.ts) compares raw NDJSON `Chunk` lines and mutation answers with `RemoteServer.handlers(..., { live: liveHub })`. It covers the cases above except `authorize`. Upstream's three events from one `changed` arrive in one chunk on both servers, which settles the `mergeAll` question.
      - [remote-mutate.test.ts](../../packages/reffect/tests/remote-mutate.test.ts) now serves Live without a hub under JSON.
    - **Test harness note.** The official web handler resolves a streaming Response only at its first chunk, so the test starts subscriptions without awaiting them, and disconnects by cancelling the body.
-   - **Open:** a differential test of `authorize` with two principals on an authenticated Live (LIVE-006).
+   - **Authorization (LIVE-006).** A second scenario serves `RemoteRpc.middleware(Authentication)` with an R `authorize`. The official side binds `handlers` to each request's principal. Two admin subscriptions and two member subscriptions see different fields of one change, a member watching only `email` receives nothing, and an unauthenticated Live fails with `Unauthorized`; the outcomes are equal on both servers.
+   - **Harness note.** A subscription that never receives a chunk has no official Response to cancel, so closing waits a bounded time.
 
 2. **SQL backend (LIVE-003).** Signals apply after commit and are dropped on rollback, checked against SQLite and Postgres.
 3. **Stock client.** A Foldkit `Data.live` subscription receives native changes (the milestone's "stock subscriptions" acceptance), then `examples/todo-remote` gains live updates.

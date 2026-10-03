@@ -6,7 +6,8 @@
 - **Validation.**
   - `vp test tests/remote-live.test.ts` passed. It compares raw Chunk lines with upstream's own hub across selected, unselected and missing fields, windowed aliases (three events in one chunk), deletes, resume cursors (`after`), disconnect, the protocol check and the id limit.
   - `remote-mutate` and `remote-read` pass. `stream-rpc`, `stream-interrupt`, `stream`, `remote-auth`, `remote-sql-mutate`, `remote-wire-rpc` and `remote-acceptance` pass. `tsc`, `vp lint` and `vp fmt --check` are clean.
-- **Open:** an `authorize` differential test (LIVE-006), SQL after-commit signals and the stock-client step ([remote-live](docs/research/remote-live.md#order-of-work-and-acceptance)).
+- **Authorization (LIVE-006).** A second scenario re-authorizes each subscriber under its own bearer principal; native and official outcomes are equal.
+- **Open:** SQL after-commit signals and the stock-client step ([remote-live](docs/research/remote-live.md#order-of-work-and-acceptance)).
 
 ## 2026-10-03 — Milestone 7 design: native Remote Live
 
