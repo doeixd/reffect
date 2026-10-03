@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — Browser live rendering, and a browser regression found
+
+- **Change.** `examples/todo-remote/web/app.ts` follows every visible todo with one `Data.live` read, composed with `Projection.struct`. Strict `tsc` and `vp check` pass.
+- **Not verified in Chrome.** The browser app stays `Initial` with the native server, with upstream's in-browser memory backend, and with the pre-live JSON build. So this is a client-side regression since the milestone 4 browser run, suspected in foldkit-remote 0.11.0 and not in reffect. The evidence is in [remote-live](docs/research/remote-live.md#review-fixes-delivered-2026-10-03).
+- **Unaffected:** the Node session, including the `Data.live` second screen.
+- **Open:** diagnose the regression, possibly as a foldkit-plus issue, before the Chrome run.
+
 ## 2026-10-03 — LIVE-010: ported runtimes in artifacts, with upstream version guards
 
 - **Change.** RPC artifacts list the ported protocol engines they run, with upstream pins and conformance tests (`runtime.ported`). When a FileSystem is available, compilation refuses installed packages that differ from the pins (`UPSTREAM_VERSION`); otherwise it reports `upstream: "unchecked"`.

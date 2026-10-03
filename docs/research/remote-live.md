@@ -217,7 +217,12 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
   - Remote's live entry from `Data.subscriptions` derives its dependencies from that read, subscribes through `RemoteClient`, and emits `LiveReceived`, which `Data.reduce` folds.
   - The screen shows the toggle without refetching, equally over the native server and upstream's memory backend with `liveHub`. This is Foldkit's real client path, run without a DOM runtime.
   - **Harness note.** In-process, nothing yields after the mutation, so an un-joined consumer fiber never ran. The example joins the entry's stream (`take(1)`).
-  - **Still open:** the browser app renders the list, and Foldkit subscribes live only for `Data.live` reads, so it needs one live read per visible todo. A Chrome run is pending.
+  - **Browser app (2026-10-03).** `web/app.ts` follows every visible todo with one `Data.live` read per item, composed with `Projection.struct` into one active entry. It typechecks strictly, but is unverified in a browser because of a regression found while trying:
+    - The app stays `Initial` and `update` receives no message. The client's `/rpc` request gets a correct 200 response, then is aborted about a second later and retried every few seconds.
+    - **It is not the native server.** The same happens with upstream's in-browser `RemoteServer.memory(...).layer`, and with the pre-live JSON build of the example.
+    - The subscription dependencies are self-equivalent in Node, so this is not a restart loop from unstable dependencies.
+    - The browser run at milestone 4 (`076da16`) used foldkit 0.165.0 and foldkit-remote 0.10.0. Foldkit is unchanged, so the suspects are foldkit-remote 0.11.0 (foldkit-plus 0.14.0) or its interaction with Foldkit's dev-mode startup. That startup waits for `@foldkit/vite-plugin` and logs "Starting without Model preservation", and the abort follows that wait.
+    - This needs its own diagnosis before an upstream issue is filed.
 - **Found on the way: SQLX-019.** SQLite read the renamed column as the literal `"name"`, because an unknown double-quoted identifier is a string in SQLite. SQLite identifiers are now backtick-quoted ([sqlx-remote](sqlx-remote.md#decisions)).
 
 ### Proposed decisions

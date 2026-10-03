@@ -83,7 +83,7 @@ These block many items below.
 
 - Per-entity live sources ([remote-live](research/remote-live.md#order-of-work-and-acceptance))
 - Live review fixes ([review](research/remote-live.md#review-2026-10-03)):
-  - LR-3 (rest): live rendering in the `todo-remote` browser app (one `Data.live` read per visible todo) and a Chrome run.
+  - LR-3 (rest): the `todo-remote` browser app stays `Initial` with any backend, including upstream's in-browser memory layer. This is a client-side regression since milestone 4, suspected in foldkit-remote 0.11.0. Diagnose it, possibly file it upstream, then verify the per-todo `Data.live` rendering in Chrome ([finding](research/remote-live.md#review-fixes-delivered-2026-10-03)).
 - Live improvement plan ([plan](research/remote-live.md#improvement-plan-2026-10-03)):
   - LIVE-008: an after-commit session hook and a separate LiveHub node and service;
   - LIVE-011: typed, domain-checked signals;
