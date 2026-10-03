@@ -486,6 +486,9 @@ const compile = <Rpcs extends Rpc.Any>(
         for (const tag of group.requests.keys())
           if (tag !== READ && tag !== QUERY && tag !== MUTATE && tag !== LIVE)
             throw unsupported(`rpc.${tag}`, "Only the Remote contract's procedures are served");
+        // A Live stream never ends, so a JSON body would buffer it forever and never answer (LR-4).
+        if (options.live && options.serialization !== "ndjson")
+          throw unsupported("live", 'A live hub needs serialization: "ndjson"');
         const authorize = Object.entries(options.authorize ?? {});
         if (authorize.length && !options.auth)
           throw unsupported("authorize", "authorize needs an authenticated principal (auth)");

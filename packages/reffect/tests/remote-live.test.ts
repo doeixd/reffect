@@ -211,12 +211,17 @@ const stockSession = (post: (body: string) => Promise<string>) =>
     return [...(yield* Fiber.join(events).pipe(Effect.timeout("10 seconds")))];
   }).pipe(Effect.scoped);
 
-test("LiveHub signals need a live hub", async () => {
+test("LiveHub signals need a live hub, served over NDJSON", async () => {
   const error = await Effect.runPromise(
     NativeRemote.compile(RemoteRpc, { domain, rows, mutations }).pipe(Effect.flip),
   );
   expect(error).toBeInstanceOf(CompileError);
   expect(error.message).toContain("live: true");
+  // JSON would buffer a never-ending stream and never answer (LR-4).
+  const json = await Effect.runPromise(
+    NativeRemote.compile(RemoteRpc, { domain, rows, mutations, live: true }).pipe(Effect.flip),
+  );
+  expect(json.message).toContain('serialization: "ndjson"');
 });
 
 test(
