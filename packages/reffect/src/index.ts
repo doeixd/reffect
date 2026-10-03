@@ -196,3 +196,11 @@ export type { StreamSinkApi } from "./stream-host.ts";
 export { PortedRuntimes, verifyUpstream } from "./ported-runtime.ts";
 export type { PortedRuntime, UpstreamCheck, UpstreamPin } from "./ported-runtime.ts";
 export { ssrSerializeRuntime } from "./ssr-serialize.ts";
+export { DocumentType, HtmlType, elementShapeOf } from "./html.ts";
+export type {
+  Attribute as HtmlAttribute,
+  Child as HtmlChild,
+  Children as HtmlChildren,
+  ElementShape,
+  HtmlValue,
+} from "./html.ts";

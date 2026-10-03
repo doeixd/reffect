@@ -1,6 +1,7 @@
 import { SchemaIR } from "./schema-json.ts";
 import { StreamAuthoring } from "./stream.ts";
 import { LiveHubIR, RemoteStoreIR } from "./remote-store.ts";
+import { HtmlIR } from "./html.ts";
 import { Source } from "./source.ts";
 import { flow } from "./flow.ts";
 import {
@@ -126,6 +127,7 @@ export const R = Object.freeze({
   Schema: SchemaIR,
   RemoteStore: RemoteStoreIR,
   LiveHub: LiveHubIR,
+  Html: HtmlIR,
   Struct,
   TaggedUnion,
   UndefinedOr,
