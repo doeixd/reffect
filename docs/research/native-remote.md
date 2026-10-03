@@ -83,6 +83,33 @@ Checked 2026-10-02 with `npm view` and a scratch install:
 2. A stock `Remote.clientLayer(RpcClient.make(RemoteRpc))` over HTTP reads and queries through the native server with no native-specific client code.
 3. NativeRpc codec slices for the wire features in NR-002 each land with their own exact-parity tests first.
 
+## Engine design (step 2, accepted 2026-10-02)
+
+Read from the `foldkit-plus` source at `main` (`7e3ffdd0`):
+
+- `remote-server/src/index.ts`: `readHelper`, `splitAliases`, `groupByEntity`, `allowedFields`, `windowsOf`, the limit checks, `pageOf` and `memory`.
+- `remote/src/{relation,requirement,query}.ts`: `refsIn`, `aliasedField`, `mergeRelation`, `stableStringify`.
+
+- **NR-008 — validated payloads become one recursive engine model.**
+  - The generated codecs validate and decode the payload exactly as the official server does. The decoded value is re-encoded (dropping excess keys; a present `undefined` becomes `null`) and read into one recursive Rust `Requirement` type (entity, id, fields, windows, relations), whose optional members are `Option`s.
+  - Absent and `undefined` are indistinguishable throughout the reference read path (`?? null`, `!== undefined`, `stableStringify` dropping `undefined`, whole-window spreads), so this model is exact.
+  - The eight generated relation levels collapse into the one type; the last level simply never has relations.
+- **NR-009 — JS collection semantics.** Ported code uses insertion-ordered maps and sets where the reference uses `Map`/`Set`. A `JsObject` type keeps canonical array-index keys first, ascending, then insertion order, wherever the reference builds or iterates plain objects: `Object.entries(relations)`, `values` built on `Object.create(null)`, and spreads that keep a key's first position while replacing its value. Row `values` are `Unknown` JSON in that order (UNK-002).
+- **NR-010 — JS text where the reference formats.**
+  - Errors carry the reference's exact messages: `Too many "<entity>" ids in one read batch`, `Too many pages of "<entity>.<field>" in one read`, `Nested selection deeper than 8 relation levels`, and `Remote protocol version <n> is not 4`.
+  - Numbers in messages and in `stableStringify` follow `Number.prototype.toString`, via [`ryu-js`](native-types.md); this is the first workload that needs byte-exact number text.
+  - `stableStringify` sorts keys by UTF-16 code units, not Rust byte order.
+- **NR-011 — sources behind one interface.**
+  - Each entity source is a Rust value with `entity`, optional declared `fields`, an optional `authorize`, and a `read(ids, fields, windows)` that returns a future. Memory reads are ready immediately, and SQLx (milestone 5) will be truly asynchronous. A source failure becomes `RemoteReadError` with its message.
+  - The memory backend ports `valueFor` (relation pages over stored ref lists, cursor as ref key or bare id, an unknown cursor giving an empty page) and `pageOf`. Rows are embedded at build time as JSON.
+- **NR-012 — packaging.**
+  - The engine is a Rust runtime module emitted only when a Remote server is compiled, with `indexmap` and `ryu-js` declared in that case alone.
+  - `NativeRemote.compile` takes the Remote wire group, a domain description (entity names and declared fields) and memory rows. It generates the Read handler from the engine, and refuses procedures it cannot serve (`Live`, NR-006; Mutate and Query until steps 3–4).
+- **NR-013 — oracle.**
+  - The differential harness serves the reference `RemoteServer.handlers` over the official `RpcServer`, using sources equivalent to the memory backend. It drives scenarios ported from `remote-server`'s memory, nested, nestedShared, alias and server tests (excluding live) against both servers, and compares raw JSON, key order included.
+  - `RemoteServer.memory` exposes only its store and an in-process client layer, not its `ServerDefinition`. Until it does, the harness builds the memory sources with `RemoteServer.entity` and a read ported from `memory` (MIT, recorded as vendored).
+  - An upstream export of the memory backend's server definition would remove that duplication.
+
 ## Order of work
 
 1. Wire features (NR-002), each as a small NativeRpc codec slice, ending with the full `RemoteRpc` Read/Query payloads compiling with parity. **Done 2026-10-02.** The slices were:
