@@ -1,5 +1,18 @@
 # Progress
 
+## 2026-10-03 — Upstream issues fixed in foldkit-plus 0.14.0
+
+- All nine foldkit-plus issues reffect filed (#135–#143) were closed as completed by three upstream commits, released in v0.14.0: `foldkit-entity` 0.7.0, `foldkit-remote`/`-server` 0.11.0 and `foldkit-remote-drizzle` 0.9.1. reffect still pins the previous versions.
+- What the upgrade unblocks is recorded in [foldkit-plus-issues.md](docs/research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03):
+  - retiring the vendored memory fixture and the `RpcClientError` adapters;
+  - the deterministic ordering refusal (NR-017);
+  - ASCII-folded non-ASCII containment, with NUL searches refused;
+  - closing the `Object.prototype` read divergence.
+
+  It is now the first item of the frontier in PLAN.md and the open-work register.
+
+- One disagreement remains upstream: its Postgres SQL folds `contains` by collation, while its evaluator now folds ASCII only. It is recorded as a candidate issue and not filed.
+
 ## 2026-10-03 — Open work register
 
 - [docs/open-work.md](docs/open-work.md) collects every still-open item from the design and research records, PROGRESS entries, native divergences and milestones 6–15, each linked to its owning record (158 links, all anchors checked).
