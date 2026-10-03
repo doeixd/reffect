@@ -129,6 +129,12 @@ export const analyzeScopes = (
     };
     const count = Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        TaskGroup: (n) => {
+          n.children.forEach((body, index) =>
+            walk(body, `${at}.children[${index}]`, false, cleanup, delayed),
+          );
+          return 0;
+        },
         Scope: (n) => {
           if (cleanup) diagnostic("SCOPE_CLEANUP", at, "Cleanup cannot create resource scopes");
           const capacity = walk(n.body, `${at}.body`, true, cleanup, delayed);

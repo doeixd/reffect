@@ -236,6 +236,8 @@ const decodeFrames = (name: string, stderr: string) =>
           "acquireUseRelease",
           "repeat",
           "forEach",
+          "all",
+          "race",
           "retry",
           "fileScope",
           "fileSize",

@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — Bounded structured task kernel
+
+- [Stable-source preparation](docs/research/structured-concurrency.md) records TASK-001–007. Parallel agents implemented checked IR/reference/planning, native context/lowering and independent conformance. Static Unit/Never All (two/three children) and Race (two children) use independent child contexts and cancellation channels, inline futures and awaited cleanup. No task metadata accompanies scalar values or dependency is added to programs without groups. Core PLAN.md remains owned by the other instance; synced its Remote authentication/field-authorization through 6b6f59d.
+- [TASKCONF-001–006](docs/research/structured-concurrency-conformance.md) evidence: 5/5 focused tests pass (137.85s); strengthened explicit-success/interruption comparisons pass 2/2 (61.81s). Seven native scenarios run debug/release under both frame policies. Controlled cancellation proves parent/loser cleanup, explicit child Scope LIFO order, masked acquisition, log-context isolation and immediate winner admission. Positive child Ref, captured parent Ref/file refusal, mutable/host-service refusal, type contracts and Full/None provenance are checked. Independent review found no blocking issue.
+- Quiet two-child setup allocates twice per completed group (200 allocations for 100 groups), with no net retained allocations. Context and unpolled-future construction add zero allocations. Concrete None/Bounded contexts measure 24/32 bytes; group futures 400/424 bytes. Logging/Scope are absent from this cost fixture; enabled snapshots can allocate. Exact source-size/layout boundaries are in TASKCONF evidence.
+- This is the first task kernel step, not general Fiber support or the full Deferred prerequisite. Typed failure remains refused because upstream can preserve mixed failure/interruption Cause. Explicit child handles, represented Exit/Cause and coordinator borrowing precede Deferred/Semaphore. Native hosts must cooperatively cancel and await; panic unwinding or dropping the parent future does not provide async finalization. Integrated validation/publication follows.
+
 ## 2026-10-03 — Milestone 4 accepted in a browser
 
 - Added [`examples/todo-remote/web`](examples/todo-remote/web): a stock Foldkit application with `Remote.fold`, `Data.active` and `foldData.mutate`, and a stock `RpcClient` as `resources`.

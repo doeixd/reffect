@@ -94,7 +94,14 @@ export {
   LogIR,
   logLevels,
 } from "./effect-ir.ts";
-export type { LogicalFrame, FramedExit, LogLevel, LogAttribute } from "./effect-ir.ts";
+export type {
+  TaskChildren,
+  AllTaskOptions,
+  LogicalFrame,
+  FramedExit,
+  LogLevel,
+  LogAttribute,
+} from "./effect-ir.ts";
 export type {
   OperationRef,
   Capability,

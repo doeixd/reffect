@@ -37,6 +37,7 @@ import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
+import { structuredRuntime } from "./structured-runtime.ts";
 import { frameTrailRuntime, syncFrameStorageRuntime } from "./frame-runtime.ts";
 import { EffectFn, maxLogicalFrames, maxScopeFinalizers } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
@@ -167,6 +168,11 @@ interface Parameter {
 type HelperBody =
   | { readonly _tag: "ClockReadMillis" }
   | { readonly _tag: "RandomDraw" }
+  | {
+      readonly _tag: "TaskGroup";
+      readonly mode: "All" | "Race";
+      readonly children: readonly number[];
+    }
   | {
       readonly _tag: "RefScope";
       readonly initial: RustBlock;
@@ -490,6 +496,7 @@ export function lowerFunctions(
           computations.add(value.node);
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
+              TaskGroup: (n) => n.children.forEach(computation),
               Scope: (n) => computation(n.body),
               AddFinalizer: (n) => computation(n.finalizer),
               AcquireRelease: (n) => {
@@ -819,6 +826,18 @@ export function lowerFunctions(
         effectMemo.set(c.node, scopes);
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            TaskGroup: (n): HelperBody => ({
+              _tag: "TaskGroup",
+              mode: n.mode,
+              children: n.children.map((child, i) =>
+                effectHelper(
+                  child,
+                  delayedScope(scope, child),
+                  NeverType,
+                  `${path}.children[${i}]`,
+                ),
+              ),
+            }),
             Scope: (n): HelperBody => ({
               _tag: "Scope",
               body: effectHelper(n.body, scope, error, `${path}.body`),
@@ -1085,6 +1104,7 @@ export function lowerFunctions(
             files: scope.fileInputs,
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
+                TaskGroup: () => true,
                 Scope: () => true,
                 AddFinalizer: () => true,
                 AcquireRelease: () => true,
@@ -1461,6 +1481,7 @@ export const emitFunctions = (
         const child = (...children: number[]) => Math.max(0, ...children.map(depth));
         const result = Match.value(f.helpers[index].body).pipe(
           Match.tagsExhaustive({
+            TaskGroup: (n) => child(...n.children),
             Scope: (n) => 1 + depth(n.body),
             AddFinalizer: () => 0,
             AcquireRelease: (n) => depth(n.acquire),
@@ -1552,6 +1573,14 @@ export const emitFunctions = (
       ),
     ),
   );
+  const taskArities = module.functions.flatMap((f) =>
+    f.helpers.flatMap((helper) =>
+      Match.value(helper.body).pipe(
+        Match.tag("TaskGroup", (n) => [n.children.length]),
+        Match.orElse(() => []),
+      ),
+    ),
+  );
   if (hasAsync)
     write(
       asyncRuntime(
@@ -1562,8 +1591,10 @@ export const emitFunctions = (
         launchTuple,
         usesStore,
         asyncServices,
+        taskArities.length > 0,
       ),
     );
+  if (taskArities.length) write(structuredRuntime(taskArities));
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
     const contextual = f.asynchronous || f.services.clock || f.services.random;
@@ -1913,6 +1944,7 @@ export const emitFunctions = (
     const entryFrameKind = (body: HelperBody): string =>
       Match.value(body).pipe(
         Match.tags({
+          TaskGroup: (n) => (n.mode === "All" ? "all" : "race"),
           FlatMap: () => "flatMap",
           CatchAll: () => "catchAll",
           AcquireUseRelease: () => "acquireUseRelease",
@@ -1959,6 +1991,63 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          TaskGroup: (n) => {
+            const race = Rs.litBool(n.mode === "Race");
+            const parts: (string | MappedFragment)[] = ["{ "];
+            n.children.forEach((_, i) => {
+              const channel = Rs.pathCall(
+                rsSegments("tokio", "sync", "watch"),
+                Rs.ident("channel"),
+                [Rs.litBool(false)],
+              );
+              parts.push(
+                `let (cancel${i}, receiver${i}) = ${channel.text}; let mut child${i} = ${Rs.dotCall(identExpr("ctx"), Rs.ident("child_context"), [identExpr(`receiver${i}`), race]).text}; `,
+              );
+            });
+            parts.push(
+              "let parent_cancellation = ctx.cancellation.clone(); let parent_interruptible = ctx.interruptible; ",
+            );
+            n.children.forEach((index, i) => {
+              const child = f.helpers[index];
+              const call = Rs.call(
+                Rs.identExpr(Rs.ident(`h_${f.name}_${child.index}`)),
+                [Rs.mutRefExpr(identExpr(`child${i}`))].concat(
+                  child.input.map((parameter) => Rs.verbatimExpr(helperArgument(parameter))),
+                ),
+              );
+              parts.push(
+                `let future${i} = async { match `,
+                mapFragment(
+                  child.origin,
+                  use(`children[${i}]`),
+                  textFragment(child.asynchronous ? Rs.await(call).text : call.text),
+                ),
+                captureFrames
+                  ? " { Ok(()) => true, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => false } }; "
+                  : " { Ok(()) => true, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false } }; ",
+              );
+            });
+            const joined = Rs.await(
+              Rs.call(
+                identExpr(`task_group${n.children.length}`),
+                n.children
+                  .flatMap((_, i) => [identExpr(`future${i}`), identExpr(`cancel${i}`)])
+                  .concat([
+                    identExpr("parent_cancellation"),
+                    identExpr("parent_interruptible"),
+                    race,
+                  ]),
+              ),
+            );
+            parts.push(
+              `if ${joined.text} && !ctx.is_cancelled() { Ok(()) } else { `,
+              captureFrames
+                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, n.mode === "All" ? "all" : "race").text})))`
+                : "Err(AsyncError::Interrupted)",
+              " } }",
+            );
+            return joinFragments(parts);
+          },
           Scope: (n) =>
             joinFragments([
               "{ ctx.enter_scope(); let result = ",

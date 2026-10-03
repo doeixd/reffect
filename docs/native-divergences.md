@@ -40,5 +40,7 @@ The injected millis driver also admits only signed safe-integer readings, while 
 - Query inputs must be Structs of plain primitive fields (string, number, boolean, null, literals) with required keys.
 - Unsupported Schema shapes: `optional(Struct({}))`, `optional(Unknown)`, tuples, non-length array checks, non-String record keys, checked outputs, classes in payloads.
 - Streaming procedures (`Live`) until milestones 6–7.
-- Mutation `Input`/`Output` schemas outside the subset where `decodeUnknown`/`encodeUnknown` and the JSON codec agree: non-finite-capable numbers (`Schema.Number`), `undefined` (`Schema.optional`), and any number in an `Output` (RM-001). Mutation outcomes have no connection changes yet (RM-005).
+- Mutation `Input`/`Output` schemas outside the subset where `decodeUnknown`/`encodeUnknown` and the JSON codec agree: non-finite-capable numbers (`Schema.Number`), `undefined` (`Schema.optional`), and any number in an `Output` (RM-001).
 - `R.Schema.encodeSync(R.Schema.toCodecJson(...))` outside a NativeRpc host (no `JsonEncoders` capability), and `R.RemoteStore` outside a `NativeRemote` server.
+
+- Task groups outside the [bounded Unit/Never profile](research/structured-concurrency.md): collected/fallible children, dynamic topology, nested groups, groups in cleanup, captured parent Ref/file, mutable injected drivers and RemoteStore/Launch child work. General Fiber/Exit/Cause are not admitted.

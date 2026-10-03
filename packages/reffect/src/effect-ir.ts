@@ -42,6 +42,7 @@ import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
 import { LaunchHost } from "./launch-host.ts";
 import { RemoteStoreHost } from "./remote-store-host.ts";
+import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { analyzeScopes } from "./scope-analysis.ts";
 export { maxScopeFinalizers } from "./scope-analysis.ts";
 
@@ -65,6 +66,8 @@ export const SyncEffects = Object.freeze({
   Span: SemanticRef.effect("reffect/effect/span@1"),
 });
 export const AsyncEffects = Object.freeze({
+  All: SemanticRef.effect("reffect/effect/all-unbounded-discard@1"),
+  Race: SemanticRef.effect("reffect/effect/race-unit@1"),
   Scope: SemanticRef.effect("reffect/effect/scope@1"),
   AddFinalizer: SemanticRef.effect("reffect/effect/add-finalizer@1"),
   AcquireRelease: SemanticRef.effect("reffect/effect/acquire-release@1"),
@@ -109,6 +112,11 @@ const checkLogName = (kind: string, value: string): void => {
     );
 };
 export type ComputationNode =
+  | {
+      readonly _tag: "TaskGroup";
+      readonly mode: "All" | "Race";
+      readonly children: readonly Computation<void, never>[];
+    }
   | { readonly _tag: "ClockReadMillis" }
   | { readonly _tag: "RandomDraw" }
   | { readonly _tag: "RefMake"; readonly initial: Expr<unknown> }
@@ -293,6 +301,12 @@ export const substituteComputation = (
       Computation.make(self.output, self.error, node).withSource(self.source);
     const result: Computation<unknown, unknown> = Match.value(self.node).pipe(
       Match.tagsExhaustive({
+        TaskGroup: (n) => {
+          const children = n.children.map((child) => walk(child) as Computation<void, never>);
+          return children.every((child, index) => child === n.children[index])
+            ? self
+            : rebuild({ ...n, children: Object.freeze(children) });
+        },
         Scope: (n) => {
           const body = walk(n.body);
           return body === n.body ? self : rebuild({ _tag: "Scope", body });
@@ -624,6 +638,7 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
     seen.add(c);
     return Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        TaskGroup: () => true,
         Scope: () => true,
         AddFinalizer: () => true,
         AcquireRelease: () => true,
@@ -801,6 +816,33 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
       issues.push(...checkExpression(e, bindings, `${at}.${step}`));
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        TaskGroup: (n) => {
+          if (
+            !IRType.same(c.output, UnitType) ||
+            !IRType.same(c.error, NeverType) ||
+            (n.mode !== "All" && n.mode !== "Race") ||
+            (n.mode === "All" ? ![2, 3].includes(n.children.length) : n.children.length !== 2) ||
+            n.children.some(
+              (child) =>
+                !IRType.same(child.output, UnitType) || !IRType.same(child.error, NeverType),
+            )
+          )
+            add(
+              at,
+              "Task groups require two/three All children or two Race children, with Unit/Never channels",
+            );
+          // Child-local regions reintroduce their own handles. Removing outer regions
+          // prevents borrowed files and mutable cells from crossing this boundary.
+          const childBindings = new Map(
+            Array.from(bindings).filter(
+              ([, types]) =>
+                !types.some((type) => containsRef(type) || IRType.same(type, FileHandleType)),
+            ),
+          );
+          n.children.forEach((child, index) =>
+            walk(child, childBindings, `${at}.children[${index}]`),
+          );
+        },
         Scope: (n) => {
           if (!IRType.same(c.output, n.body.output) || !IRType.same(c.error, n.body.error))
             add(at, "Scope preserves its body channels");
@@ -1174,6 +1216,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
     });
   walk(f.body, new Map([[f.binder, f.input]]), `${path}.body`);
   issues.push(...analyzeScopes(f.body, `${path}.body`).diagnostics);
+  issues.push(...analyzeTaskGroups(f.body, `${path}.body`).diagnostics);
   return issues;
 };
 
@@ -1207,6 +1250,13 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
         });
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          TaskGroup: (n) =>
+            n.mode === "All"
+              ? Effect.all(
+                  n.children.map((child) => evaluate(child, bindings)),
+                  { concurrency: "unbounded", discard: true },
+                )
+              : Effect.race(evaluate(n.children[0], bindings), evaluate(n.children[1], bindings)),
           Scope: (n) => Effect.scoped(evaluate(n.body, bindings)),
           AddFinalizer: (n) =>
             Effect.addFinalizer(() =>
@@ -1427,6 +1477,8 @@ export interface LogicalFrame {
     | "launch"
     | "repeat"
     | "forEach"
+    | "all"
+    | "race"
     | "retry"
     | "catchAll"
     | "ensuring"
@@ -1495,6 +1547,8 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
     adapted.set(c, path);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        TaskGroup: (n) =>
+          n.children.forEach((child, index) => adaptNode(child, `${path}.children[${index}]`)),
         Scope: (n) => adaptNode(n.body, `${path}.body`),
         AddFinalizer: (n) => adaptNode(n.finalizer, `${path}.finalizer`),
         AcquireRelease: (n) => {
@@ -1600,6 +1654,16 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             };
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          TaskGroup: (n) =>
+            (n.mode === "All"
+              ? Effect.all(
+                  n.children.map((child) => evaluate(child, bindings)),
+                  { concurrency: "unbounded", discard: true },
+                )
+              : Effect.race(evaluate(n.children[0], bindings), evaluate(n.children[1], bindings))
+            ).pipe(
+              Effect.mapError((failure) => outward(failure, n.mode === "All" ? "all" : "race")),
+            ),
           Scope: (n) =>
             Effect.scoped(evaluate(n.body, bindings)).pipe(
               Effect.mapError((failure) => outward(failure, "scope")),
@@ -2052,7 +2116,81 @@ const logAt =
   (level: LogLevel) =>
   (message: string, attributes: readonly LogAttribute[] = []) =>
     logMessage(level, message, attributes);
+export type TaskChildren =
+  | readonly [Computation<void, never>, Computation<void, never>]
+  | readonly [Computation<void, never>, Computation<void, never>, Computation<void, never>];
+export interface AllTaskOptions {
+  readonly concurrency: "unbounded";
+  readonly discard: true;
+  readonly mode?: "default";
+}
+const taskGroup = (
+  mode: "All" | "Race",
+  children: readonly Computation<void, never>[],
+): Computation<void, never> => {
+  if (
+    !Array.isArray(children) ||
+    (mode === "All" ? ![2, 3].includes(children.length) : children.length !== 2) ||
+    children.some(
+      (child) =>
+        !(child instanceof Computation) ||
+        !IRType.same(child.output, UnitType) ||
+        !IRType.same(child.error, NeverType),
+    )
+  )
+    throw fail(
+      "UNSUPPORTED_TASK_GROUP",
+      "authoring",
+      mode === "All" ? "all" : "race",
+      "Task groups require a static tuple of Unit/Never children: two/three for all, two for race",
+    );
+  return Computation.make(UnitType, NeverType, {
+    _tag: "TaskGroup",
+    mode,
+    children: Object.freeze(Array.from(children)),
+  });
+};
+/** Bounded concurrent, discarded Effect.all: two or three static Unit/Never children. */
+const all = (children: TaskChildren, options: AllTaskOptions): Computation<void, never> => {
+  if (
+    !options ||
+    options.concurrency !== "unbounded" ||
+    options.discard !== true ||
+    (options.mode !== undefined && options.mode !== "default") ||
+    Object.keys(options).some((key) => !["concurrency", "discard", "mode"].includes(key))
+  )
+    throw fail(
+      "UNSUPPORTED_TASK_GROUP",
+      "authoring",
+      "all.options",
+      "all requires concurrency:unbounded, discard:true and optionally mode:default",
+    );
+  return taskGroup("All", children);
+};
+/** Bounded first-success race; the losing child is interrupted and its cleanup awaited. */
+const race: {
+  (that: Computation<void, never>): (self: Computation<void, never>) => Computation<void, never>;
+  (self: Computation<void, never>, that: Computation<void, never>): Computation<void, never>;
+} = dual(
+  2,
+  (
+    self: Computation<void, never>,
+    that: Computation<void, never>,
+    ...options: readonly unknown[]
+  ) => {
+    if (options.length)
+      throw fail(
+        "UNSUPPORTED_TASK_GROUP",
+        "authoring",
+        "race.options",
+        "Race options and exposed winner fibers are not admitted",
+      );
+    return taskGroup("Race", [self, that]);
+  },
+);
 export const EffectIR = Object.freeze({
+  all,
+  race,
   void: succeed(UnitType.literal()),
   asVoid: <A, E>(self: Computation<A, E>): Computation<void, E> =>
     map(self, () => UnitType.literal()),

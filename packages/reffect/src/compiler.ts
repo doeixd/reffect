@@ -17,6 +17,7 @@ import type {
   RuntimeServicesSelection,
   ResolvedRuntimeServicesSelection,
 } from "./runtime-service-model.ts";
+import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { containsRef } from "./ref-model.ts";
 import { hostFunctionOf } from "./schema-json.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
@@ -565,6 +566,10 @@ const derive = Effect.fn("Compile.derive")(function* (
     types.add(c.error);
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
+        TaskGroup: (n) => {
+          effectRefs.add(n.mode === "All" ? AsyncEffects.All : AsyncEffects.Race);
+          n.children.forEach(walkComputation);
+        },
         Scope: (n) => {
           effectRefs.add(AsyncEffects.Scope);
           walkComputation(n.body);
@@ -784,6 +789,19 @@ const plan = Effect.fn("Compile.plan")(function* (
         ? cause
         : fail("INVALID_SERVICE_SELECTION", "plan", "runtimeServices", String(cause)),
   });
+  if (selectedServices.clock === "InjectedMillis") {
+    for (const [name, f] of Object.entries(analysis.program.functions)) {
+      if (!(f instanceof EffectFn)) continue;
+      const paths = analyzeTaskGroups(f.body, `functions.${name}.body`).childClockPaths;
+      if (paths.length)
+        return yield* fail(
+          "TASK_GROUP_SERVICE",
+          "plan",
+          paths[0],
+          "Child tasks cannot capture a mutable injected Clock driver",
+        );
+    }
+  }
   const derived = yield* derive(analysis.program);
   if (
     derived.requirements.includes(RandomRequirement) &&

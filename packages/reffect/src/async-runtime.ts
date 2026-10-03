@@ -13,6 +13,7 @@ export const asyncRuntime = (
   launch?: string,
   store = false,
   services: RuntimeServiceUsage = { clock: false, random: false },
+  taskGroups = false,
 ): string => `
 #[derive(Debug)]
 pub enum AsyncError<E> { Fail(E), Interrupted }
@@ -65,6 +66,17 @@ impl AsyncContext {
         }
     }
     ${runtimeServiceMethods(services)}
+    ${
+      taskGroups
+        ? `fn child_context(&self, cancellation: tokio::sync::watch::Receiver<bool>, race: bool) -> Self {
+        let mut child = Self::new(cancellation);
+        child.interruptible = race || self.interruptible;
+        ${logging ? "child.annos = self.annos.clone(); child.spans = self.spans.clone(); child.request = self.request.clone();" : ""}
+        ${store ? "child.store = self.store;" : ""}
+        child
+    }`
+        : ""
+    }
     pub fn is_cancelled(&self) -> bool {
         self.interruptible && (*self.cancellation.borrow() || self.cancellation.has_changed().is_err())
     }

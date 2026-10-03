@@ -100,6 +100,7 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       RefScope: (n) => [edge("initial", n.initial), edge("body", n.body)],
       RefGet: () => [],
       RefModify: (n) => [edge("result", n.result), edge("next", n.next)],
+      TaskGroup: (n) => n.children.map((child, index) => edge(`children[${index}]`, child)),
       ClockReadMillis: () => [],
       RandomDraw: () => [],
       FileSize: () => [],

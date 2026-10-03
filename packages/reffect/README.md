@@ -125,6 +125,20 @@ Normalization and optimization are identity stages for this subset. Ownership us
 
 ## Run
 
+### Bounded structured tasks
+
+```ts
+const work = R.Effect.all([R.Effect.sleep(1), R.Effect.sleep(2)], {
+  concurrency: "unbounded",
+  discard: true,
+});
+const first = R.Effect.sleep(1).pipe(R.Effect.race(R.Effect.sleep(2)));
+```
+
+`all` accepts a static tuple of two or three Unit/Never computations; `race` accepts two, in either argument style. Use `asVoid` to discard infallible values before admission. Race interrupts its loser and awaits cleanup. Parent interruption signals every child and awaits cleanup before the enclosing parent finalizes. Children have separate invocation contexts, inherit log/request snapshots and must open their own explicit resource Scope for registrations.
+
+Children cannot capture parent Ref/file handles, read injected Clock/Random drivers, access RemoteStore/Launch, create nested groups or create groups during cleanup. Child-local Ref/file regions remain supported. General Fiber handles, collected results and typed-failing groups await their own ownership and Exit/Cause contracts. Native hosts must signal cancellation and await the parent future; dropping a future does not perform async finalization. See [task decisions](../../docs/research/structured-concurrency.md).
+
 ### Scoped heartbeat vertical slice
 
 [examples/heartbeat](../../examples/heartbeat/README.md) builds a standalone Rust
