@@ -870,6 +870,17 @@ type CompileOptions = {
   readonly failureFrames?: FailureFramePolicy;
   /** Built once at startup and released after in-flight requests on graceful shutdown. */
   readonly layer?: StaticLayer<Service, unknown>;
+  /**
+   * Request hardening the official server does not apply (see docs/native-divergences.md).
+   * Defaults: 64 KiB bodies and 64-request batches.
+   */
+  readonly limits?: { readonly bodyBytes?: number; readonly batch?: number };
+};
+const limitOf = (value: number | undefined, fallback: number, path: string): number => {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 1)
+    throw unsupported(`limits.${path}`, "Limits are positive safe integers");
+  return value;
 };
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
@@ -888,6 +899,10 @@ export const compileServer = (
     const prepared = yield* Effect.try({
       try: () => {
         const path = options.path ?? "/rpc";
+        const limits = {
+          body: limitOf(options.limits?.bodyBytes, 65536, "bodyBytes"),
+          batch: limitOf(options.limits?.batch, 64, "batch"),
+        };
         if (!/^\/(?:[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)?$/.test(path))
           throw unsupported(
             "path",
@@ -1269,6 +1284,7 @@ export const compileServer = (
           );
         return {
           path,
+          limits,
           auth,
           ranges,
           composites: Array.from(registry.values()),
@@ -1402,8 +1418,8 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
     const main = Rs.itemsText(
       [
         Rs.constItem(Rs.ident("RPC_PATH"), Rs.strRefType(), Rs.stringLiteral(prepared.path)),
-        Rs.constItem(Rs.ident("MAX_BODY"), Rs.usizeType(), Rs.litInt(65536)),
-        Rs.constItem(Rs.ident("MAX_BATCH"), Rs.usizeType(), Rs.litInt(64)),
+        Rs.constItem(Rs.ident("MAX_BODY"), Rs.usizeType(), Rs.litInt(prepared.limits.body)),
+        Rs.constItem(Rs.ident("MAX_BATCH"), Rs.usizeType(), Rs.litInt(prepared.limits.batch)),
         ...(prepared.auth
           ? [
               Rs.constItem(

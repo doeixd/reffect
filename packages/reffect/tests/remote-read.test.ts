@@ -181,6 +181,14 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
   ],
   ["too many ids", read(Array.from({ length: 1001 }, (_, i) => req("User", `m${i}`, ["name"])))],
   [
+    "a legitimate batch larger than 64 KiB",
+    read(
+      Array.from({ length: 900 }, (_, i) =>
+        req("User", `m${i}`, ["name", `padding-field-${"x".repeat(80)}`]),
+      ),
+    ),
+  ],
+  [
     "nested level over the id limit is chunked",
     read([req("Team", "big", ["members"], { relations: { members: rel("User", ["name"]) } })]),
   ],

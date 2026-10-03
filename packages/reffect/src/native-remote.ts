@@ -28,6 +28,11 @@ export interface RemoteDomain {
 export interface NativeRemoteOptions {
   readonly domain: RemoteDomain;
   readonly rows: MemoryRows;
+  /**
+   * Request hardening (docs/native-divergences.md). Remote batches whole screens into one Read,
+   * so the body limit defaults to 4 MiB rather than NativeRpc's 64 KiB.
+   */
+  readonly limits?: { readonly bodyBytes?: number; readonly batch?: number };
 }
 
 const unsupported = (path: string, message: string) =>
@@ -202,7 +207,7 @@ ${prepared.evaluator || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, Par
     return yield* compileServer(
       group,
       {},
-      {},
+      { limits: { bodyBytes: 4 * 1024 * 1024, ...options.limits } },
       {
         procedures,
         modules: [remoteEngineRuntime, server],

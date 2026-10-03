@@ -47,3 +47,12 @@ An initial incomplete local installation appeared to lack Drizzle dist files. A 
 ## Dependency declaration compatibility note
 
 Drizzle RC.4 declarations fail TypeScript 7.0.2 checking with private-builder configuration and variance errors across dialects. This is a Drizzle/toolchain issue, not established as a Foldkit-Plus implementation defect (upstream uses TypeScript 5.9.3). reffect strictly checks authored code with skipLibCheck for dependency declarations and records that limitation in [the integration research](foldkit-query.md).
+
+## Native Remote integration findings (2026-10-03, foldkit-plus 0.13.0)
+
+Found while compiling a native RemoteServer against published `foldkit-remote`/`foldkit-remote-server` 0.10.0 and `foldkit-entity` 0.6.0 on Effect 4.0.0. These are suggestions; reffect works around each one.
+
+- **`RemoteServer.memory` hides its server definition.** It returns only the store and an in-process `Remote.clientLayer`, so serving the memory backend over a real `RpcServer` means copying `memory`'s read and query-run closures (reffect's `tests/fixtures/foldkit-remote-memory.ts`). Suggested: expose the `ServerDefinition` (for example `backend.server`), so `RemoteServer.handlers(backend.server, undefined)` can be served directly.
+- **`RemoteRpcClient` rejects a stock Effect RPC client.** Its error channels admit only Remote's errors, while `RpcClient.make(RemoteRpc)` also fails with `RpcClientError`. An application therefore needs a small transport adapter (`catchTag("RpcClientError", die)`); upstream's examples use hand-written transports instead. Suggested: accept transport errors in `clientLayer` (mapping them to a Remote error or defect), or document the adapter.
+- **Ordering refusals name a sort-dependent pair.** `evaluate`'s `ordered` throws `orders by values this interpreter cannot compare (A and B)` and the null-key message for whichever pair V8's sort compares first. The text is engine-dependent and cannot be reproduced by another interpreter. Suggested: validate the order keys of all matched rows before sorting, and report the first offending row/key in row order (reffect's NR-017).
+- **Object-prototype field names leak.** The read path's `field in row` and `renames[field] ?? field` lookups see `Object.prototype` members, so requesting a field named `constructor` or `toString` reads a function. Suggested: use `Object.hasOwn` and `Object.create(null)` maps.

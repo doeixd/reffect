@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-03 — Request limits, depth and upstream findings
+
+- Probed transport limits against the official server. 1–8 MB bodies are accepted officially; natively they were refused (connection reset at the 64 KiB hardening limit). Payloads nested about 127+ levels deep are accepted officially, but refused whole natively by `serde_json`'s recursion limit. Both are now in the [divergence register](docs/native-divergences.md), along with the 64-request batch limit.
+- `NativeRpc.compile` accepts `limits: { bodyBytes, batch }` (defaults 64 KiB / 64). `NativeRemote` defaults to a 4 MiB body, because Remote batches whole screens into one Read; a 130 KB Read batch is now a `remote-read.test.ts` scenario that fails with `413` under the old limit.
+- Recorded four upstream suggestions in [foldkit-plus issues](docs/research/foldkit-plus-issues.md#native-remote-integration-findings-2026-10-03-foldkit-plus-0130): export the memory server definition; accept `RpcClientError` in `RemoteRpcClient`; give ordering refusals deterministic text; use own-key lookups.
+
 ## 2026-10-03 — Native test parallelism
 
 - Every native test runs a `cargo build` that already uses all cores, so default Vitest parallelism oversubscribed the CPU: earlier, six heavy suites hit their budgets. A shared Cargo target directory was rejected because Cargo reports only the uplifted binary path, which would collide between crates.
