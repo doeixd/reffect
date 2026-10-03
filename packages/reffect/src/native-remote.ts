@@ -491,7 +491,7 @@ const compile = <Rpcs extends Rpc.Any>(
     const server = `static REMOTE_ROWS: &str = ${Rs.stringLiteral(prepared.rows).text};
 static REMOTE_MEMORY: std::sync::OnceLock<remote_engine::Memory> = std::sync::OnceLock::new();
 fn remote_memory() -> &'static remote_engine::Memory {
-    REMOTE_MEMORY.get_or_init(|| remote_engine::Memory::new(vec![${names.join(", ")}], &serde_json::from_str(REMOTE_ROWS).expect("embedded rows are JSON")))
+    REMOTE_MEMORY.get_or_init(|| remote_engine::Memory::new(vec![${names.join(", ")}], &serde_json::from_str(REMOTE_ROWS).expect("embedded rows are JSON"), &REMOTE_QUERIES))
 }
 ${prepared.definitions.map((definition) => definition.validator).join("\n")}
 static REMOTE_QUERIES: [remote_engine::QueryDef; ${prepared.definitions.length}] = [${prepared.definitions.map((definition) => definition.definition).join(", ")}];
@@ -520,7 +520,7 @@ ${arms}        _ => return Served::Failure(remote_engine::mutation_error(format!
     }
 }`;
     // Each entity's authorize for the request's principal; others permit every requested field.
-    const authorizer = `fn remote_authorize(principal: Option<u64>) -> impl Fn(&str, &[String]) -> Vec<String> {
+    const authorizer = `fn remote_authorize(principal: Option<u64>) -> impl Fn(&str, &[String]) -> Vec<String> + Sync {
     move |entity: &str, fields: &[String]| -> Vec<String> {
         let _ = principal;
         match entity {
@@ -541,11 +541,11 @@ ${prepared.authorize
       procedures[MUTATE] = { call: "remote_mutate(context, cancellation, payload).await" };
     if (group.requests.has(READ))
       procedures[READ] = {
-        call: "remote_engine::read(remote_memory(), &remote_authorize(context.principal), payload)",
+        call: "remote_engine::read(remote_memory(), &remote_authorize(context.principal), payload).await",
       };
     if (group.requests.has(QUERY))
       procedures[QUERY] = {
-        call: "remote_engine::query(remote_memory(), &REMOTE_QUERIES, &remote_authorize(context.principal), payload)",
+        call: "remote_engine::query(remote_memory(), &remote_authorize(context.principal), payload).await",
       };
     return yield* compileServer(
       group,
@@ -556,6 +556,8 @@ ${prepared.authorize
       },
       {
         procedures,
+        // The engine awaits its source (SQLX-007), so the server is asynchronous.
+        asynchronous: true,
         modules: [
           remoteEngineRuntime,
           server,

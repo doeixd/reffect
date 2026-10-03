@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-03 — Milestone 5 step 2: async engine over a Source trait
+
+- The Remote engine now reads and pages through an async `Source` trait, and the memory backend implements it with ready futures (SQLX-007). NativeRemote servers are always asynchronous. Details are in [sqlx-remote.md](docs/research/sqlx-remote.md#order-of-work).
+- No behaviour change. remote-read, -query, -mutate, -auth, -acceptance and -wire pass (6 files, 15 tests), and `examples/todo-remote` still equals upstream.
+
 ## 2026-10-03 — Milestone 5 step 1: storage metadata and SQL planning
 
 - Added [sql-plan.ts](packages/reffect/src/sql-plan.ts).

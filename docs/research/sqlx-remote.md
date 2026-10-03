@@ -102,7 +102,12 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
    - Validation runs the planned SQL on `node:sqlite` rather than comparing SQL text. It is checked against upstream's own `query` source over the same database: the full order, the backward order, and every cursor in both directions ([sql-plan.test.ts](../../packages/reffect/tests/sql-plan.test.ts), 3/3).
      - All 27 shared `foldkit-entity/conformance` cases plan, with no refusal needed, and match upstream's expected order.
      - A 23-row tie-heavy set covers equal ranks, descending terms, `_`/`%`/empty/null searches over non-ASCII names, a boolean literal, and an input-folded null check with true, false and null inputs.
-2. An async source trait in the engine, with memory moved onto it (no behaviour change; the milestone 4 suites stay green).
+2. **Done (2026-10-03):** the async `Source` trait.
+   - The engine's `read_helper`, `read` and `query` are generic async functions over `Source`, which has `has_source`, async `read`, `check_query` (unknown query, then input, in upstream's order) and async `page` (one page of ids and its boundaries).
+   - The engine keeps everything upstream's handlers own: limits, grouping, authorization, settling, relations and `select`. A source failure becomes `RemoteReadError(message)`, as in `readHelper`.
+   - `Memory` implements `Source` with ready futures, so no lock is held across an await, and owns its query definitions.
+   - `Authorize` is `Sync`, and `NativeRemote` servers are always asynchronous (`RpcRuntime.asynchronous`).
+   - No behaviour change: remote-read, -query, -mutate, -auth, -acceptance and -wire pass (6 files, 15 tests), and the todo example still equals upstream.
 3. SQLx reads and queries over SQLite, compared over the wire with `RemoteServer.handlers` using `foldkit-remote-drizzle` sources over a `node:sqlite` copy of the same database. Also run the shared `foldkit-entity/conformance` cases.
 4. Writes and transactions through mutation sources; stock-client acceptance over SQL.
 5. Postgres as a second dialect, executed.

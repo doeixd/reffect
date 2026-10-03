@@ -867,6 +867,8 @@ export interface RpcRuntime {
    * `context` and (in async servers) `cancellation` are in scope.
    */
   readonly procedures: { readonly [tag: string]: { readonly call: string } };
+  /** The runtime awaits in its calls, so the server must be asynchronous. */
+  readonly asynchronous?: boolean;
   /**
    * R functions the runtime calls as `runtime_<name>(context, cancellation, input).await`,
    * yielding a `RuntimeCall`. Each takes one input decoded by its schema's generated decoder and
@@ -1503,6 +1505,7 @@ export const compileServer = (
           services: serverServices.map((service) => service.id),
           runtimeFunctions,
           asynchronous:
+            runtime?.asynchronous === true ||
             runtimeFunctions.length > 0 ||
             Object.values(functions).some(
               (fn) => fn instanceof EffectFn && isAsyncComputation(fn.body),

@@ -92,7 +92,7 @@ mod remote_engine {
     }
 
     #[derive(Clone, Debug, PartialEq)]
-    pub struct Window { first: Option<f64>, last: Option<f64>, after: Option<String>, before: Option<String> }
+    pub struct Window { pub first: Option<f64>, pub last: Option<f64>, pub after: Option<String>, pub before: Option<String> }
     #[derive(Clone, Debug)]
     pub struct Relation { entity: String, fields: Vec<String>, windows: Option<JsObject<Window>>, relations: Option<JsObject<Relation>> }
     #[derive(Clone, Debug)]
@@ -328,7 +328,19 @@ mod remote_engine {
     }
 
     // ---- Sources (NR-011): the memory backend.
-    pub struct EntityRecord { id: String, values: JsObject<Value> }
+    pub struct EntityRecord { pub id: String, pub values: JsObject<Value> }
+    /// One page of a query: its row ids in order and the boundaries the page advertises.
+    pub struct PageIds { pub ids: Vec<String>, pub start: Boundary, pub end: Boundary }
+    /// A backend serving entity reads and query pages (SQLX-007). The engine owns everything
+    /// upstream's handlers own: limits, grouping, authorization, settling, relations, select.
+    pub trait Source: Sync {
+        fn has_source(&self, entity: &str) -> bool;
+        /// A source failure is its RemoteServerError message.
+        fn read(&self, entity: &str, ids: &[String], fields: &[String], windows: &Option<JsObject<Window>>) -> impl std::future::Future<Output = Result<Vec<EntityRecord>, String>> + Send;
+        /// In upstream's order: an unknown query, then input the Input schema refuses. The query's entity.
+        fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String>;
+        fn page(&self, query: &str, input: &Value, window: &Window) -> impl std::future::Future<Output = Result<PageIds, String>> + Send;
+    }
     /// A row as the memory backend holds it: a plain object, shared until a write replaces it.
     pub type Row = Arc<JsObject<Value>>;
     struct Tables { version: u64, tables: HashMap<String, Ordered<Row>> }
@@ -336,12 +348,12 @@ mod remote_engine {
   "`MemoryStore`" +
   String.raw` (RS-003..006): one server-lifetime store behind a lock,
     /// taken once per operation. Every write bumps the version, which invalidates query caches.
-    pub struct Memory { entities: Vec<String>, state: RwLock<Tables> }
+    pub struct Memory { entities: Vec<String>, state: RwLock<Tables>, queries: &'static [QueryDef] }
     impl Memory {
         /// ` +
   "`rows`" +
   String.raw`: entity -> [[String(id), row]] in table order, as the memory backend keys them.
-        pub fn new(entities: Vec<String>, rows: &Value) -> Memory {
+        pub fn new(entities: Vec<String>, rows: &Value, queries: &'static [QueryDef]) -> Memory {
             let mut tables = HashMap::new();
             if let Some(object) = rows.as_object() {
                 for (entity, table) in object.iter() {
@@ -356,12 +368,11 @@ mod remote_engine {
                     tables.insert(entity.clone(), ordered);
                 }
             }
-            Memory { entities, state: RwLock::new(Tables { version: 0, tables }) }
+            Memory { entities, state: RwLock::new(Tables { version: 0, tables }), queries }
         }
         fn tables(&self) -> std::sync::RwLockReadGuard<'_, Tables> { self.state.read().unwrap_or_else(|poisoned| poisoned.into_inner()) }
         fn tables_mut(&self) -> std::sync::RwLockWriteGuard<'_, Tables> { self.state.write().unwrap_or_else(|poisoned| poisoned.into_inner()) }
-        fn has_source(&self, entity: &str) -> bool { self.entities.iter().any(|name| name == entity) }
-        fn read(&self, entity: &str, ids: &[String], fields: &[String], windows: &Option<JsObject<Window>>) -> Vec<EntityRecord> {
+        fn read_now(&self, entity: &str, ids: &[String], fields: &[String], windows: &Option<JsObject<Window>>) -> Vec<EntityRecord> {
             let state = self.tables();
             let Some(table) = state.tables.get(entity) else { return Vec::new() };
             ids.iter().filter_map(|id| {
@@ -412,7 +423,7 @@ mod remote_engine {
         }
     }
     #[derive(Clone)]
-    enum Boundary { Terminal, Unknown, Cursor(String) }
+    pub enum Boundary { Terminal, Unknown, Cursor(String) }
     /// ` +
   "`pageOf`" +
   String.raw` without ` +
@@ -483,7 +494,7 @@ mod remote_engine {
     /// An entity source's ` +
   "`authorize`" +
   String.raw` for the bound principal: declared fields in, permitted fields out.
-    pub type Authorize<'a> = &'a dyn Fn(&str, &[String]) -> Vec<String>;
+    pub type Authorize<'a> = &'a (dyn Fn(&str, &[String]) -> Vec<String> + Sync);
     /// ` +
   "`allowedFields`" +
   String.raw`: requested fields ` +
@@ -495,7 +506,7 @@ mod remote_engine {
         let permitted: HashSet<String> = authorize(entity, requested).into_iter().collect();
         requested.iter().filter(|field| permitted.contains(*field)).cloned().collect()
     }
-    fn read_helper(server: &Memory, authorize: Authorize, requests: Vec<Requirement>) -> Result<Value, Value> {
+    async fn read_helper<S: Source>(server: &S, authorize: Authorize<'_>, requests: Vec<Requirement>) -> Result<Value, Value> {
         let mut entities: Vec<Value> = Vec::new();
         let mut settled: Ordered<(String, String, OrderedSet)> = Ordered::new();
         let mut fetched: HashMap<String, HashSet<String>> = HashMap::new();
@@ -522,7 +533,7 @@ mod remote_engine {
                 if allowed.is_empty() { continue; }
                 let windows = windows_of(&group.slice.windows, &allowed);
                 let mut records = Vec::new();
-                for chunk in id_list.chunks(MAX_IDS_PER_ENTITY) { records.extend(server.read(&name, chunk, &allowed, &windows)); }
+                for chunk in id_list.chunks(MAX_IDS_PER_ENTITY) { records.extend(server.read(&name, chunk, &allowed, &windows).await.map_err(read_error)?); }
                 for mut record in records {
                     let mut values: JsObject<Value> = JsObject::new();
                     let mut omitted = Vec::new();
@@ -587,7 +598,7 @@ mod remote_engine {
   String.raw` handler over a validated payload: protocol check, then ` +
   "`readHelper`" +
   String.raw`.
-    pub fn read(server: &Memory, authorize: Authorize, payload: &Value) -> Result<Value, Value> {
+    pub async fn read<S: Source>(server: &S, authorize: Authorize<'_>, payload: &Value) -> Result<Value, Value> {
         let received = payload.get("version").map(number).unwrap_or(f64::NAN);
         if received != PROTOCOL_VERSION {
             let mut buffer = ryu_js::Buffer::new();
@@ -596,7 +607,7 @@ mod remote_engine {
             return Err(json!({ "_tag": "RemoteProtocolError", "message": format!("Remote protocol version {} is not 4", printed), "expected": 4, "received": wire }));
         }
         let requests: Vec<Requirement> = payload.get("requests").and_then(Value::as_array).map(|items| items.iter().map(requirement).collect()).unwrap_or_default();
-        read_helper(server, authorize, requests)
+        read_helper(server, authorize, requests).await
     }
     // ---- Query (NR-014..017): a domain query's body, run by the milestone-1 evaluator.
     use super::foldkit_eval::Value as Cell;
@@ -654,11 +665,10 @@ mod remote_engine {
     /// ` +
   "`handlers.FoldkitRemoteQuery`" +
   String.raw` with the memory backend's query sources.
-    pub fn query(server: &Memory, queries: &[QueryDef], authorize: Authorize, payload: &Value) -> Result<Value, Value> {
+    pub async fn query<S: Source>(server: &S, authorize: Authorize<'_>, payload: &Value) -> Result<Value, Value> {
         let name = payload.get("query").and_then(Value::as_str).unwrap_or_default();
-        let Some(def) = queries.iter().find(|def| def.name == name) else { return Err(query_error(format!("Unknown query: {}", name))) };
         let input = payload.get("input").unwrap_or(&Value::Null);
-        if !(def.valid)(input) { return Err(query_error("Invalid query input".to_string())); }
+        let entity = server.check_query(name, input).map_err(query_error)?;
         let select = payload.get("select").filter(|value| !value.is_null()).map(relation);
         if let Some(select) = &select {
             if let Some(paged) = check_pages_per_relation(std::slice::from_ref(select)) {
@@ -666,10 +676,23 @@ mod remote_engine {
             }
         }
         let window = window(payload.get("window").unwrap_or(&Value::Null));
-        // The page is taken from one view of the table; the selected rows are read afterwards,
-        // as upstream reads them, without holding the store across the read.
-        let (edges, start, end, requirements) = {
-            let state = server.tables();
+        let PageIds { ids, start, end } = server.page(name, input, &window).await.map_err(query_error)?;
+        let edges: Vec<Value> = ids.iter().map(|id| json!({ "entity": entity, "id": id, "key": format!("{}:{}", entity, id) })).collect();
+        let Some(select) = select else { return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end) })) };
+        let requirements: Vec<Requirement> = ids.iter().filter(|_| select.entity == entity).map(|id| Requirement {
+            entity: select.entity.clone(), id: id.clone(), fields: select.fields.clone(),
+            windows: select.windows.clone(), relations: select.relations.clone(), renames: None,
+        }).collect();
+        if requirements.is_empty() {
+            return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": [], "settled": [] }));
+        }
+        let read = read_helper(server, authorize, requirements).await.map_err(|error| query_error(error.get("message").and_then(Value::as_str).unwrap_or_default().to_string()))?;
+        Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": read["entities"], "settled": read["settled"] }))
+    }
+    impl Memory {
+        /// The memory backend's query page: the body by the evaluator, paged by pageOf with locate.
+        fn page_now(&self, def: &QueryDef, input: &Value, window: &Window) -> Result<PageIds, String> {
+            let state = self.tables();
             let empty = Ordered::new();
             let table = state.tables.get(def.entity).unwrap_or(&empty);
             let rows: Vec<(&String, &Row)> = table.iter().collect();
@@ -685,7 +708,7 @@ mod remote_engine {
                     }
                 }
             };
-            let matched = (def.run)(&encoded, &cells).map_err(|error| query_error(error.to_string()))?;
+            let matched = (def.run)(&encoded, &cells).map_err(|error| error.to_string())?;
             // A cursor row that no longer matches still has a place in the order, as a keyset has it.
             let locate = |cursor: &str| -> Result<Position, String> {
                 let Some(found) = rows.iter().position(|(id, _)| id.as_str() == cursor) else {
@@ -700,23 +723,28 @@ mod remote_engine {
                 Ok(Position { index, exact: false })
             };
             let id_of = |index: &usize| rows[*index].0.clone();
-            let (page, start, end) = page_of(&matched, &window, &id_of, Some(&locate)).map_err(query_error)?;
-            let edges: Vec<Value> = page.iter().map(|index| {
-                let id = rows[*index].0;
-                json!({ "entity": def.entity, "id": id, "key": format!("{}:{}", def.entity, id) })
-            }).collect();
-            let requirements: Option<Vec<Requirement>> = select.map(|select| page.iter().filter(|_| select.entity == def.entity).map(|index| Requirement {
-                entity: select.entity.clone(), id: rows[*index].0.clone(), fields: select.fields.clone(),
-                windows: select.windows.clone(), relations: select.relations.clone(), renames: None,
-            }).collect());
-            (edges, start, end, requirements)
-        };
-        let Some(requirements) = requirements else { return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end) })) };
-        if requirements.is_empty() {
-            return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": [], "settled": [] }));
+            let (page, start, end) = page_of(&matched, window, &id_of, Some(&locate))?;
+            Ok(PageIds { ids: page.iter().map(|index| rows[*index].0.clone()).collect(), start, end })
         }
-        let read = read_helper(server, authorize, requirements).map_err(|error| query_error(error.get("message").and_then(Value::as_str).unwrap_or_default().to_string()))?;
-        Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": read["entities"], "settled": read["settled"] }))
+    }
+    impl Source for Memory {
+        fn has_source(&self, entity: &str) -> bool { self.entities.iter().any(|name| name == entity) }
+        // The memory backend is synchronous: each answer is ready, and no lock is held across an await.
+        fn read(&self, entity: &str, ids: &[String], fields: &[String], windows: &Option<JsObject<Window>>) -> impl std::future::Future<Output = Result<Vec<EntityRecord>, String>> + Send {
+            std::future::ready(Ok(self.read_now(entity, ids, fields, windows)))
+        }
+        fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String> {
+            let Some(def) = self.queries.iter().find(|def| def.name == query) else { return Err(format!("Unknown query: {}", query)) };
+            if !(def.valid)(input) { return Err("Invalid query input".to_string()); }
+            Ok(def.entity)
+        }
+        fn page(&self, query: &str, input: &Value, window: &Window) -> impl std::future::Future<Output = Result<PageIds, String>> + Send {
+            let result = match self.queries.iter().find(|def| def.name == query) {
+                Some(def) => self.page_now(def, input, window),
+                None => Err(format!("Unknown query: {}", query)),
+            };
+            std::future::ready(result)
+        }
     }
 }
 `;
