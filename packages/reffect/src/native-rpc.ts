@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Match, Option, Schema, SchemaAST, SchemaIssue } from "effect";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
-import { Compile, Rust, type Plan } from "./compiler.ts";
+import { Compile, Rust, Target, type Plan } from "./compiler.ts";
+import { jsonEncodedWitness, jsonEncoderName } from "./schema-json.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
@@ -11,6 +12,9 @@ import { StaticLayer } from "./layer.ts";
 import {
   CompileError,
   BoolType,
+  literalsOf,
+  type StructLayout,
+  Capabilities,
   Expr,
   Fn,
   IRType,
@@ -882,6 +886,78 @@ const limitOf = (value: number | undefined, fallback: number, path: string): num
     throw unsupported(`limits.${path}`, "Limits are positive safe integers");
   return value;
 };
+// The server crate supplies `Schema.toCodecJson` encoders from its verified codecs (RM-006).
+const serverTarget = (target: Target): Target =>
+  target.pipe(Target.withCapabilities([...target.capabilities, Capabilities.JsonEncoders]));
+/**
+ * The contract schema whose JSON codec a witness's `Schema.toCodecJson` agrees with. Builtin
+ * witnesses carry private identity filters NativeRpc refuses, so codecs are found from the
+ * witness's structure; the wire test compares the result with the official encoding.
+ */
+const contractSchemaOf = (type: IRType<unknown>, path: string): Schema.Top => {
+  const scalar = (
+    [
+      [NumberType, Schema.Number],
+      [StringType, Schema.String],
+      [BoolType, Schema.Boolean],
+      [U64Type, U64Json],
+      [UnknownType, Schema.Unknown],
+    ] as const
+  ).find(([witness]) => IRType.same(type, witness));
+  if (scalar) return scalar[1];
+  const item = arrayItem(type);
+  if (item) return Schema.Array(contractSchemaOf(item, `${path}[]`));
+  const value = recordValue(type);
+  if (value) return Schema.Record(Schema.String, contractSchemaOf(value, `${path}{}`));
+  const literals = literalsOf(type);
+  if (literals) return Schema.Literals(literals);
+  const fieldsOf = (layout: StructLayout): Schema.Struct.Fields =>
+    Object.fromEntries(
+      layout.fields.map((field) => {
+        const at = `${path}.${field.name}`;
+        const defined = field.optional === undefined ? undefined : undefinedOrItem(field.type);
+        if (defined === undefined) return [field.name, contractSchemaOf(field.type, at)];
+        const schema = contractSchemaOf(defined, at);
+        return [
+          field.name,
+          field.optional === "optional" ? Schema.optional(schema) : Schema.optionalKey(schema),
+        ];
+      }),
+    );
+  const struct = structLayout(type);
+  if (struct) return Schema.Struct(fieldsOf(struct));
+  const cases = unionCases(type);
+  if (cases)
+    return Schema.Union(
+      cases.map((member) => {
+        const layout = structLayout(member);
+        if (!layout?.tag) throw unsupported(path, "Union cases must be tagged structs");
+        return Schema.TaggedStruct(layout.tag, fieldsOf(layout));
+      }),
+    );
+  throw unsupported(path, "No JSON codec for this witness");
+};
+/** The library's `reffect_json` module: one encoder per witness the program encodes. */
+const jsonModule = (plan: Plan): string => {
+  const witnesses = plan.analysis.operations.flatMap((operation) => {
+    const witness = jsonEncodedWitness(operation);
+    return witness ? [witness] : [];
+  });
+  if (witnesses.length === 0) return "";
+  const registry: Registry = new Map();
+  const encoders = witnesses.map((type) => {
+    const path = `Schema.toCodecJson(${type.id})`;
+    const kind = codec(contractSchemaOf(type, path).ast, path, false, registry, false);
+    if (kind === "never" || !IRType.same(witnessOf(kind), type))
+      throw unsupported(path, "No verified JSON codec maps back onto this witness");
+    return { name: jsonEncoderName(type), type, codec: kind };
+  });
+  return `
+#[allow(non_snake_case)]
+pub mod reffect_json {
+${compositeCodecs(Array.from(registry.values()), encoders)}}
+`;
+};
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
   bindings: Bindings<Rpcs>,
@@ -1315,7 +1391,7 @@ export const compileServer = (
     });
     const core = yield* Compile.run(
       Compile.make(prepared.program).pipe(
-        Compile.withTarget(prepared.asynchronous ? Rust.tokio : Rust.std),
+        Compile.withTarget(serverTarget(prepared.asynchronous ? Rust.tokio : Rust.std)),
         Compile.withSourceArtifacts(SourceArtifacts.None),
         Compile.withFailureFrames(options.failureFrames ?? FailureFrames.Bounded),
       ),
@@ -1394,6 +1470,11 @@ export const compileServer = (
         ),
       ),
     );
+    const encoders = yield* Effect.try({
+      try: () => jsonModule(core.explanation),
+      catch: (cause) =>
+        cause instanceof CompileError ? cause : unsupported("Schema.toCodecJson", String(cause)),
+    });
     const hasLogs = core.explanation.analysis.effects.includes(SyncEffects.Log);
     const contextRuntime = hasLogs
       ? String.raw`
@@ -1470,7 +1551,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
           (runtime?.dependencies ?? []).join(""),
-        "src/lib.rs": core.files["src/lib.rs"],
+        "src/lib.rs": core.files["src/lib.rs"] + encoders,
         "src/main.rs": main,
       }),
       runtime: Object.freeze({
@@ -1520,8 +1601,29 @@ export const NativeRpc = Object.freeze({
   witness: contractWitness,
 });
 
-/** Generated serde_json decoders/encoders for contract composites, with official messages. */
-const compositeCodecs = (composites: readonly Composite[]): string => {
+// JSON.stringify-compatible doubles: non-finite as strings, -0 as 0, safe integers unfractioned.
+const jsNumber = `fn js_number(x: f64) -> Value {
+    if x.is_nan() { return Value::String("NaN".to_string()); }
+    if x.is_infinite() { return Value::String(if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string()); }
+    if x == 0.0 { return Value::from(0u64); }
+    if x.fract() == 0.0 && x.abs() < 9007199254740992.0 { return Value::from(x as i64); }
+    Value::from(x)
+}
+`;
+/** A host encoder for one `Schema.toCodecJson` witness (RM-006). */
+interface JsonEncoder {
+  readonly name: string;
+  readonly type: IRType<unknown>;
+  readonly codec: Codec;
+}
+/**
+ * Generated serde_json decoders/encoders for contract composites, with official messages. Given
+ * `encoders`, only the encode side is generated, as the library's `reffect_json` module.
+ */
+const compositeCodecs = (
+  composites: readonly Composite[],
+  encoders?: readonly JsonEncoder[],
+): string => {
   const rustType = (type: IRType<unknown>): string => {
     const item = arrayItem(type);
     if (item) return `Vec<${rustType(item)}>`;
@@ -1539,6 +1641,12 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
         : IRType.same(type, StringType)
           ? "String"
           : "()";
+  };
+  const borrowedType = (type: IRType<unknown>): string => {
+    const item = arrayItem(type);
+    if (item) return `[${rustType(item)}]`;
+    const value = recordValue(type);
+    return value ? `[(String, ${rustType(value)})]` : rustType(type);
   };
   const decodeField = (codec: Codec, value: string, path: string): string =>
     isScalar(codec)
@@ -1623,68 +1731,71 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
       const mismatch = Rs.stringLiteral(
         finiteOnly ? "Expected number" : 'Expected number | "Infinity" | "-Infinity" | "NaN"',
       ).text;
-      return (
-        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<f64, String> {\n    let x = match value {\n        Value::Number(number) => number.as_f64().unwrap_or(f64::NAN),\n${fallback}        _ => return Err(at(${mismatch}, path)),\n    };\n` +
-        checks
-          .map(
-            (check) =>
-              `    if !(${check.rust}) { return Err(at(${Rs.stringLiteral(check.expected).text}, path)); }\n`,
-          )
-          .join("") +
-        `    Ok(x)\n}\n` +
-        `fn encode_${name}(value: &f64) -> Value { js_number(*value) }\n`
-      );
+      return {
+        decode:
+          `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<f64, String> {\n    let x = match value {\n        Value::Number(number) => number.as_f64().unwrap_or(f64::NAN),\n${fallback}        _ => return Err(at(${mismatch}, path)),\n    };\n` +
+          checks
+            .map(
+              (check) =>
+                `    if !(${check.rust}) { return Err(at(${Rs.stringLiteral(check.expected).text}, path)); }\n`,
+            )
+            .join("") +
+          `    Ok(x)\n}\n`,
+        encode: `fn encode_${name}(value: &f64) -> Value { js_number(*value) }\n`,
+      };
     }
     if (shape.literals) {
       const variants = rustLiteralVariants(shape.literals);
       const type = rustType(shape.type);
-      return (
-        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${type}, String> {\n    match value.as_str() {\n${shape.literals
+      return {
+        decode: `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${type}, String> {\n    match value.as_str() {\n${shape.literals
           .map(
             (literal, i) =>
               `        Some(${Rs.stringLiteral(literal).text}) => Ok(${type}::${variants[i]}),\n`,
           )
-          .join("")}        _ => Err(at(${expected}, path)),\n    }\n}\n` +
-        `fn encode_${name}(value: &${type}) -> Value {\n    Value::String(match value {\n${shape.literals
+          .join("")}        _ => Err(at(${expected}, path)),\n    }\n}\n`,
+        encode: `fn encode_${name}(value: &${type}) -> Value {\n    Value::String(match value {\n${shape.literals
           .map(
             (literal, i) =>
               `        ${type}::${variants[i]} => ${Rs.stringLiteral(literal).text},\n`,
           )
-          .join("")}    }.to_string())\n}\n`
-      );
+          .join("")}    }.to_string())\n}\n`,
+      };
     }
     if (shape.json)
-      return (
-        `fn decode_${name}(value: &Value, _path: Option<&Path>) -> Result<Value, String> { Ok(js_json(value)) }\n` +
-        `fn encode_${name}(value: &Value) -> Value { value.clone() }\n`
-      );
+      return {
+        decode: `fn decode_${name}(value: &Value, _path: Option<&Path>) -> Result<Value, String> { Ok(js_json(value)) }\n`,
+        encode: `fn encode_${name}(value: &Value) -> Value { value.clone() }\n`,
+      };
     if (shape.record !== undefined)
-      return (
-        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
-        `    let Some(object) = value.as_object() else { return Err(at(${expected}, path)) };\n` +
-        `    let mut out = Vec::with_capacity(object.len());\n` +
-        `    for (key, item) in js_entries(object) {\n        let child = Path { parent: path, name: key, index: false };\n        out.push((key.clone(), ${decodeField(shape.record, "item", "Some(&child)")}?));\n    }\n    Ok(out)\n}\n` +
-        `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    let mut map = serde_json::Map::new();\n    for (key, item) in value.iter() { map.insert(key.clone(), ${encodeField(shape.record, "(*item)")}); }\n    Value::Object(map)\n}\n`
-      );
+      return {
+        decode:
+          `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
+          `    let Some(object) = value.as_object() else { return Err(at(${expected}, path)) };\n` +
+          `    let mut out = Vec::with_capacity(object.len());\n` +
+          `    for (key, item) in js_entries(object) {\n        let child = Path { parent: path, name: key, index: false };\n        out.push((key.clone(), ${decodeField(shape.record, "item", "Some(&child)")}?));\n    }\n    Ok(out)\n}\n`,
+        encode: `fn encode_${name}(value: &[(String, ${rustType(recordValue(shape.type)!)})]) -> Value {\n    let mut map = serde_json::Map::new();\n    for (key, item) in value.iter() { map.insert(key.clone(), ${encodeField(shape.record, "(*item)")}); }\n    Value::Object(map)\n}\n`,
+      };
     if (shape.item !== undefined)
-      return (
-        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
-        `    let Some(items) = value.as_array() else { return Err(at(${expected}, path)) };\n` +
-        `    let mut out = Vec::with_capacity(items.len());\n` +
-        `    for (i, item) in items.iter().enumerate() {\n        let index = i.to_string();\n        let child = Path { parent: path, name: &index, index: true };\n        out.push(${decodeField(shape.item, "item", "Some(&child)")}?);\n    }\n` +
-        // Elements decode first; length checks then run in declaration order, first failure wins.
-        (shape.lengths?.length
-          ? `    let n = out.len();\n` +
-            shape.lengths
-              .map(
-                (check) =>
-                  `    if !(${check.rust}) { return Err(at(${Rs.stringLiteral(check.expected).text}, path)); }\n`,
-              )
-              .join("")
-          : "") +
-        `    Ok(out)\n}\n` +
-        `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    Value::Array(value.iter().map(|item| ${encodeField(shape.item, "(*item)")}).collect())\n}\n`
-      );
+      return {
+        decode:
+          `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n` +
+          `    let Some(items) = value.as_array() else { return Err(at(${expected}, path)) };\n` +
+          `    let mut out = Vec::with_capacity(items.len());\n` +
+          `    for (i, item) in items.iter().enumerate() {\n        let index = i.to_string();\n        let child = Path { parent: path, name: &index, index: true };\n        out.push(${decodeField(shape.item, "item", "Some(&child)")}?);\n    }\n` +
+          // Elements decode first; length checks then run in declaration order, first failure wins.
+          (shape.lengths?.length
+            ? `    let n = out.len();\n` +
+              shape.lengths
+                .map(
+                  (check) =>
+                    `    if !(${check.rust}) { return Err(at(${Rs.stringLiteral(check.expected).text}, path)); }\n`,
+                )
+                .join("")
+            : "") +
+          `    Ok(out)\n}\n`,
+        encode: `fn encode_${name}(value: &[${rustType(arrayItem(shape.type)!)}]) -> Value {\n    Value::Array(value.iter().map(|item| ${encodeField(shape.item, "(*item)")}).collect())\n}\n`,
+      };
     if (shape.cases.length === 0) {
       const body = structBody(shape.type, undefined, shape.fields);
       // An empty Struct also accepts arrays, as the pinned decoder does.
@@ -1692,10 +1803,10 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
         shape.fields.length === 0
           ? `if !(value.is_object() || value.is_array()) { return Err(at(${expected}, path)) }\n    let empty = serde_json::Map::new();\n    let object = value.as_object().unwrap_or(&empty);\n`
           : `let Some(object) = value.as_object() else { return Err(at(${expected}, path)) };\n`;
-      return (
-        `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n    ${object}${body.decode}}\n` +
-        `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    let mut map = serde_json::Map::new();\n${body.encode}    Value::Object(map)\n}\n`
-      );
+      return {
+        decode: `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n    ${object}${body.decode}}\n`,
+        encode: `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    let mut map = serde_json::Map::new();\n${body.encode}    Value::Object(map)\n}\n`,
+      };
     }
     const variants = shape.cases.map((c, i) => {
       const body = structBody(shape.type, c.tag, c.fields);
@@ -1705,11 +1816,26 @@ const compositeCodecs = (composites: readonly Composite[]): string => {
         encode: `        ${variant}(value) => {\n            let mut map = serde_json::Map::new();\n${body.encode}            Value::Object(map)\n        }\n`,
       };
     });
-    return (
-      `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n    let empty = serde_json::Map::new();\n    let object = value.as_object().unwrap_or(&empty);\n    match value.as_object().and_then(|o| o.get("_tag")).and_then(Value::as_str) {\n${variants.map((v) => v.decode).join("")}        _ => Err(at(${expected}, path)),\n    }\n}\n` +
-      `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    match value {\n${variants.map((v) => v.encode).join("")}    }\n}\n`
-    );
+    return {
+      decode: `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${rustType(shape.type)}, String> {\n    let empty = serde_json::Map::new();\n    let object = value.as_object().unwrap_or(&empty);\n    match value.as_object().and_then(|o| o.get("_tag")).and_then(Value::as_str) {\n${variants.map((v) => v.decode).join("")}        _ => Err(at(${expected}, path)),\n    }\n}\n`,
+      encode: `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    match value {\n${variants.map((v) => v.encode).join("")}    }\n}\n`,
+    };
   });
+  if (encoders)
+    return `use crate as reffect_generated;
+use serde_json::Value;
+${
+  composites.some((shape) => shape.number !== undefined) ? jsNumber : ""
+}${items.map((item) => item.encode).join("")}${encoders
+      .map((encoder) =>
+        // Read-only inputs arrive borrowed (`&str`, slices); owned values coerce to them.
+        IRType.same(encoder.type, StringType)
+          ? `pub fn ${encoder.name}(value: &str) -> Value { Value::String(value.to_string()) }
+`
+          : `pub fn ${encoder.name}(value: &${borrowedType(encoder.type)}) -> Value { ${encodeField(encoder.codec, "(*value)")} }
+`,
+      )
+      .join("")}`;
   return `struct Path<'a> { parent: Option<&'a Path<'a>>, name: &'a str, index: bool }
 fn at(message: &str, path: Option<&Path>) -> String {
     let mut names = Vec::new();
@@ -1722,13 +1848,7 @@ fn at(message: &str, path: Option<&Path>) -> String {
     format!("{}\\n  at {}", message, segments)
 }
 /// JSON.stringify-compatible doubles: non-finite as strings, -0 as 0, safe integers unfractioned.
-fn js_number(x: f64) -> Value {
-    if x.is_nan() { return Value::String("NaN".to_string()); }
-    if x.is_infinite() { return Value::String(if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string()); }
-    if x == 0.0 { return Value::from(0u64); }
-    if x.fract() == 0.0 && x.abs() < 9007199254740992.0 { return Value::from(x as i64); }
-    Value::from(x)
-}
+${jsNumber}
 fn u64_in(value: &Value, path: Option<&Path>) -> Result<u64, String> { u64_arg(value, None).map_err(|message| at(&message, path)) }
 fn bool_in(value: &Value, path: Option<&Path>) -> Result<bool, String> { bool_arg(value, None).map_err(|message| at(&message, path)) }
 fn string_in(value: &Value, path: Option<&Path>) -> Result<String, String> { string_arg(value, None).map_err(|message| at(&message, path)) }
@@ -1771,5 +1891,5 @@ fn array_index(key: &str) -> Option<u32> {
 `
       : ""
   }
-${items.join("")}`;
+${items.map((item) => item.decode + item.encode).join("")}`;
 };

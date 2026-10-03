@@ -14,7 +14,12 @@
   - `get`/`write`/`remove` follow upstream `MemoryStore`.
   - Query cells are cached per store version.
   - Remote read, query and acceptance pass (6/6).
-- **Design:** mutations use typed, wire-shaped values (RM-006, RS-001/RM-001 refined), because upstream `Remote.patch` takes `Partial<Struct.Encoded<F>>`. The next step is `R.Schema.encodeSync(R.Schema.toCodecJson(witness))`, built on NativeRpc's verified encoders.
+- **Design:** mutations use typed, wire-shaped values (RM-006, RS-001/RM-001 refined), because upstream `Remote.patch` takes `Partial<Struct.Encoded<F>>`.
+- **RM-006 implemented:** `R.Schema.encodeSync(R.Schema.toCodecJson(witness))` turns typed values into `Unknown`.
+  - Each witness is an interned operation that needs the host `JsonEncoders` capability; a plain `Compile` refuses it.
+  - NativeRpc emits a `reffect_json` library module from its verified encoders.
+  - [schema-json-rpc.test.ts](packages/reffect/tests/schema-json-rpc.test.ts) matches official `toCodecJson` byte for byte (2/2).
+  - Array and record encoders now take slices. Regression: arrays, records, records-js, unknown, optional, tagged-errors, literals and remote-read RPC suites pass (8 files, 17 tests).
 
 ## 2026-10-03 — First native versus official Remote measurements
 

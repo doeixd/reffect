@@ -73,6 +73,8 @@ export const Capabilities = Object.freeze({
   SyncResult: SemanticRef.capability("reffect/capability/sync-result@1"),
   /** Opaque JSON data (`R.Unknown`), natively `serde_json::Value` (UNK-003). */
   Json: SemanticRef.capability("reffect/capability/json@1"),
+  /** Typed-value JSON encoders supplied by a host's verified codecs (RM-006). */
+  JsonEncoders: SemanticRef.capability("reffect/capability/json-encoders@1"),
 });
 export const Targets = Object.freeze({ RustStd: SemanticRef.target("rust/std@1") });
 export const Traits = Object.freeze({

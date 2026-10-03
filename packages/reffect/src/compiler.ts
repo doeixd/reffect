@@ -8,6 +8,7 @@ import { Foldkit } from "./foldkit.ts";
 import { EffectFn, SyncEffects, AsyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import { containsRef } from "./ref-model.ts";
+import { jsonEncodedWitness } from "./schema-json.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -79,7 +80,8 @@ export interface Implementation {
     | "not"
     | "contains"
     | "replace"
-    | "add";
+    | "add"
+    | "json";
 }
 export class Target extends Pipeable.Class {
   private constructor(
@@ -115,6 +117,25 @@ const implementation = (
     method,
     rationale: `Verified primitive Rust ${method} implements ${operation.id} without coercion`,
   });
+const hostEncoders = new WeakMap<object, Implementation>();
+/** The host-supplied encoder for one witness (RM-006), selected only where JsonEncoders is. */
+const jsonImplementation = (operation: AnyOperation): Implementation => {
+  const known = hostEncoders.get(operation);
+  if (known) return known;
+  const created: Implementation = Object.freeze({
+    id: `rust/${operation.id}`,
+    operation,
+    target: Targets.RustStd,
+    strategy: "generated",
+    capabilities: operation.capabilities,
+    crates: Object.freeze([]),
+    method: "json",
+    rationale:
+      "The NativeRpc host's codec, verified against Schema.toCodecJson, encodes the witness",
+  });
+  hostEncoders.set(operation, created);
+  return created;
+};
 const implementations = Object.freeze([
   implementation(AddU64 as AnyOperation, "wrapping_add"),
   implementation(SubU64 as AnyOperation, "wrapping_sub"),
@@ -623,7 +644,11 @@ const plan = Effect.fn("Compile.plan")(function* (
   for (const op of derived.operations) {
     const rejected: { id: string; reason: string }[] = [];
     let selected: Implementation | undefined;
-    for (const candidate of target.implementations.filter((i) => i.operation.id === op.id)) {
+    const encoded = jsonEncodedWitness(op);
+    const candidates = encoded
+      ? [jsonImplementation(op)]
+      : target.implementations.filter((i) => i.operation.id === op.id);
+    for (const candidate of candidates) {
       const reason =
         candidate.operation.ref !== op.ref || candidate.operation !== op
           ? "Semantic identity collision"
@@ -633,7 +658,7 @@ const plan = Effect.fn("Compile.plan")(function* (
                   (c) => !target.capabilities.includes(c) || !candidate.capabilities.includes(c),
                 )
               ? "Missing capability"
-              : !implementations.includes(candidate)
+              : !implementations.includes(candidate) && !encoded
                 ? "No verified Rust lowering registered for this candidate"
                 : undefined;
       if (reason) rejected.push({ id: candidate.id, reason });

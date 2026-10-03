@@ -65,13 +65,20 @@ Checked against `foldkit-remote` 0.10.0 `index.d.mts`: `Remote.patch(entity, id,
   - The reference runs official `Schema.encodeSync(Schema.toCodecJson(witness.schema))`.
   - Natively, the generated module declares a `ToJson` trait and lowers the node to `ToJson::to_json(&value)`. The RPC server crate implements `ToJson` for each witness the node reaches, with the NativeRpc encoders already verified against the official codec (numbers, optional keys, JS key order, literals, tagged unions). This avoids a second, unverified encoder in core lowering.
   - Outside an RPC host there are no `ToJson` impls; such functions already reach `Unknown`, which the native runner excludes, so the node is refused there rather than failing in Cargo.
+- **RM-006 as implemented (2026-10-03).**
+  - Each encoded witness is an interned operation, `reffect/schema.encode-json@1/<witness>`, that requires the new `JsonEncoders` capability.
+  - Plan selection supplies a host implementation (`method: "json"`) only for targets with that capability. NativeRpc adds the capability, so a plain `Compile` refuses with "Missing capability".
+  - NativeRpc appends a `reffect_json` module to the generated library. It holds one `pub fn json_<digest>` per witness, built by the same generator as the server's encoders (encode side only).
+  - Array and record encoders now take slices, because read-only inputs arrive borrowed.
+  - Builtin witnesses carry private identity filters that NativeRpc refuses, so the codec comes from the witness's structure (`contractSchemaOf`), not from `witness.schema`.
+  - [schema-json-rpc.test.ts](../../packages/reffect/tests/schema-json-rpc.test.ts) compares native responses with the reference running official `toCodecJson`, as parsed JSON and as raw key order. It covers non-finite and `-0` numbers, optional/optionalKey fields, literals, `Unknown`, records with index keys, tagged unions, and two encoders in one function.
 - **RS-001 refined — typed store writes.** `write(entity, id, values)` takes any Struct witness and stores its JSON encoding, so a row keeps the entity's wire shape. That is narrower than upstream's untyped `Record<string, unknown>` (spreading a non-object is not admitted) and settles the NR-017 question for written rows: the values are the entity's own encoded field types. `remove(entity, id)` is unchanged. `get` returns raw `Unknown` rows and waits for typed decoding (`Schema.decodeUnknown`, fallible) with the first mutation that needs it.
 - **RM-001 refined — patches and outcomes.** `NativeRemote.patch(Entity, id, values)` builds `{ entity, id, values: encode(values) }`, checking at authoring time that `values` is a Struct whose fields are declared entity fields with the witnesses of their encoded schemas. All patches share one Struct type, so `entities` stays an ordered Array as upstream returns it. `connections` waits for RM-005.
 
 ## Order of work
 
 1. RM-002 store with read/query sharing it (no behaviour change). **Done (phase A).**
-2. RM-006 typed → `Unknown` encoding, tested over NativeRpc against the official server.
+2. RM-006 typed → `Unknown` encoding, tested over NativeRpc against the official server. **Done** (see below).
 3. `RemoteStore` write/remove nodes (RS-001), tested through mutations.
 4. RM-001 mutations, with Rename-style and create/delete scenarios ported from the memory and server tests, compared over the wire and through `Data.mutate` acceptance.
 5. RM-004 authorization, with nested-authorization scenarios from `nested.test.ts` (authorized levels, a relation the principal may not read).

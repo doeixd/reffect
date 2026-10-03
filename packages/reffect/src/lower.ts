@@ -25,6 +25,7 @@ import {
 import { refContent, refType } from "./ref-model.ts";
 import { rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
 import type { Expr, OperationRef, Program, RecordQuery } from "./kernel.ts";
+import { jsonEncodedWitness, jsonEncoderName } from "./schema-json.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -52,6 +53,8 @@ export type RustExpr = (
       readonly _tag: "Call";
       readonly method: Implementation["method"];
       readonly args: readonly RustExpr[];
+      /** The host's encoder function for a "json" call (RM-006). */
+      readonly encoder?: string;
     }
   | {
       readonly _tag: "Match";
@@ -597,14 +600,18 @@ export function lowerFunctions(
                   ? Object.freeze({ _tag: "Undefined" })
                   : Object.freeze({ _tag: "Defined", value: literal });
               },
-              Apply: (n): RustExpr =>
-                Object.freeze({
+              Apply: (n): RustExpr => {
+                const method = selected.get(n.operation.ref)!.method;
+                const encoded = jsonEncodedWitness(n.operation);
+                return Object.freeze({
                   _tag: "Call",
-                  method: selected.get(n.operation.ref)!.method,
+                  method,
                   args: Object.freeze(
                     n.args.map((arg, i) => expression(arg, `${path}.args[${i}]`)),
                   ),
-                }),
+                  ...(method === "json" && encoded ? { encoder: jsonEncoderName(encoded) } : {}),
+                });
+              },
               Match: (n): RustExpr =>
                 Object.freeze({
                   _tag: "Match",
@@ -1690,6 +1697,12 @@ export const emitFunctions = (
                 },
                 Call: (n) => {
                   if (n.method === "not") return joinFragments(["!(", operand(n.args[0]), ")"]);
+                  if (n.method === "json")
+                    return joinFragments([
+                      `crate::reffect_json::${Rs.ident(n.encoder!).text}(&(`,
+                      operand(n.args[0]),
+                      "))",
+                    ]);
                   if (n.method === "add")
                     return joinFragments([
                       "(",
