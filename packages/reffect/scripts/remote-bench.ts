@@ -70,7 +70,28 @@ const { parentPort, workerData } = require("node:worker_threads");
   await Promise.all(Array.from({ length: concurrency }, loop));
   parentPort.postMessage(latencies);
 })();`;
+// BENCH-003: with REFFECT_BENCH_OHA set to an oha binary, a native load generator replaces fetch.
+const OHA = process.env.REFFECT_BENCH_OHA;
+const runOha = (url: string, body: string, count: number) => {
+  const file = join(mkdtempSync(join(tmpdir(), "reffect-body-")), "body.json");
+  writeFileSync(file, body);
+  const report = JSON.parse(
+    execFileSync(OHA!, ["-n", String(count), "-c", String(CONCURRENCY), "-m", "POST", "-D", file, "-H", "content-type: application/json", "--no-tui", "--output-format", "json", url], { maxBuffer: 64 * 1024 * 1024 }).toString(),
+  ) as {
+    readonly summary: { readonly requestsPerSec: number; readonly successRate: number };
+    readonly latencyPercentiles: { readonly p50: number; readonly p95: number; readonly p99: number };
+  };
+  if (report.summary.successRate !== 1) throw new Error(`oha saw failures against ${url}`);
+  const ms = (seconds: number) => Number((seconds * 1000).toFixed(3));
+  return {
+    requestsPerSecond: Math.round(report.summary.requestsPerSec),
+    p50ms: ms(report.latencyPercentiles.p50),
+    p95ms: ms(report.latencyPercentiles.p95),
+    p99ms: ms(report.latencyPercentiles.p99),
+  };
+};
 const run = async (url: string, body: string, count: number) => {
+  if (OHA) return runOha(url, body, count);
   const started = performance.now();
   const parts = await Promise.all(
     Array.from(
@@ -175,7 +196,7 @@ const record = {
     requests: REQUESTS,
     concurrency: CONCURRENCY,
     warmup: WARMUP,
-    client: `node fetch (keep-alive) in ${WORKERS} worker threads, same machine`,
+    client: OHA ? `oha ${execFileSync(OHA, ["--version"]).toString().trim()}, same machine` : `node fetch (keep-alive) in ${WORKERS} worker threads, same machine`,
   },
   peakServerMemoryMiB: memory,
   results,
