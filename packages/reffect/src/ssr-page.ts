@@ -88,7 +88,11 @@ export const splitTemplate = (
 };
 
 /** The Rust host: `handleRequest` around `render`, an expression evaluating to the encoded page. */
-export const pageRuntime = (parts: ReadonlyArray<TemplatePart>, render: string): string => {
+export const pageRuntime = (
+  parts: ReadonlyArray<TemplatePart>,
+  origin: string,
+  render: string,
+): string => {
   const splice = parts
     .map((part) =>
       part._tag === "Text"
@@ -257,6 +261,9 @@ async fn ssr_page(method: axum::http::Method, uri: axum::http::Uri, headers: Hea
             return empty(StatusCode::NOT_FOUND, &[("vary", ssr_host::vary_with(Some(&ssr_host::vary_with(None, "Accept")), "Sec-Fetch-Dest"))]);
         }
     }
+    // The request URL as upstream's Request has it: the target resolved against the origin.
+    #[allow(unused_variables)]
+    let href: String = url::Url::parse(${JSON.stringify(origin)}).and_then(|base| base.join(target)).map(|url| url.to_string()).unwrap_or_default();
     // The page's own render failure, or a title the template cannot hold, is a server error.
     let page: Value = ${render};
     let (Some(html), Some(raw_title)) = (page["success"]["html"].as_str(), page["success"]["title"].as_str()) else {

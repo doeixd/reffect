@@ -172,7 +172,9 @@ const htmlImplementation = (operation: AnyOperation): Implementation => {
     target: Targets.RustStd,
     strategy: "generated",
     capabilities: operation.capabilities,
-    crates: Object.freeze([]),
+    crates: Object.freeze(
+      htmlOperationKind(operation)?._tag === "JsonText" ? ["ryu-js@1.0.3"] : [],
+    ),
     method: "html",
     rationale: "foldkit/ssr-serialize@1 renders the element as renderToString does",
   });

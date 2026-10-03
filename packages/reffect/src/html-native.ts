@@ -248,3 +248,43 @@ pub mod foldkit_html {
     }
 }
 `;
+
+/** `JSON.stringify` for decoded JSON: serde's string escaping matches JS, and numbers are JS text. */
+export const jsonTextRuntime = String.raw`
+#[allow(dead_code)]
+pub mod foldkit_json {
+    pub fn json_text(value: &serde_json::Value) -> String {
+        let mut out = String::new();
+        write(value, &mut out);
+        out
+    }
+    fn write(value: &serde_json::Value, out: &mut String) {
+        match value {
+            serde_json::Value::Null => out.push_str("null"),
+            serde_json::Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+            serde_json::Value::Number(number) => match (number.as_i64(), number.as_u64(), number.as_f64()) {
+                (Some(i), _, _) => out.push_str(&i.to_string()),
+                (_, Some(u), _) => out.push_str(&u.to_string()),
+                (_, _, Some(x)) => out.push_str(ryu_js::Buffer::new().format(x)),
+                _ => out.push_str("null"),
+            },
+            serde_json::Value::String(text) => out.push_str(&serde_json::to_string(text).unwrap()),
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() { if i > 0 { out.push(','); } write(item, out); }
+                out.push(']');
+            }
+            serde_json::Value::Object(map) => {
+                out.push('{');
+                for (i, (key, item)) in map.iter().enumerate() {
+                    if i > 0 { out.push(','); }
+                    out.push_str(&serde_json::to_string(key).unwrap());
+                    out.push(':');
+                    write(item, out);
+                }
+                out.push('}');
+            }
+        }
+    }
+}
+`;

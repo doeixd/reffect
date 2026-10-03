@@ -38,7 +38,7 @@ import type { OperationRef, Program, RecordQuery } from "./kernel.ts";
 import { hostFunctionOf } from "./schema-json.ts";
 import { HtmlType, htmlOperationKind } from "./html-ir.ts";
 import type { HtmlOperationKind } from "./html-ir.ts";
-import { elementCall, htmlRuntime } from "./html-native.ts";
+import { elementCall, htmlRuntime, jsonTextRuntime } from "./html-native.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -1606,6 +1606,8 @@ export const emitFunctions = (
   let usesRyu = false;
   // Set when an Html value is reachable, which brings the ported serializer (SSR-003).
   let usesHtml = false;
+  // Set when JSON text is written as JSON.stringify does (M9-1).
+  let usesJsonText = false;
   const rsTypeOf = (type: IRType<unknown>): RsType => {
     const content = refContent(type);
     if (content) return rsTypeOf(content);
@@ -2173,6 +2175,11 @@ export const emitFunctions = (
                     if (html._tag === "Text")
                       return joinFragments(["crate::foldkit_html::text(&(", args[0]!, ")[..])"]);
                     if (html._tag === "Empty") return textFragment("crate::foldkit_html::empty()");
+                    if (html._tag === "JsonText") {
+                      usesJsonText = true;
+                      usesRyu = true;
+                      return joinFragments(["crate::foldkit_json::json_text(&(", args[0]!, "))"]);
+                    }
                     if (html._tag === "RootKind")
                       return joinFragments(["crate::foldkit_html::root_kind(&(", args[0]!, "))"]);
                     if (html._tag === "RenderFailure")
@@ -3561,7 +3568,7 @@ export const emitFunctions = (
         ? 'serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'
         : "") +
       (usesRyu ? 'ryu-js = { version = "=1.0.3", default-features = false }\n' : ""),
-    "src/lib.rs": usesHtml ? `${writer.text}\n${htmlRuntime}` : writer.text,
+    "src/lib.rs": `${writer.text}${usesHtml ? `\n${htmlRuntime}` : ""}${usesJsonText ? `\n${jsonTextRuntime}` : ""}`,
     "src/main.rs": `${usesStrings ? stringBoundary : ""}${
       (hasAsync
         ? Rs.withAttributes(

@@ -15,6 +15,7 @@ import {
   StringType,
   Targets,
   Traits,
+  UnknownType,
 } from "./kernel.ts";
 import type { AnyOperation } from "./kernel.ts";
 import { ArrayIR, Struct, TaggedUnion, UndefinedOr } from "./records.ts";
@@ -278,7 +279,8 @@ export type HtmlOperationKind =
   | { readonly _tag: "Element"; readonly shape: ElementShape }
   | { readonly _tag: "RootKind" }
   | { readonly _tag: "RenderFailure" }
-  | { readonly _tag: "Render" };
+  | { readonly _tag: "Render" }
+  | { readonly _tag: "JsonText" };
 export const htmlOperationKind = (operation: AnyOperation): HtmlOperationKind | undefined => {
   const shape = elementShapes.get(operation);
   if (shape) return { _tag: "Element", shape };
@@ -287,5 +289,14 @@ export const htmlOperationKind = (operation: AnyOperation): HtmlOperationKind | 
   if (operation === RootKindOperation) return { _tag: "RootKind" };
   if (operation === RenderFailureOperation) return { _tag: "RenderFailure" };
   if (operation === RenderOperation) return { _tag: "Render" };
+  if (operation === JsonTextOperation) return { _tag: "JsonText" };
   return undefined;
 };
+
+/** `JSON.stringify` of decoded JSON data: the text of the Flags payload (M9-1). */
+export const JsonTextOperation = Operation.make(
+  SemanticRef.operation("reffect/json.stringify@1"),
+  [UnknownType],
+  StringType,
+  (value) => JSON.stringify(value),
+).pipe(Operation.withCapabilities([HtmlCapability]));

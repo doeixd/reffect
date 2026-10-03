@@ -957,8 +957,11 @@ type CompileOptions = {
    */
   readonly pages?: {
     readonly template: string;
-    readonly render: Fn<readonly [], unknown>;
+    /** No input, or the request URL: its target resolved against `origin` as WHATWG resolves it. */
+    readonly render: Fn<readonly [], unknown> | Fn<readonly [IRType<string>], unknown>;
     readonly containerId?: string;
+    /** The origin page URLs are resolved against; never the untrusted Host header. */
+    readonly origin?: string;
   };
 };
 const limitOf = (value: number | undefined, fallback: number, path: string): number => {
@@ -1614,12 +1617,32 @@ export const compileServer = (
         });
         if (auth && protectedCount === 0) throw unsupported("auth", "Bearer adapter is unused");
         let pages:
-          | { readonly kind: Codec; readonly parts: ReadonlyArray<TemplatePart> }
+          | {
+              readonly kind: Codec;
+              readonly parts: ReadonlyArray<TemplatePart>;
+              readonly takesUrl: boolean;
+              readonly origin: string;
+            }
           | undefined;
         if (options.pages) {
-          const { render, template, containerId } = options.pages;
-          if (!(render instanceof Fn) || render.input.length !== 0)
-            throw unsupported("pages.render", "The page is a pure R function of no inputs");
+          const { render, template, containerId, origin = "http://localhost" } = options.pages;
+          if (
+            !(render instanceof Fn) ||
+            render.input.length > 1 ||
+            (render.input.length === 1 && !IRType.same(render.input[0]!, StringType))
+          )
+            throw unsupported(
+              "pages.render",
+              "The page is a pure R function of nothing or of the request URL (String)",
+            );
+          let base: URL;
+          try {
+            base = new URL(origin);
+          } catch {
+            throw unsupported("pages.origin", "The origin is an absolute URL");
+          }
+          if (base.origin === "null" || base.href !== `${base.origin}/`)
+            throw unsupported("pages.origin", "The origin is a scheme, host and port only");
           const kind = codec(PageSchema.ast, "pages.render", false, registry, false);
           if (!IRType.same(render.output, witnessOf(kind)))
             throw unsupported(
@@ -1629,7 +1652,12 @@ export const compileServer = (
           if (Object.hasOwn(functions, "ssr_page"))
             throw unsupported("pages.render", "ssr_page is reserved for the page");
           functions.ssr_page = render;
-          pages = { kind, parts: splitTemplate(template, containerId) };
+          pages = {
+            kind,
+            parts: splitTemplate(template, containerId),
+            takesUrl: render.input.length === 1,
+            origin: base.href,
+          };
         }
         if (layer)
           functions.launch = EffectFn.make([], NeverType, layer.error, () =>
@@ -1900,9 +1928,14 @@ ${
               Rs.verbatimItem(
                 pageRuntime(
                   prepared.pages.parts,
+                  prepared.pages.origin,
                   encode(
                     prepared.pages.kind,
-                    Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident("r_ssr_page"), []),
+                    Rs.pathCall(
+                      [Rs.ident("reffect_generated")],
+                      Rs.ident("r_ssr_page"),
+                      prepared.pages.takesUrl ? [Rs.verbatimExpr("href.clone()")] : [],
+                    ),
                   ).text,
                 ),
               ),

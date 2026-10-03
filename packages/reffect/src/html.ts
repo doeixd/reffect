@@ -12,7 +12,9 @@
  */
 import { Effect, Schema } from "effect";
 import type { Document, HtmlBuilder } from "foldkit/html";
-import { BoolType, EqString, Expr, IRType, StringType, fail } from "./kernel.ts";
+import { BoolType, EqString, Expr, IRType, NumberType, StringType, fail } from "./kernel.ts";
+import { ConcatString } from "./kernel.ts";
+import { SchemaIR } from "./schema-json.ts";
 import type { Fn } from "./kernel.ts";
 import { Struct, UndefinedOr } from "./records.ts";
 import { ResultIR } from "./result.ts";
@@ -30,6 +32,7 @@ import {
   RenderFailureOperation,
   RenderOperation,
   RenderedType,
+  JsonTextOperation,
   RootKindOperation,
   STRING_ATTRIBUTES,
   TextOperation,
@@ -249,9 +252,61 @@ const toFoldkitView =
  * reference of each step is upstream `renderToString` itself; natively it is the ported
  * serializer (SSR-003).
  */
+/** Whether a witness holds a Number, whose `-0` the Flags JSON round trip would normalize. */
+const holdsNumber = (type: IRType<unknown>): boolean =>
+  IRType.same(type, NumberType) ||
+  (type.layout !== undefined &&
+    (type.layout._tag === "Struct"
+      ? type.layout.fields.some((field) => holdsNumber(field.type))
+      : type.layout._tag === "Union"
+        ? type.layout.cases.some(holdsNumber)
+        : type.layout._tag === "Array" || type.layout._tag === "UndefinedOr"
+          ? holdsNumber(type.layout.item)
+          : type.layout._tag === "Record"
+            ? holdsNumber(type.layout.value)
+            : false));
+/**
+ * Upstream's Flags payload: `<script type="application/json" data-foldkit-flags="…">` holding
+ * `JSON.stringify` of the encoded Flags with every `<` escaped. Upstream hands `init` the decoded
+ * round trip of that text; without Numbers it is the value itself, so the profile refuses them.
+ */
+const flagsPayload = (flags: Expr<unknown>, runtimeId: string): Expr<string> => {
+  if (holdsNumber(flags.type))
+    throw fail(
+      "UNSUPPORTED_FLAGS",
+      "authoring",
+      "Html.renderToString.flags",
+      "Flags holding Numbers are not admitted: the JSON round trip turns -0 into 0 before init",
+    );
+  const text = Expr.apply(
+    JsonTextOperation,
+    SchemaIR.encodeSync(SchemaIR.toCodecJson(flags.type))(flags),
+  );
+  const escapedId = runtimeId
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;");
+  return Expr.apply(
+    ConcatString,
+    Expr.apply(
+      ConcatString,
+      Expr.literal(
+        StringType,
+        `<script type="application/json" data-foldkit-flags="${escapedId}">`,
+      ),
+      StringType.replaceAll(text, "<", "\\u003c"),
+    ),
+    Expr.literal(StringType, "</script>"),
+  );
+};
 const renderToString = (
   document: Expr<{ readonly title: string; readonly body: HtmlValue }>,
-  options: { readonly buildId: string; readonly runtimeId?: string },
+  options: {
+    readonly buildId: string;
+    readonly runtimeId?: string;
+    /** The Flags `init` was given, carried to the client in the Flags payload (M9-1). */
+    readonly flags?: Expr<unknown>;
+  },
 ): Expr<
   ResultValue<
     { readonly html: string; readonly title: string },
@@ -274,13 +329,19 @@ const renderToString = (
     Expr.literal(StringType, options.buildId),
   ] as const;
   const kind = Expr.apply(RootKindOperation, body);
+  const flagsScript =
+    options.flags === undefined ? undefined : flagsPayload(options.flags, runtimeId);
+
   return Expr.match(
     Expr.apply(EqString, kind, Expr.literal(StringType, "Element")),
     UndefinedOr.match(Expr.apply(RenderFailureOperation, body, ...ids), {
       onUndefined: () =>
         ResultIR.succeed(
           RenderedType.make({
-            html: Expr.apply(RenderOperation, body, ...ids),
+            html:
+              flagsScript === undefined
+                ? Expr.apply(RenderOperation, body, ...ids)
+                : Expr.apply(ConcatString, Expr.apply(RenderOperation, body, ...ids), flagsScript),
             title: Struct.get(document, "title"),
           }),
           RenderErrorType,
