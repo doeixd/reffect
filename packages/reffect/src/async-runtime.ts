@@ -1,3 +1,9 @@
+import {
+  runtimeServiceFields,
+  runtimeServiceInitializers,
+  runtimeServiceMethods,
+} from "./runtime-services.ts";
+import type { RuntimeServiceUsage } from "./runtime-services.ts";
 /** Audited execution scaffold. Logging and failure storage are selected by reachability/policy. */
 export const asyncRuntime = (
   logging: boolean,
@@ -6,6 +12,7 @@ export const asyncRuntime = (
   scopeCapacity = 0,
   launch?: string,
   store = false,
+  services: RuntimeServiceUsage = { clock: false, random: false },
 ): string => `
 #[derive(Debug)]
 pub enum AsyncError<E> { Fail(E), Interrupted }
@@ -37,6 +44,7 @@ pub trait RemoteStore: Send + Sync {
 `
     : ""
 }pub struct AsyncContext {
+    ${runtimeServiceFields(services)}
     cancellation: tokio::sync::watch::Receiver<bool>,
     interruptible: bool,
     ${logging ? "annos: Vec<(&'static str, LogAttr)>, spans: Vec<(&'static str, std::time::Instant)>, request: Option<String>," : ""}
@@ -48,6 +56,7 @@ pub trait RemoteStore: Send + Sync {
 impl AsyncContext {
     pub fn new(cancellation: tokio::sync::watch::Receiver<bool>) -> Self {
         Self { cancellation, interruptible: true,
+            ${runtimeServiceInitializers(services)}
             ${logging ? "annos: Vec::new(), spans: Vec::new(), request: None," : ""}
             ${frames ? "frames: None," : ""}
             ${scopeDepth ? "scopes: std::array::from_fn(|_| None), scope_depth: 0," : ""}
@@ -55,6 +64,7 @@ impl AsyncContext {
             ${store ? "store: None," : ""}
         }
     }
+    ${runtimeServiceMethods(services)}
     pub fn is_cancelled(&self) -> bool {
         self.interruptible && (*self.cancellation.borrow() || self.cancellation.has_changed().is_err())
     }

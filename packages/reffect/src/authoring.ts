@@ -39,6 +39,8 @@ import { ResultIR, effectResult } from "./result.ts";
 import { DurationIR } from "./duration.ts";
 import { EffectCombinators } from "./effect-combinators.ts";
 import { RefIR } from "./ref.ts";
+import { ClockIR } from "./clock.ts";
+import { RandomIR } from "./random.ts";
 import {
   ArrayCombinators,
   BooleanCombinators,
@@ -130,6 +132,8 @@ export const R = Object.freeze({
   Result: ResultIR,
   Duration: DurationIR,
   Ref: RefIR,
+  Clock: ClockIR,
+  Random: RandomIR,
   Boolean: Object.freeze({ not: BoolType.not, ...BooleanCombinators }),
   Literals,
   Match: Object.freeze({ bool, valueTags }),

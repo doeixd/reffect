@@ -1,6 +1,6 @@
-# Next bounded Clock and Random modules
+# Bounded Clock and Random modules
 
-Prepared 2026-10-02 against Effect **4.0.0-rc.118**. This is a researched next patch, not shipped support. It supplements [runtime lowering](../runtime-lowering.md), [Duration configuration](duration-module.md) and [observability timing](../observability.md); it does not change the core roadmap.
+Prepared 2026-10-02 against Effect **4.0.0-rc.118**. The millis/next/nextBoolean subset is now implemented; broader APIs below remain proposed. It supplements [runtime lowering](../runtime-lowering.md), [Duration configuration](duration-module.md) and [observability timing](../observability.md); it does not change the core roadmap.
 
 ## Verified primary sources
 
@@ -49,7 +49,7 @@ This is a differential acceptance fixture for future native service identity, no
 
 ## Runtime injection and costs
 
-The next patch should introduce an internal checked implementation specification shared by compiler/reference test harnesses: live clock or stable/scripted clock, and scripted Random doubles. Native test probes instantiate generated concrete contexts directly; no unauthenticated RPC request field or machine-stdout protocol change chooses a test clock/seed. Script exhaustion/invalid Random values are structured harness/internal failures, not ordinary typed errors, and must bypass catchAll.
+The next patch should introduce an internal checked implementation specification shared by compiler/reference test harnesses: live clock or stable/scripted clock, and scripted Random doubles. Native test probes instantiate generated concrete contexts directly; no unauthenticated RPC request field or machine-stdout protocol change chooses a test clock/seed. The delivered driver treats script exhaustion/invalid values as fatal trusted-host configuration faults that bypass typed recovery; native panic does not await general Effect-defect finalization. See the implementation record for this narrower fault contract.
 
 Scripted Random values must be finite in `[0,1)` and preserve one draw per executed node. Keep scripts separate from scalar results and provenance. Runtime implementation selection belongs in reachable requirements/implementation registries, not the static scalar Layer API. A future HTTP host may deliberately supply long-lived generators or per-request service instances, with ownership and sharing recorded.
 
@@ -65,3 +65,19 @@ Do not add a universal heavyweight RuntimeServices struct to existing pure progr
 - Before `withSeed`: vectors longer than 256 generator words, numeric/string/non-ASCII/long seeds, repeated wrapper reuse, independently reconstructed wrappers, nested service shadow/restore, exact next/Boolean/range consumption. Confirm admission for lone-surrogate seeds (TextEncoder replacement versus the project's well-formed string policy).
 - Live smoke tests check representable wall-clock range and monotonic nondecrease without tight latency assertions or comparing clocks sampled at different instants. Seeded exact bits and controlled-clock events provide conformance; statistical samples alone cannot prove parity or lack of bias.
 - Full integrated semantic tests and compiler checks; native enabled/disabled cost probes; pinned crate/MSRV/features only if a new dependency becomes reachable. Update the module inventory as proposed until this end-to-end slice passes.
+
+## 2026-10-03 implementation preparation
+
+Rechecked published Effect 4.0.0 Clock/Random source before this slice and synchronized the existing native Remote Query work through 8fdaee8. Prior source audit established unchanged used Clock/Random semantics from rc.118. The next bounded implementation targets currentTimeMillis, next and nextBoolean with explicit checked runtime-driver selection. Pure/no-service native entries retain their representation and signatures. Stateful injection is invocation-owned, synchronous reads remain synchronous, and async helpers borrow the same driver state across suspension. Scripts are trusted host/compiler configuration, never RPC payload options.
+
+Core IR/reference/planning, native lowering/runtime and conformance have separate agent ownership. Their implementation records refine configuration, observer-clock policy and defect behavior before code changes. Parent owns integration/public exports and central documentation; the other instance continues to own PLAN.md. Seeded reuse, nanosecond representation, numeric ranges, live Random algorithm selection and cross-task driver sharing remain deferred.
+
+Parent integration acceptance adds a stock-client HTTP smoke fixture for live millis in synchronous and suspended handlers, plus structured refusal of an unselected Random backend. Use broad signed-safe wall-clock assertions rather than sample equality or latency bounds. Existing published RpcClient/Number wire behavior supplies the host protocol; no injected drivers enter request contracts.
+
+## Implemented profile and evidence
+
+`R.Clock.currentTimeMillis`, `R.Random.next` and `R.Random.nextBoolean` are synchronous checked effects. Compile requests select runtime implementations through `Compile.withRuntimeServices`; Random without explicit ScriptedRandom is refused. Default live millis remains std-only and context-free for synchronous entries. Injected Clock and scripted Random use owned SyncContext/AsyncContext fields with trusted native host setters. Injected Clock defaults live until configured; Random defaults empty and cannot silently generate a draw. No injected drivers enter RPC payloads, and the ordinary generated command-line host supplies no scripts.
+
+Clock admits signed safe-integer millis; Random admits finite `[0,1)` doubles with `nextBoolean` consuming one draw and applying `>0.5`. Invalid/exhausted scripts are fatal host configuration faults that bypass typed recovery; general defect finalization parity is outside this profile. Scripted computation reads leave existing observer clocks and Sleep live. Nanoseconds, range helpers, seeded lifetime/ISAAC, a live Random backend and cross-task sharing remain deferred.
+
+The [implementation record](runtime-services-implementation.md), [driver decisions](runtime-services-lowering.md) and [conformance evidence](runtime-services-conformance.md) record choices and measured limits. Focused 7/7 tests pass official/plain/framed reference and native debug/release under both frame policies, including cleanup on valid-script interruption, isolation and ordered reads. Full publication evidence belongs to PROGRESS.md.

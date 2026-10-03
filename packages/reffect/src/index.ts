@@ -43,6 +43,9 @@ export { DurationIR } from "./duration.ts";
 export type { Duration, DurationInput } from "./duration.ts";
 export { EffectCombinators } from "./effect-combinators.ts";
 export { RefIR } from "./ref.ts";
+export { ClockIR } from "./clock.ts";
+export { RandomIR } from "./random.ts";
+export type { RuntimeServicesSelection } from "./runtime-service-model.ts";
 export {
   ArrayCombinators,
   BooleanCombinators,

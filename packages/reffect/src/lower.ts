@@ -23,6 +23,13 @@ import {
   literalsOf,
 } from "./kernel.ts";
 import { refContent, refType } from "./ref-model.ts";
+import { normalizeRuntimeServicesSelection } from "./runtime-service-model.ts";
+import type {
+  RuntimeServicesSelection,
+  ResolvedRuntimeServicesSelection,
+} from "./runtime-service-model.ts";
+import { runtimeServicesPrelude } from "./runtime-services.ts";
+import type { RuntimeServiceUsage } from "./runtime-services.ts";
 import { rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
 import type { Expr, OperationRef, Program, RecordQuery } from "./kernel.ts";
 import { hostFunctionOf } from "./schema-json.ts";
@@ -158,6 +165,8 @@ interface Parameter {
   readonly type: IRType<unknown>;
 }
 type HelperBody =
+  | { readonly _tag: "ClockReadMillis" }
+  | { readonly _tag: "RandomDraw" }
   | {
       readonly _tag: "RefScope";
       readonly initial: RustBlock;
@@ -310,6 +319,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
+  readonly services: RuntimeServiceUsage;
   readonly asynchronous: boolean;
   readonly origin?: string;
   readonly path: string;
@@ -322,12 +332,14 @@ interface RustFunction {
     | { readonly _tag: "Effect"; readonly root: number; readonly error: IRType<unknown> };
 }
 export interface RustModule {
+  readonly runtimeServices: ResolvedRuntimeServicesSelection;
   readonly failureFrames: FailureFramePolicy;
   readonly sourceArtifacts: FullSourceArtifacts;
   readonly provenance: ProvenanceSnapshot;
   readonly functions: readonly RustFunction[];
 }
 export interface UnmappedRustModule {
+  readonly runtimeServices: ResolvedRuntimeServicesSelection;
   readonly failureFrames: FailureFramePolicy;
   readonly sourceArtifacts: NoneSourceArtifacts;
   readonly provenance?: never;
@@ -350,25 +362,30 @@ export function lowerFunctions(
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: FullSourceArtifacts,
   failureFrames?: FailureFramePolicy,
+  runtimeServices?: RuntimeServicesSelection,
 ): RustModule;
 export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: NoneSourceArtifacts,
   failureFrames?: FailureFramePolicy,
+  runtimeServices?: RuntimeServicesSelection,
 ): UnmappedRustModule;
 export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: ArtifactPolicy,
   failureFrames?: FailureFramePolicy,
+  runtimeServices?: RuntimeServicesSelection,
 ): LoweredModule;
 export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: ArtifactPolicy = SourceArtifacts.Full,
   failureFrames: FailureFramePolicy = FailureFrames.Bounded,
+  servicesSelection: RuntimeServicesSelection = {},
 ): LoweredModule {
+  const runtimeServices = normalizeRuntimeServicesSelection(servicesSelection);
   checkArtifactPolicy(policy);
   checkFailureFramePolicy(failureFrames);
   const provenance = SourceArtifacts.isNone(policy) ? undefined : new Provenance(program);
@@ -487,6 +504,8 @@ export function lowerFunctions(
                 computation(n.body);
                 computation(n.afterClose);
               },
+              ClockReadMillis: () => {},
+              RandomDraw: () => {},
               RefMake: (n) => expression(n.initial),
               RefScope: (n) => {
                 expression(n.initial);
@@ -875,6 +894,8 @@ export function lowerFunctions(
                 afterClose: effectHelper(n.afterClose, scope, error, `${path}.afterClose`),
               };
             },
+            ClockReadMillis: (): HelperBody => ({ _tag: "ClockReadMillis" }),
+            RandomDraw: (): HelperBody => ({ _tag: "RandomDraw" }),
             RefMake: (): HelperBody => {
               throw fail(
                 "RESOURCE_ESCAPE",
@@ -1078,6 +1099,8 @@ export function lowerFunctions(
                 Repeat: () => true,
                 Retry: () => true,
                 FileScope: () => true,
+                ClockReadMillis: () => false,
+                RandomDraw: () => false,
                 RefScope: (n) => helpers.get(n.body)?.asynchronous ?? false,
                 RefGet: () => false,
                 RefModify: () => false,
@@ -1115,7 +1138,19 @@ export function lowerFunctions(
               error: f.error,
             })
           : Object.freeze({ _tag: "Pure", block: block(f.body, rootScope, `${path}.body`) });
+      const clock =
+        runtimeServices.clock === "InjectedMillis" &&
+        Array.from(helpers.values()).some((h) => h.body._tag === "ClockReadMillis");
+      const random = Array.from(helpers.values()).some((h) => h.body._tag === "RandomDraw");
+      if (random && runtimeServices.random !== "ScriptedRandom")
+        throw fail(
+          "MISSING_RUNTIME_SERVICE",
+          "lower",
+          path,
+          "Random requires explicit ScriptedRandom implementation selection",
+        );
       return Object.freeze({
+        services: Object.freeze({ clock, random }),
         name,
         asynchronous: Match.value(node).pipe(
           Match.tagsExhaustive({
@@ -1135,11 +1170,17 @@ export function lowerFunctions(
   return provenance
     ? Object.freeze({
         failureFrames,
+        runtimeServices,
         sourceArtifacts: SourceArtifacts.Full,
         provenance: provenance.snapshot(),
         functions,
       })
-    : Object.freeze({ failureFrames, sourceArtifacts: SourceArtifacts.None, functions });
+    : Object.freeze({
+        failureFrames,
+        runtimeServices,
+        sourceArtifacts: SourceArtifacts.None,
+        functions,
+      });
 }
 
 const rsSegments = (...names: string[]) => names.map((name) => Rs.ident(name));
@@ -1364,6 +1405,25 @@ export const emitFunctions = (
   );
   if (hasLogScopes) write(logPrelude);
   const hasAsync = module.functions.some((f) => f.asynchronous);
+  const serviceUsage = (asynchronous: boolean): RuntimeServiceUsage => ({
+    clock: module.functions.some((f) => f.asynchronous === asynchronous && f.services.clock),
+    random: module.functions.some((f) => f.asynchronous === asynchronous && f.services.random),
+  });
+  const syncServices = serviceUsage(false);
+  const asyncServices = serviceUsage(true);
+  const hasSyncServices = syncServices.clock || syncServices.random;
+  const hasClockReads = module.functions.some((f) =>
+    f.helpers.some((h) => h.body._tag === "ClockReadMillis"),
+  );
+  if (hasClockReads || syncServices.random || asyncServices.random)
+    write(
+      runtimeServicesPrelude(
+        hasClockReads,
+        syncServices.clock || asyncServices.clock,
+        syncServices.random || asyncServices.random,
+        syncServices,
+      ),
+    );
   const registrations = module.functions.flatMap((f, functionIndex) =>
     f.helpers.flatMap((helper) => {
       const cleanup = Match.value(helper.body).pipe(
@@ -1406,6 +1466,8 @@ export const emitFunctions = (
             AcquireRelease: (n) => depth(n.acquire),
             RegisteredFile: (n) => depth(n.body),
             FileScope: (n) => child(n.body, n.afterClose),
+            ClockReadMillis: () => 0,
+            RandomDraw: () => 0,
             RefScope: (n) => depth(n.body),
             RefGet: () => 0,
             RefModify: () => 0,
@@ -1499,10 +1561,13 @@ export const emitFunctions = (
         maxScopeFinalizers,
         launchTuple,
         usesStore,
+        asyncServices,
       ),
     );
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
+    const contextual = f.asynchronous || f.services.clock || f.services.random;
+    const contextType = f.asynchronous ? "AsyncContext" : "SyncContext";
     const record = (helper: Helper): string => {
       const registration = registrationByHelper.get(helper)!;
       return Rs.pathCall(
@@ -1517,7 +1582,7 @@ export const emitFunctions = (
       const helper = f.helpers[index];
       const call = Rs.call(
         Rs.identExpr(Rs.ident(`h_${f.name}_${helper.index}`)),
-        (f.asynchronous && helper.error ? [identExpr("ctx")] : []).concat(
+        (contextual && helper.error ? [identExpr("ctx")] : []).concat(
           helper.input.map((p) => Rs.verbatimExpr(helperArgument(p))),
           helper.files.map((name) => Rs.refExpr(identExpr(name))),
         ),
@@ -1852,6 +1917,8 @@ export const emitFunctions = (
           CatchAll: () => "catchAll",
           AcquireUseRelease: () => "acquireUseRelease",
           FileScope: () => "fileScope",
+          ClockReadMillis: () => "clockReadMillis",
+          RandomDraw: () => "randomDraw",
           RefScope: () => "refScope",
           RefGet: () => "refGet",
           RefModify: () => "refModify",
@@ -1992,6 +2059,21 @@ export const emitFunctions = (
               " } }",
             ]);
           },
+          ClockReadMillis: () =>
+            textFragment(
+              Rs.block(
+                [],
+                Rs.ok(
+                  module.runtimeServices.clock === "InjectedMillis"
+                    ? Rs.dotCall(identExpr("ctx"), Rs.ident("clock_millis"), [])
+                    : Rs.call(identExpr("live_clock_millis"), []),
+                ),
+              ).text,
+            ),
+          RandomDraw: () =>
+            textFragment(
+              Rs.block([], Rs.ok(Rs.dotCall(identExpr("ctx"), Rs.ident("random_next"), []))).text,
+            ),
           RefScope: (n) => {
             const initializer = refBindingFragment(
               Rs.letMut(Rs.ident("ref_slot"), rsTypeOf(n.content), refPlaceholder),
@@ -2359,7 +2441,7 @@ export const emitFunctions = (
             textFragment(Rs.ident(`h_${f.name}_${helper.index}`).text),
             "definition",
           ),
-          `(${(f.asynchronous && helper.error ? ["ctx: &mut AsyncContext"] : [])
+          `(${(contextual && helper.error ? [`ctx: &mut ${contextType}`] : [])
             .concat(
               helper.input.map((p) => `${Rs.ident(p.name).text}: ${helperParameterType(p.type)}`),
               helper.files.map(
@@ -2393,7 +2475,7 @@ export const emitFunctions = (
           textFragment(Rs.ident(`r_${f.name}`).text),
           "definition",
         ),
-        `(${(f.asynchronous ? ["ctx: &mut AsyncContext"] : []).concat(f.input.map((type, i) => `p${i}: ${rsTypeOf(type).text}`)).join(", ")}) -> `,
+        `(${(contextual ? [`ctx: &mut ${contextType}`] : []).concat(f.input.map((type, i) => `p${i}: ${rsTypeOf(type).text}`)).join(", ")}) -> `,
         mapFragment(
           f.origin,
           useAt(f.path),
@@ -2538,9 +2620,12 @@ export const emitFunctions = (
     const call = Rs.pathCall(
       rsSegments("reffect_generated"),
       Rs.ident(`r_${f.name}`),
-      (f.asynchronous ? [Rs.mutRefExpr(identExpr("ctx"))] : []).concat(
-        f.input.map((type, i) => parseArg(type, i + 1)),
-      ),
+      (f.asynchronous
+        ? [Rs.mutRefExpr(identExpr("ctx"))]
+        : f.services.clock || f.services.random
+          ? [Rs.mutRefExpr(identExpr("services_ctx"))]
+          : []
+      ).concat(f.input.map((type, i) => parseArg(type, i + 1))),
     );
     return f.asynchronous ? Rs.await(call) : call;
   };
@@ -2634,6 +2719,15 @@ export const emitFunctions = (
   }));
   const mainBody = Rs.block(
     [
+      ...(hasSyncServices
+        ? [
+            Rs.letMut(
+              Rs.ident("services_ctx"),
+              undefined,
+              Rs.pathCall(rsSegments("reffect_generated", "SyncContext"), Rs.ident("new"), []),
+            ),
+          ]
+        : []),
       ...(hasAsync
         ? [
             Rs.verbatimStmt(

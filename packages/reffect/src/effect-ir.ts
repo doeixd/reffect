@@ -1,4 +1,16 @@
-import { Duration, Effect, Exit, Match, Option, Pipeable, Ref, Schema, Schedule } from "effect";
+import {
+  Duration,
+  Effect,
+  Exit,
+  Match,
+  Option,
+  Pipeable,
+  Ref,
+  Clock,
+  Random,
+  Schema,
+  Schedule,
+} from "effect";
 import { checkedMilliseconds } from "./duration.ts";
 import type { Scope } from "effect";
 import { Schedule as ScheduleValue, validSchedulePlan, validTimes } from "./schedule.ts";
@@ -14,6 +26,7 @@ import {
   NeverType,
   StringType,
   UnknownType,
+  NumberType,
   U64Type,
   UnitType,
   SemanticRef,
@@ -35,6 +48,8 @@ export { maxScopeFinalizers } from "./scope-analysis.ts";
 import { containsRef, refContent, refScalar, refType } from "./ref-model.ts";
 
 export const SyncEffects = Object.freeze({
+  ClockReadMillis: SemanticRef.effect("reffect/clock/current-time-millis@1"),
+  RandomDraw: SemanticRef.effect("reffect/random/next@1"),
   RefMake: SemanticRef.effect("reffect/ref/make@1"),
   RefGet: SemanticRef.effect("reffect/ref/get@1"),
   RefModify: SemanticRef.effect("reffect/ref/modify@1"),
@@ -94,6 +109,8 @@ const checkLogName = (kind: string, value: string): void => {
     );
 };
 export type ComputationNode =
+  | { readonly _tag: "ClockReadMillis" }
+  | { readonly _tag: "RandomDraw" }
   | { readonly _tag: "RefMake"; readonly initial: Expr<unknown> }
   | {
       readonly _tag: "RefScope";
@@ -325,6 +342,8 @@ export const substituteComputation = (
           const next = substituting(n.next);
           return result === n.result && next === n.next ? self : rebuild({ ...n, result, next });
         },
+        ClockReadMillis: () => self,
+        RandomDraw: () => self,
         FileSize: () => self,
         Succeed: (n) => {
           const value = substituting(n.value);
@@ -614,6 +633,8 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         RefScope: (n) => walk(n.body),
         RefGet: () => false,
         RefModify: () => false,
+        ClockReadMillis: () => false,
+        RandomDraw: () => false,
         FileSize: () => true,
         Sleep: () => true,
         Launch: () => true,
@@ -906,6 +927,14 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
             ...checkExpression(n.result, nested, `${at}.result`),
             ...checkExpression(n.next, nested, `${at}.next`),
           );
+        },
+        ClockReadMillis: () => {
+          if (!IRType.same(c.output, NumberType) || !IRType.same(c.error, NeverType))
+            add(at, "Clock millis reads require Number/Never channels");
+        },
+        RandomDraw: () => {
+          if (!IRType.same(c.output, NumberType) || !IRType.same(c.error, NeverType))
+            add(at, "Random draws require Number/Never channels");
         },
         FileSize: (n) => {
           if (!IRType.same(c.output, U64Type) || !IRType.same(c.error, BoolType))
@@ -1239,6 +1268,24 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
                 Effect.fail(fail("REFERENCE_FAILURE", "reference", "Ref.modify", String(cause))),
               ),
             ),
+          ClockReadMillis: () =>
+            Clock.currentTimeMillis.pipe(
+              Effect.flatMap((value) =>
+                Number.isSafeInteger(value)
+                  ? Effect.succeed(value)
+                  : Effect.die(
+                      new Error("Clock millis driver requires signed safe-integer readings"),
+                    ),
+              ),
+            ),
+          RandomDraw: () =>
+            Random.next.pipe(
+              Effect.flatMap((value) =>
+                Number.isFinite(value) && value >= 0 && value < 1
+                  ? Effect.succeed(value)
+                  : Effect.die(new Error("Random driver requires finite draws in [0, 1)")),
+              ),
+            ),
           FileSize: (n) => {
             const file = bindings.get(n.binder)?.[0];
             return file instanceof FileLease
@@ -1390,6 +1437,8 @@ export interface LogicalFrame {
     | "acquireUseRelease"
     | "fileScope"
     | "refScope"
+    | "clockReadMillis"
+    | "randomDraw"
     | "refGet"
     | "refModify"
     | "fileSize"
@@ -1464,6 +1513,8 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
         RefScope: (n) => adaptNode(n.body, `${path}.body`),
         RefGet: () => {},
         RefModify: () => {},
+        ClockReadMillis: () => {},
+        RandomDraw: () => {},
         FileSize: () => {},
         CatchAll: (n) => {
           adaptNode(n.source, `${path}.source`);
@@ -1523,9 +1574,13 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
   ): Effect.Effect<unknown, FramedFailure, Scope.Scope> =>
     Effect.suspend(() => {
       const path = adapted.get(c) ?? basePath;
-      const expression = (e: Expr<unknown>, step: string) =>
+      const expression = (
+        e: Expr<unknown>,
+        step: string,
+        expressionBindings: Bindings = bindings,
+      ) =>
         Effect.try({
-          try: () => evaluateExpression(e, bindings),
+          try: () => evaluateExpression(e, expressionBindings),
           catch: (): FramedFailure => ({
             _tag: "Internal",
             cause: fail("REFERENCE_FAILURE", "reference", step, "Expression failed"),
@@ -1628,6 +1683,24 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   _tag: "Internal",
                   cause: fail("REFERENCE_FAILURE", "reference", "Ref.modify", "Expression failed"),
                 }),
+              ),
+            ),
+          ClockReadMillis: () =>
+            Clock.currentTimeMillis.pipe(
+              Effect.flatMap((value) =>
+                Number.isSafeInteger(value)
+                  ? Effect.succeed(value)
+                  : Effect.die(
+                      new Error("Clock millis driver requires signed safe-integer readings"),
+                    ),
+              ),
+            ),
+          RandomDraw: () =>
+            Random.next.pipe(
+              Effect.flatMap((value) =>
+                Number.isFinite(value) && value >= 0 && value < 1
+                  ? Effect.succeed(value)
+                  : Effect.die(new Error("Random driver requires finite draws in [0, 1)")),
               ),
             ),
           FileSize: (n) => {
@@ -1751,7 +1824,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.flatMap((value) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [value]);
-                return expression(n.body, `${path}.body`).pipe(
+                return expression(n.body, `${path}.body`, nested).pipe(
                   Effect.mapError((cause): FramedFailure =>
                     cause instanceof CompileError
                       ? { _tag: "Internal", cause }

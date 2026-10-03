@@ -189,6 +189,8 @@ export const analyzeScopes = (
           expression(n.next, "next");
           return 0;
         },
+        ClockReadMillis: () => 0,
+        RandomDraw: () => 0,
         FileSize: () => {
           if (delayed)
             diagnostic(

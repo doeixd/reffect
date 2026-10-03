@@ -74,6 +74,21 @@ const Counter = R.fn([], R.U64, R.Never, () =>
 
 Each execution owns a native local cell; helpers borrow it across sequential awaits. No per-cell heap allocation, metadata registry or synchronization primitive is generated. Public/composite handle escape, cross-task sharing and registered cleanup captures are refused. Compiler-erased lexical Layer sharing inside the region is supported. See [Ref decisions and measured cost limits](../../docs/research/ref-module.md).
 
+## Clock and Random drivers
+
+`R.Clock.currentTimeMillis` reads signed safe-integer wall milliseconds at execution time. Its default live driver uses Rust std. `R.Random.next` returns a finite double in `[0,1)`; `nextBoolean` consumes one draw and tests `>0.5`. These remain synchronous effects.
+
+```ts
+import { Compile, R } from "reffect";
+
+const Draw = R.fn([], R.Bool, R.Never, () => R.Random.nextBoolean);
+const request = Compile.make(R.program({ Draw })).pipe(
+  Compile.withRuntimeServices({ random: "ScriptedRandom" }),
+);
+```
+
+Random requires explicit driver selection. A trusted native host installs prepared scripts through generated context setters; the ordinary command-line/RPC hosts supply no scripts. `clock: "InjectedMillis"` enables stable/scripted millis setters and initially reads live time. Contexts own their buffers and cursors; no service metadata accompanies values. Unsafe observer clocks and Sleep remain live. Exhausted/invalid scripts are host configuration faults, with general defect-finalization behavior outside the supported profile. Nanos, seeds, range helpers and a live Random backend remain deferred. See [design and evidence](../../docs/research/clock-random-modules.md).
+
 ## Supported semantics
 
 - `R.U64` is an exact bigint in `0..2^64-1`, with native Rust `u64`. `literal`, `add`, `sub`, `mul`, `eq`, and `lt` construct immutable expressions. Arithmetic is modulo `2^64` in every build profile.

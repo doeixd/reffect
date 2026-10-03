@@ -242,6 +242,8 @@ const decodeFrames = (name: string, stderr: string) =>
           "refScope",
           "refGet",
           "refModify",
+          "clockReadMillis",
+          "randomDraw",
           "log",
         ].includes(frame.kind)
       )

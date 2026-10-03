@@ -22,6 +22,12 @@ Inputs that reffect refuses **while compiling** are not divergences, because no 
 | [RM-001](research/remote-mutations.md#mutations-as-implemented-2026-10-03)      | Remote Mutate, store writes                  | A non-finite number computed in R and written to the store or put in a patch                              | `NaN`/`±Infinity` held; JSON carries `null` on the wire                                                               | Encoded as the JSON codec encodes it: `"NaN"`, `"Infinity"`                              | Refuse non-finite numbers at the `RemoteStore`/patch boundary, or encode as `null`               |
 | [SCOPER-004](research/scope-reference-evidence.md)                              | Scope                                        | Registering a finalizer on a closed scope                                                                 | Runs immediately                                                                                                      | Refused at runtime; unreachable through the lexical builders                             | Implement when explicit scopes are exposed                                                       |
 
+### Trusted Clock/Random host faults
+
+[RTS-004](research/runtime-services-implementation.md) records the bounded native host fault contract. An exhausted scripted provider throws an Effect defect in the reference harness; official Effect can still await scoped/ensuring cleanup after that defect. Native script exhaustion or invalid host setter configuration panics and does not run the generated async finalization path. Typed catch/retry/result cannot recover either fault. Valid-script interruption and cleanup do conform; general defect/finalizer parity requires a future Cause/runtime adapter. The command-line/RPC hosts install no Random script, so explicitly selected scripted artifacts require a configured trusted native host.
+
+The injected millis driver also admits only signed safe-integer readings, while a custom official Clock can return arbitrary Numbers. This is an explicit host-driver profile restriction; native setters refuse invalid readings, and the reffect reference validates the same subset. It is not a general Clock-service substitution claim.
+
 ## Closed
 
 | ID                                    | Area         | Was                                                                            | Closed by                                                                                                                                                 |

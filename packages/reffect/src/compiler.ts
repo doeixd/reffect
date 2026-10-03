@@ -7,6 +7,16 @@ import { Cargo } from "./cargo.ts";
 import { Foldkit } from "./foldkit.ts";
 import { EffectFn, SyncEffects, AsyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
+import {
+  ClockRequirement,
+  RandomRequirement,
+  defaultRuntimeServices,
+  normalizeRuntimeServicesSelection,
+} from "./runtime-service-model.ts";
+import type {
+  RuntimeServicesSelection,
+  ResolvedRuntimeServicesSelection,
+} from "./runtime-service-model.ts";
 import { containsRef } from "./ref-model.ts";
 import { hostFunctionOf } from "./schema-json.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
@@ -177,6 +187,41 @@ const scopedFileAdapter = Object.freeze({
     "Read-only std::fs::File ownership, spawn_blocking masked acquisition, borrowed metadata helpers and explicit close before awaited cleanup; no runtime handle map or clones",
   crates: Object.freeze(["tokio@1.53.1"]),
 });
+const liveMillisAdapter = Object.freeze({
+  requirement: ClockRequirement,
+  ref: SemanticRef.runtime("rust/std-clock-millis@1"),
+  representation: NumberType,
+  target: Targets.RustStd,
+  strategy: "generated" as const,
+  crates: Object.freeze([]),
+  rationale:
+    "Checked signed epoch millis from std SystemTime; no service context for direct live reads",
+});
+const injectedMillisAdapter = Object.freeze({
+  requirement: ClockRequirement,
+  ref: SemanticRef.runtime("rust/injected-clock-millis@1"),
+  representation: NumberType,
+  target: Targets.RustStd,
+  strategy: "generated" as const,
+  crates: Object.freeze([]),
+  rationale:
+    "Invocation-owned live/stable/scripted clock selected by trusted native host; no global service or scalar tags",
+});
+const scriptedRandomAdapter = Object.freeze({
+  requirement: RandomRequirement,
+  ref: SemanticRef.runtime("rust/scripted-random-double@1"),
+  representation: NumberType,
+  target: Targets.RustStd,
+  strategy: "generated" as const,
+  crates: Object.freeze([]),
+  rationale:
+    "Owned validated double script and cursor; exactly one draw per execution, no implicit live or seeded fallback",
+});
+type ServiceAdapter =
+  | typeof scopedFileAdapter
+  | typeof liveMillisAdapter
+  | typeof injectedMillisAdapter
+  | typeof scriptedRandomAdapter;
 export const Rust = Object.freeze({
   scopedFiles: scopedFileAdapter,
   asyncResult: asyncResultAdapter,
@@ -221,7 +266,7 @@ export interface Selection {
   readonly rejected: readonly { readonly id: string; readonly reason: string }[];
 }
 export class Plan extends Pipeable.Class {
-  readonly services: readonly (typeof scopedFileAdapter)[];
+  readonly services: readonly ServiceAdapter[];
   readonly runtime: typeof syncResultAdapter | typeof asyncResultAdapter | undefined;
   private constructor(
     readonly analysis: Analysis,
@@ -229,11 +274,19 @@ export class Plan extends Pipeable.Class {
     readonly selections: readonly Selection[],
     readonly crates: readonly string[],
     readonly failureFrames: FailureFramePolicy,
+    readonly runtimeServices: ResolvedRuntimeServicesSelection,
   ) {
     super();
-    this.services = Object.freeze(
-      analysis.requirements.includes(FileRequirement) ? [scopedFileAdapter] : [],
-    );
+    this.services = Object.freeze([
+      ...(analysis.requirements.includes(FileRequirement) ? [scopedFileAdapter] : []),
+      ...(analysis.requirements.includes(ClockRequirement)
+        ? [runtimeServices.clock === "InjectedMillis" ? injectedMillisAdapter : liveMillisAdapter]
+        : []),
+      ...(analysis.requirements.includes(RandomRequirement) &&
+      runtimeServices.random === "ScriptedRandom"
+        ? [scriptedRandomAdapter]
+        : []),
+    ]);
     this.runtime =
       analysis.effects.length === 0
         ? undefined
@@ -248,6 +301,7 @@ export class Plan extends Pipeable.Class {
     selections: readonly Selection[],
     crates: readonly string[],
     failureFrames: FailureFramePolicy = FailureFrames.Bounded,
+    runtimeServices: RuntimeServicesSelection = defaultRuntimeServices,
   ): Plan {
     return new Plan(
       analysis,
@@ -255,19 +309,52 @@ export class Plan extends Pipeable.Class {
       Object.freeze(Array.from(selections)),
       Object.freeze(Array.from(crates)),
       failureFrames,
+      normalizeRuntimeServicesSelection(runtimeServices),
     );
   }
   static withFailureFrames(policy: FailureFramePolicy) {
     return (self: Plan): Plan =>
-      Plan.make(self.analysis, self.target, self.selections, self.crates, policy);
+      Plan.make(
+        self.analysis,
+        self.target,
+        self.selections,
+        self.crates,
+        policy,
+        self.runtimeServices,
+      );
   }
   static withSelections(selections: readonly Selection[]) {
     return (self: Plan): Plan =>
-      Plan.make(self.analysis, self.target, selections, self.crates, self.failureFrames);
+      Plan.make(
+        self.analysis,
+        self.target,
+        selections,
+        self.crates,
+        self.failureFrames,
+        self.runtimeServices,
+      );
   }
   static withCrates(crates: readonly string[]) {
     return (self: Plan): Plan =>
-      Plan.make(self.analysis, self.target, self.selections, crates, self.failureFrames);
+      Plan.make(
+        self.analysis,
+        self.target,
+        self.selections,
+        crates,
+        self.failureFrames,
+        self.runtimeServices,
+      );
+  }
+  static withRuntimeServices(selection: RuntimeServicesSelection) {
+    return (self: Plan): Plan =>
+      Plan.make(
+        self.analysis,
+        self.target,
+        self.selections,
+        self.crates,
+        self.failureFrames,
+        selection,
+      );
   }
 }
 export interface Ownership {
@@ -303,24 +390,54 @@ export class CompileSpec<P extends ArtifactPolicy = FullSourceArtifacts> extends
     readonly target: Target,
     readonly sourceArtifacts: P,
     readonly failureFrames: FailureFramePolicy,
+    readonly runtimeServices: ResolvedRuntimeServicesSelection,
   ) {
     super();
     Object.freeze(this);
   }
   static make(this: void, program: Program): CompileSpec {
-    return new CompileSpec(program, Rust.std, SourceArtifacts.Full, FailureFrames.Bounded);
+    return new CompileSpec(
+      program,
+      Rust.std,
+      SourceArtifacts.Full,
+      FailureFrames.Bounded,
+      defaultRuntimeServices,
+    );
   }
   static withSourceArtifacts<P extends ArtifactPolicy>(this: void, policy: P) {
     return <Previous extends ArtifactPolicy>(self: CompileSpec<Previous>): CompileSpec<P> =>
-      new CompileSpec(self.program, self.target, policy, self.failureFrames);
+      new CompileSpec(self.program, self.target, policy, self.failureFrames, self.runtimeServices);
   }
   static withFailureFrames(this: void, policy: FailureFramePolicy) {
     return <P extends ArtifactPolicy>(self: CompileSpec<P>): CompileSpec<P> =>
-      new CompileSpec(self.program, self.target, self.sourceArtifacts, policy);
+      new CompileSpec(
+        self.program,
+        self.target,
+        self.sourceArtifacts,
+        policy,
+        self.runtimeServices,
+      );
   }
   static withTarget(this: void, target: Target) {
     return <P extends ArtifactPolicy>(self: CompileSpec<P>): CompileSpec<P> =>
-      new CompileSpec(self.program, target, self.sourceArtifacts, self.failureFrames);
+      new CompileSpec(
+        self.program,
+        target,
+        self.sourceArtifacts,
+        self.failureFrames,
+        self.runtimeServices,
+      );
+  }
+  static withRuntimeServices(this: void, selection: RuntimeServicesSelection) {
+    const normalized = normalizeRuntimeServicesSelection(selection);
+    return <P extends ArtifactPolicy>(self: CompileSpec<P>): CompileSpec<P> =>
+      new CompileSpec(
+        self.program,
+        self.target,
+        self.sourceArtifacts,
+        self.failureFrames,
+        normalized,
+      );
   }
 }
 export const stages = Object.freeze([
@@ -508,6 +625,12 @@ const derive = Effect.fn("Compile.derive")(function* (
           walk(n.result);
           walk(n.next);
         },
+        ClockReadMillis: () => {
+          effectRefs.add(SyncEffects.ClockReadMillis);
+        },
+        RandomDraw: () => {
+          effectRefs.add(SyncEffects.RandomDraw);
+        },
         FileSize: () => {
           effectRefs.add(AsyncEffects.FileSize);
         },
@@ -626,7 +749,13 @@ const derive = Effect.fn("Compile.derive")(function* (
     ]),
     effects: collect([...operations.flatMap((op) => op.effects), ...effectRefs]),
     requirements: collect(
-      operations.flatMap((op) => op.requirements).concat(usesFiles ? [FileRequirement] : []),
+      operations
+        .flatMap((op) => op.requirements)
+        .concat(
+          usesFiles ? [FileRequirement] : [],
+          effectRefs.has(SyncEffects.ClockReadMillis) ? [ClockRequirement] : [],
+          effectRefs.has(SyncEffects.RandomDraw) ? [RandomRequirement] : [],
+        ),
     ),
     types: Object.freeze(Array.from(types)),
   });
@@ -639,6 +768,7 @@ const normalize = Effect.fn("Compile.normalize")(function* (analysis: Analysis) 
 const plan = Effect.fn("Compile.plan")(function* (
   analysis: Analysis,
   target: Target = Rust.std,
+  runtimeServices: RuntimeServicesSelection = defaultRuntimeServices,
 ): Effect.fn.Return<Plan, CompileError> {
   if (target.ref !== Targets.RustStd)
     return yield* fail(
@@ -647,7 +777,24 @@ const plan = Effect.fn("Compile.plan")(function* (
       target.id,
       "No verified lowering registered for this target",
     );
+  const selectedServices = yield* Effect.try({
+    try: () => normalizeRuntimeServicesSelection(runtimeServices),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("INVALID_SERVICE_SELECTION", "plan", "runtimeServices", String(cause)),
+  });
   const derived = yield* derive(analysis.program);
+  if (
+    derived.requirements.includes(RandomRequirement) &&
+    selectedServices.random !== "ScriptedRandom"
+  )
+    return yield* fail(
+      "MISSING_RUNTIME_SERVICE",
+      "plan",
+      RandomRequirement.id,
+      "Reachable Random requires explicit ScriptedRandom implementation selection",
+    );
   const selections: Selection[] = [];
   for (const op of derived.operations) {
     const rejected: { id: string; reason: string }[] = [];
@@ -718,6 +865,8 @@ const plan = Effect.fn("Compile.plan")(function* (
           .concat(derived.capabilities.includes(Capabilities.Json) ? ["serde_json@1.0.151"] : []),
       ),
     ).sort(),
+    FailureFrames.Bounded,
+    selectedServices,
   );
 });
 const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
@@ -728,7 +877,7 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
         ? cause
         : fail("INVALID_PLAN", "verify", "failureFrames", String(cause)),
   });
-  const expected = (yield* plan(p.analysis, p.target)).pipe(
+  const expected = (yield* plan(p.analysis, p.target, p.runtimeServices)).pipe(
     Plan.withFailureFrames(p.failureFrames),
   );
   if (
@@ -809,6 +958,7 @@ const lower = Effect.fn("Compile.lower")(function* (
         new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
         policy,
         p.failureFrames,
+        p.runtimeServices,
       ),
     catch: (cause) =>
       cause instanceof CompileError
@@ -851,6 +1001,7 @@ const run = Effect.fn("Compile.run")(function* (
   target: Target = Rust.std,
   policy: ArtifactPolicy = SourceArtifacts.Full,
   failureFrames: FailureFramePolicy = FailureFrames.Bounded,
+  runtimeServices: RuntimeServicesSelection = defaultRuntimeServices,
 ) {
   yield* Effect.try({
     try: () => checkArtifactPolicy(policy),
@@ -862,7 +1013,9 @@ const run = Effect.fn("Compile.run")(function* (
   const checked = yield* check(program);
   const derived = yield* derive(checked);
   const normalized = yield* normalize(derived);
-  const planned = (yield* plan(normalized, target)).pipe(Plan.withFailureFrames(failureFrames));
+  const planned = (yield* plan(normalized, target, runtimeServices)).pipe(
+    Plan.withFailureFrames(failureFrames),
+  );
   const verified = yield* verify(planned);
   const optimized = yield* optimize(verified);
   return yield* emit(optimized, policy);
@@ -899,6 +1052,7 @@ const runRequest = <Value extends Program | CompileSpec<ArtifactPolicy>>(
       selectedTarget,
       policy,
       value instanceof CompileSpec ? value.failureFrames : FailureFrames.Bounded,
+      value instanceof CompileSpec ? value.runtimeServices : defaultRuntimeServices,
     ),
   ) as Effect.Effect<
     Value extends CompileSpec<infer P> ? ArtifactFor<P> : MappedArtifact,
@@ -962,6 +1116,7 @@ const build = Effect.fn("Compile.build")(function* (
       selectedTarget,
       policy,
       value instanceof CompileSpec ? value.failureFrames : FailureFrames.Bounded,
+      value instanceof CompileSpec ? value.runtimeServices : defaultRuntimeServices,
     ),
   );
   const directory = yield* cargo.write(artifact, output);
@@ -1005,12 +1160,16 @@ export const Compile = {
   withTarget: CompileSpec.withTarget,
   withFailureFrames: CompileSpec.withFailureFrames,
   withSourceArtifacts: CompileSpec.withSourceArtifacts,
+  withRuntimeServices: CompileSpec.withRuntimeServices,
   fromFoldkitQuery: Foldkit.compile,
   check: (program: Program) => located(program, check(program)),
   derive: (program: Program) => located(program, derive(program)),
   normalize: (analysis: Analysis) => located(analysis.program, normalize(analysis)),
-  plan: (analysis: Analysis, target: Target = Rust.std) =>
-    located(analysis.program, plan(analysis, target)),
+  plan: (
+    analysis: Analysis,
+    target: Target = Rust.std,
+    runtimeServices: RuntimeServicesSelection = defaultRuntimeServices,
+  ) => located(analysis.program, plan(analysis, target, runtimeServices)),
   verify: (p: Plan) => located(p.analysis.program, verify(p)),
   optimize: (p: Plan) => located(p.analysis.program, optimize(p)),
   analyzeOwnership: (p: Plan) => located(p.analysis.program, analyzeOwnership(p)),
@@ -1018,11 +1177,15 @@ export const Compile = {
   emit: emitRequest,
   run: runRequest,
   build: buildRequest,
-  explain: Effect.fn("Compile.explain")(function* (program: Program, target: Target = Rust.std) {
+  explain: Effect.fn("Compile.explain")(function* (
+    program: Program,
+    target: Target = Rust.std,
+    runtimeServices: RuntimeServicesSelection = defaultRuntimeServices,
+  ) {
     return yield* located(
       program,
       Effect.gen(function* () {
-        return yield* plan(yield* derive(program), target);
+        return yield* plan(yield* derive(program), target, runtimeServices);
       }),
     );
   }),
