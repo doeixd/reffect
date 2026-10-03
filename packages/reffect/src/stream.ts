@@ -2,7 +2,9 @@
  * `R.Stream`: the first finite Stream subset (STREAM-005), spelled as Effect v4 spells it. Sources
  * and operators build a `StreamIR`; `runCollect` consumes it as an Effect.
  */
+import { Match } from "effect";
 import { dual } from "effect/Function";
+import type { Schedule } from "./schedule.ts";
 import { Computation, EffectFn, joinType, streamEmit, streamRunCollect } from "./effect-ir.ts";
 import { SchemaIR } from "./schema-json.ts";
 import {
@@ -64,6 +66,45 @@ const empty = <A>(item: IRType<A>): StreamIR<A, never> =>
 const failWith = <A, E>(error: Expr<E>, item: IRType<A>): StreamIR<A, E> =>
   new StreamIR(item, error.type, { _tag: "Fail", error });
 
+/**
+ * `Stream.fromSchedule(schedule)`: the schedule's outputs, each after its delay. Native for
+ * `Schedule.spaced(d)`, whose outputs count 0, 1, 2, … forever.
+ */
+const fromSchedule = (schedule: Schedule): StreamIR<number, never> =>
+  Match.value(schedule.plan).pipe(
+    Match.tag(
+      "Spaced",
+      (plan) =>
+        new StreamIR(NumberType, NeverType, {
+          _tag: "FromSchedule",
+          milliseconds: plan.milliseconds,
+        }),
+    ),
+    Match.orElse(() => {
+      throw fail(
+        "UNSUPPORTED_STREAM",
+        "authoring",
+        at("fromSchedule"),
+        "Stream.fromSchedule is native for Schedule.spaced only",
+      );
+    }),
+  );
+/**
+ * `Stream.ensuring(finalizer)`: run the finalizer when the stream ends, however it ends. Native
+ * as the outermost operator of the stream a consumer runs.
+ */
+const ensuring: {
+  (finalizer: Computation<void, never>): <A, E>(self: StreamIR<A, E>) => StreamIR<A, E>;
+  <A, E>(self: StreamIR<A, E>, finalizer: Computation<void, never>): StreamIR<A, E>;
+} = dual(2, <A, E>(self: StreamIR<A, E>, finalizer: Computation<void, never>): StreamIR<A, E> => {
+  if (!(finalizer instanceof Computation) || !IRType.same(finalizer.error, NeverType))
+    throw fail("TYPE_MISMATCH", "authoring", at("ensuring"), "Finalizers cannot fail");
+  return new StreamIR(self.item, self.error, {
+    _tag: "Ensuring",
+    source: self as StreamIR<unknown, unknown>,
+    finalizer,
+  });
+});
 /** `Stream.map(f)`, per element. */
 const map: {
   <A, B>(f: (value: Expr<A>) => Expr<B>): <E>(self: StreamIR<A, E>) => StreamIR<B, E>;
@@ -183,6 +224,8 @@ const fn = <const I extends readonly IRType<unknown>[], A, E>(
 
 export const StreamAuthoring = Object.freeze({
   fn,
+  fromSchedule,
+  ensuring,
   make,
   fromIterable,
   range,

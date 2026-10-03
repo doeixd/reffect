@@ -45,7 +45,14 @@ import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
 import { LaunchHost } from "./launch-host.ts";
 import { RemoteStoreHost } from "./remote-store-host.ts";
-import { StreamIR, mapStreamExpressions, streamExpressions, toEffectStream } from "./stream-ir.ts";
+import {
+  StreamIR,
+  mapStreamExpressions,
+  streamExpressions,
+  streamFinalizers,
+  streamSuspends,
+  toEffectStream,
+} from "./stream-ir.ts";
 import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { analyzeScopes } from "./scope-analysis.ts";
 export { maxScopeFinalizers } from "./scope-analysis.ts";
@@ -381,11 +388,19 @@ export const substituteComputation = (
         RandomDraw: () => self,
         FileSize: () => self,
         StreamRunCollect: (n) => {
-          const stream = mapStreamExpressions(n.stream, substituting);
+          const stream = mapStreamExpressions(
+            n.stream,
+            substituting,
+            (c) => walk(c) as Computation<void, never>,
+          );
           return stream === n.stream ? self : rebuild({ _tag: "StreamRunCollect", stream });
         },
         StreamEmit: (n) => {
-          const stream = mapStreamExpressions(n.stream, substituting);
+          const stream = mapStreamExpressions(
+            n.stream,
+            substituting,
+            (c) => walk(c) as Computation<void, never>,
+          );
           const encoded = substituting(n.encoded);
           return stream === n.stream && encoded === n.encoded
             ? self
@@ -564,6 +579,7 @@ const emitReference = (
     readonly encoded: Expr<unknown>;
   },
   bindings: ReadonlyMap<symbol, readonly unknown[]>,
+  finalize: (finalizer: Computation<void, never>) => Effect.Effect<unknown>,
 ): Effect.Effect<void, unknown> =>
   Effect.serviceOption(StreamSinkHost).pipe(
     Effect.flatMap(
@@ -572,8 +588,12 @@ const emitReference = (
           Effect.die(new Error("A streaming body needs a StreamSinkHost in the reference")),
         onSome: (sink) =>
           Stream.runForEachArray(
-            toEffectStream(n.stream, bindings, evaluateExpression, (outer, binder, value) =>
-              new Map(outer).set(binder, [value]),
+            toEffectStream(
+              n.stream,
+              bindings,
+              evaluateExpression,
+              (outer, binder, value) => new Map(outer).set(binder, [value]),
+              finalize,
             ),
             (values) =>
               sink.emit(
@@ -750,8 +770,8 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         Retry: () => true,
         Ensuring: () => true,
         AcquireUseRelease: () => true,
-        // A finite pure pipeline runs to completion without suspending.
-        StreamRunCollect: () => false,
+        // A pure pipeline runs to completion without suspending; timers and finalizers suspend.
+        StreamRunCollect: (n) => streamSuspends(n.stream),
         // Handing a chunk to the host waits for room, and a closed sink interrupts.
         StreamEmit: () => true,
         Succeed: () => false,
@@ -1197,6 +1217,8 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         StreamRunCollect: (n) => {
           if (!IRType.same(c.error, n.stream.error))
             add(at, "Stream.runCollect fails with the stream's error witness");
+          for (const { finalizer, path } of streamFinalizers(n.stream))
+            walk(finalizer, bindings, `${at}.${path}`);
           for (const { expr, binder, path } of streamExpressions(n.stream)) {
             const nested = new Map(bindings);
             if (binder) nested.set(binder.symbol, [binder.type]);
@@ -1209,6 +1231,8 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
             (!IRType.same(c.error, n.stream.error) && !IRType.same(n.stream.error, NeverType))
           )
             add(at, "A streaming body yields Unit and fails with its stream's error");
+          for (const { finalizer, path } of streamFinalizers(n.stream))
+            walk(finalizer, bindings, `${at}.${path}`);
           for (const { expr, binder, path } of streamExpressions(n.stream)) {
             const nested = new Map(bindings);
             if (binder) nested.set(binder.symbol, [binder.type]);
@@ -1520,11 +1544,18 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
             ),
           StreamRunCollect: (n) =>
             Stream.runCollect(
-              toEffectStream(n.stream, bindings, evaluateExpression, (outer, binder, value) =>
-                new Map(outer).set(binder, [value]),
+              toEffectStream(
+                n.stream,
+                bindings,
+                evaluateExpression,
+                (outer, binder, value) => new Map(outer).set(binder, [value]),
+                (finalizer) => Effect.scoped(evaluate(finalizer, bindings)).pipe(Effect.orDie),
               ),
             ).pipe(Effect.map((elements) => [...elements])),
-          StreamEmit: (n) => emitReference(n, bindings),
+          StreamEmit: (n) =>
+            emitReference(n, bindings, (finalizer) =>
+              Effect.scoped(evaluate(finalizer, bindings)).pipe(Effect.orDie),
+            ),
           Succeed: (n) => expression(n.value).pipe(Effect.flatMap(Effect.succeed)),
           Fail: (n) => expression(n.error).pipe(Effect.flatMap(Effect.fail)),
           Map: (n) =>
@@ -1729,8 +1760,10 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.finalizer, `${path}.finalizer`);
         },
-        StreamRunCollect: () => {},
-        StreamEmit: () => {},
+        StreamRunCollect: (n) =>
+          streamFinalizers(n.stream).forEach((f) => adaptNode(f.finalizer, `${path}.${f.path}`)),
+        StreamEmit: (n) =>
+          streamFinalizers(n.stream).forEach((f) => adaptNode(f.finalizer, `${path}.${f.path}`)),
         Succeed: () => {},
         Fail: () => {},
         Map: (n) => {
@@ -2002,7 +2035,9 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.mapError((failure) => outward(failure, "ensuring")),
             ),
           StreamEmit: (n) =>
-            emitReference(n, bindings).pipe(
+            emitReference(n, bindings, (finalizer) =>
+              Effect.scoped(evaluate(finalizer, bindings)).pipe(Effect.orDie),
+            ).pipe(
               Effect.mapError((error): FramedFailure => ({
                 _tag: "Domain",
                 error,
@@ -2013,8 +2048,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           // A stream's typed failure leaves the consumer with one frame there, as natively.
           StreamRunCollect: (n) =>
             Stream.runCollect(
-              toEffectStream(n.stream, bindings, evaluateExpression, (outer, binder, value) =>
-                new Map(outer).set(binder, [value]),
+              toEffectStream(
+                n.stream,
+                bindings,
+                evaluateExpression,
+                (outer, binder, value) => new Map(outer).set(binder, [value]),
+                (finalizer) => Effect.scoped(evaluate(finalizer, bindings)).pipe(Effect.orDie),
               ),
             ).pipe(
               Effect.map((elements) => [...elements]),

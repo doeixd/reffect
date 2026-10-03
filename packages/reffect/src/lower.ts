@@ -31,7 +31,7 @@ import type {
 import { runtimeServicesPrelude } from "./runtime-services.ts";
 import type { RuntimeServiceUsage } from "./runtime-services.ts";
 import { ArrayType, rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
-import { streamExpressions } from "./stream-ir.ts";
+import { streamExpressions, streamFinalizers } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
 import { Expr } from "./kernel.ts";
 import type { OperationRef, Program, RecordQuery } from "./kernel.ts";
@@ -42,7 +42,13 @@ import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
 import { structuredRuntime } from "./structured-runtime.ts";
 import { frameTrailRuntime, syncFrameStorageRuntime } from "./frame-runtime.ts";
-import { EffectFn, maxLogicalFrames, maxScopeFinalizers } from "./effect-ir.ts";
+import {
+  EffectFn,
+  maxLogicalFrames,
+  maxScopeFinalizers,
+  streamEmit,
+  streamRunCollect,
+} from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
@@ -177,6 +183,7 @@ type StreamPlan =
   | { readonly _tag: "Range"; readonly min: RustBlock; readonly max: RustBlock }
   | { readonly _tag: "Empty" }
   | { readonly _tag: "Fail"; readonly error: RustBlock }
+  | { readonly _tag: "FromSchedule"; readonly milliseconds: number }
   | {
       readonly _tag: "Transform";
       readonly filter: boolean;
@@ -195,6 +202,19 @@ type StreamPlan =
     }
   | { readonly _tag: "Concat"; readonly first: StreamPlan; readonly second: StreamPlan }
   | { readonly _tag: "Chunks"; readonly source: StreamPlan; readonly item: IRType<unknown> };
+/** Whether a planned pipeline sleeps, so its consumer is asynchronous. */
+const planSuspends = (plan: StreamPlan): boolean =>
+  Match.value(plan).pipe(
+    Match.tags({
+      FromSchedule: () => true,
+      Transform: (m) => planSuspends(m.source),
+      Take: (m) => planSuspends(m.source),
+      Rechunk: (m) => planSuspends(m.source),
+      Chunks: (m) => planSuspends(m.source),
+      Concat: (m) => planSuspends(m.first) || planSuspends(m.second),
+    }),
+    Match.orElse(() => false),
+  );
 type HelperBody =
   | { readonly _tag: "ClockReadMillis" }
   | { readonly _tag: "RandomDraw" }
@@ -609,10 +629,13 @@ export function lowerFunctions(
               Repeat: (n) => computation(n.body),
               Retry: (n) => computation(n.body),
               Succeed: (n) => expression(n.value),
-              StreamRunCollect: (n) =>
-                streamExpressions(n.stream).forEach(({ expr }) => expression(expr)),
+              StreamRunCollect: (n) => {
+                streamExpressions(n.stream).forEach(({ expr }) => expression(expr));
+                streamFinalizers(n.stream).forEach(({ finalizer }) => computation(finalizer));
+              },
               StreamEmit: (n) => {
                 streamExpressions(n.stream).forEach(({ expr }) => expression(expr));
+                streamFinalizers(n.stream).forEach(({ finalizer }) => computation(finalizer));
                 expression(n.encoded);
               },
               Fail: (n) => expression(n.error),
@@ -873,6 +896,11 @@ export function lowerFunctions(
         channels.set(error, index);
         scopes.set(scope, channels);
         effectMemo.set(c.node, scopes);
+        const rootFinalizer = (stream: StreamIR<unknown, unknown>) =>
+          Match.value(stream.node).pipe(
+            Match.tag("Ensuring", (m) => ({ source: m.source, finalizer: m.finalizer })),
+            Match.orElse(() => undefined),
+          );
         // Stream pipelines plan once per consumer (STREAM-004).
         // A per-element operator runs as its Array operation over a bound chunk.
         const transform = (
@@ -920,6 +948,18 @@ export function lowerFunctions(
                 max: block(m.max, scope, `${at}.max`),
               }),
               Empty: (): StreamPlan => ({ _tag: "Empty" }),
+              FromSchedule: (m): StreamPlan => ({
+                _tag: "FromSchedule",
+                milliseconds: m.milliseconds,
+              }),
+              Ensuring: (): StreamPlan => {
+                throw fail(
+                  "UNSUPPORTED_STREAM",
+                  "lower",
+                  at,
+                  "Stream.ensuring is native as the outermost operator of a consumed stream",
+                );
+              },
               Fail: (m): StreamPlan => ({
                 _tag: "Fail",
                 error: block(m.error, scope, `${at}.error`),
@@ -1134,6 +1174,24 @@ export function lowerFunctions(
               block: block(n.error, scope, `${path}.error`),
             }),
             StreamRunCollect: (n): HelperBody => {
+              // A root Stream.ensuring is Effect.ensuring around consuming its source.
+              const ensured = rootFinalizer(n.stream);
+              if (ensured)
+                return {
+                  _tag: "Ensuring",
+                  body: effectHelper(
+                    streamRunCollect(ensured.source, c.output),
+                    scope,
+                    error,
+                    `${path}.stream.source`,
+                  ),
+                  finalizer: effectHelper(
+                    ensured.finalizer,
+                    scope,
+                    error,
+                    `${path}.stream.finalizer`,
+                  ),
+                };
               return {
                 _tag: "StreamCollect",
                 plan: planStream(n.stream, `${path}.stream`),
@@ -1143,6 +1201,23 @@ export function lowerFunctions(
             },
             // Each chunk is encoded element by element, then handed to the host (STREAM-006).
             StreamEmit: (n): HelperBody => {
+              const ensured = rootFinalizer(n.stream);
+              if (ensured)
+                return {
+                  _tag: "Ensuring",
+                  body: effectHelper(
+                    streamEmit(ensured.source, n.item, n.encoded, c.error),
+                    scope,
+                    error,
+                    `${path}.stream.source`,
+                  ),
+                  finalizer: effectHelper(
+                    ensured.finalizer,
+                    scope,
+                    error,
+                    `${path}.stream.finalizer`,
+                  ),
+                };
               const input = ArrayType.of(n.stream.item);
               const chunk = Symbol("reffect/stream/chunk");
               const chunkScope = caseScope(scope, chunk, input);
@@ -1262,7 +1337,7 @@ export function lowerFunctions(
             files: scope.fileInputs,
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
-                StreamCollect: (n) => n.emit !== undefined,
+                StreamCollect: (n) => n.emit !== undefined || planSuspends(n.plan),
                 TaskGroup: () => true,
                 Scope: () => true,
                 AddFinalizer: () => true,
@@ -2601,6 +2676,15 @@ export const emitFunctions = (
                     ]);
                   },
                   Empty: () => textFragment(""),
+                  // Stream.fromSchedule(Schedule.spaced(d)): each count after an interruptible sleep.
+                  FromSchedule: (m) => {
+                    const [count, chunk] = ["count", "chunk"].map(name);
+                    return joinFragments([
+                      `{ let mut ${count}: f64 = 0.0; loop { if let Err(error) = ctx.sleep(${m.milliseconds}).await { stopped = Some(error); break ${root}; } let ${chunk}: Vec<f64> = vec![${count}]; ${count} += 1.0; `,
+                      next(chunk),
+                      " } }",
+                    ]);
+                  },
                   Fail: (m) =>
                     joinFragments([
                       "{ failure = Some(",
@@ -2681,6 +2765,7 @@ export const emitFunctions = (
                   FromArray: () => false,
                   Range: () => false,
                   Empty: () => false,
+                  FromSchedule: () => false,
                   Fail: () => true,
                   Transform: (m) => fails(m.source),
                   Take: (m) => fails(m.source),
@@ -2727,12 +2812,17 @@ export const emitFunctions = (
                   : "",
                 "else { Ok(()) } }",
               ]);
+            const suspends = planSuspends(n.plan);
             return joinFragments([
               `{ let mut ${out}: ${vec(n.item)} = Vec::new(); `,
+              suspends ? "let mut stopped = None; " : "",
               failing ? `let mut failure: Option<${typeName(n.error)}> = None; ` : "",
               `#[allow(unused_labels)] ${root}: { `,
               emit(n.plan, consume),
               " } ",
+              suspends
+                ? joinFragments(["if let Some(error) = stopped { ", wrap("error"), " } else "])
+                : "",
               failing
                 ? joinFragments([
                     "if let Some(error) = failure { ",

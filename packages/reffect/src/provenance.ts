@@ -1,5 +1,5 @@
 import { Match } from "effect";
-import { streamExpressions } from "./stream-ir.ts";
+import { streamExpressions, streamFinalizers } from "./stream-ir.ts";
 import { Expr, Fn, CompileError, fail } from "./kernel.ts";
 import type { Diagnostic, Program } from "./kernel.ts";
 import { Computation, EffectFn } from "./effect-ir.ts";
@@ -115,10 +115,13 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       Span: (n) => [edge("body", n.body)],
       Succeed: (n) => [edge("value", n.value)],
       StreamRunCollect: (n) =>
-        streamExpressions(n.stream).map(({ expr, path }) => edge(path, expr)),
+        streamExpressions(n.stream)
+          .map(({ expr, path }) => edge(path, expr))
+          .concat(streamFinalizers(n.stream).map(({ finalizer, path }) => edge(path, finalizer))),
       StreamEmit: (n) =>
         streamExpressions(n.stream)
           .map(({ expr, path }) => edge(path, expr))
+          .concat(streamFinalizers(n.stream).map(({ finalizer, path }) => edge(path, finalizer)))
           .concat([edge("encoded", n.encoded)]),
       Fail: (n) => [edge("error", n.error)],
       Map: (n) => [edge("source", n.source), edge("body", n.body)],

@@ -4,11 +4,11 @@
  * Computation node (`runCollect`); the reference rebuilds it with official `Stream`, and native
  * lowering fuses it into one chunk loop that keeps Effect's chunk boundaries (STREAM-004).
  */
-import { Match, Stream } from "effect";
+import { Duration, Effect, Match, Schedule, Stream } from "effect";
 import { pipeArguments } from "effect/Pipeable";
 import type { Pipeable } from "effect/Pipeable";
 import type { Expr, IRType } from "./kernel.ts";
-import type { EffectFn } from "./effect-ir.ts";
+import type { Computation, EffectFn } from "./effect-ir.ts";
 
 export type StreamNode =
   /** `Stream.make(...values)` and `Stream.fromIterable(array)`: one chunk, none when empty. */
@@ -17,6 +17,17 @@ export type StreamNode =
   | { readonly _tag: "Range"; readonly min: Expr<number>; readonly max: Expr<number> }
   | { readonly _tag: "Empty" }
   | { readonly _tag: "Fail"; readonly error: Expr<unknown> }
+  /** `Stream.fromSchedule(Schedule.spaced(d))`: 0, 1, 2, …, each after sleeping `d`. */
+  | { readonly _tag: "FromSchedule"; readonly milliseconds: number }
+  /**
+   * `Stream.ensuring(finalizer)`: the finalizer runs when the stream ends however it ends. Native
+   * only as a consumed stream's outermost operator (STREAM-005).
+   */
+  | {
+      readonly _tag: "Ensuring";
+      readonly source: StreamIR<unknown, unknown>;
+      readonly finalizer: Computation<void, never>;
+    }
   /** Per element, as `Stream.map`; `body` reads the element through `item`. */
   | {
       readonly _tag: "Map";
@@ -83,6 +94,7 @@ export const streamSources = (node: StreamNode): ReadonlyArray<StreamIR<unknown,
       Take: (n) => [n.source],
       Rechunk: (n) => [n.source],
       Chunks: (n) => [n.source],
+      Ensuring: (n) => [n.source],
       Concat: (n) => [n.first, n.second],
     }),
     Match.orElse(() => []),
@@ -110,6 +122,8 @@ export const streamExpressions = (
           out.push({ expr: n.max, path: `${path}.max` });
         },
         Empty: () => undefined,
+        FromSchedule: () => undefined,
+        Ensuring: (n) => visit(n.source, `${path}.source`),
         Fail: (n) => out.push({ expr: n.error, path: `${path}.error` }),
         Map: (n) => {
           visit(n.source, `${path}.source`);
@@ -137,6 +151,7 @@ export const streamExpressions = (
 export const mapStreamExpressions = <A, E>(
   stream: StreamIR<A, E>,
   f: (expr: Expr<unknown>) => Expr<unknown>,
+  finalizer: (c: Computation<void, never>) => Computation<void, never> = (c) => c,
 ): StreamIR<A, E> => {
   const go = (s: StreamIR<unknown, unknown>): StreamIR<unknown, unknown> => {
     const rebuild = (node: StreamNode, changed: boolean) =>
@@ -153,6 +168,15 @@ export const mapStreamExpressions = <A, E>(
           return rebuild({ ...n, min, max }, min !== n.min || max !== n.max);
         },
         Empty: () => s,
+        FromSchedule: () => s,
+        Ensuring: (n) => {
+          const source = go(n.source);
+          const next = finalizer(n.finalizer);
+          return rebuild(
+            { ...n, source, finalizer: next },
+            source !== n.source || next !== n.finalizer,
+          );
+        },
         Fail: (n) => {
           const error = f(n.error);
           return rebuild({ ...n, error }, error !== n.error);
@@ -199,6 +223,7 @@ export const toEffectStream = <B>(
   bindings: B,
   evaluate: (expr: Expr<unknown>, bindings: B) => unknown,
   bind: (bindings: B, binder: symbol, value: unknown) => B,
+  finalize: (finalizer: Computation<void, never>) => Effect.Effect<unknown>,
 ): Stream.Stream<unknown, unknown> => {
   const go = (s: StreamIR<unknown, unknown>): Stream.Stream<unknown, unknown> =>
     Match.value(s.node).pipe(
@@ -212,6 +237,8 @@ export const toEffectStream = <B>(
             Stream.range(evaluate(n.min, bindings) as number, evaluate(n.max, bindings) as number),
           ),
         Empty: () => Stream.empty,
+        FromSchedule: (n) => Stream.fromSchedule(Schedule.spaced(Duration.millis(n.milliseconds))),
+        Ensuring: (n) => Stream.ensuring(go(n.source), finalize(n.finalizer)),
         Fail: (n) => Stream.suspend(() => Stream.fail(evaluate(n.error, bindings))),
         Map: (n) =>
           Stream.map(go(n.source), (value) => evaluate(n.body, bind(bindings, n.item, value))),
@@ -229,3 +256,33 @@ export const toEffectStream = <B>(
     );
   return go(stream);
 };
+
+/** The finalizers a pipeline registers, with their paths. */
+export const streamFinalizers = (
+  stream: StreamIR<unknown, unknown>,
+): ReadonlyArray<{ readonly finalizer: Computation<void, never>; readonly path: string }> => {
+  const out: Array<{ finalizer: Computation<void, never>; path: string }> = [];
+  const visit = (s: StreamIR<unknown, unknown>, path: string): void => {
+    Match.value(s.node).pipe(
+      Match.tag("Ensuring", (n) => {
+        visit(n.source, `${path}.source`);
+        out.push({ finalizer: n.finalizer, path: `${path}.finalizer` });
+      }),
+      Match.tag("Concat", (n) => {
+        visit(n.first, `${path}.first`);
+        visit(n.second, `${path}.second`);
+      }),
+      Match.orElse(() =>
+        streamSources(s.node).forEach((source) => visit(source, `${path}.source`)),
+      ),
+    );
+  };
+  visit(stream, "stream");
+  return out;
+};
+/** Whether running the pipeline suspends: a timed source or a finalizer. */
+export const streamSuspends = (stream: StreamIR<unknown, unknown>): boolean =>
+  Match.value(stream.node).pipe(
+    Match.tags({ FromSchedule: () => true, Ensuring: () => true }),
+    Match.orElse(() => streamSources(stream.node).some(streamSuspends)),
+  );

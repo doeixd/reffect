@@ -1,4 +1,4 @@
-import { Fn, PureReference, evaluateExpression, fail } from "./kernel.ts";
+import { Fn, NeverType, PureReference, UnitType, evaluateExpression, fail } from "./kernel.ts";
 import { toEffectStream } from "./stream-ir.ts";
 import type { StreamFn } from "./stream-ir.ts";
 import type { CompileError, IRType, Inputs } from "./kernel.ts";
@@ -116,6 +116,12 @@ const stream = <I extends readonly IRType<unknown>[], A, E>(
           new Map<symbol, readonly unknown[]>([[f.binder, args]]),
           evaluateExpression,
           (outer, binder, value) => new Map(outer).set(binder, [value]),
+          // A finalizer here is closed: it reads none of the function's inputs (STREAM-005).
+          (finalizer) =>
+            EffectReference.runUnknown(
+              EffectFn.make([], UnitType, NeverType, () => finalizer),
+              [],
+            ).pipe(Effect.orDie),
         ) as Stream.Stream<A, E>,
     ),
     Match.orElse(() =>

@@ -1,5 +1,5 @@
 import { Match } from "effect";
-import { streamExpressions } from "./stream-ir.ts";
+import { streamExpressions, streamFinalizers } from "./stream-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Diagnostic } from "./kernel.ts";
 import { IRType, Traits } from "./kernel.ts";
@@ -278,10 +278,12 @@ export const analyzeScopes = (
         // A pure pipeline registers nothing; its expressions are checked like any other.
         StreamRunCollect: (n) => {
           streamExpressions(n.stream).forEach(({ expr, path }) => expression(expr, path));
+          streamFinalizers(n.stream).forEach((f) => finalizer(f.finalizer, f.path, false));
           return 0;
         },
         StreamEmit: (n) => {
           streamExpressions(n.stream).forEach(({ expr, path }) => expression(expr, path));
+          streamFinalizers(n.stream).forEach((f) => finalizer(f.finalizer, f.path, false));
           expression(n.encoded, "encoded");
           return 0;
         },

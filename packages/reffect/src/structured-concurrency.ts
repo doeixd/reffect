@@ -1,4 +1,5 @@
 import { Match } from "effect";
+import { streamFinalizers } from "./stream-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import type { Diagnostic } from "./kernel.ts";
 
@@ -108,8 +109,10 @@ export const analyzeTaskGroups = (
         RefModify: () => {},
         FileSize: () => {},
         Succeed: () => {},
-        StreamRunCollect: () => {},
-        StreamEmit: () => {},
+        StreamRunCollect: (n) =>
+          streamFinalizers(n.stream).forEach((f) => finalizer(f.finalizer, f.path)),
+        StreamEmit: (n) =>
+          streamFinalizers(n.stream).forEach((f) => finalizer(f.finalizer, f.path)),
         Fail: () => {},
         Sleep: () => {},
         Log: () => {},
