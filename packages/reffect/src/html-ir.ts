@@ -270,3 +270,22 @@ export const isHtmlRenderOperation = (
       : operation === RenderOperation
         ? "render"
         : undefined;
+
+/** How native lowering renders an Html operation, or undefined for any other operation. */
+export type HtmlOperationKind =
+  | { readonly _tag: "Text" }
+  | { readonly _tag: "Empty" }
+  | { readonly _tag: "Element"; readonly shape: ElementShape }
+  | { readonly _tag: "RootKind" }
+  | { readonly _tag: "RenderFailure" }
+  | { readonly _tag: "Render" };
+export const htmlOperationKind = (operation: AnyOperation): HtmlOperationKind | undefined => {
+  const shape = elementShapes.get(operation);
+  if (shape) return { _tag: "Element", shape };
+  if (operation === TextOperation) return { _tag: "Text" };
+  if (operation === EmptyOperation) return { _tag: "Empty" };
+  if (operation === RootKindOperation) return { _tag: "RootKind" };
+  if (operation === RenderFailureOperation) return { _tag: "RenderFailure" };
+  if (operation === RenderOperation) return { _tag: "Render" };
+  return undefined;
+};

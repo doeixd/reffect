@@ -36,6 +36,9 @@ import type { StreamIR } from "./stream-ir.ts";
 import { Expr } from "./kernel.ts";
 import type { OperationRef, Program, RecordQuery } from "./kernel.ts";
 import { hostFunctionOf } from "./schema-json.ts";
+import { HtmlType, htmlOperationKind } from "./html-ir.ts";
+import type { HtmlOperationKind } from "./html-ir.ts";
+import { elementCall, htmlRuntime } from "./html-native.ts";
 import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -72,6 +75,8 @@ export type RustExpr = (
       readonly args: readonly RustExpr[];
       /** The host's encoder function for a "json" call (RM-006). */
       readonly encoder?: string;
+      /** What an "html" call builds (SSR-003). */
+      readonly html?: HtmlOperationKind;
     }
   | {
       readonly _tag: "Match";
@@ -719,6 +724,7 @@ export function lowerFunctions(
                     n.args.map((arg, i) => expression(arg, `${path}.args[${i}]`)),
                   ),
                   ...(method === "json" && host ? { encoder: host } : {}),
+                  ...(method === "html" ? { html: htmlOperationKind(n.operation)! } : {}),
                 });
               },
               Match: (n): RustExpr =>
@@ -1587,6 +1593,8 @@ export const emitFunctions = (
   let usesJson = false;
   // Set when a number is written as JS text (SSR-012).
   let usesRyu = false;
+  // Set when an Html value is reachable, which brings the ported serializer (SSR-003).
+  let usesHtml = false;
   const rsTypeOf = (type: IRType<unknown>): RsType => {
     const content = refContent(type);
     if (content) return rsTypeOf(content);
@@ -1595,6 +1603,10 @@ export const emitFunctions = (
     if (IRType.same(type, UnitType)) return Rs.unitType();
     if (IRType.same(type, StringType)) return Rs.stringType();
     if (IRType.same(type, NumberType)) return Rs.namedType("f64");
+    if (IRType.same(type, HtmlType)) {
+      usesHtml = true;
+      return Rs.verbatimType("crate::foldkit_html::Html");
+    }
     if (IRType.same(type, UnknownType)) {
       usesJson = true;
       return Rs.pathType([Rs.ident("serde_json"), Rs.ident("Value")]);
@@ -2084,6 +2096,32 @@ export const emitFunctions = (
                       operand(n.args[1]),
                       ")",
                     ]);
+                  if (n.method === "html") {
+                    usesHtml = true;
+                    const html = n.html!;
+                    const args = n.args.map((arg) => operand(arg));
+                    const ids = () => [", &(", args[1]!, ")[..], &(", args[2]!, ")[..])"];
+                    if (html._tag === "Element")
+                      return joinFragments([...elementCall(html.shape, args)]);
+                    if (html._tag === "Text")
+                      return joinFragments(["crate::foldkit_html::text(&(", args[0]!, ")[..])"]);
+                    if (html._tag === "Empty") return textFragment("crate::foldkit_html::empty()");
+                    if (html._tag === "RootKind")
+                      return joinFragments(["crate::foldkit_html::root_kind(&(", args[0]!, "))"]);
+                    if (html._tag === "RenderFailure")
+                      return joinFragments([
+                        "crate::foldkit_html::failure(&(",
+                        args[0]!,
+                        ")",
+                        ...ids(),
+                      ]);
+                    return joinFragments([
+                      "crate::foldkit_html::render_html(&(",
+                      args[0]!,
+                      ")",
+                      ...ids(),
+                    ]);
+                  }
                   if (n.method === "js_string") {
                     usesRyu = true;
                     return joinFragments([
@@ -3371,7 +3409,7 @@ export const emitFunctions = (
         ? 'serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'
         : "") +
       (usesRyu ? 'ryu-js = { version = "=1.0.3", default-features = false }\n' : ""),
-    "src/lib.rs": writer.text,
+    "src/lib.rs": usesHtml ? `${writer.text}\n${htmlRuntime}` : writer.text,
     "src/main.rs": `${usesStrings ? stringBoundary : ""}${
       (hasAsync
         ? Rs.withAttributes(

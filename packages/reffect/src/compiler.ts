@@ -28,6 +28,7 @@ import type {
 import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { containsRef } from "./ref-model.ts";
 import { hostFunctionOf } from "./schema-json.ts";
+import { HtmlCapability, HtmlType, htmlOperationKind } from "./html-ir.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -103,6 +104,7 @@ export interface Implementation {
     | "replace"
     | "concat"
     | "js_string"
+    | "html"
     | "add"
     | "json";
 }
@@ -157,6 +159,24 @@ const hostImplementation = (operation: AnyOperation): Implementation => {
       "A NativeRpc host function, verified against the reference, implements the operation",
   });
   hostImplementations.set(operation, created);
+  return created;
+};
+const htmlImplementations = new WeakMap<object, Implementation>();
+/** The ported Foldkit serializer (SSR-003) implements every Html operation. */
+const htmlImplementation = (operation: AnyOperation): Implementation => {
+  const known = htmlImplementations.get(operation);
+  if (known) return known;
+  const created: Implementation = Object.freeze({
+    id: `rust/${operation.id}`,
+    operation,
+    target: Targets.RustStd,
+    strategy: "generated",
+    capabilities: operation.capabilities,
+    crates: Object.freeze([]),
+    method: "html",
+    rationale: "foldkit/ssr-serialize@1 renders the element as renderToString does",
+  });
+  htmlImplementations.set(operation, created);
   return created;
 };
 const implementations = Object.freeze([
@@ -249,6 +269,7 @@ export const Rust = Object.freeze({
       Capabilities.String,
       Capabilities.Number,
       Capabilities.SyncResult,
+      HtmlCapability,
       Capabilities.AsyncResult,
       Capabilities.ScopedFiles,
       Capabilities.Json,
@@ -263,6 +284,7 @@ export const Rust = Object.freeze({
       Capabilities.String,
       Capabilities.Number,
       Capabilities.SyncResult,
+      HtmlCapability,
       Capabilities.Json,
     ]),
   ),
@@ -857,9 +879,12 @@ const plan = Effect.fn("Compile.plan")(function* (
     const rejected: { id: string; reason: string }[] = [];
     let selected: Implementation | undefined;
     const encoded = hostFunctionOf(op);
+    const html = htmlOperationKind(op) !== undefined;
     const candidates = encoded
       ? [hostImplementation(op)]
-      : target.implementations.filter((i) => i.operation.id === op.id);
+      : html
+        ? [htmlImplementation(op)]
+        : target.implementations.filter((i) => i.operation.id === op.id);
     for (const candidate of candidates) {
       const reason =
         candidate.operation.ref !== op.ref || candidate.operation !== op
@@ -870,7 +895,7 @@ const plan = Effect.fn("Compile.plan")(function* (
                   (c) => !target.capabilities.includes(c) || !candidate.capabilities.includes(c),
                 )
               ? "Missing capability"
-              : !implementations.includes(candidate) && !encoded
+              : !implementations.includes(candidate) && !encoded && !html
                 ? "No verified Rust lowering registered for this candidate"
                 : undefined;
       if (reason) rejected.push({ id: candidate.id, reason });
@@ -958,7 +983,7 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
   for (const type of expected.analysis.types) {
     if (
       type.layout === undefined &&
-      ![U64Type, BoolType, UnitType, NeverType, StringType, NumberType, UnknownType].some(
+      ![U64Type, BoolType, UnitType, NeverType, StringType, NumberType, UnknownType, HtmlType].some(
         (builtin) => IRType.same(type, builtin),
       )
     )
