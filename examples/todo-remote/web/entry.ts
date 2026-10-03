@@ -18,7 +18,7 @@ const RemoteLive = Layer.unwrap(
 ).pipe(
   Layer.provide(
     RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(
-      Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]),
+      Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
     ),
   ),
 );

@@ -1,20 +1,29 @@
 /**
- * A todo list served by a native Foldkit Remote server. The stock Foldkit `Remote` client reads
- * and mutates it over Effect RPC. The same session runs against upstream's JavaScript memory
- * backend (with the same R sources over its own MemoryStore) and must see the same screens.
+ * A todo list served by a native Foldkit Remote server. The stock Foldkit `Remote` client reads,
+ * mutates and watches it live over Effect RPC. The same session runs against upstream's
+ * JavaScript memory backend and live hub (with the same R sources over its own MemoryStore) and
+ * must see the same screens.
  */
-import { Effect, FileSystem, Layer, Match, Option, Schema, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Match, Option, Schema, Stream } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { ChildProcess } from "effect/process";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { Entity } from "foldkit-entity";
-import { ConnectionChangeSchema, NormalizedEntity, Remote, RemoteRpc } from "foldkit-remote";
+import {
+  ConnectionChangeSchema,
+  NormalizedEntity,
+  Remote,
+  RemoteClient,
+  RemoteRpc,
+} from "foldkit-remote";
+import type { LiveEvent } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
-import type { MemoryStore } from "foldkit-remote-server";
+import type { LiveHub, MemoryStore } from "foldkit-remote-server";
 import {
   CargoApi,
   CompileError,
+  LiveHubHost,
   NativeRemote,
   Reference,
   RemoteStoreHost,
@@ -35,9 +44,34 @@ const show = (screen: ReturnType<typeof list.read>): string =>
     Match.orElse((other) => `(${other._tag})`),
   );
 
-/** What a screen does: show the list, add, toggle, delete, refuse an empty title, reload. */
+/** A live event as a second screen watching the todos would apply it. */
+const showLive = (event: LiveEvent): string =>
+  Match.value(event).pipe(
+    Match.tag(
+      "EntityPatched",
+      ({ ref, values, cursor }) => `#${cursor} ${ref.id} ${JSON.stringify(values)}`,
+    ),
+    Match.tag("EntityDeleted", ({ ref, cursor }) => `#${cursor} ${ref.id} deleted`),
+    Match.orElse(({ _tag }) => _tag),
+  );
+
+/**
+ * What a screen does: show the list, add, toggle, delete, refuse an empty title, reload. Meanwhile
+ * another screen watches t1 and t2 live, as `Data.live` subscribes.
+ */
 const session = Effect.gen(function* () {
   const screens: Array<readonly [string, string]> = [];
+  const client = yield* RemoteClient;
+  const watching = yield* client
+    .live({
+      requirements: [
+        { entity: "Todo", id: "t1", fields: ["title"] },
+        { entity: "Todo", id: "t2", fields: ["done"] },
+      ],
+      after: 0,
+    })
+    .pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped);
+  yield* Effect.sleep("200 millis");
   let model = yield* Data.prefetch(initial, list);
   screens.push(["start", show(list.read(model))]);
   model = (yield* Remote.mutateInto(Data, model, AddTodo, { id: "t3", title: "Ship it" }, "r1"))
@@ -50,8 +84,10 @@ const session = Effect.gen(function* () {
   const refused = yield* Remote.mutate(AddTodo, { id: "t4", title: "" }, "r4").pipe(Effect.flip);
   screens.push(["add without a title", refused.message]);
   screens.push(["reload", show(list.read(yield* Data.prefetch(initial, list)))]);
+  const live = yield* Fiber.join(watching).pipe(Effect.timeout("10 seconds"));
+  screens.push(["watched live", [...live].map(showLive).join("   ")]);
   return screens;
-});
+}).pipe(Effect.scoped);
 
 // The encoded outcome an R source returns, read with upstream's own wire schemas.
 const Outcome = Schema.Struct({
@@ -63,11 +99,17 @@ const Outcome = Schema.Struct({
   ),
 });
 // Upstream's memory backend running the same R sources over its own store.
+// Upstream's live hub, which the sources signal; set once the memory server exists.
+let hub: LiveHub<undefined> | undefined;
 const reference =
   (native: NativeRemoteMutation, store: MemoryStore) =>
   ({ input }: { readonly input: unknown }) =>
     Reference.run(native.fn, [input]).pipe(
       Effect.provideService(RemoteStoreHost, memoryStoreApi(store)),
+      Effect.provideService(LiveHubHost, {
+        changed: (ref, fields) => hub!.changed(ref, fields),
+        deleted: (ref) => hub!.deleted(ref),
+      }),
       Effect.catch((error) =>
         error instanceof CompileError
           ? Effect.die(error)
@@ -89,16 +131,27 @@ const upstream = RemoteServer.memory({
     RemoteServer.mutation(DeleteTodo, reference(deleteTodo, store)),
   ],
 });
+/** Upstream's handlers with its live hub, as the stock client's layer. */
+const upstreamLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const liveHub = yield* RemoteServer.liveHub([...upstream.server.entities.values()]);
+    hub = liveHub;
+    return Remote.clientLayer(RemoteServer.handlers(upstream.server, undefined, { live: liveHub }));
+  }),
+);
 
 /** Compiles, builds and starts the native server; its address once it is listening. */
 const startServer = (port: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-remote-" });
-    const artifact = yield* NativeRemote.compile(RemoteRpc.omit("FoldkitRemoteLive"), {
+    // Live streams need NDJSON: a JSON body would wait for a stream that never ends.
+    const artifact = yield* NativeRemote.compile(RemoteRpc, {
       domain: Data,
       rows,
       mutations,
+      live: true,
+      serialization: "ndjson",
     });
     const directory = yield* CargoApi.write(artifact, `${parent}/server`);
     yield* CargoApi.fetch(directory);
@@ -123,7 +176,7 @@ const native = Effect.gen(function* () {
   const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
     Effect.provide(
       RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
-        Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]),
+        Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
       ),
     ),
   );
@@ -143,7 +196,7 @@ await Effect.runPromise(
         }),
       ).pipe(Effect.provide(NodeServices.layer))
     : Effect.gen(function* () {
-        const expected = yield* session.pipe(Effect.provide(upstream.layer));
+        const expected = yield* session.pipe(Effect.provide(upstreamLayer));
         const screens = yield* Effect.scoped(native);
         for (const [label, screen] of screens) console.log(`${label.padEnd(20)} ${screen}`);
         if (JSON.stringify(screens) !== JSON.stringify(expected))

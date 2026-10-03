@@ -44,11 +44,14 @@ export const toggleTodo = NativeRemote.mutation(ToggleTodo, ({ input }) => {
           const stored = R.Struct.get(found, "value");
           const values = Done.make({ done: R.Boolean.not(R.Struct.get(stored, "done")) });
           return R.Effect.flatMap(R.RemoteStore.write("Todo", id, values), () =>
-            R.Effect.succeed(
-              NativeRemote.outcome(ToggleTodo).make({
-                output: R.Struct({}).make({}),
-                entities: R.Array.make(NativeRemote.patch(Todo, id, values)),
-              }),
+            // Other clients watching this todo receive the new `done` (LiveHub.changed).
+            R.Effect.flatMap(R.LiveHub.changed({ entity: "Todo", id }, ["done"]), () =>
+              R.Effect.succeed(
+                NativeRemote.outcome(ToggleTodo).make({
+                  output: R.Struct({}).make({}),
+                  entities: R.Array.make(NativeRemote.patch(Todo, id, values)),
+                }),
+              ),
             ),
           );
         },
@@ -60,12 +63,14 @@ export const toggleTodo = NativeRemote.mutation(ToggleTodo, ({ input }) => {
 export const deleteTodo = NativeRemote.mutation(DeleteTodo, ({ input }) => {
   const id = R.Struct.get(input, "id");
   return R.Effect.flatMap(R.RemoteStore.remove("Todo", id), () =>
-    R.Effect.succeed(
-      NativeRemote.outcome(DeleteTodo).make({
-        output: R.Struct({}).make({}),
-        connections: R.Array.make(NativeRemote.remove(allTodos, todoRef(id))),
-        deleted: R.Array.make(todoRef(id)),
-      }),
+    R.Effect.flatMap(R.LiveHub.deleted({ entity: "Todo", id }), () =>
+      R.Effect.succeed(
+        NativeRemote.outcome(DeleteTodo).make({
+          output: R.Struct({}).make({}),
+          connections: R.Array.make(NativeRemote.remove(allTodos, todoRef(id))),
+          deleted: R.Array.make(todoRef(id)),
+        }),
+      ),
     ),
   );
 });
