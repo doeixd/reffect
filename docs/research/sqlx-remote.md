@@ -212,6 +212,7 @@ Status: **implemented (2026-10-03)**, steps 1–5 on SQLite and Postgres. Scope:
 
 - A non-integral number compared with an integer column: node-postgres sends untyped text, so Postgres infers integer and refuses `2.5` (Database query failed), while SQLx sends float8 and compares numerically (no match). Inputs are schema-checked, so this needs a query whose input schema admits fractions against an integer column.
 - Text containing NUL is refused by Postgres on both sides.
+- A written value whose JSON type differs from its column's (a number into a text column): SQLx binds the JSON type and Postgres refuses the assignment (`Database query failed`), while node-postgres sends text that Postgres coerces. R's typed values match their entity schema, so an admitted mutation does not reach this.
 
 ### Acceptance (step 5)
 
