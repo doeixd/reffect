@@ -50,7 +50,7 @@ const sqlStore = (
   bindings: typeof bound | typeof pgBound,
   run: (sql: string, params: ReadonlyArray<unknown>) => Effect.Effect<number>,
 ): RemoteStoreApi => {
-  const at = (n: number) => (dialect === "postgres" ? `$${n}` : "?");
+  const at = (n: number) => `${dialect === "postgres" ? "$" : "?"}${n}`;
   const tableOf = (entity: string) => (entity === "Project" ? "projects" : "users");
   const columnOf = (entity: string, field: string): string => {
     const binding = entity === "Project" ? bindings.Project : bindings.User;

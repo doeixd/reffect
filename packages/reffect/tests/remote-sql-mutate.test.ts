@@ -1,10 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
-import { drizzle } from "drizzle-orm/node-sqlite";
 import {
   ConnectionChangeSchema,
   Mutation,
@@ -16,7 +14,7 @@ import type { RemoteRpcClient } from "foldkit-remote";
 import { Entity } from "foldkit-entity";
 import { defineMessageUnion } from "foldkit/message";
 import { Surface } from "foldkit-surface";
-import { databaseLayer, query, source } from "foldkit-remote-drizzle";
+import { query, source } from "foldkit-remote-drizzle";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import {
@@ -30,20 +28,15 @@ import {
 import type { NativeRemoteMutation, RemoteStoreApi } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
-import {
-  ByStatus,
-  Project,
-  Search,
-  bound,
-  domain,
-  domainEntities,
-  seed,
-} from "./fixtures/remote-sql-domain.ts";
+import { ByStatus, Project, Search, domain, domainEntities } from "./fixtures/remote-sql-domain.ts";
+import { sqlBackends } from "./fixtures/sql-database.ts";
+import type { SqlBackend, SqlDatabase } from "./fixtures/sql-database.ts";
 
 const { User } = domainEntities;
 
-// Milestone 5 step 4 (SQLX-006): R mutation sources over a SQLite transaction per mutation,
-// against the same sources run by the reference over Drizzle writes in a transaction.
+// Milestone 5 steps 4 and 5 (SQLX-006, SQLX-012): R mutation sources in one transaction per
+// mutation on SQLite and Postgres, against the same sources run by the reference over SQL writes
+// in a transaction on the official server's own database.
 const Group = RemoteRpc.omit("FoldkitRemoteLive");
 
 const Rename = Mutation.make("Rename", {
@@ -251,87 +244,36 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
   ],
 ];
 
-/**
- * MemoryStore semantics over the same connection: update the given columns of an existing row, or
- * insert a new one; a ref value stores its target id in the foreign key.
- */
-const sqlStore = (db: DatabaseSync): RemoteStoreApi => {
-  const tableOf = (entity: string) => (entity === "Project" ? "projects" : "users");
-  const columnOf = (entity: string, field: string): string => {
-    const binding = entity === "Project" ? bound.Project : bound.User;
-    const column = Object.entries(binding.columns).find(([key]) => key === field)?.[1];
-    if (column !== undefined) return column.name;
-    if (entity === "Project" && field === "owner") return "owner_id";
-    throw new Error(`No column for ${field}`);
-  };
-  const stored = (field: string, value: unknown): string | number | null => {
-    if (field === "owner" && typeof value === "string") return value.slice(value.indexOf(":") + 1);
-    if (typeof value === "boolean") return Number(value);
-    if (typeof value === "string" || typeof value === "number" || value === null) return value;
-    throw new Error(`Unexpected value for ${field}`);
-  };
-  return {
-    write: (entity, id, values) => {
-      const entries = Object.entries(values).filter(([field]) => field !== "id");
-      const columns = entries.map(([field]) => columnOf(entity, field));
-      const params = entries.map(([field, value]) => stored(field, value));
-      const updated =
-        columns.length === 0
-          ? db.prepare(`select 1 from ${tableOf(entity)} where id = ?`).all(id).length
-          : Number(
-              db
-                .prepare(
-                  `update ${tableOf(entity)} set ${columns.map((column) => `"${column}" = ?`).join(", ")} where id = ?`,
-                )
-                .run(...params, id).changes,
-            );
-      if (updated === 0)
-        db.prepare(
-          `insert into ${tableOf(entity)} (id${columns.map((column) => `, "${column}"`).join("")}) values (?${columns.map(() => ", ?").join("")})`,
-        ).run(id, ...params);
-    },
-    remove: (entity, id) => {
-      db.prepare(`delete from ${tableOf(entity)} where id = ?`).run(id);
-    },
-  };
-};
-
-/** The official server: upstream Drizzle sources, and the same R sources over its own SQLite. */
-const officialServer = (db: DatabaseSync) => {
-  const store = sqlStore(db);
-  // One transaction per mutation; a store exception answers as upstream's Drizzle helpers do.
+/** The official server: upstream Drizzle sources, and the same R sources over its own database. */
+const officialServer = (db: SqlDatabase, bindings: SqlBackend["bindings"]) => {
+  // One transaction per mutation; a store failure answers as upstream's Drizzle helpers do.
   const run =
     (native: NativeRemoteMutation) =>
     ({ input }: { readonly input: unknown }) =>
       Effect.gen(function* () {
-        db.exec("BEGIN IMMEDIATE");
+        const transaction = yield* db.begin;
         let failed = false;
+        const guard = (done: void | Effect.Effect<void>) =>
+          (Effect.isEffect(done) ? done : Effect.void).pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                failed = true;
+              }),
+            ),
+          );
         const guarded: RemoteStoreApi = {
-          write: (entity, id, values) => {
-            try {
-              store.write(entity, id, values);
-            } catch (error) {
-              failed = true;
-              throw error;
-            }
-          },
-          remove: (entity, id) => {
-            try {
-              store.remove(entity, id);
-            } catch (error) {
-              failed = true;
-              throw error;
-            }
-          },
+          write: (entity, id, values) =>
+            Effect.suspend(() => guard(transaction.store.write(entity, id, values))),
+          remove: (entity, id) => Effect.suspend(() => guard(transaction.store.remove(entity, id))),
         };
         const exit = yield* Effect.exit(
           Reference.run(native.fn, [input]).pipe(Effect.provideService(RemoteStoreHost, guarded)),
         );
         if (Exit.isSuccess(exit)) {
-          db.exec("COMMIT");
+          yield* transaction.commit;
           return Schema.decodeUnknownSync(Outcome)(exit.value);
         }
-        db.exec("ROLLBACK");
+        yield* transaction.rollback;
         if (failed) return yield* new RemoteServerError({ message: "Database query failed" });
         const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
         if (error === undefined || error instanceof CompileError)
@@ -342,8 +284,11 @@ const officialServer = (db: DatabaseSync) => {
         });
       });
   const server = RemoteServer.make({
-    entities: [source(bound.User), source(bound.Project)],
-    queries: [query(ByStatus, { entity: bound.Project }), query(Search, { entity: bound.Project })],
+    entities: [source(bindings.User), source(bindings.Project)],
+    queries: [
+      query(ByStatus, { entity: bindings.Project }),
+      query(Search, { entity: bindings.Project }),
+    ],
     mutations: [
       RemoteServer.mutation(Rename, run(rename)),
       RemoteServer.mutation(Create, run(create)),
@@ -355,10 +300,10 @@ const officialServer = (db: DatabaseSync) => {
   });
   return server;
 };
-const oracle = (db: DatabaseSync) =>
+const oracle = (db: SqlDatabase, bindings: SqlBackend["bindings"]) =>
   Effect.gen(function* () {
-    const layer = databaseLayer(drizzle({ client: db }));
-    const handlers = RemoteServer.handlers(officialServer(db), undefined);
+    const layer = db.layer;
+    const handlers = RemoteServer.handlers(officialServer(db, bindings), undefined);
     const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
       Effect.provide([
         Group.toLayer({
@@ -375,90 +320,94 @@ const oracle = (db: DatabaseSync) =>
     return HttpEffect.toWebHandler(http);
   });
 
-test(
-  "native SQL mutations match upstream sources over Drizzle writes, one transaction each",
-  async () => {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const parent = yield* fs.makeTempDirectoryScoped({
-            prefix: "reffect-remote-sql-mutate-",
-          });
-          // Separate files: each server mutates its own copy of the same seed.
-          const officialDb = seed(`${parent}/official.db`);
-          const nativeFile = `${parent}/native.db`;
-          seed(nativeFile).close();
-          yield* Effect.addFinalizer(() => Effect.sync(() => officialDb.close()));
-          const official = yield* oracle(officialDb);
-          const officialPost = (body: string) =>
-            Effect.promise(async () => {
-              const response = await official(
-                new Request("http://reffect.test/rpc", { method: "POST", body }),
-              );
-              return { status: response.status, body: await response.text() };
+for (const backend of sqlBackends)
+  test.skipIf(backend.unavailable !== undefined)(
+    `native ${backend.dialect} mutations match the same sources on the official server, one transaction each`,
+    async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const parent = yield* fs.makeTempDirectoryScoped({
+              prefix: "reffect-remote-sql-mutate-",
             });
-          const artifact = yield* NativeRemote.compile(Group, {
-            domain,
-            sql: { dialect: "sqlite", bindings: bound, databaseUrlEnv: "REFFECT_DATABASE_URL" },
-            mutations,
-          });
-          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-          yield* CargoApi.fetch(directory);
-          yield* CargoApi.build(directory, "debug");
-          const child = yield* ChildProcess.make(
-            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-            ["--port", "0"],
-            {
-              env: { REFFECT_DATABASE_URL: `sqlite:${nativeFile.replaceAll("\\", "/")}` },
-              extendEnv: true,
-            },
-          );
-          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-          const ready = yield* Stream.runHead(
-            Stream.splitLines(Stream.decodeText(child.stdout)),
-          ).pipe(Effect.timeout("10 seconds"));
-          if (!Option.isSome(ready)) throw new Error("Missing ready record");
-          const { address } = Schema.decodeUnknownSync(
-            Schema.Struct({
-              schema: Schema.Literal("reffect.rpc.ready@1"),
-              address: Schema.String,
-            }),
-          )(JSON.parse(ready.value));
-          const post = (body: string) =>
-            Effect.promise(async () => {
-              const response = await fetch(`http://${address}/rpc`, { method: "POST", body });
-              return { status: response.status, body: await response.text() };
+            // Separate databases: each server mutates its own copy of the same seed.
+            const open = yield* backend.databases;
+            const officialDb = yield* open("official");
+            const nativeDb = yield* open("native");
+            const official = yield* oracle(officialDb, backend.bindings);
+            const officialPost = (body: string) =>
+              Effect.promise(async () => {
+                const response = await official(
+                  new Request("http://reffect.test/rpc", { method: "POST", body }),
+                );
+                return { status: response.status, body: await response.text() };
+              });
+            const artifact = yield* NativeRemote.compile(Group, {
+              domain,
+              sql: {
+                dialect: backend.dialect,
+                bindings: backend.bindings,
+                databaseUrlEnv: "REFFECT_DATABASE_URL",
+              },
+              mutations,
             });
-          const answers = new Map<string, string>();
-          for (const [label, body] of corpus) {
-            const native = yield* post(body);
-            const reference = yield* officialPost(body);
-            answers.set(label, reference.body);
-            expect(native.status, label).toBe(reference.status);
-            expect(JSON.parse(native.body), label).toStrictEqual(JSON.parse(reference.body));
-            expect(successValue(native.body), `${label} raw key order`).toStrictEqual(
-              successValue(reference.body),
+            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+            yield* CargoApi.fetch(directory);
+            yield* CargoApi.build(directory, "debug");
+            const child = yield* ChildProcess.make(
+              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+              ["--port", "0"],
+              {
+                env: { REFFECT_DATABASE_URL: nativeDb.url },
+                extendEnv: true,
+              },
             );
-          }
-          const answer = (label: string) => answers.get(label) ?? "";
-          expect(answer("read after rename")).toContain("Zephyr");
-          expect(answer("read created")).toContain('"owner":"User:u3"');
-          expect(answer("drafts after create")).toContain("p90");
-          expect(answer("drafts after archive")).not.toContain('"p03"');
-          expect(answer("a store failure")).toContain("Database query failed");
-          expect(answer("read after the store failure")).toContain('"entities":[]');
-          expect(answer("a typed failure after a write")).toContain("Refused after writing");
-          expect(answer("read after the typed failure")).not.toContain("Lost");
-          expect(answer("a store failure after a write")).toContain("Database query failed");
-          expect(answer("read after the second failure")).not.toContain("Gone");
-          expect(answer("invalid input")).toContain("Invalid mutation input");
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-    );
-  },
-  nativeTestBudget(0) + 240000,
-);
+            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+            const ready = yield* Stream.runHead(
+              Stream.splitLines(Stream.decodeText(child.stdout)),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (!Option.isSome(ready)) throw new Error("Missing ready record");
+            const { address } = Schema.decodeUnknownSync(
+              Schema.Struct({
+                schema: Schema.Literal("reffect.rpc.ready@1"),
+                address: Schema.String,
+              }),
+            )(JSON.parse(ready.value));
+            const post = (body: string) =>
+              Effect.promise(async () => {
+                const response = await fetch(`http://${address}/rpc`, { method: "POST", body });
+                return { status: response.status, body: await response.text() };
+              });
+            const answers = new Map<string, string>();
+            for (const [label, body] of corpus) {
+              const native = yield* post(body);
+              const reference = yield* officialPost(body);
+              answers.set(label, reference.body);
+              expect(native.status, label).toBe(reference.status);
+              expect(JSON.parse(native.body), label).toStrictEqual(JSON.parse(reference.body));
+              expect(successValue(native.body), `${label} raw key order`).toStrictEqual(
+                successValue(reference.body),
+              );
+            }
+            const answer = (label: string) => answers.get(label) ?? "";
+            expect(answer("read after rename")).toContain("Zephyr");
+            expect(answer("read created")).toContain('"owner":"User:u3"');
+            expect(answer("drafts after create")).toContain("p90");
+            expect(answer("drafts after archive")).not.toContain('"p03"');
+            expect(answer("a store failure")).toContain("Database query failed");
+            expect(answer("read after the store failure")).toContain('"entities":[]');
+            expect(answer("a typed failure after a write")).toContain("Refused after writing");
+            expect(answer("read after the typed failure")).not.toContain("Lost");
+            expect(answer("a store failure after a write")).toContain("Database query failed");
+            expect(answer("read after the second failure")).not.toContain("Gone");
+            expect(answer("invalid input")).toContain("Invalid mutation input");
+          }),
+        ).pipe(Effect.provide(NodeServices.layer)),
+      );
+    },
+    nativeTestBudget(0) + 300000,
+  );
 
 // Milestone 5 acceptance: the stock Remote client over the native SQL server sees what it sees over
 // the official one, through queries, mutateInto, a refusal and a reload.
@@ -508,94 +457,105 @@ const session = Effect.gen(function* () {
   };
 });
 
-test(
-  "a stock Remote client reads, queries and mutates through the native SQL server",
-  async () => {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sql-acceptance-" });
-          const officialDb = seed(`${parent}/official.db`);
-          yield* Effect.addFinalizer(() => Effect.sync(() => officialDb.close()));
-          const nativeFile = `${parent}/native.db`;
-          seed(nativeFile).close();
-          // Upstream's handlers are a RemoteRpcClient; each answer runs against the official file.
-          const layer = databaseLayer(drizzle({ client: officialDb }));
-          const handlers = RemoteServer.handlers(officialServer(officialDb), undefined);
-          const officialClient: RemoteRpcClient = {
-            FoldkitRemoteRead: (payload) =>
-              handlers.FoldkitRemoteRead(payload).pipe(Effect.provide(layer)),
-            FoldkitRemoteQuery: (payload) =>
-              handlers.FoldkitRemoteQuery(payload).pipe(Effect.provide(layer)),
-            FoldkitRemoteMutate: (payload) =>
-              handlers.FoldkitRemoteMutate(payload).pipe(Effect.provide(layer)),
-            FoldkitRemoteLive: () => Stream.die("Live is not part of this session"),
-          };
-          const official = yield* session.pipe(Effect.provide(Remote.clientLayer(officialClient)));
-          expect(official.reloaded).toMatchObject({ _tag: "Ready" });
-          expect(official.refused).toBe("Database query failed");
-          // Each step observes its effect, so the comparison below cannot pass vacuously.
-          const seen = (value: unknown) => JSON.stringify(value);
-          expect(seen(official.loaded)).not.toContain("Zephyr");
-          expect(seen(official.renamed)).toContain("Zephyr");
-          expect(seen(official.renamed)).toContain("Zeta");
-          expect(seen(official.archived)).not.toContain("Zeta");
-          // Create's outcome adds no connection, so only the reload pages the new top-ranked row in.
-          expect(seen(official.reloaded)).toContain("Aurora");
-          expect(seen(official.reloaded)).toContain("Zephyr");
-          expect(seen(official.reloaded)).not.toContain("Zeta");
+for (const backend of sqlBackends)
+  test.skipIf(backend.unavailable !== undefined)(
+    `a stock Remote client reads, queries and mutates through the native ${backend.dialect} server`,
+    async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sql-acceptance-" });
+            const open = yield* backend.databases;
+            const officialDb = yield* open("official");
+            const nativeDb = yield* open("native");
+            // Upstream's handlers are a RemoteRpcClient; each answer runs against the official database.
+            const layer = officialDb.layer;
+            const handlers = RemoteServer.handlers(
+              officialServer(officialDb, backend.bindings),
+              undefined,
+            );
+            const officialClient: RemoteRpcClient = {
+              FoldkitRemoteRead: (payload) =>
+                handlers.FoldkitRemoteRead(payload).pipe(Effect.provide(layer)),
+              FoldkitRemoteQuery: (payload) =>
+                handlers.FoldkitRemoteQuery(payload).pipe(Effect.provide(layer)),
+              FoldkitRemoteMutate: (payload) =>
+                handlers.FoldkitRemoteMutate(payload).pipe(Effect.provide(layer)),
+              FoldkitRemoteLive: () => Stream.die("Live is not part of this session"),
+            };
+            const official = yield* session.pipe(
+              Effect.provide(Remote.clientLayer(officialClient)),
+            );
+            expect(official.reloaded).toMatchObject({ _tag: "Ready" });
+            expect(official.refused).toBe("Database query failed");
+            // Each step observes its effect, so the comparison below cannot pass vacuously.
+            const seen = (value: unknown) => JSON.stringify(value);
+            expect(seen(official.loaded)).not.toContain("Zephyr");
+            expect(seen(official.renamed)).toContain("Zephyr");
+            expect(seen(official.renamed)).toContain("Zeta");
+            expect(seen(official.archived)).not.toContain("Zeta");
+            // Create's outcome adds no connection, so only the reload pages the new top-ranked row in.
+            expect(seen(official.reloaded)).toContain("Aurora");
+            expect(seen(official.reloaded)).toContain("Zephyr");
+            expect(seen(official.reloaded)).not.toContain("Zeta");
 
-          const artifact = yield* NativeRemote.compile(Group, {
-            domain,
-            sql: { dialect: "sqlite", bindings: bound, databaseUrlEnv: "REFFECT_DATABASE_URL" },
-            mutations,
-          });
-          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-          yield* CargoApi.fetch(directory);
-          yield* CargoApi.build(directory, "debug");
-          const child = yield* ChildProcess.make(
-            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-            ["--port", "0"],
-            {
-              env: { REFFECT_DATABASE_URL: `sqlite:${nativeFile.replaceAll("\\", "/")}` },
-              extendEnv: true,
-            },
-          );
-          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-          const ready = yield* Stream.runHead(
-            Stream.splitLines(Stream.decodeText(child.stdout)),
-          ).pipe(Effect.timeout("10 seconds"));
-          if (!Option.isSome(ready)) throw new Error("Missing ready record");
-          const { address } = Schema.decodeUnknownSync(
-            Schema.Struct({
-              schema: Schema.Literal("reffect.rpc.ready@1"),
-              address: Schema.String,
-            }),
-          )(JSON.parse(ready.value));
-          const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
-            Effect.provide(
-              RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
-                Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]),
+            const artifact = yield* NativeRemote.compile(Group, {
+              domain,
+              sql: {
+                dialect: backend.dialect,
+                bindings: backend.bindings,
+                databaseUrlEnv: "REFFECT_DATABASE_URL",
+              },
+              mutations,
+            });
+            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+            yield* CargoApi.fetch(directory);
+            yield* CargoApi.build(directory, "debug");
+            const child = yield* ChildProcess.make(
+              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+              ["--port", "0"],
+              {
+                env: { REFFECT_DATABASE_URL: nativeDb.url },
+                extendEnv: true,
+              },
+            );
+            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+            const ready = yield* Stream.runHead(
+              Stream.splitLines(Stream.decodeText(child.stdout)),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (!Option.isSome(ready)) throw new Error("Missing ready record");
+            const { address } = Schema.decodeUnknownSync(
+              Schema.Struct({
+                schema: Schema.Literal("reffect.rpc.ready@1"),
+                address: Schema.String,
+              }),
+            )(JSON.parse(ready.value));
+            const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
+              Effect.provide(
+                RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
+                  Layer.provide([FetchHttpClient.layer, RpcSerialization.layerJson]),
+                ),
               ),
-            ),
-          );
-          // Remote's transport admits only Remote's errors (foldkit-plus#141).
-          const transport: RemoteRpcClient = {
-            FoldkitRemoteRead: (payload) =>
-              rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-            FoldkitRemoteQuery: (payload) =>
-              rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-            FoldkitRemoteMutate: (payload) =>
-              rpc.FoldkitRemoteMutate(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-            FoldkitRemoteLive: (payload) =>
-              rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
-          };
-          const native = yield* session.pipe(Effect.provide(Remote.clientLayer(transport)));
-          expect(native).toStrictEqual(official);
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-    );
-  },
-  nativeTestBudget(0) + 240000,
-);
+            );
+            // Remote's transport admits only Remote's errors (foldkit-plus#141).
+            const transport: RemoteRpcClient = {
+              FoldkitRemoteRead: (payload) =>
+                rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
+              FoldkitRemoteQuery: (payload) =>
+                rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
+              FoldkitRemoteMutate: (payload) =>
+                rpc
+                  .FoldkitRemoteMutate(payload)
+                  .pipe(Effect.catchTag("RpcClientError", Effect.die)),
+              FoldkitRemoteLive: (payload) =>
+                rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
+            };
+            const native = yield* session.pipe(Effect.provide(Remote.clientLayer(transport)));
+            expect(native).toStrictEqual(official);
+          }),
+        ).pipe(Effect.provide(NodeServices.layer)),
+      );
+    },
+    nativeTestBudget(0) + 300000,
+  );
