@@ -26,6 +26,7 @@ import {
 import type { AnyOperation, Fn } from "./kernel.ts";
 import { ArrayIR, Struct } from "./records.ts";
 import { Reference } from "./reference.ts";
+import { NativeRpc } from "./native-rpc.ts";
 
 /** The reference value of an `Html` expression: what the view describes, before Foldkit sees it. */
 export type HtmlValue =
@@ -40,7 +41,8 @@ export type HtmlValue =
 type AttributeValue =
   | { readonly name: StringAttribute; readonly value: string }
   | { readonly name: BooleanAttribute; readonly value: boolean }
-  | { readonly name: "DataAttribute"; readonly key: string; readonly value: string };
+  | { readonly name: "DataAttribute"; readonly key: string; readonly value: string }
+  | { readonly name: EventAttribute; readonly message: unknown };
 
 const HtmlCapability = SemanticRef.capability("reffect/capability/foldkit-html@1");
 const isHtmlValue = (value: unknown): value is HtmlValue =>
@@ -67,14 +69,77 @@ const STRING_ATTRIBUTES = [
   "Value",
 ] as const;
 const BOOLEAN_ATTRIBUTES = ["Checked", "Disabled"] as const;
+/** Event attributes take a Message; they leave no trace in server HTML (SSR-010). */
+const EVENT_ATTRIBUTES = ["OnClick", "OnDoubleClick", "OnSubmit"] as const;
 type StringAttribute = (typeof STRING_ATTRIBUTES)[number];
 type BooleanAttribute = (typeof BOOLEAN_ATTRIBUTES)[number];
+type EventAttribute = (typeof EVENT_ATTRIBUTES)[number];
+
+/** A variant of a `defineMessageUnion` Message: a tagged struct schema that constructs itself. */
+export type MessageVariant = Schema.Top &
+  ((value: never) => { readonly _tag: string }) & { readonly fields: Schema.Struct.Fields };
+type MessageFields<V extends MessageVariant> = {
+  readonly [K in Exclude<keyof Schema.Schema.Type<V>, "_tag">]: Expr<Schema.Schema.Type<V>[K]>;
+};
+/** A Message to construct when an event fires: the app's variant and its fields as R values. */
+export interface MessageExpr {
+  readonly variant: MessageVariant;
+  readonly fields: ReadonlyArray<{ readonly name: string; readonly value: Expr<unknown> }>;
+}
+const variantIds = new WeakMap<MessageVariant, number>();
+let nextVariantId = 0;
+const variantId = (variant: MessageVariant): number => {
+  const known = variantIds.get(variant);
+  if (known !== undefined) return known;
+  nextVariantId += 1;
+  variantIds.set(variant, nextVariantId);
+  return nextVariantId;
+};
+/**
+ * `R.Html.message(Message.ClickedToggle, { id })`: each field is checked against the variant's
+ * own schema, so the whole Message union never needs an R witness (SSR-010).
+ */
+const message = <V extends MessageVariant>(variant: V, fields: MessageFields<V>): MessageExpr => {
+  const entries: ReadonlyArray<readonly [string, Expr<unknown>]> = Object.entries(fields);
+  for (const [name, value] of entries) {
+    const schema = variant.fields[name];
+    if (name === "_tag" || !Schema.isSchema(schema))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        `Html.message.${name}`,
+        "Not a field of this Message",
+      );
+    if (!IRType.same(value.type, NativeRpc.witness(schema)))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        `Html.message.${name}`,
+        "The value's witness differs from the field's schema",
+      );
+  }
+  const missing = Object.keys(variant.fields).filter(
+    (name) => name !== "_tag" && !entries.some(([given]) => given === name),
+  );
+  if (missing.length)
+    throw fail(
+      "TYPE_MISMATCH",
+      "authoring",
+      "Html.message",
+      `Missing fields: ${missing.join(", ")}`,
+    );
+  return Object.freeze({
+    variant,
+    fields: Object.freeze(entries.map(([name, value]) => Object.freeze({ name, value }))),
+  });
+};
 
 /** An attribute as authored: its Foldkit constructor and the R expression it is given. */
 export type Attribute =
   | { readonly name: StringAttribute; readonly value: Expr<string> }
   | { readonly name: BooleanAttribute; readonly value: Expr<boolean> }
-  | { readonly name: "DataAttribute"; readonly key: string; readonly value: Expr<string> };
+  | { readonly name: "DataAttribute"; readonly key: string; readonly value: Expr<string> }
+  | { readonly name: EventAttribute; readonly message: MessageExpr };
 const stringValue = (value: Expr<string> | string, at: string): Expr<string> => {
   const expr = typeof value === "string" ? Expr.literal(StringType, value) : value;
   if (!IRType.same(expr.type, StringType))
@@ -125,6 +190,12 @@ export interface ElementShape {
   readonly attributes: ReadonlyArray<
     | { readonly name: StringAttribute | BooleanAttribute }
     | { readonly name: "DataAttribute"; readonly key: string }
+    /** Its Message's field values are reference-only arguments: native rendering erases them. */
+    | {
+        readonly name: EventAttribute;
+        readonly variant: MessageVariant;
+        readonly fields: ReadonlyArray<{ readonly name: string; readonly type: IRType<unknown> }>;
+      }
   >;
   readonly isVoid: boolean;
 }
@@ -141,7 +212,11 @@ export const isHtmlEmptyOperation = (operation: AnyOperation): boolean =>
 const shapeKey = (shape: ElementShape): string =>
   `${shape.tag}(${shape.attributes
     .map((attribute) =>
-      attribute.name === "DataAttribute" ? `data:${attribute.key}` : attribute.name,
+      "key" in attribute
+        ? `data:${attribute.key}`
+        : "variant" in attribute
+          ? `${attribute.name}:${variantId(attribute.variant)}{${attribute.fields.map((field) => field.name).join(",")}}`
+          : attribute.name,
     )
     .join(",")})`;
 /** One interned operation per element shape: attribute values, then the children array. */
@@ -149,29 +224,44 @@ const elementOperation = (shape: ElementShape): AnyOperation => {
   const key = shapeKey(shape);
   const known = elementOperations.get(key);
   if (known) return known;
-  const inputs: IRType<unknown>[] = shape.attributes.map((attribute) =>
-    attribute.name === "Checked" || attribute.name === "Disabled" ? BoolType : StringType,
+  const inputs: IRType<unknown>[] = shape.attributes.flatMap((attribute) =>
+    "variant" in attribute
+      ? attribute.fields.map((field) => field.type)
+      : [attribute.name === "Checked" || attribute.name === "Disabled" ? BoolType : StringType],
   );
   inputs.push(HtmlArray);
   const operation = Operation.make(
     SemanticRef.operation(`reffect/foldkit-html.element@1/${key}`),
     inputs,
     HtmlType,
-    (...args: ReadonlyArray<unknown>): HtmlValue => ({
-      _tag: "Element",
-      tag: shape.tag,
-      attributes: shape.attributes.map((attribute, i): AttributeValue => {
-        const value = args[i];
-        if (attribute.name === "DataAttribute")
+    (...args: ReadonlyArray<unknown>): HtmlValue => {
+      let next = 0;
+      const attributes = shape.attributes.map((attribute): AttributeValue => {
+        if ("variant" in attribute) {
+          const fields = Object.fromEntries(
+            attribute.fields.map((field) => [field.name, args[next++]]),
+          );
+          return {
+            name: attribute.name,
+            message: Reflect.apply(attribute.variant, undefined, [fields]),
+          };
+        }
+        const value = args[next++];
+        if ("key" in attribute)
           return { name: "DataAttribute", key: attribute.key, value: String(value) };
         if (attribute.name === "Checked" || attribute.name === "Disabled")
           return { name: attribute.name, value: value === true };
         return { name: attribute.name, value: String(value) };
-      }),
-      children: (args[shape.attributes.length] as ReadonlyArray<HtmlValue>).filter(
-        (child) => child._tag !== "Empty",
-      ),
-    }),
+      });
+      return {
+        _tag: "Element",
+        tag: shape.tag,
+        attributes,
+        children: (args[next] as ReadonlyArray<HtmlValue>).filter(
+          (child) => child._tag !== "Empty",
+        ),
+      };
+    },
   ).pipe(Operation.withCapabilities([HtmlCapability]));
   elementShapes.set(operation, shape);
   elementOperations.set(key, operation);
@@ -201,7 +291,7 @@ const element =
     const at = `Html.${tag}`;
     const seen = new Set<string>();
     for (const attribute of attributes) {
-      const name = attribute.name === "DataAttribute" ? `data-${attribute.key}` : attribute.name;
+      const name = "key" in attribute ? `data-${attribute.key}` : attribute.name;
       // Foldkit keeps the last value but the first position; the profile refuses the ambiguity.
       if (seen.has(name))
         throw fail("DUPLICATE_ATTRIBUTE", "authoring", at, `${name} is given twice`);
@@ -212,13 +302,27 @@ const element =
       isVoid,
       attributes: Object.freeze(
         attributes.map((attribute) =>
-          attribute.name === "DataAttribute"
+          "key" in attribute
             ? Object.freeze({ name: attribute.name, key: attribute.key })
-            : Object.freeze({ name: attribute.name }),
+            : "message" in attribute
+              ? Object.freeze({
+                  name: attribute.name,
+                  variant: attribute.message.variant,
+                  fields: Object.freeze(
+                    attribute.message.fields.map((field) =>
+                      Object.freeze({ name: field.name, type: field.value.type }),
+                    ),
+                  ),
+                })
+              : Object.freeze({ name: attribute.name }),
         ),
       ),
     });
-    const values: Expr<unknown>[] = attributes.map((attribute) => attribute.value);
+    const values: Expr<unknown>[] = attributes.flatMap((attribute) =>
+      "message" in attribute
+        ? attribute.message.fields.map((field) => field.value)
+        : [attribute.value],
+    );
     return Expr.apply(
       elementOperation(shape),
       ...values,
@@ -263,11 +367,13 @@ const toFoldkit = <Message>(value: HtmlValue, h: HtmlBuilder<Message>): FoldkitH
   if (value._tag === "Text") return value.text;
   if (value._tag === "Empty") return h.empty;
   const attributes = value.attributes.map((attribute) =>
-    attribute.name === "DataAttribute"
-      ? h.DataAttribute(attribute.key, attribute.value)
-      : attribute.name === "Checked" || attribute.name === "Disabled"
-        ? h[attribute.name](attribute.value === true)
-        : h[attribute.name](String(attribute.value)),
+    "message" in attribute
+      ? h[attribute.name](attribute.message as Message)
+      : "key" in attribute
+        ? h.DataAttribute(attribute.key, attribute.value)
+        : attribute.name === "Checked" || attribute.name === "Disabled"
+          ? h[attribute.name](attribute.value === true)
+          : h[attribute.name](String(attribute.value)),
   );
   const build = Reflect.get(h, value.tag) as (
     attributes: ReadonlyArray<unknown>,
@@ -312,6 +418,13 @@ export const HtmlIR = Object.freeze({
   ...(Object.fromEntries(
     BOOLEAN_ATTRIBUTES.map((name) => [name, booleanAttribute(name)]),
   ) as Record<BooleanAttribute, (value: Expr<boolean> | boolean) => Attribute>),
+  ...(Object.fromEntries(
+    EVENT_ATTRIBUTES.map((name) => [
+      name,
+      (expr: MessageExpr): Attribute => ({ name, message: expr }),
+    ]),
+  ) as Record<EventAttribute, (message: MessageExpr) => Attribute>),
+  message,
   DataAttribute: (key: string, value: Expr<string> | string): Attribute => {
     if (!DATA_KEY.test(key))
       throw fail(
