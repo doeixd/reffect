@@ -1,0 +1,49 @@
+# Native Remote mutations, Store and authorization (step 4)
+
+Status: **proposed (2026-10-03)**, not implemented. Step 4 of the [native RemoteServer design](native-remote.md#order-of-work) (NR-005) and [milestone §21](../implementation-milestones.md#21-authorization-must-become-portable). Read from `foldkit-remote-server` 0.10.0 (`handlers.FoldkitRemoteMutate`, `MutationSource`, `MutationOutcome`, `memory`'s `MemoryStore`, `allowedFields`), its memory test's `Rename` mutation, and `foldkit-remote` 0.10.0 (`Remote.patch`, `connectionIdentity`).
+
+## What the reference does
+
+- **Handler.** An unknown mutation → `RemoteMutationError("Unknown mutation: <name>")`. The input is decoded with the mutation's `Input` schema (`decodeUnknown`, not the JSON codec); failure → `"Invalid mutation input"`. Then `run({ input, principal })`; a source's `RemoteServerError` → `RemoteMutationError(message)`. The output is encoded with `Output`; failure → `"Invalid mutation output"`. The result is `{ output, entities, connections, deleted }`.
+- **Memory backend.** Mutations are **user callbacks** given the `MemoryStore`:
+  - `rows(entity)`;
+  - `write(entity, id, values)`, which sets `{ ...existing, id, ...values }` and keeps a new row's position at the end;
+  - `remove(entity, id)`.
+
+  The next read sees the change. A typical body writes the store and returns `Remote.patch(Entity, id, values)` and connection changes (`RemoteServer.prepend/append/remove(connection, ref)`).
+
+- **Authorization.** An entity source's optional `authorize(principal, fields) → fields` filters the declared, requested fields. Only requested fields survive, even if it returns more (`allowedFields`). The memory backend authorizes nothing.
+
+## Options
+
+| Option                                                               | Assessment                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A: R-authored mutation functions over a native `RemoteStore` service | Mirrors upstream (a mutation is code given the store). Needs R surface that mostly exists: services, `R.Struct`/`R.Record`/`R.UndefinedOr`, `Effect.fail`. Adds three things: a server-lifetime mutable store service, typed-value → `Unknown` encoding, and record construction |
+| B: declarative mutations (create/update/delete patches as data)      | Simpler to execute, but invents an API upstream does not have; most real mutations need logic                                                                                                                                                                                    |
+| C: keep mutations in JS (hybrid host)                                | Milestone 9 territory; contradicts "fully native" for this milestone                                                                                                                                                                                                             |
+
+## Proposed decisions
+
+- **RM-001 — Option A, mirroring `RemoteServer.mutation(Mutation, run)`.** `NativeRemote.mutation(Mutation, fn)` binds an R `EffectFn` whose input witness is derived from `Mutation.Input` (decodeUnknown semantics, as NR-015). The function returns a `MutationOutcome` R struct: `output` (the `Mutation.Output` witness), optional `entities`/`connections`/`deleted`. Failing with the R witness of `RemoteServerError` becomes `RemoteMutationError(message)`.
+- **RM-002 — `RemoteStore` as a native service.**
+  - Exposed to R as a service with `get(entity, id) → UndefinedOr<Record<String, Unknown>>`, `write(entity, id, values)` and `remove(entity, id)`. Each follows `MemoryStore` exactly, including spread order and new-row position.
+  - The memory tables move behind a `Mutex` in server-lifetime state (reusing the server-layer machinery).
+  - Reads, queries and mutations see one store. Requests that run concurrently serialize on the store, which matches the single-threaded JS reference.
+- **RM-003 — encoding typed values into `Unknown`.** `R.Json.encode(witness)(value) → Unknown` uses the witness's JSON codec, the generated encoders natively, exactly as `Schema.encode(toCodecJson(...))`. Building a `values` record needs `R.Record.fromEntries` (or `set`), mirroring `effect/Record`.
+- **RM-004 — authorization as a compiled R function (§21 option 1).**
+  - `NativeRemote.entity(Entity, { authorize })` takes an R function `(principal, fields: Array<String>) → Array<String>`. The engine keeps only declared, requested fields that the result lists, ported from `allowedFields`.
+  - The principal comes from the checked bearer adapter (u64) or `Unit` for public servers. R already has `Array.filter`, string equality and booleans, so typical rules ("owner sees `email`") compile today.
+- **RM-005 — `connectionIdentity` and patch helpers as R functions.** `Remote.patch` and `RemoteServer.prepend/append/remove` become R builders producing the wire structs. A connection identity is the query name plus canonical input text, which needs canonical JSON of the input, so it waits for RM-003.
+
+## Order of work
+
+1. RM-002 store with read/query sharing it (no behaviour change), then `RemoteStore` R service operations, with differential tests against `MemoryStore` semantics.
+2. RM-003 typed → `Unknown` encoding and `Record` construction.
+3. RM-001 mutations, with Rename-style and create/delete scenarios ported from the memory and server tests, compared over the wire and through `Data.mutate` acceptance.
+4. RM-004 authorization, with nested-authorization scenarios from `nested.test.ts` (authorized levels, a relation the principal may not read).
+
+## Open questions
+
+- Should mutation outputs encode through `Output`'s JSON codec natively (exact, but needs output codecs for arbitrary schemas), or must the R function produce the encoded form?
+- How should concurrent mutations behave in Rust (one Mutex) compared with JS's run-to-completion between awaits? They are identical for synchronous bodies; asynchronous sources need a recorded policy.
+- Should `RemoteServer.memory` export its server definition upstream (removing vendored fixtures), and should `RemoteRpcClient` admit `RpcClientError`? Both are recorded as upstream suggestions.

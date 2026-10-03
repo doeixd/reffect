@@ -66,6 +66,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 - [Well-formed strings](research/string-profile.md): `R.String` semantics compared across UTF-16/UTF-8, literal `replaceAll`, owned/borrowed lowering and the Foldkit escaping differential.
 - [JS numbers](research/number-profile.md): `R.Number` as IEEE doubles, pinned `Schema.Number` JSON codec rules (non-finite strings, `isInt`/`isFinite`), structural check recognition and JS-compatible encoding.
 - [Native types](research/native-types.md) (proposed): JS-type Rust crates (`ryu-js`, Boa's `JsString`), and sized integers, tuples, fixed arrays and bytes as checked refinements of Effect schemas.
+- [Remote mutations, Store and authorization](research/remote-mutations.md) (proposed): R-authored mutations over a native `RemoteStore` service, typed-to-`Unknown` encoding, and authorization as compiled R functions (milestone §21).
 - [Literal unions](research/literal-unions.md): `R.Literals([...])` string literal unions as Copy Rust enums, and their RPC codecs.
 - [Raw Unknown](research/unknown-json.md): `R.Unknown` as JSON data normalized like `JSON.parse` (doubles, JS key order), a derived JSON capability and `serde_json` dependency, and the open plain-`Schema.String` question for Remote requests.
 - [TaggedError classes](research/tagged-errors.md): `Schema.TaggedError` error unions as R tagged-union cases with verified round trips; plain `Schema.String` in encoded positions; JS boundaries build instances.
