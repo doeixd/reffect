@@ -121,7 +121,24 @@ A stream's successful `Exit` carries `"value":null`.
 
    Original step: **Streaming procedures** (STREAM-006). Done when native responses equal the official server's byte for byte for the probe's table, under NDJSON and JSON, and a stock `RpcClient` over `layerNdjson` consumes a native stream incrementally (the first chunk arrives before the stream ends).
 
-4. **Interruption** (STREAM-003). Done when a client that aborts mid-stream makes the native handler run its finalizers exactly once, observed as the official probe observed `Stream.ensuring`, and the server keeps serving. A full buffer must suspend the producer (STREAM-002).
+4. **Done (2026-10-03).**
+   - **Timed sources.** `Stream.fromSchedule(Schedule.spaced(d))` counts 0, 1, 2, … each after an interruptible sleep. The timing was measured against Effect: the first element waits `d`.
+   - **Finalizers.** `Stream.ensuring(finalizer)` lowers, as a consumed stream's outermost operator, to the existing masked `Effect.ensuring` around consuming its source. It is refused elsewhere.
+   - **Validation:** [stream-interrupt.test.ts](../../packages/reffect/tests/stream-interrupt.test.ts) shows the same, natively and on the official server:
+     - the first chunk of a timed stream arrives alone before it ends;
+     - a client disconnecting mid-stream runs the finalizer exactly once;
+     - the server keeps serving.
+
+     The timed stream's bytes are identical. The official finalizer runs in the HTTP request's fiber, so the test's logger is provided there as well.
+
+   - **Limits:**
+     - `ensuring` only as the outermost operator;
+     - `Reference.stream` runs finalizers as closed effect functions, so a finalizer cannot read the stream function's inputs;
+     - `fromSchedule` is native for `spaced` only;
+     - a full buffer suspending the producer (STREAM-002) is by construction (bounded channels with awaited sends) but not measured by a test.
+
+   Original step: **Interruption** (STREAM-003). Done when a client that aborts mid-stream makes the native handler run its finalizers exactly once, observed as the official probe observed `Stream.ensuring`, and the server keeps serving. A full buffer must suspend the producer (STREAM-002).
+
 5. **Live skeleton.** `FoldkitRemoteLive` served as a stream, lifting NR-006's refusal, as the bridge to milestone 7.
 
 ## Open questions

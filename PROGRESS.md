@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-03 — Milestone 6 step 4: interruption by disconnect
+
+- **New stream operators:**
+  - `Stream.fromSchedule(Schedule.spaced(d))` gives timed sources;
+  - `Stream.ensuring` runs a finalizer however the stream ends. It is native as a consumed stream's outermost operator, through the masked `Effect.ensuring`.
+- **Validation.** `vp test tests/stream-interrupt.test.ts` passed: incremental delivery, and exactly one finalizer run on disconnect, natively and officially, with the server serving afterwards. `stream`, `stream-rpc`, `async-effect`, `effect-combinators` and `exit-cause` pass.
+- **Race fix.** The other session's Exit capture (`effect-exit.ts`) landed beside `StreamEmit`, and its exhaustive walk missed the new node. Fixed in `17c5b48`.
+- **Limits** are listed in [streaming-rpc.md](docs/research/streaming-rpc.md#order-of-work-and-acceptance) and the open-work register.
+
 ## 2026-10-03 — Milestone 6 step 3: streaming RPC procedures
 
 - **`R.Stream.fn`** answers `stream: true` procedures. Native servers send each chunk as a `Chunk` message, then the `Exit`. Under NDJSON chunks stream as they are produced, through the 16-message body channel; under JSON they are buffered.
