@@ -84,7 +84,7 @@ const rows = {
 const Named = R.Struct({ name: R.String });
 const Created = R.Struct({ name: R.String, status: R.String, owner: R.String, rank: R.Number });
 const text = (value: string) => R.literal(R.String, value);
-const rename = NativeRemote.mutation(Rename, (input) => {
+const rename = NativeRemote.mutation(Rename, ({ input }) => {
   const id = R.Struct.get(input, "id");
   const name = R.Struct.get(input, "name");
   const values = Named.make({ name });
@@ -108,7 +108,7 @@ const drafts = NativeRemote.connection(
   R.Struct({ status: R.String }).make({ status: text("draft") }),
 );
 // Connection identities from a decoded input: key order, booleans and escaping (RM-005).
-const ping = NativeRemote.mutation(Ping, (input) => {
+const ping = NativeRemote.mutation(Ping, ({ input }) => {
   const labeled = NativeRemote.connection(Labeled, input);
   return R.Effect.succeed(
     NativeRemote.outcome(Ping).make({
@@ -127,7 +127,7 @@ const ping = NativeRemote.mutation(Ping, (input) => {
     }),
   );
 });
-const create = NativeRemote.mutation(Create, (input) => {
+const create = NativeRemote.mutation(Create, ({ input }) => {
   const id = R.Struct.get(input, "id");
   const values = Created.make({
     name: R.Struct.get(input, "name"),
@@ -145,7 +145,7 @@ const create = NativeRemote.mutation(Create, (input) => {
     ),
   );
 });
-const archive = NativeRemote.mutation(Archive, (input) => {
+const archive = NativeRemote.mutation(Archive, ({ input }) => {
   const id = R.Struct.get(input, "id");
   return R.Effect.flatMap(R.RemoteStore.remove("Project", id), () =>
     R.Effect.succeed(

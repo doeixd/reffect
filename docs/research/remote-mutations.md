@@ -168,7 +168,13 @@ Checked against `foldkit-remote-server` 0.10.0: README "Authentication vs author
 
   Parsed JSON and raw key order match. Path assertions confirm each principal sees a different answer.
 
-- **Remaining.** RM-004c (the principal in mutation and query sources) and Live reauthorization (milestone 7).
+- **RM-004c (2026-10-03).**
+  - `NativeRemote.mutation(M, ({ input, principal }) => …)` mirrors `RemoteServer.mutation(M, ({ input, principal }) => …)`. Reading `principal` marks the source; its compiled function then takes the `u64` principal before its input.
+  - A source that reads it is refused unless Mutate carries the auth middleware, and the runtime glue passes the authenticated principal.
+  - Sources that never read it keep one input, so public servers run them.
+  - Query sources are bodies (`Query.define`) with no principal in the memory profile.
+- **Fixed on the way.** A server whose runtime functions are all synchronous is asynchronous only for its runtime. It no longer refers to an `AsyncContext` the library does not generate.
+- **Remaining.** Live reauthorization (milestone 7).
 
 ## Order of work
 
@@ -176,7 +182,7 @@ Checked against `foldkit-remote-server` 0.10.0: README "Authentication vs author
 2. RM-006 typed → `Unknown` encoding, tested over NativeRpc against the official server. **Done** (see below).
 3. `RemoteStore` write/remove nodes (RS-001), tested through mutations. **Done.**
 4. RM-001 mutations (**done**, see below), with Rename-style and create/delete scenarios ported from the memory and server tests, compared over the wire and through `Data.mutate` acceptance.
-5. RM-004 authorization (**a/b done**; c remains), with nested-authorization scenarios from `nested.test.ts` (authorized levels, a relation the principal may not read).
+5. RM-004 authorization (**done**), with nested-authorization scenarios from `nested.test.ts` (authorized levels, a relation the principal may not read).
 
 ## Open questions
 

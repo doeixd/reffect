@@ -200,7 +200,7 @@ const Echo = Mutation.make("Echo", {
 });
 const text = (value: string) => R.literal(R.String, value);
 const Named = R.Struct({ name: R.String });
-const rename = NativeRemote.mutation(Rename, (input) => {
+const rename = NativeRemote.mutation(Rename, ({ input }) => {
   const id = R.Struct.get(input, "id");
   const name = R.Struct.get(input, "name");
   const values = Named.make({ name });
@@ -218,7 +218,7 @@ const rename = NativeRemote.mutation(Rename, (input) => {
   );
 });
 // Never touches the store, so it compiles to a synchronous source.
-const echo = NativeRemote.mutation(Echo, (input) =>
+const echo = NativeRemote.mutation(Echo, ({ input }) =>
   R.Effect.succeed(
     NativeRemote.outcome(Echo).make({
       output: R.Struct({ text: R.String }).make({ text: R.Struct.get(input, "text") }),

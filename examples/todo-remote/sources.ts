@@ -13,7 +13,7 @@ const allTodos = NativeRemote.connection(Todos, R.Struct({}).make({}));
 const NewTodo = R.Struct({ title: R.String, done: R.Bool });
 const Done = R.Struct({ done: R.Bool });
 
-export const addTodo = NativeRemote.mutation(AddTodo, (input) => {
+export const addTodo = NativeRemote.mutation(AddTodo, ({ input }) => {
   const id = R.Struct.get(input, "id");
   const title = R.Struct.get(input, "title");
   const values = NewTodo.make({ title, done: R.Bool.literal(false) });
@@ -32,7 +32,7 @@ export const addTodo = NativeRemote.mutation(AddTodo, (input) => {
   );
 });
 
-export const toggleTodo = NativeRemote.mutation(ToggleTodo, (input) => {
+export const toggleTodo = NativeRemote.mutation(ToggleTodo, ({ input }) => {
   const id = R.Struct.get(input, "id");
   const values = Done.make({ done: R.Struct.get(input, "done") });
   return R.Effect.flatMap(R.RemoteStore.write("Todo", id, values), () =>
@@ -45,7 +45,7 @@ export const toggleTodo = NativeRemote.mutation(ToggleTodo, (input) => {
   );
 });
 
-export const deleteTodo = NativeRemote.mutation(DeleteTodo, (input) => {
+export const deleteTodo = NativeRemote.mutation(DeleteTodo, ({ input }) => {
   const id = R.Struct.get(input, "id");
   return R.Effect.flatMap(R.RemoteStore.remove("Todo", id), () =>
     R.Effect.succeed(

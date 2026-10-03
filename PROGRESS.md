@@ -6,6 +6,8 @@
 - `NativeRemote.compile` takes `auth` and per-entity `authorize` R functions. The engine ports `allowedFields`.
 - [remote-auth.test.ts](packages/reffect/tests/remote-auth.test.ts) passes 2/2 against `RemoteServer.handlers` bound per request: three principals, denials, settled withheld fields, IDs that are not read, relations not followed, query `select`. Details are in [remote-mutations.md](docs/research/remote-mutations.md#rm-004ab-as-implemented-2026-10-03).
 - Upstream finding recorded in [foldkit-plus issues](docs/research/foldkit-plus-issues.md): `RemoteServer.entity(Entity, …)` drops relation fields.
+- RM-004c: mutation sources take `({ input, principal })`, as upstream's do. Reading the principal requires an authenticated Mutate. remote-auth passes 2/2 with admin, member and guest claims and an unauthenticated claim.
+- Fixed: a server whose runtime functions are all synchronous no longer emits a missing `AsyncContext`.
 
 ## 2026-10-03 — Owned Clock/Random drivers
 

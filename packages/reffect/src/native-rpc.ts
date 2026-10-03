@@ -876,6 +876,8 @@ export interface RpcRuntime {
     readonly [name: string]: {
       readonly fn: EffectFn<readonly IRType<unknown>[], unknown, unknown>;
       readonly input: Schema.Top;
+      /** The function takes the authenticated `u64` principal before its input. */
+      readonly principal?: boolean;
     };
   };
   /**
@@ -1098,24 +1100,35 @@ export const compileServer = (
           functions[name] = fn;
         }
         const runtimeFunctions = Object.entries(runtime?.functions ?? {}).map(
-          ([name, { fn, input }]) => {
+          ([name, { fn, input, principal }]) => {
             const at = `runtime.${name}`;
             if (!/^[a-z][a-z0-9_]*$/.test(name))
               throw unsupported(at, "Runtime function names are lowercase Rust identifiers");
-            if (!(fn instanceof EffectFn) || fn.input.length !== 1)
-              throw unsupported(at, "Runtime functions are R effect functions of one input");
+            const arity = principal ? 2 : 1;
+            if (
+              !(fn instanceof EffectFn) ||
+              fn.input.length !== arity ||
+              (principal && !IRType.same(fn.input[0], U64Type))
+            )
+              throw unsupported(
+                at,
+                "Runtime functions are R effect functions of one input, after a U64 principal if any",
+              );
+            if (principal && !auth)
+              throw unsupported(at, "A runtime function with a principal needs an auth adapter");
             if (
               !IRType.same(fn.output, UnknownType) ||
               !(IRType.same(fn.error, UnknownType) || IRType.same(fn.error, NeverType))
             )
               throw unsupported(at, "Runtime functions produce and fail with Unknown");
             const kind = codec(input.ast, `${at}.input`, true, registry, true);
-            if (kind === "never" || !IRType.same(witnessOf(kind), fn.input[0]))
+            if (kind === "never" || !IRType.same(witnessOf(kind), fn.input[arity - 1]))
               throw unsupported(at, "The input witness disagrees with its schema");
             functions[`runtime_${name}`] = fn;
             return {
               name,
               kind,
+              principal: principal === true,
               asynchronous: isAsyncComputation(fn.body),
               fails: !IRType.same(fn.error, NeverType),
             };
@@ -1603,14 +1616,23 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
     reffect_generated::with_log_context(metadata.to_string(), f)
 }`
       : "fn in_context<T>(_context: &RequestContext, f: impl FnOnce() -> T) -> T { f() }";
+    // Only compiled async functions take an execution context; a server can be asynchronous for
+    // its runtime alone (synchronous mutation sources), with no AsyncContext generated.
+    const hasAsyncFunctions = Object.values(prepared.program.functions).some(
+      (fn) => fn instanceof EffectFn && isAsyncComputation(fn.body),
+    );
     const executionRuntime = prepared.asynchronous
-      ? `
+      ? `${
+          hasAsyncFunctions
+            ? `
 fn execution_context(cancellation: tokio::sync::watch::Receiver<bool>, context: &RequestContext) -> reffect_generated::AsyncContext {
     let mut execution = reffect_generated::AsyncContext::new(cancellation);
     ${hasLogs ? 'execution.set_request(json!({"id":context.id, "tag":context.tag, "principal":context.principal.map(|p| p.to_string())}).to_string());' : "let _ = context;"}
     ${usesStore ? `execution.set_remote_store(${runtime!.store!.expr});` : ""}
     execution
-}
+}`
+            : ""
+        }
 fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt"}]}) }
 `
       : "";
@@ -1634,18 +1656,22 @@ enum RuntimeCall { Invalid(String), Success(Value), Failure(Value), Interrupted 
           .map((f) => {
             const call = `reffect_generated::r_runtime_${f.name}`;
             const failure = f.fails ? "RuntimeCall::Failure(error)" : "match error {}";
+            // Hosts call functions that take a principal only from protected procedures.
+            const args = f.principal
+              ? 'context.principal.expect("authenticated before runtime functions run"), arg'
+              : "arg";
             return `async fn runtime_${f.name}(context: &RequestContext<'_>, cancellation: &tokio::sync::watch::Receiver<bool>, input: &Value) -> RuntimeCall {
     let arg = match ${decodeCall(f.kind)} { Ok(arg) => arg, Err(message) => return RuntimeCall::Invalid(message) };
 ${
   f.asynchronous
     ? `    let mut execution = execution_context(cancellation.clone(), context);
-    match ${call}(&mut execution, arg).await {
+    match ${call}(&mut execution, ${args}).await {
         Ok(value) => RuntimeCall::Success(value),
         Err(reffect_generated::AsyncError::Fail(error)) => ${failure},
         Err(reffect_generated::AsyncError::Interrupted) => RuntimeCall::Interrupted,
     }`
     : `    let _ = cancellation;
-    match in_context(context, || ${call}(arg)) { Ok(value) => RuntimeCall::Success(value), Err(error) => ${failure} }`
+    match in_context(context, || ${call}(${args})) { Ok(value) => RuntimeCall::Success(value), Err(error) => ${failure} }`
 }
 }
 `;

@@ -4,10 +4,10 @@ import { ChildProcess } from "effect/process";
 import { RpcMiddleware, RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { Entity, Order, Relation } from "foldkit-entity";
-import { Query, Remote, RemoteRpc } from "foldkit-remote";
-import { RemoteServer } from "foldkit-remote-server";
+import { Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
+import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
-import { CargoApi, NativeRemote, NativeRpc, R, Reference } from "../src/index.ts";
+import { CargoApi, CompileError, NativeRemote, NativeRpc, R, Reference } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
 import { memoryQueryRun, memoryRead, memoryTables } from "./fixtures/foldkit-remote-memory.ts";
@@ -21,7 +21,7 @@ class Authentication extends RpcMiddleware.Service<
   Authentication,
   { provides: CurrentPrincipal }
 >()("reffect/test/RemoteAuthentication", { error: Schema.Literal("Unauthorized") }) {}
-const Group = RemoteRpc.omit("FoldkitRemoteLive", "FoldkitRemoteMutate").middleware(Authentication);
+const Group = RemoteRpc.omit("FoldkitRemoteLive").middleware(Authentication);
 const auth = NativeRpc.bearer(Authentication, CurrentPrincipal, {
   credentialsEnv: "REFFECT_REMOTE_CREDENTIALS",
 });
@@ -46,7 +46,12 @@ const { User, Project } = Entity.relate(
 const All = Query.define("All", {}, () =>
   Query.from(Project).pipe(Query.orderBy(Order.asc(Project.fields.name))),
 );
-const domain = Remote.define({ entities: [User, Project], queries: [All] });
+// RM-004c: a source's own policy reads the principal.
+const Claim = Mutation.make("Claim", {
+  Input: { note: Schema.String },
+  Output: { admin: Schema.Boolean, note: Schema.String },
+});
+const domain = Remote.define({ entities: [User, Project], queries: [All], mutations: [Claim] });
 const rows = {
   User: [
     { id: "u1", name: "Ada", email: "ada@example.test" },
@@ -81,6 +86,21 @@ const authorizeProject = R.fn([R.U64, R.Array(R.String)], R.Array(R.String), (pr
         R.Bool.not(R.String.eq(field, text("budget"))),
         R.Bool.not(R.Boolean.and(is(principal, 3n), R.String.eq(field, text("owner")))),
       ),
+    ),
+  ),
+);
+
+const claim = NativeRemote.mutation(Claim, ({ input, principal }) =>
+  R.Match.bool(
+    is(principal, 3n),
+    R.Effect.fail(NativeRemote.ServerError.make({ message: text("Guests cannot claim") })),
+    R.Effect.succeed(
+      NativeRemote.outcome(Claim).make({
+        output: R.Struct({ admin: R.Bool, note: R.String }).make({
+          admin: is(principal, 1n),
+          note: R.Struct.get(input, "note"),
+        }),
+      }),
     ),
   ),
 );
@@ -130,6 +150,21 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
     [`${token}: query select`, query(token)] as const,
     [`${token}: a user's email`, read(token, "User", "u1", ["email"])] as const,
   ]),
+  ...["admin-token", "member-token", "guest-token"].map(
+    (token) =>
+      [
+        `${token}: claim`,
+        envelope(
+          "FoldkitRemoteMutate",
+          { requestId: "r", mutation: "Claim", input: { note: "é" } },
+          token,
+        ),
+      ] as const,
+  ),
+  [
+    "missing token, claim",
+    envelope("FoldkitRemoteMutate", { requestId: "r", mutation: "Claim", input: { note: "" } }),
+  ],
   ["missing token", projectWithOwner(undefined)],
   ["wrong token", projectWithOwner("nope")],
   ["missing token, query", query(undefined)],
@@ -152,6 +187,24 @@ const oracle = Effect.gen(function* () {
       ),
     ],
     queries: [RemoteServer.query(All, memoryQueryRun(tables, All))],
+    mutations: [
+      RemoteServer.mutation(Claim, ({ input, principal }) =>
+        Reference.run(claim.fn, [principal, input]).pipe(
+          Effect.catch((error) =>
+            error instanceof CompileError
+              ? Effect.die(error)
+              : Effect.fail(
+                  new RemoteServerError({
+                    message: Schema.decodeUnknownSync(Schema.Struct({ message: Schema.String }))(
+                      error,
+                    ).message,
+                  }),
+                ),
+          ),
+          Effect.map(Schema.decodeUnknownSync(Schema.Struct({ output: Claim.Output }))),
+        ),
+      ),
+    ],
   });
   const authentication = Layer.succeed(Authentication, (effect, metadata) => {
     const token =
@@ -173,6 +226,10 @@ const oracle = Effect.gen(function* () {
         FoldkitRemoteQuery: (payload) =>
           Effect.flatMap(CurrentPrincipal, (principal) =>
             RemoteServer.handlers(server, principal).FoldkitRemoteQuery(payload),
+          ),
+        FoldkitRemoteMutate: (payload) =>
+          Effect.flatMap(CurrentPrincipal, (principal) =>
+            RemoteServer.handlers(server, principal).FoldkitRemoteMutate(payload),
           ),
       }),
       authentication,
@@ -202,6 +259,12 @@ test("authorize needs auth, matching functions and protected reads", async () =>
     ),
   );
   expect(unprotected.message).toContain("must carry the auth middleware");
+  // A source reading the principal on a public Mutate has no principal to read.
+  const publicMutate = await Effect.runPromise(
+    NativeRemote.compile(Public, { domain, rows, auth, mutations: [claim] }).pipe(Effect.flip),
+  );
+  expect(publicMutate.message).toContain("needs Mutate to carry the auth middleware");
+  expect(claim.principal).toBe(true);
 });
 
 test(
@@ -225,6 +288,7 @@ test(
             rows,
             auth,
             authorize: { User: authorizeUser, Project: authorizeProject },
+            mutations: [claim],
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.fetch(directory);
@@ -271,6 +335,10 @@ test(
           expect(answer("guest-token: project with owner")).not.toContain('"Ada"');
           expect(answer("guest-token: a user's email")).toContain('"entities":[]');
           expect(answer("missing token")).toContain("Unauthorized");
+          expect(answer("admin-token: claim")).toContain('"admin":true');
+          expect(answer("member-token: claim")).toContain('"admin":false');
+          expect(answer("guest-token: claim")).toContain("Guests cannot claim");
+          expect(answer("missing token, claim")).toContain("Unauthorized");
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );
