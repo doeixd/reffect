@@ -1,4 +1,4 @@
-import { Effect, Exit, Predicate, Schema } from "effect";
+import { Cause, Effect, Exit, Predicate, Schema } from "effect";
 import { CargoApi } from "./cargo.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import { EffectFn, isAsyncComputation, maxLogicalFrames } from "./effect-ir.ts";
@@ -108,6 +108,33 @@ const exitOf = <I extends readonly IRType<unknown>[], A, E>(
     if (fn instanceof EffectFn) {
       if (output === "interrupt" && isAsyncComputation(fn.body))
         return Exit.interrupt() as Exit.Exit<A, E>;
+      if (output.startsWith("cause:") && isAsyncComputation(fn.body)) {
+        const encoded = output.slice(6).split(",");
+        const reasons: Cause.Reason<unknown>[] = [];
+        let failures = 0;
+        for (const [index, reason] of encoded.entries()) {
+          if (reason === "interrupt" && index === 0) reasons.push(Cause.makeInterruptReason());
+          else {
+            const type: IRType<unknown> | undefined = /^u64:[0-9]+$/.test(reason)
+              ? U64Type
+              : /^bool:(true|false)$/.test(reason)
+                ? BoolType
+                : reason === "unit"
+                  ? UnitType
+                  : undefined;
+            if (!type || ++failures > 3)
+              return yield* fail(
+                "INVALID_NATIVE_OUTPUT",
+                "native",
+                name,
+                "Invalid bounded native cause",
+              );
+            reasons.push(Cause.makeFailReason(yield* decodeScalar(type, name, reason)));
+          }
+        }
+        // Effect can retain an earlier channel's failure when cancellation skips recovery.
+        return Exit.failCause(Cause.fromReasons(reasons)) as Exit.Exit<A, E>;
+      }
       if (output.startsWith("ok:"))
         return Exit.succeed(yield* decodeScalar(fn.output, name, output.slice(3))) as Exit.Exit<
           A,

@@ -65,6 +65,7 @@ import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
 import { rpcAuthRuntime } from "./rpc-auth-runtime.ts";
 import { decodeArgs, rpcRuntime } from "./rpc-runtime.ts";
+import { analyzeTaskGroups } from "./structured-concurrency.ts";
 
 const U64Json = RpcCodecs.U64Json;
 const StringJson = RpcCodecs.StringJson;
@@ -1672,6 +1673,15 @@ export const compileServer = (
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("group", String(cause)),
     });
+    if (
+      Object.values(prepared.program.functions).some(
+        (fn) => fn instanceof EffectFn && analyzeTaskGroups(fn.body).hasFallibleGroups,
+      )
+    )
+      return yield* unsupported(
+        "handlers",
+        "Fallible task groups require a verified compound RPC Cause wire adapter",
+      );
     const core = yield* Compile.run(
       Compile.make(prepared.program).pipe(
         Compile.withTarget(serverTarget(prepared.asynchronous ? Rust.tokio : Rust.std)),

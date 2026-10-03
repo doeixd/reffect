@@ -1,0 +1,36 @@
+# Fallible task native preparation
+
+Recorded 2026-10-03 before implementation. This adapter follows controlled stable-source probes in [fallible concurrency](fallible-concurrency.md). Existing Unit/Never groups remain implemented independently.
+
+Reviewed AGENTS, PLAN, PROGRESS, structured-concurrency and Exit/Cause records, plus the synchronized streaming lowerer/runtime. Checked published [Effect 4.0.0 implementation](https://unpkg.com/effect@4.0.0/src/internal/effect.ts) online and installed core/effect sources. Effect All filters later sibling Interrupt reasons and combines later Fail reasons with equality deduplication; Race concatenates unsuccessful child causes without deduplication. A child observer runs after that child's finalization. Ambient interruption bypasses typed handlers independently of whether a Cause has a Fail reason.
+
+## Recorded decisions
+
+- **FN-001 — Reachable carrier.** Preserve `AsyncError::Fail(E)` and `Interrupted`. Emit an additional inline `Combined` variant only in modules reaching a fallible group. Modules containing only existing infallible groups retain their old emitted enum and context layout. No field is added to scalars, no global registry and no new dependency. Context watch cancellation remains sticky; no extra context cancellation flag is necessary.
+- **FN-002 — Bound must be proved before emission.** Two/three unnested children and infallible finalizers bound successful typed-failure production to one Fail per child. Controlled stable probes establish mode-specific parent cancellation: All retains a leading parent Interrupt and completed/pending child Fail reasons after awaited cleanup, while Race returns only the parent Interrupt, discarding pending child failures. Child brackets preserve their Fail outcome during masked cleanup. Thus this profile requires at most three Fail slots and a leading-Interrupt flag. Sequential groups forward only the terminal group outcome; nested groups and fallible finalizers remain refused. Never silently truncate a buffer.
+- **FN-003 — Initial equality.** Common Bool/U64/Unit error witnesses, ignoring Never, permit All's later-failure deduplication without substituting Rust structural equality for Effect object identity. Composite errors and Number need separate equality evidence. Race duplicate scalar errors remain separate reasons.
+- **FN-004 — Separate frames.** Internal diagnostics retain the existing policy-selected frame trail. A fallible group keeps the primary terminal child's trail and adds the group occurrence; sibling cleanup cannot replace it. Reasons contain error/interruption semantics only. Disabled frames allocate no trail.
+- **FN-005 — Exhaustive consumers.** A new enum variant requires retry, typed catch, finalizer impossibility matches, task wrappers, CLI emission and RPC/streaming host matches to change together. Typed handling chooses the first Fail reason only when ambient cancellation permits continuation. A handler with a different error witness must never forward a buffer containing the old E under the new E. Never-to-common-error adaptation must explicitly eliminate impossible Fail payloads.
+
+## Alternatives and acceptance
+
+A heap-backed Vec Cause on every async error is rejected: it changes legacy layouts and would impose allocation merely for ordinary single errors. Tokio try_join is rejected because early return drops finalizers. Fixed-arity borrowed futures remain the existing execution substrate; children are cooperatively canceled and awaited.
+
+Acceptance requires controlled official/reference/native probes for immediate admission stopping, multiple failures and duplicate errors, failing-child cleanup before sibling cancellation, parent interruption during masked cleanup, Race all-failure order and successful loser cleanup. Compile and observe forwarding through recovery, retry, Scope and streaming/RPC hosts. Measure carrier/context/future layouts and setup/retained allocations under disabled and bounded frames, retaining legacy infallible cost gates.
+
+Status: native adapter implemented after recorded preparation. The finite nongeneric scalar carrier preserves retired scalar payloads across canceled recovery. E-changing recovery from a non-scalar source reaching a fallible group is refused; composite destination handlers and unrelated legacy recovery remain available. RPC exposure remains separately gated until a compound Cause/retired-error wire encoding is verified.
+
+**FN-006 — Error-channel changes need real storage.** Typed recovery can change E, including to Never. Pending ambient cancellation bypasses recovery while its original Fail reason survives. A generic `Combined<E>` alone cannot forward the old payload as `Combined<Never>`. Chosen scoped solution: nongeneric finite `RuntimeFailure::{Bool,U64,Unit}` storage inside Combined, with witness-checked extraction only when a typed handler runs. This is bounded scalar erasure, not arbitrary Any or heap boxing. An alternative is refusing every error-changing recovery around fallible tasks; silently projecting cancellation to Interrupt alone is unacceptable.
+
+## Native cost evidence
+
+The standalone [allocation/layout probe](../../packages/reffect/tests/fallible-cost.test.ts) runs an immediate U64 failure plus an unstarted Unit sibling 100 times. Runtime and outer host watch setup precede counting; child watch setup, failure construction, cancellation of the unstarted sibling and result drop are included. The context is dropped before retained allocations are observed, so the final bounded diagnostic trail is reclaimed.
+
+| Policy  | Context bytes | Unpolled future bytes | RuntimeFailure / RuntimeCause / AsyncError<u64> bytes | Allocations per 100 groups | Net retained |
+| ------- | ------------- | --------------------- | ----------------------------------------------------- | -------------------------- | ------------ |
+| None    | 24            | 456                   | 16 / 64 / 64                                          | 200                        | 0            |
+| Bounded | 32            | 488                   | 16 / 64 / 64                                          | 400                        | 0            |
+
+Debug and release agree. Context creation, unpolled future construction and 100 explicit inline Cause constructions each allocate zero. None execution's exact 200-allocation budget matches the two independent child watch channels per group. Bounded adds existing boxed trails for the failing and canceled children; discarded sibling trails and the context's terminal trail are reclaimed. No allocation was introduced to carry the scalar failure reasons themselves. Source UTF8 bytes are 7,651 under None and 9,911 under Bounded after erasing the unused infallible coordinator in this fallible-only artifact. These concrete layouts are build/platform-specific observations, not ABI promises, byte/RSS measurements or a general leak proof. Logged, scoped and suspended programs have separate costs.
+
+Validation: initial probe 1/1 passed (47.06 s); repeated after unused-coordinator erasure 1/1 passed (46.24 s), Rust debug/release under both policies. Root's final integration also checks the later explicit legacy-emission assertion: an infallible-only module keeps its original enum and emits no RuntimeCause/RuntimeFailure/Combined/TaskFailure.

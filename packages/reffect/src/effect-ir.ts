@@ -2,6 +2,9 @@ import {
   Duration,
   Effect,
   Exit,
+  Cause,
+  Equal,
+  Hash,
   Match,
   Option,
   Pipeable,
@@ -129,7 +132,7 @@ export type ComputationNode =
   | {
       readonly _tag: "TaskGroup";
       readonly mode: "All" | "Race";
-      readonly children: readonly Computation<void, never>[];
+      readonly children: readonly Computation<void, unknown>[];
     }
   | { readonly _tag: "ClockReadMillis" }
   | { readonly _tag: "RandomDraw" }
@@ -954,19 +957,29 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
         TaskGroup: (n) => {
+          const childErrors = n.children.map((child) => child.error);
+          const scalarError = (type: IRType<unknown>) =>
+            [NeverType, BoolType, U64Type, UnitType].some((candidate) =>
+              IRType.same(type, candidate),
+            );
+          const represented =
+            childErrors.find((type) => !IRType.same(type, NeverType)) ?? NeverType;
           if (
             !IRType.same(c.output, UnitType) ||
-            !IRType.same(c.error, NeverType) ||
+            !IRType.same(c.error, represented) ||
+            !scalarError(c.error) ||
             (n.mode !== "All" && n.mode !== "Race") ||
             (n.mode === "All" ? ![2, 3].includes(n.children.length) : n.children.length !== 2) ||
             n.children.some(
               (child) =>
-                !IRType.same(child.output, UnitType) || !IRType.same(child.error, NeverType),
+                (!IRType.same(child.output, UnitType) && !IRType.same(child.output, NeverType)) ||
+                !scalarError(child.error) ||
+                (!IRType.same(child.error, NeverType) && !IRType.same(child.error, represented)),
             )
           )
             add(
               at,
-              "Task groups require two/three All children or two Race children, with Unit/Never channels",
+              "Task groups require two/three All children or two Race children, Unit/Never success and one common Bool/U64/Unit error witness (Never ignored)",
             );
           // Child-local regions reintroduce their own handles. Removing outer regions
           // prevents borrowed files and mutable cells from crossing this boundary.
@@ -1702,14 +1715,26 @@ export interface FramedExit<A, E> {
   readonly frames: readonly LogicalFrame[];
   readonly omitted: number;
 }
-type FramedFailure =
-  | {
-      readonly _tag: "Domain";
-      readonly error: unknown;
-      readonly frames: readonly LogicalFrame[];
-      readonly omitted: number;
-    }
-  | { readonly _tag: "Internal"; readonly cause: CompileError };
+class FramedDomain implements Equal.Equal {
+  readonly _tag = "Domain";
+  constructor(
+    readonly error: unknown,
+    readonly frames: readonly LogicalFrame[],
+    readonly omitted: number,
+  ) {}
+  [Equal.symbol](that: Equal.Equal): boolean {
+    return that instanceof FramedDomain && Equal.equals(this.error, that.error);
+  }
+  [Hash.symbol](): number {
+    return Hash.hash(this.error);
+  }
+}
+type FramedFailure = FramedDomain | { readonly _tag: "Internal"; readonly cause: CompileError };
+// Diagnostic decoration must preserve all semantic reasons; Effect.mapError selects only the first Fail.
+const mapFramedError =
+  <E, E2>(map: (error: E) => E2) =>
+  <A, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E2, R> =>
+    self.pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, map))));
 const frame = (path: string, kind: LogicalFrame["kind"]): LogicalFrame =>
   Object.freeze({ path, kind });
 const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(function* <
@@ -1847,15 +1872,13 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
       const outward = (failure: FramedFailure, kind: LogicalFrame["kind"]): FramedFailure =>
         failure._tag === "Internal"
           ? failure
-          : {
-              _tag: "Domain",
-              error: failure.error,
-              frames:
-                failure.frames.length < maxLogicalFrames
-                  ? failure.frames.concat([frame(path, kind)])
-                  : failure.frames,
-              omitted: failure.omitted + (failure.frames.length < maxLogicalFrames ? 0 : 1),
-            };
+          : new FramedDomain(
+              failure.error,
+              failure.frames.length < maxLogicalFrames
+                ? failure.frames.concat([frame(path, kind)])
+                : failure.frames,
+              failure.omitted + (failure.frames.length < maxLogicalFrames ? 0 : 1),
+            );
       return Match.value(c.node).pipe(
         Match.tagsExhaustive({
           TaskGroup: (n) =>
@@ -1866,11 +1889,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 )
               : Effect.race(evaluate(n.children[0], bindings), evaluate(n.children[1], bindings))
             ).pipe(
-              Effect.mapError((failure) => outward(failure, n.mode === "All" ? "all" : "race")),
+              mapFramedError((failure) => outward(failure, n.mode === "All" ? "all" : "race")),
             ),
           Scope: (n) =>
             Effect.scoped(evaluate(n.body, bindings)).pipe(
-              Effect.mapError((failure) => outward(failure, "scope")),
+              mapFramedError((failure) => outward(failure, "scope")),
             ),
           AddFinalizer: (n) =>
             Effect.addFinalizer(() =>
@@ -1881,16 +1904,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               const nested = new Map(bindings);
               nested.set(n.binder, [resource]);
               return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
-            }).pipe(Effect.mapError((failure) => outward(failure, "acquireRelease"))),
+            }).pipe(mapFramedError((failure) => outward(failure, "acquireRelease"))),
           RegisteredFile: (n) =>
             Effect.acquireRelease(
               openReferenceFile(n.path).pipe(
-                Effect.mapError((error): FramedFailure => ({
-                  _tag: "Domain",
-                  error,
-                  frames: [],
-                  omitted: 0,
-                })),
+                mapFramedError((error): FramedFailure => new FramedDomain(error, [], 0)),
               ),
               (file) =>
                 file.close.pipe(
@@ -1904,17 +1922,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 nested.set(n.binder, [file]);
                 return evaluate(n.body, nested);
               }),
-              Effect.mapError((failure) => outward(failure, "registeredFile")),
+              mapFramedError((failure) => outward(failure, "registeredFile")),
             ),
           FileScope: (n) =>
             Effect.acquireUseRelease(
               openReferenceFile(n.path).pipe(
-                Effect.mapError((error): FramedFailure => ({
-                  _tag: "Domain",
-                  error,
-                  frames: [],
-                  omitted: 0,
-                })),
+                mapFramedError((error): FramedFailure => new FramedDomain(error, [], 0)),
               ),
               (file) => {
                 const nested = new Map(bindings);
@@ -1927,7 +1940,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   Effect.asVoid,
                   Effect.orDie,
                 ),
-            ).pipe(Effect.mapError((failure) => outward(failure, "fileScope"))),
+            ).pipe(mapFramedError((failure) => outward(failure, "fileScope"))),
           RefMake: (n) => expression(n.initial, `${path}.initial`).pipe(Effect.flatMap(Ref.make)),
           RefScope: (n) =>
             expression(n.initial, `${path}.initial`).pipe(
@@ -1937,7 +1950,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 nested.set(n.binder, [cell]);
                 return evaluate(n.body, nested);
               }),
-              Effect.mapError((failure) => outward(failure, "refScope")),
+              mapFramedError((failure) => outward(failure, "refScope")),
             ),
           RefGet: (n) => Ref.get(bindings.get(n.binder)![0] as Ref.Ref<unknown>),
           RefModify: (n) =>
@@ -1975,12 +1988,9 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             const file = bindings.get(n.binder)?.[0];
             return file instanceof FileLease
               ? file.size.pipe(
-                  Effect.mapError((error): FramedFailure => ({
-                    _tag: "Domain",
-                    error,
-                    frames: [frame(path, "fileSize")],
-                    omitted: 0,
-                  })),
+                  mapFramedError(
+                    (error): FramedFailure => new FramedDomain(error, [frame(path, "fileSize")], 0),
+                  ),
                 )
               : Effect.fail({
                   _tag: "Internal",
@@ -1994,7 +2004,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 const nested = new Map(bindings);
                 nested.set(n.binder, [failure.error]);
                 return evaluate(n.body, nested).pipe(
-                  Effect.mapError((error) => outward(error, "catchAll")),
+                  mapFramedError((error) => outward(error, "catchAll")),
                 );
               }),
             ),
@@ -2011,13 +2021,13 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 nested.set(n.binder, [resource]);
                 return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
               },
-            ).pipe(Effect.mapError((failure) => outward(failure, "acquireUseRelease"))),
+            ).pipe(mapFramedError((failure) => outward(failure, "acquireUseRelease"))),
           Sleep: (n) => Effect.sleep(n.milliseconds),
           Launch: (n) =>
             Effect.forEach(n.values, (value, index) =>
               expression(value, `${path}.values.${index}`),
             ).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
@@ -2029,7 +2039,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               expression(n.id, `${path}.id`),
               n.values ? expression(n.values, `${path}.values`) : Effect.void,
             ]).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
@@ -2040,7 +2050,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             evaluate(n.body, bindings).pipe(
               Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),
               Effect.asVoid,
-              Effect.mapError((failure) => outward(failure, "repeat")),
+              mapFramedError((failure) => outward(failure, "repeat")),
             ),
           Retry: (n) => {
             let completed = 0;
@@ -2055,23 +2065,20 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   return Effect.sleep(delay).pipe(Effect.flatMap(attempt));
                 }),
               );
-            return attempt().pipe(Effect.mapError((failure) => outward(failure, "retry")));
+            return attempt().pipe(mapFramedError((failure) => outward(failure, "retry")));
           },
           Ensuring: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
-              Effect.mapError((failure) => outward(failure, "ensuring")),
+              mapFramedError((failure) => outward(failure, "ensuring")),
             ),
           StreamEmit: (n) =>
             emitReference(n, bindings, (finalizer) =>
               Effect.scoped(evaluate(finalizer, bindings)).pipe(Effect.orDie),
             ).pipe(
-              Effect.mapError((error): FramedFailure => ({
-                _tag: "Domain",
-                error,
-                frames: [frame(path, "fail")],
-                omitted: 0,
-              })),
+              mapFramedError(
+                (error): FramedFailure => new FramedDomain(error, [frame(path, "fail")], 0),
+              ),
             ),
           // A stream's typed failure leaves the consumer with one frame there, as natively.
           StreamRunCollect: (n) =>
@@ -2085,16 +2092,13 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               ),
             ).pipe(
               Effect.map((elements) => [...elements]),
-              Effect.mapError((error): FramedFailure => ({
-                _tag: "Domain",
-                error,
-                frames: [frame(path, "fail")],
-                omitted: 0,
-              })),
+              mapFramedError(
+                (error): FramedFailure => new FramedDomain(error, [frame(path, "fail")], 0),
+              ),
             ),
           Succeed: (n) =>
             expression(n.value, `${path}.value`).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
@@ -2102,28 +2106,23 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             ),
           Fail: (n) =>
             expression(n.error, `${path}.error`).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
               ),
               Effect.flatMap((payload): Effect.Effect<unknown, FramedFailure> =>
-                Effect.fail({
-                  _tag: "Domain",
-                  error: payload,
-                  frames: [frame(path, "fail")],
-                  omitted: 0,
-                } as const),
+                Effect.fail(new FramedDomain(payload, [frame(path, "fail")], 0)),
               ),
             ),
           Map: (n) =>
             evaluate(n.source, bindings).pipe(
-              Effect.mapError((failure) => outward(failure, "map")),
+              mapFramedError((failure) => outward(failure, "map")),
               Effect.flatMap((value) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [value]);
                 return expression(n.body, `${path}.body`, nested).pipe(
-                  Effect.mapError((cause): FramedFailure =>
+                  mapFramedError((cause): FramedFailure =>
                     cause instanceof CompileError
                       ? { _tag: "Internal", cause }
                       : (cause as FramedFailure),
@@ -2133,31 +2132,31 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             ),
           FlatMap: (n) =>
             evaluate(n.source, bindings).pipe(
-              Effect.mapError((failure) => outward(failure, "flatMap")),
+              mapFramedError((failure) => outward(failure, "flatMap")),
               Effect.flatMap((value) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [value]);
                 return evaluate(n.body, nested).pipe(
-                  Effect.mapError((failure) => outward(failure, "flatMap")),
+                  mapFramedError((failure) => outward(failure, "flatMap")),
                 );
               }),
             ),
           Match: (n) =>
             expression(n.condition, `${path}.condition`).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
               ),
               Effect.flatMap((value) =>
                 (value ? evaluate(n.onTrue, bindings) : evaluate(n.onFalse, bindings)).pipe(
-                  Effect.mapError((failure) => outward(failure, "match")),
+                  mapFramedError((failure) => outward(failure, "match")),
                 ),
               ),
             ),
           ForEach: (n) =>
             expression(n.source, `${path}.source`).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
@@ -2169,14 +2168,14 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                     evaluate(
                       n.body,
                       new Map(bindings).set(n.item, [item]).set(n.index, [BigInt(i)]),
-                    ).pipe(Effect.mapError((failure) => outward(failure, "forEach"))),
+                    ).pipe(mapFramedError((failure) => outward(failure, "forEach"))),
                   { discard: n.discard },
                 ),
               ),
             ),
           MatchTags: (n) =>
             expression(n.value, `${path}.value`).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
@@ -2188,14 +2187,14 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 return evaluate(
                   selected.body,
                   new Map(bindings).set(selected.binder, [value]),
-                ).pipe(Effect.mapError((failure) => outward(failure, "match")));
+                ).pipe(mapFramedError((failure) => outward(failure, "match")));
               }),
             ),
           Log: (n) =>
             Effect.forEach(n.attributes, ([key, value]) =>
               expression(value, `${path}.attributes.${key}`).pipe(
                 Effect.map((evaluated) => [key, evaluated] as const),
-                Effect.mapError((cause): FramedFailure =>
+                mapFramedError((cause): FramedFailure =>
                   cause instanceof CompileError
                     ? { _tag: "Internal", cause }
                     : (cause as FramedFailure),
@@ -2212,7 +2211,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             ),
           Annotate: (n) =>
             expression(n.value, `${path}.value`).pipe(
-              Effect.mapError((cause): FramedFailure =>
+              mapFramedError((cause): FramedFailure =>
                 cause instanceof CompileError
                   ? { _tag: "Internal", cause }
                   : (cause as FramedFailure),
@@ -2220,14 +2219,14 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.flatMap((value) =>
                 evaluate(n.body, bindings).pipe(
                   Effect.annotateLogs(n.key, value),
-                  Effect.mapError((failure) => outward(failure, "annotate")),
+                  mapFramedError((failure) => outward(failure, "annotate")),
                 ),
               ),
             ),
           Span: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.withLogSpan(n.label),
-              Effect.mapError((failure) => outward(failure, "span")),
+              mapFramedError((failure) => outward(failure, "span")),
             ),
         }),
       );
@@ -2237,30 +2236,32 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
     unknown,
     FramedFailure
   >;
-  const outcome = yield* checked.pipe(
-    Effect.map((value) => ({ _tag: "Ok", value }) as const),
-    Effect.catch((failure: FramedFailure) =>
-      failure._tag === "Internal"
-        ? Effect.fail(failure.cause)
-        : Effect.succeed({ _tag: "Err", failure } as const),
-    ),
-  );
-  if (outcome._tag === "Ok")
+  const outcome = yield* Effect.exit(checked);
+  if (Exit.isSuccess(outcome))
     return {
       exit: Exit.succeed(outcome.value as A),
       frames: Object.freeze([]),
       omitted: 0,
     };
-  const hasRoom = outcome.failure.frames.length < maxLogicalFrames;
-  const kept = hasRoom
-    ? outcome.failure.frames.concat([
-        frame(basePath.split(".").slice(0, -1).join(".") || basePath, "function"),
-      ])
-    : outcome.failure.frames;
+  for (const reason of outcome.cause.reasons)
+    if (Cause.isFailReason(reason) && reason.error._tag === "Internal")
+      return yield* reason.error.cause;
+  const first = outcome.cause.reasons.find(Cause.isFailReason)?.error;
+  const trail = first instanceof FramedDomain ? first : undefined;
+  const hasRoom = trail !== undefined && trail.frames.length < maxLogicalFrames;
+  const kept = trail
+    ? hasRoom
+      ? trail.frames.concat([
+          frame(basePath.split(".").slice(0, -1).join(".") || basePath, "function"),
+        ])
+      : trail.frames
+    : [];
   return {
-    exit: Exit.fail(outcome.failure.error as E),
+    exit: Exit.failCause(
+      Cause.map(outcome.cause, (failure) => (failure as FramedDomain).error as E),
+    ),
     frames: Object.freeze(kept),
-    omitted: outcome.failure.omitted + (hasRoom ? 0 : 1),
+    omitted: (trail?.omitted ?? 0) + (trail && !hasRoom ? 1 : 0),
   };
 });
 export const EffectReference = Object.freeze({
@@ -2350,9 +2351,10 @@ const logAt =
   (level: LogLevel) =>
   (message: string, attributes: readonly LogAttribute[] = []) =>
     logMessage(level, message, attributes);
-export type TaskChildren =
-  | readonly [Computation<void, never>, Computation<void, never>]
-  | readonly [Computation<void, never>, Computation<void, never>, Computation<void, never>];
+export type TaskChildren<E = never> =
+  | readonly [Computation<void, E>, Computation<void, E>]
+  | readonly [Computation<void, E>, Computation<void, E>, Computation<void, E>];
+type TaskError<C> = C extends Computation<unknown, infer E> ? E : never;
 export interface AllTaskOptions {
   readonly concurrency: "unbounded";
   readonly discard: true;
@@ -2360,32 +2362,41 @@ export interface AllTaskOptions {
 }
 const taskGroup = (
   mode: "All" | "Race",
-  children: readonly Computation<void, never>[],
-): Computation<void, never> => {
+  children: readonly Computation<void, unknown>[],
+): Computation<void, unknown> => {
+  const scalarError = (type: IRType<unknown>) =>
+    [NeverType, BoolType, U64Type, UnitType].some((candidate) => IRType.same(type, candidate));
   if (
     !Array.isArray(children) ||
     (mode === "All" ? ![2, 3].includes(children.length) : children.length !== 2) ||
     children.some(
       (child) =>
         !(child instanceof Computation) ||
-        !IRType.same(child.output, UnitType) ||
-        !IRType.same(child.error, NeverType),
+        (!IRType.same(child.output, UnitType) && !IRType.same(child.output, NeverType)) ||
+        !scalarError(child.error),
     )
   )
     throw fail(
       "UNSUPPORTED_TASK_GROUP",
       "authoring",
       mode === "All" ? "all" : "race",
-      "Task groups require a static tuple of Unit/Never children: two/three for all, two for race",
+      "Task groups require two/three All children or two Race children, Unit/Never success and Bool/U64/Unit errors (Never ignored)",
     );
-  return Computation.make(UnitType, NeverType, {
+  const error = children.reduce<IRType<unknown>>(
+    (joined, child) => joinType(joined, child.error),
+    NeverType,
+  );
+  return Computation.make(UnitType, error, {
     _tag: "TaskGroup",
     mode,
     children: Object.freeze(Array.from(children)),
   });
 };
-/** Bounded concurrent, discarded Effect.all: two or three static Unit/Never children. */
-const all = (children: TaskChildren, options: AllTaskOptions): Computation<void, never> => {
+/** Bounded concurrent, discarded Effect.all with one common represented scalar error channel. */
+const all = <const Children extends TaskChildren<unknown>>(
+  children: Children,
+  options: AllTaskOptions,
+): Computation<void, TaskError<Children[number]>> => {
   if (
     !options ||
     options.concurrency !== "unbounded" ||
@@ -2399,19 +2410,19 @@ const all = (children: TaskChildren, options: AllTaskOptions): Computation<void,
       "all.options",
       "all requires concurrency:unbounded, discard:true and optionally mode:default",
     );
-  return taskGroup("All", children);
+  return taskGroup("All", children) as Computation<void, TaskError<Children[number]>>;
 };
-/** Bounded first-success race; the losing child is interrupted and its cleanup awaited. */
+/** Bounded first-success race; losing cleanup is awaited and all-failure reasons are retained. */
 const race: {
-  (that: Computation<void, never>): (self: Computation<void, never>) => Computation<void, never>;
-  (self: Computation<void, never>, that: Computation<void, never>): Computation<void, never>;
+  <E2>(that: Computation<void, E2>): <E>(self: Computation<void, E>) => Computation<void, E | E2>;
+  <E, E2>(self: Computation<void, E>, that: Computation<void, E2>): Computation<void, E | E2>;
 } = dual(
   2,
-  (
-    self: Computation<void, never>,
-    that: Computation<void, never>,
+  <E, E2>(
+    self: Computation<void, E>,
+    that: Computation<void, E2>,
     ...options: readonly unknown[]
-  ) => {
+  ): Computation<void, E | E2> => {
     if (options.length)
       throw fail(
         "UNSUPPORTED_TASK_GROUP",
@@ -2419,7 +2430,7 @@ const race: {
         "race.options",
         "Race options and exposed winner fibers are not admitted",
       );
-    return taskGroup("Race", [self, that]);
+    return taskGroup("Race", [self, that]) as Computation<void, E | E2>;
   },
 );
 export const EffectIR = Object.freeze({

@@ -15,9 +15,10 @@ export const asyncRuntime = (
   services: RuntimeServiceUsage = { clock: false, random: false },
   taskGroups = false,
   streams = false,
+  fallibleGroups = false,
 ): string => `
 #[derive(Debug)]
-pub enum AsyncError<E> { Fail(E), Interrupted }
+pub enum AsyncError<E> { Fail(E), Interrupted${fallibleGroups ? ", Combined(RuntimeCause)" : ""} }
 ${launch ? `pub type LaunchValues = ${launch};` : ""}
 ${
   scopeDepth

@@ -34,9 +34,12 @@ Everything still to be done, collected from the design and research records on 2
 
 ## Cross-cutting gates
 
+- Compound fallible All/Race RPC wire causes, interruptor identities/reason annotations, and retained earlier-channel errors: NativeRpc refuses this new profile pending stock-client conformance ([fallible concurrency](research/fallible-concurrency.md#host-integration-decision)).
+- Lexical Deferred/Semaphore ownership, statically bounded waiter storage, and independent waiter cancellation before coordination admission ([lexical coordination](research/lexical-coordination.md)).
+
 These block many items below.
 
-- A represented Exit/Cause (typed failure, defect, interruption, combination) — blocks typed task-group failure, fallible/Exit-aware finalizers, Deferred `fail`, defect-finalizer parity for host faults ([structured-concurrency](research/structured-concurrency.md#why-typed-failure-is-deferred), [runtime-lowering](runtime-lowering.md#what-remains-in-the-semantic-runtime))
+- Broader represented Exit/Cause (defects, explicit interruption values, full identity/annotations and async capture) — scalar fallible task propagation is delivered; fallible/Exit-aware finalizers, Deferred full-Cause completion and defect-finalizer parity remain gated ([structured-concurrency](research/structured-concurrency.md#why-typed-failure-is-deferred), [runtime-lowering](runtime-lowering.md#what-remains-in-the-semantic-runtime))
 - Explicit child/Fiber handles and coordinator ownership — next gate before any suspending coordination module ([coverage](effect-module-coverage.md#priority-waves-and-hard-acceptance-gates), COORD-001)
 - Named calls: callable `R.fn` with a hidden `Call(FunctionRef)`, lazy bodies, call graph/SCCs, tail analysis, self-tail loops and mutual-tail state machines; promote to a researched plan first ([r-language RT-1..4](r-language.md#rt-1--callable-functionref), [function-calls](research/function-calls.md#recommendation), D1)
 - Ownership inference beyond primitive copy and single-use moves: borrows, `&mut`, clone elimination; composite witnesses are never Copy (REC-004) ([milestones §17](implementation-milestones.md#17-initial-ownership-implementation), [records-unions](research/records-unions.md#implementation-decisions))

@@ -24,8 +24,12 @@ export const structuredConcurrencyTypeChecks = () => {
   R.Effect.all(dynamic, options);
   // @ts-expect-error Collected values need a separate representation contract.
   R.Effect.all([R.Effect.succeed(R.U64.literal(1n)), R.Effect.void], options);
-  // @ts-expect-error Failure combination needs represented Cause.
-  R.Effect.race(R.Effect.fail(R.Bool.literal(false)), R.Effect.void);
+  expectTypeOf(R.Effect.race(R.Effect.fail(R.Bool.literal(false)), R.Effect.void)).toEqualTypeOf<
+    Computation<void, boolean>
+  >();
+  expectTypeOf(
+    R.Effect.all([R.Effect.void, R.Effect.fail(R.U64.literal(1n))], options),
+  ).toEqualTypeOf<Computation<void, bigint>>();
   // @ts-expect-error Numeric concurrency is not admitted.
   R.Effect.all([R.Effect.void, R.Effect.void], { concurrency: 2, discard: true });
   // @ts-expect-error Default sequential options are not admitted.

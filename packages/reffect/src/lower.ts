@@ -43,7 +43,8 @@ import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
-import { structuredRuntime } from "./structured-runtime.ts";
+import { causeRuntime } from "./cause-runtime.ts";
+import { structuredRuntime, fallibleStructuredRuntime } from "./structured-runtime.ts";
 import { frameTrailRuntime, syncFrameStorageRuntime } from "./frame-runtime.ts";
 import {
   EffectFn,
@@ -420,6 +421,16 @@ export interface UnmappedRustModule {
   readonly functions: readonly RustFunction[];
 }
 export type LoweredModule = RustModule | UnmappedRustModule;
+/** Host adapters must handle the finite erased carrier when any reached group is fallible. */
+export const hasFallibleTaskGroups = (module: LoweredModule): boolean =>
+  module.functions.some((f) =>
+    f.helpers.some(
+      (helper) =>
+        helper.body._tag === "TaskGroup" &&
+        helper.body.children.some((index) => !IRType.same(f.helpers[index].error!, NeverType)),
+    ),
+  );
+
 interface Scope {
   readonly files: ReadonlyMap<symbol, string>;
   readonly fileInputs: readonly string[];
@@ -1004,7 +1015,7 @@ export function lowerFunctions(
                 effectHelper(
                   child,
                   delayedScope(scope, child),
-                  NeverType,
+                  child.error,
                   `${path}.children[${i}]`,
                 ),
               ),
@@ -1838,6 +1849,28 @@ export const emitFunctions = (
       ),
     ),
   );
+  const fallibleArities = module.functions.flatMap((f) =>
+    f.helpers.flatMap((helper) =>
+      helper.body._tag === "TaskGroup" &&
+      helper.body.children.some((index) => !IRType.same(f.helpers[index].error!, NeverType))
+        ? [helper.body.children.length]
+        : [],
+    ),
+  );
+  const infallibleArities = module.functions.flatMap((f) =>
+    f.helpers.flatMap((helper) =>
+      Match.value(helper.body).pipe(
+        Match.tag("TaskGroup", (n) =>
+          n.children.every((index) => IRType.same(f.helpers[index].error!, NeverType))
+            ? [n.children.length]
+            : [],
+        ),
+        Match.orElse(() => []),
+      ),
+    ),
+  );
+  const fallibleGroups = fallibleArities.length > 0;
+  if (fallibleGroups) write(causeRuntime(captureFrames));
   if (hasAsync)
     write(
       asyncRuntime(
@@ -1850,13 +1883,47 @@ export const emitFunctions = (
         asyncServices,
         taskArities.length > 0,
         usesStreams,
+        fallibleGroups,
       ),
     );
-  if (taskArities.length) write(structuredRuntime(taskArities));
+  if (infallibleArities.length) write(structuredRuntime(infallibleArities));
+  if (fallibleGroups) write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
     const contextual = f.asynchronous || f.services.clock || f.services.random;
     const contextType = f.asynchronous ? "AsyncContext" : "SyncContext";
+    const fallibleReachability = new Map<number, boolean>();
+    const reachesFallibleGroup = (index: number): boolean => {
+      const cached = fallibleReachability.get(index);
+      if (cached !== undefined) return cached;
+      const any = (...indices: number[]) => indices.some(reachesFallibleGroup);
+      const result = Match.value(f.helpers[index].body).pipe(
+        Match.tags({
+          TaskGroup: (n) => n.children.some((i) => !IRType.same(f.helpers[i].error!, NeverType)),
+          Scope: (n) => any(n.body),
+          RefScope: (n) => any(n.body),
+          AddFinalizer: (n) => any(n.finalizer),
+          AcquireRelease: (n) => any(n.acquire, n.release),
+          RegisteredFile: (n) => any(n.body, n.afterClose),
+          FileScope: (n) => any(n.body, n.afterClose),
+          AcquireUseRelease: (n) => any(n.acquire, n.use, n.release),
+          Ensuring: (n) => any(n.body, n.finalizer),
+          CatchAll: (n) => any(n.source, n.body),
+          FlatMap: (n) => any(n.source, n.body),
+          Map: (n) => any(n.source),
+          Match: (n) => any(n.onTrue, n.onFalse),
+          MatchTags: (n) => any(...n.cases.map((c) => c.helper)),
+          ForEach: (n) => any(n.helper),
+          Annotate: (n) => any(n.body),
+          Span: (n) => any(n.body),
+          Repeat: (n) => any(n.body),
+          Retry: (n) => any(n.body),
+        }),
+        Match.orElse(() => false),
+      );
+      fallibleReachability.set(index, result);
+      return result;
+    };
     const record = (helper: Helper): string => {
       const registration = registrationByHelper.get(helper)!;
       return Rs.pathCall(
@@ -2285,6 +2352,9 @@ export const emitFunctions = (
         Match.tagsExhaustive({
           TaskGroup: (n) => {
             const race = Rs.litBool(n.mode === "Race");
+            const fallible = n.children.some(
+              (index) => !IRType.same(f.helpers[index].error!, NeverType),
+            );
             const parts: (string | MappedFragment)[] = ["{ "];
             n.children.forEach((_, i) => {
               const channel = Rs.pathCall(
@@ -2314,14 +2384,16 @@ export const emitFunctions = (
                   use(`children[${i}]`),
                   textFragment(child.asynchronous ? Rs.await(call).text : call.text),
                 ),
-                captureFrames
-                  ? " { Ok(()) => true, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => false } }; "
-                  : " { Ok(()) => true, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false } }; ",
+                fallible
+                  ? ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => Ok(())"}, ${captureFrames ? "Err((error, frames))" : "Err(error)"} => { let mut cause = RuntimeCause::empty(); match error { AsyncError::Fail(error) => ${IRType.same(child.error!, NeverType) ? "match error {}" : `cause.push(${IRType.same(child.error!, BoolType) ? "RuntimeFailure::Bool(error)" : IRType.same(child.error!, U64Type) ? "RuntimeFailure::U64(error)" : "RuntimeFailure::Unit"}, false)`}, AsyncError::Interrupted => cause.interrupted = true, AsyncError::Combined(other) => cause = other } Err(TaskFailure { cause, ${captureFrames ? "frames: Some(frames)," : ""} }) } } }; `
+                  : captureFrames
+                    ? ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => false${fallibleGroups ? ', Err((AsyncError::Combined(_), _frames)) => panic!("Checked infallible child produced combined cause")' : ""} } }; `
+                    : ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible child produced combined cause")' : ""} } }; `,
               );
             });
             const joined = Rs.await(
               Rs.call(
-                identExpr(`task_group${n.children.length}`),
+                identExpr(`${fallible ? "fallible_" : ""}task_group${n.children.length}`),
                 n.children
                   .flatMap((_, i) => [identExpr(`future${i}`), identExpr(`cancel${i}`)])
                   .concat([
@@ -2331,6 +2403,17 @@ export const emitFunctions = (
                   ]),
               ),
             );
+            if (fallible) {
+              const groupFrame = frameOf(helper, n.mode === "All" ? "all" : "race").text;
+              parts.push(
+                `match ${joined.text} { Ok(()) => Ok(()), Err(failure) => { `,
+                captureFrames
+                  ? `let frames = match failure.frames { Some(mut frames) => { frames.push(${groupFrame}); frames }, None => FrameTrail::new(${groupFrame}) }; Err((AsyncError::Combined(failure.cause), frames))`
+                  : "Err(AsyncError::Combined(failure.cause))",
+                " } } }",
+              );
+              return joinFragments(parts);
+            }
             parts.push(
               `if ${joined.text} && !ctx.is_cancelled() { Ok(()) } else { `,
               captureFrames
@@ -2600,14 +2683,17 @@ export const emitFunctions = (
                       : "Err(error) => Err(error)",
                     " } }",
                   ]),
-          Repeat: (n) =>
-            joinFragments([
+          Repeat: (n) => {
+            const projection = fallibleGroups
+              ? `let error = match error { AsyncError::Combined(cause) if !ctx.is_cancelled() && cause.first().is_some() => { let value = match cause.first().unwrap() { ${IRType.same(f.helpers[n.body].error!, BoolType) ? "RuntimeFailure::Bool(value) => value," : IRType.same(f.helpers[n.body].error!, U64Type) ? "RuntimeFailure::U64(value) => value," : IRType.same(f.helpers[n.body].error!, UnitType) ? "RuntimeFailure::Unit => ()," : ""} _ => panic!("Checked repeat failure witness") }; AsyncError::Fail(value) }, error => error }; `
+              : "";
+            return joinFragments([
               "{ let mut completed: u64 = 0u64; loop { match ",
               callFrag(n.body, use("body")),
               " { Ok(()) => {}, ",
               captureFrames
-                ? `Err((error, mut frames)) => { frames.push(${frameOf(helper, "repeat").text}); return Err((error, frames)); }`
-                : "Err(error) => return Err(error),",
+                ? `Err((error, mut frames)) => { ${projection}frames.push(${frameOf(helper, "repeat").text}); return Err((error, frames)); }`
+                : `Err(error) => { ${projection}return Err(error); },`,
               " } if !(",
               scheduleContinue(n.schedule, n.times),
               `) { break Ok(()); } let delay: u64 = ${scheduleDelay(n.schedule)}; if delay > 0 { match ctx.sleep(delay).await { Ok(()) => {}, `,
@@ -2615,12 +2701,30 @@ export const emitFunctions = (
                 ? `Err(error) => return Err((error, FrameTrail::new(${frameOf(helper, "repeat").text}))),`
                 : "Err(error) => return Err(error),",
               " } } completed += 1; } }",
-            ]),
+            ]);
+          },
           Retry: (n) =>
             joinFragments([
               "{ let mut completed: u64 = 0u64; loop { match ",
               callFrag(n.body, use("body")),
               " { Ok(value) => break Ok(value), ",
+              ...(fallibleGroups
+                ? [
+                    `${captureFrames ? "Err((AsyncError::Combined(cause), mut frames))" : "Err(AsyncError::Combined(cause))"} => { if ctx.is_cancelled() || cause.first().is_none() { `,
+                    captureFrames
+                      ? `frames.push(${frameOf(helper, "retry").text}); return Err((AsyncError::Combined(cause), frames)); `
+                      : "return Err(AsyncError::Combined(cause)); ",
+                    `} if !(${scheduleContinue(n.schedule, n.times)}) { let error = match cause.first().expect("Checked retry failure") { ${IRType.same(f.helpers[n.body].error!, BoolType) ? "RuntimeFailure::Bool(value) => value," : IRType.same(f.helpers[n.body].error!, U64Type) ? "RuntimeFailure::U64(value) => value," : IRType.same(f.helpers[n.body].error!, UnitType) ? "RuntimeFailure::Unit => ()," : ""} _ => panic!("Checked retry failure witness") }; `,
+                    captureFrames
+                      ? `frames.push(${frameOf(helper, "retry").text}); return Err((AsyncError::Fail(error), frames)); `
+                      : "return Err(AsyncError::Fail(error)); ",
+                    `} let delay: u64 = ${scheduleDelay(n.schedule)}; if delay > 0 { match ctx.sleep(delay).await { Ok(()) => {}, `,
+                    captureFrames
+                      ? `Err(error) => return Err((error, FrameTrail::new(${frameOf(helper, "retry").text}))),`
+                      : "Err(error) => return Err(error),",
+                    " } } completed += 1; }, ",
+                  ]
+                : []),
               captureFrames
                 ? `Err((AsyncError::Interrupted, _frames)) => return Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "retry").text}))), Err((AsyncError::Fail(error), mut frames)) => { `
                 : "Err(AsyncError::Interrupted) => return Err(AsyncError::Interrupted), Err(AsyncError::Fail(error)) => { ",
@@ -2647,6 +2751,41 @@ export const emitFunctions = (
               : captureFrames
                 ? `Err((${binder}, _handled_frames))`
                 : `Err(${binder})`;
+            const retainedFailure =
+              fallibleGroups && f.asynchronous && reachesFallibleGroup(n.source)
+                ? (() => {
+                    const sameError = IRType.same(source.error!, helper.error!);
+                    const retained = sameError
+                      ? `AsyncError::Fail(${binder})`
+                      : "AsyncError::Combined(cause)";
+                    const cause = sameError
+                      ? ""
+                      : `let mut cause = RuntimeCause::empty(); cause.push(${IRType.same(source.error!, BoolType) ? `RuntimeFailure::Bool(${binder})` : IRType.same(source.error!, U64Type) ? `RuntimeFailure::U64(${binder})` : "RuntimeFailure::Unit"}, false); `;
+                    return `if ctx.is_cancelled() { ${cause}${captureFrames ? `let mut frames = _handled_frames; frames.push(${frameOf(helper, "catchAll").text}); return Err((${retained}, frames));` : `return Err(${retained});`} } `;
+                  })()
+                : "";
+            const combined =
+              fallibleGroups && f.asynchronous
+                ? joinFragments([
+                    `, ${captureFrames ? "Err((AsyncError::Combined(cause), mut frames))" : "Err(AsyncError::Combined(cause))"} => { if ctx.is_cancelled() || cause.first().is_none() { `,
+                    captureFrames
+                      ? `frames.push(${frameOf(helper, "catchAll").text}); return Err((AsyncError::Combined(cause), frames)); `
+                      : "return Err(AsyncError::Combined(cause)); ",
+                    `} let ${binder} = match cause.first().expect("Checked typed failure") { `,
+                    IRType.same(source.error!, BoolType)
+                      ? "RuntimeFailure::Bool(value) => value,"
+                      : IRType.same(source.error!, U64Type)
+                        ? "RuntimeFailure::U64(value) => value,"
+                        : IRType.same(source.error!, UnitType)
+                          ? "RuntimeFailure::Unit => (),"
+                          : "",
+                    ' _ => panic!("Checked task failure witness") }; ',
+                    captureFrames ? "drop(frames); " : "",
+                    "match ",
+                    adaptFrag(n.body, helper.output, use("body")),
+                    ` { Ok(value) => Ok(value), ${failureArm(helper, "catchAll")} } }`,
+                  ])
+                : textFragment("");
             const interrupted = f.asynchronous
               ? captureFrames
                 ? `, Err((AsyncError::Interrupted, mut frames)) => { frames.push(${frameOf(helper, "catchAll").text}); Err((AsyncError::Interrupted, frames)) }`
@@ -2655,9 +2794,11 @@ export const emitFunctions = (
             return joinFragments([
               "{ match ",
               callFrag(n.source, use("source")),
-              ` { ${sourceSuccess}${domainPattern} => { ${captureFrames ? "drop(_handled_frames); " : ""}match `,
+              ` { ${sourceSuccess}${domainPattern} => { ${retainedFailure}${captureFrames ? "drop(_handled_frames); " : ""}match `,
               adaptFrag(n.body, helper.output, use("body")),
-              ` { Ok(value) => Ok(value), ${failureArm(helper, "catchAll")} } }${interrupted} } }`,
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "catchAll")} } }`,
+              combined,
+              `${interrupted} } }`,
             ]);
           },
           AcquireUseRelease: (n) =>
@@ -3175,8 +3316,8 @@ export const emitFunctions = (
             textFragment(cleanup.asynchronous ? Rs.await(call).text : call.text),
           ),
           captureFrames
-            ? ' { Ok(()) => {}, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => panic!("Masked non-failing scope finalizer was interrupted") }\n'
-            : ' { Ok(()) => {}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => panic!("Masked non-failing scope finalizer was interrupted") }\n',
+            ? ` { Ok(()) => {}, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => panic!("Masked non-failing scope finalizer was interrupted")${fallibleGroups ? ', Err((AsyncError::Combined(_), _frames)) => panic!("Checked infallible scope finalizer produced combined cause")' : ""} }\n`
+            : ` { Ok(()) => {}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => panic!("Masked non-failing scope finalizer was interrupted")${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible scope finalizer produced combined cause")' : ""} }\n`,
         ]),
       );
       write("            },\n");
@@ -3320,6 +3461,17 @@ export const emitFunctions = (
                     pat: Rs.pat("Err(reffect_generated::AsyncError::Interrupted)"),
                     body: Rs.inlineStmtBlock(
                       Rs.println("interrupt"),
+                      ...(captureFrames ? [Rs.blockStmt(framesBlock(true))] : []),
+                    ),
+                  },
+                ]
+              : []),
+            ...(fallibleGroups && f.asynchronous
+              ? [
+                  {
+                    pat: Rs.pat("Err(reffect_generated::AsyncError::Combined(cause))"),
+                    body: Rs.inlineStmtBlock(
+                      Rs.stmt(Rs.dotCall(identExpr("cause"), Rs.ident("write_scalar"), [])),
                       ...(captureFrames ? [Rs.blockStmt(framesBlock(true))] : []),
                     ),
                   },
