@@ -1,6 +1,6 @@
 # Named function calls and recursion in the IR
 
-Status: **historical design analysis; decision updated 2026-10-03.** Written 2026-10-02 after `R.flow`. The per-pass blast-radius analysis remains useful, but [R language direction](../r-language.md) now promotes **D1 named monomorphic calls** into the planned language foundation and adds proper-tail-recursion lowering. **D2 first-class function values remains out of scope.**
+Status: **historical design analysis; decision refined 2026-10-03.** Written 2026-10-02 after `R.flow`. The per-pass blast-radius analysis remains useful, but [R language direction](../r-language.md) now treats **D1 as an internal IR fact behind naturally callable `R.fn` values**, not a public `.call()` API. Ordinary TypeScript function-reference identity supplies `FunctionRef`; recursion is discovered from the call graph and proper-tail lowering is derived by the compiler. **D2 runtime first-class function values remains out of scope.**
 
 ## The distinction that matters
 
