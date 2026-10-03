@@ -125,10 +125,10 @@ This distinction should be preserved deliberately.
 For example:
 
 ```ts
-const fields = config.map(makeField)
-const handlers = routes.map(makeHandler)
+const fields = config.map(makeField);
+const handlers = routes.map(makeHandler);
 
-const escaped = R.String.replaceAll(value, "<", "&lt;")
+const escaped = R.String.replaceAll(value, "<", "&lt;");
 ```
 
 The array maps over `config` and `routes` can run at build time. They do not become native runtime loops unless they construct R operations that say so.
@@ -136,9 +136,9 @@ The array maps over `config` and `routes` can run at build time. They do not bec
 Likewise:
 
 ```ts
-const doubled = R.U64.mul(x, R.U64.literal(2n))
+const doubled = R.U64.mul(x, R.U64.literal(2n));
 
-R.U64.add(doubled, doubled)
+R.U64.add(doubled, doubled);
 ```
 
 does not require an R `Let` node. The TypeScript variable names one IR value while building the graph.
@@ -161,7 +161,7 @@ Conceptually:
 R.Match.bool(condition, {
   true: () => yes,
   false: () => no,
-})
+});
 ```
 
 or an eventual unified API such as:
@@ -209,23 +209,15 @@ If Match is the only branch primitive:
 An R function should look like a function in TypeScript:
 
 ```ts
-const double = R.fn(
-  [R.U64],
-  R.U64,
-  x => R.U64.mul(x, R.U64.literal(2n)),
-)
+const double = R.fn([R.U64], R.U64, (x) => R.U64.mul(x, R.U64.literal(2n)));
 
-const quadruple = R.fn(
-  [R.U64],
-  R.U64,
-  x => double(double(x)),
-)
+const quadruple = R.fn([R.U64], R.U64, (x) => double(double(x)));
 ```
 
 There should be no public:
 
 ```ts
-double.call(x)
+double.call(x);
 ```
 
 Calling `double(x)` executes the TypeScript builder wrapper and produces an internal call expression referencing `double`'s semantic function identity.
@@ -268,7 +260,7 @@ This means:
 This is allowed because TypeScript resolves it at build time:
 
 ```ts
-const helper = BUILD_FLAG ? foo : bar
+const helper = BUILD_FLAG ? foo : bar;
 ```
 
 provided `BUILD_FLAG` is actually build-time host logic and only the chosen function reaches the constructed IR.
@@ -301,19 +293,12 @@ Ordinary TypeScript references are enough.
 Example:
 
 ```ts
-const factorial = R.fn(
-  [R.U64],
-  R.U64,
-  n =>
-    R.Match.bool(R.U64.eq(n, R.U64.literal(0n)), {
-      true: () => R.U64.literal(1n),
-      false: () =>
-        R.U64.mul(
-          n,
-          factorial(R.U64.sub(n, R.U64.literal(1n))),
-        ),
-    }),
-)
+const factorial = R.fn([R.U64], R.U64, (n) =>
+  R.Match.bool(R.U64.eq(n, R.U64.literal(0n)), {
+    true: () => R.U64.literal(1n),
+    false: () => R.U64.mul(n, factorial(R.U64.sub(n, R.U64.literal(1n)))),
+  }),
+);
 ```
 
 The semantic body contains a `Call` to the same `FunctionRef`.
@@ -482,10 +467,10 @@ This is exactly why tail recursion belongs in compiler analysis rather than in u
 For pure values, ordinary TypeScript bindings are the authoring abstraction:
 
 ```ts
-const normalized = normalize(x)
-const encoded = encode(normalized)
+const normalized = normalize(x);
+const encoded = encode(normalized);
 
-R.Struct.make({ normalized, encoded })
+R.Struct.make({ normalized, encoded });
 ```
 
 The bindings exist while constructing the graph.
@@ -835,15 +820,12 @@ This separation lets the public semantic language remain elegant while the compi
 A recursive R function should look ordinary:
 
 ```ts
-const gcd = R.fn(
-  [R.U64, R.U64],
-  R.U64,
-  (a, b) =>
-    R.Match.bool(R.U64.eq(b, R.U64.literal(0n)), {
-      true: () => a,
-      false: () => gcd(b, R.U64.rem(a, b)),
-    }),
-)
+const gcd = R.fn([R.U64, R.U64], R.U64, (a, b) =>
+  R.Match.bool(R.U64.eq(b, R.U64.literal(0n)), {
+    true: () => a,
+    false: () => gcd(b, R.U64.rem(a, b)),
+  }),
+);
 ```
 
 No:
