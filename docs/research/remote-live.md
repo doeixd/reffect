@@ -254,6 +254,45 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
   - The compiler plans, explains and verifies both (LIVE-010).
   - Long term, once server-lifetime Ref, Queue and `Stream.fromQueue` are admitted (behind the deferred cross-fiber ownership gate), the hub is re-expressed in R. The port then stays as a specialization the planner may select because conformance tests show it matches.
 
+### LIVE-010 design (2026-10-03)
+
+- **Existing model.** The plan explanation already names semantic runtimes as adapters (`SemanticRef.runtime("rust/tokio-result@1")` with a strategy and a rationale), but only for generated Result runtimes. The RPC artifact lists crates and its server id, and nothing about the ported engines.
+- **Entry.** A `PortedRuntime` has:
+  - a `SemanticRef.runtime` id (e.g. `foldkit/remote-live-hub@1`);
+  - strategy `"port"`;
+  - its upstream pins (package and exact version);
+  - what it serves (RPC procedures or effect ids);
+  - its conformance evidence (test files);
+  - a rationale.
+- **Registry.** It lives in `src/ported-runtime.ts`, and `RpcArtifact.runtime.ported` lists the entries a build selected:
+  - the Effect RPC HTTP protocol (every NativeRpc server);
+  - the Remote Read engine;
+  - Mutate shaping;
+  - memory or SQL Query paging, with the foldkit-entity evaluator or the Drizzle lowering;
+  - the live hub.
+- **Version guard.** When a `FileSystem` service is present (tests, CLI, any Node program), compilation reads each pinned package's `package.json` and refuses a mismatch with `UPSTREAM_VERSION`. It finds the package as Node does, through the `node_modules` directories above the compiler's own module.
+  - Without a `FileSystem` service, the artifact records `upstream: "unchecked"`, so `NativeRpc.compile` keeps its pure signature.
+  - **Rejected:**
+    - reading versions with `node:fs` in the compiler, which goes against the project's scoped-filesystem rule;
+    - `import.meta.resolve`, which the Vite module runner may not provide;
+    - a warn-only guard, which would let silent drift through again (the 0.14.0 upgrade changed pinned behaviour unnoticed).
+- **Acceptance.**
+  - Artifacts list the selected ports.
+  - A test runs the guard against the installed packages.
+  - A test with a mismatched pin fails with `UPSTREAM_VERSION`.
+- **Delivered 2026-10-03.**
+  - [ported-runtime.ts](../../packages/reffect/src/ported-runtime.ts) defines `PortedRuntimes`:
+    - `effect/rpc-http@1`;
+    - `foldkit/remote-read@1`;
+    - `foldkit/remote-mutate@1`;
+    - `foldkit/remote-query-memory@1`;
+    - `foldkit/remote-query-sql@1`;
+    - `foldkit/remote-live-hub@1`.
+  - Pins: effect 4.0.0, foldkit-remote and foldkit-remote-server 0.11.0, foldkit-entity 0.7.0, foldkit-remote-drizzle 0.9.1.
+  - `RpcArtifact.runtime` has `ported` and `upstream` (`"verified"` or `"unchecked"`). NativeRemote selects ports by procedure, backend and `live`.
+  - [ported-runtime.test.ts](../../packages/reffect/tests/ported-runtime.test.ts) covers a verified install, the unchecked case without a FileSystem, a drifted pin, a missing package, and the selected port lists.
+  - **Consequence.** Upgrading a pinned package now fails every compile that provides a FileSystem until the pin is updated, which should only happen after the port's conformance tests pass.
+
 ### Order
 
 1. **Defects.** LR-1 via LIVE-007, LR-2 via LIVE-009's "unsubscribed" record (or an interim record), LR-3 and LR-4.

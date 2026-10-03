@@ -86,7 +86,6 @@ These block many items below.
   - LR-3 (rest): live rendering in the `todo-remote` browser app (one `Data.live` read per visible todo) and a Chrome run.
 - Live improvement plan ([plan](research/remote-live.md#improvement-plan-2026-10-03)):
   - LIVE-008: an after-commit session hook and a separate LiveHub node and service;
-  - LIVE-010: a semantic runtime registry in plan explanations, with upstream version guards;
   - LIVE-011: typed, domain-checked signals;
   - LIVE-012: runtime Rust as `.rs` files with rustfmt, clippy and unit tests;
   - LIVE-013: randomized hub conformance against upstream `liveHub`;

@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-03 — LIVE-010: ported runtimes in artifacts, with upstream version guards
+
+- **Change.** RPC artifacts list the ported protocol engines they run, with upstream pins and conformance tests (`runtime.ported`). When a FileSystem is available, compilation refuses installed packages that differ from the pins (`UPSTREAM_VERSION`); otherwise it reports `upstream: "unchecked"`.
+- **Validation.**
+  - `vp test tests/ported-runtime.test.ts` passed (4 tests).
+  - `remote-live` and `rpc-ndjson` pass with the guard active.
+  - `vp check` is clean.
+- **Next:** browser live rendering for `todo-remote` (rest of LR-3), then milestone 8 research.
+
 ## 2026-10-03 — LR-3: Foldkit's `Data.live` path over the native server
 
 - **Change.** `examples/todo-remote` adds a second screen that reads t2 with `Data.live` and folds the `LiveReceived` messages of Remote's own live Subscription entry with `Data.reduce`. It shows the toggle without refetching, and its screens equal upstream's memory backend with `liveHub`.
