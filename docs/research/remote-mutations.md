@@ -52,6 +52,11 @@ The Store is not an R value. It is a native resource whose operations the runtim
 - **RS-005 — caches follow the store.** Writes and removes bump a store version. Per-query evaluator cells (BENCH, query cache) are keyed by that version, so a read after a write sees the change, as `memory`'s next read does.
 - **RS-006 — ownership (BENCH-002).** Stored rows are shared immutable values (`Arc`), so reads hand out shared rows rather than deep copies, and `write` replaces a row (`{ ...existing, id, ...values }`) copy-on-write. This is the first workload where the ownership stage shares instead of cloning.
 
+### Store progress
+
+- **Phase A (engine, 2026-10-03): done.** `remote_engine::Memory` holds the tables behind one `RwLock` with a version counter. Rows are `Arc<JsObject<Value>>` (JS own-property order, so a written index key lands where JS puts it). `get`/`write`/`remove` follow `MemoryStore`: `{ ...existing, id, ...values }`, a new row last, `remove` then `write` appends again. Query cells are cached per store version (RS-005). A query takes its page from one view of the table and releases the lock before reading the selected rows, as upstream reads them. Read and Query behaviour is unchanged.
+- **Open for phase B:** NR-017 checks only the embedded rows against query field kinds. A written value outside a query's kinds makes the native evaluator refuse that query, while the JS evaluator compares any value. Writes either need the same check at the `RemoteStore` boundary (typed `values`) or the evaluator needs JS comparison semantics for mixed kinds; record the choice with RS-001.
+
 ## Order of work
 
 1. RM-002 store with read/query sharing it (no behaviour change), then `RemoteStore` R service operations, with differential tests against `MemoryStore` semantics.

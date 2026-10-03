@@ -32,7 +32,7 @@ Status: **measured 2026-10-03** on win32/x64 (Node 24.21 under `vp exec`, rustc 
 
 ## Findings and changes
 
-1. **Query rebuilt every row's evaluator cells per request** (5,000 rows, UTF-16 re-encoding). Each query definition now caches its cells; query throughput over HTTP went from 103 to 400 req/s. RM-002 must invalidate the cache once the store becomes writable.
+1. **Query rebuilt every row's evaluator cells per request** (5,000 rows, UTF-16 re-encoding). Each query definition now caches its cells; query throughput over HTTP went from 103 to 400 req/s. The cache is keyed by the store version, so writes invalidate it (RS-005).
 2. **Axum 0.8.9 leaves Nagle's algorithm on**, while Node's HTTP server disables it. The native server now sets `TCP_NODELAY` on accepted connections (`tap_io`). It made no measurable difference here, but it matches the reference deployment.
 3. **A literal port is not automatically faster than V8.** The first in-process Read was 660 µs against V8's 334 µs:
    - Grouping rebuilt merged slices and deep-copied relation trees per request; it now merges in place (`merge_into`, same semantics: first-position keys, duplicates, empty windows absent).

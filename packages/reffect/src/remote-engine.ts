@@ -10,6 +10,7 @@ export const remoteEngineRuntime =
 mod remote_engine {
     use serde_json::{json, Map, Value};
     use std::collections::{HashMap, HashSet};
+    use std::sync::{Arc, Mutex, RwLock};
 
     const PROTOCOL_VERSION: f64 = 4.0;
     const MAX_IDS_PER_ENTITY: usize = 1000;
@@ -72,6 +73,10 @@ mod remote_engine {
             self.values.insert(key, value);
         }
         fn iter(&self) -> impl Iterator<Item = (&String, &V)> { self.keys.iter().map(move |key| (key, &self.values[key])) }
+        /// ` + "`Map.prototype.delete`" + String.raw`: setting the key again appends it.
+        fn remove(&mut self, key: &str) {
+            if self.values.remove(key).is_some() { self.keys.retain(|existing| existing != key); }
+        }
         fn into_values(mut self) -> Vec<V> { self.keys.iter().map(|key| self.values.remove(key).unwrap()).collect() }
     }
     /// Insertion-ordered set, as a JS ` +
@@ -322,27 +327,37 @@ mod remote_engine {
 
     // ---- Sources (NR-011): the memory backend.
     pub struct EntityRecord { id: String, values: JsObject<Value> }
-    pub struct Memory { entities: Vec<String>, tables: HashMap<String, Ordered<Map<String, Value>>> }
+    /// A row as the memory backend holds it: a plain object, shared until a write replaces it.
+    pub type Row = Arc<JsObject<Value>>;
+    struct Tables { version: u64, tables: HashMap<String, Ordered<Row>> }
+    /// The memory backend's ` + "`MemoryStore`" + String.raw` (RS-003..006): one server-lifetime store behind a lock,
+    /// taken once per operation. Every write bumps the version, which invalidates query caches.
+    pub struct Memory { entities: Vec<String>, state: RwLock<Tables> }
     impl Memory {
-        /// ` +
-  "`rows`" +
-  String.raw`: entity -> [[String(id), row]] in table order, as the memory backend keys them.
+        /// ` + "`rows`" + String.raw`: entity -> [[String(id), row]] in table order, as the memory backend keys them.
         pub fn new(entities: Vec<String>, rows: &Value) -> Memory {
             let mut tables = HashMap::new();
             if let Some(object) = rows.as_object() {
                 for (entity, table) in object.iter() {
                     let mut ordered = Ordered::new();
                     for entry in table.as_array().into_iter().flatten() {
-                        if let (Some(id), Some(row)) = (entry.get(0).and_then(Value::as_str), entry.get(1).and_then(Value::as_object)) { ordered.set(id.to_string(), row.clone()); }
+                        if let (Some(id), Some(row)) = (entry.get(0).and_then(Value::as_str), entry.get(1).and_then(Value::as_object)) {
+                            let mut copy = JsObject::new();
+                            for (key, value) in row.iter() { copy.set(key.clone(), value.clone()); }
+                            ordered.set(id.to_string(), Arc::new(copy));
+                        }
                     }
                     tables.insert(entity.clone(), ordered);
                 }
             }
-            Memory { entities, tables }
+            Memory { entities, state: RwLock::new(Tables { version: 0, tables }) }
         }
+        fn tables(&self) -> std::sync::RwLockReadGuard<'_, Tables> { self.state.read().unwrap_or_else(|poisoned| poisoned.into_inner()) }
+        fn tables_mut(&self) -> std::sync::RwLockWriteGuard<'_, Tables> { self.state.write().unwrap_or_else(|poisoned| poisoned.into_inner()) }
         fn has_source(&self, entity: &str) -> bool { self.entities.iter().any(|name| name == entity) }
         fn read(&self, entity: &str, ids: &[String], fields: &[String], windows: &Option<JsObject<Window>>) -> Vec<EntityRecord> {
-            let Some(table) = self.tables.get(entity) else { return Vec::new() };
+            let state = self.tables();
+            let Some(table) = state.tables.get(entity) else { return Vec::new() };
             ids.iter().filter_map(|id| {
                 let row = table.get(id)?;
                 let mut values = JsObject::new();
@@ -354,6 +369,28 @@ mod remote_engine {
                 }
                 Some(EntityRecord { id: id.clone(), values })
             }).collect()
+        }
+        /// The row ` + "`rows(entity)`" + String.raw` holds under ` + "`id`" + String.raw`, if any.
+        #[allow(dead_code)]
+        pub fn get(&self, entity: &str, id: &str) -> Option<Row> { self.tables().tables.get(entity)?.get(id).cloned() }
+        /// ` + "`write(entity, id, values)`" + String.raw`: the row becomes ` + "`{ ...existing, id, ...values }`" + String.raw`; a new row
+        /// goes last. ` + "`values`" + String.raw` are in JS own-property order.
+        #[allow(dead_code)]
+        pub fn write(&self, entity: &str, id: &str, values: Vec<(String, Value)>) {
+            let mut state = self.tables_mut();
+            state.version += 1;
+            let table = state.tables.entry(entity.to_string()).or_insert_with(Ordered::new);
+            let mut row = table.get(id).map(|row| JsObject::clone(row)).unwrap_or_default();
+            row.set("id".to_string(), Value::String(id.to_string()));
+            for (key, value) in values { row.set(key, value); }
+            table.set(id.to_string(), Arc::new(row));
+        }
+        /// ` + "`remove(entity, id)`" + String.raw`; removing an absent row changes nothing.
+        #[allow(dead_code)]
+        pub fn remove(&self, entity: &str, id: &str) {
+            let mut state = self.tables_mut();
+            state.version += 1;
+            if let Some(table) = state.tables.get_mut(entity) { table.remove(id); }
         }
     }
     #[derive(Clone)]
@@ -543,9 +580,8 @@ mod remote_engine {
         /// The order-only twin's own slots: without the predicates it reads fewer of them.
         pub order_fields: &'static [&'static str],
         pub order_inputs: &'static [&'static str],
-        /// The table's evaluator cells, built once: memory rows are fixed until mutations land
-        /// (RM-002 must invalidate this when the store becomes writable).
-        pub cells: std::sync::OnceLock<Vec<Vec<Cell>>>,
+        /// The table's evaluator cells and the store version they were built at.
+        pub cells: Mutex<Option<(u64, Arc<Vec<Vec<Cell>>>)>>,
     }
     /// A row or input value as the evaluator sees it; an absent field is null (` +
   "`isNull`" +
@@ -581,36 +617,52 @@ mod remote_engine {
             }
         }
         let window = window(payload.get("window").unwrap_or(&Value::Null));
-        let empty = Ordered::new();
-        let table = server.tables.get(def.entity).unwrap_or(&empty);
-        let rows: Vec<(&String, &Map<String, Value>)> = table.iter().collect();
-        let encoded: Vec<Cell> = def.inputs.iter().map(|key| cell(input.get(*key))).collect();
-        let cells = def.cells.get_or_init(|| rows.iter().map(|(_, row)| def.fields.iter().map(|field| cell(row.get(*field))).collect()).collect());
-        let matched = (def.run)(&encoded, cells).map_err(|error| query_error(error.to_string()))?;
-        // A cursor row that no longer matches still has a place in the order, as a keyset has it.
-        let locate = |cursor: &str| -> Result<Position, String> {
-            let Some(found) = rows.iter().position(|(id, _)| id.as_str() == cursor) else {
-                return Err(format!("Cursor \"{}\" names a row that no longer exists", cursor));
+        // The page is taken from one view of the table; the selected rows are read afterwards,
+        // as upstream reads them, without holding the store across the read.
+        let (edges, start, end, requirements) = {
+            let state = server.tables();
+            let empty = Ordered::new();
+            let table = state.tables.get(def.entity).unwrap_or(&empty);
+            let rows: Vec<(&String, &Row)> = table.iter().collect();
+            let encoded: Vec<Cell> = def.inputs.iter().map(|key| cell(input.get(*key))).collect();
+            let cells = {
+                let mut cache = def.cells.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                match cache.as_ref() {
+                    Some((version, cells)) if *version == state.version => cells.clone(),
+                    _ => {
+                        let cells: Arc<Vec<Vec<Cell>>> = Arc::new(rows.iter().map(|(_, row)| def.fields.iter().map(|field| cell(row.get(field))).collect()).collect());
+                        *cache = Some((state.version, cells.clone()));
+                        cells
+                    }
+                }
             };
-            let twin = |index: &usize| -> Vec<Cell> { def.order_fields.iter().map(|field| cell(rows[*index].1.get(*field))).collect() };
-            let mut subset: Vec<Vec<Cell>> = matched.iter().map(twin).collect();
-            subset.push(twin(&found));
-            let order_input: Vec<Cell> = def.order_inputs.iter().map(|key| cell(input.get(*key))).collect();
-            let placed = (def.order)(&order_input, &subset).map_err(|error| error.to_string())?;
-            let index = placed.iter().position(|index| *index == subset.len() - 1).unwrap_or(subset.len() - 1);
-            Ok(Position { index, exact: false })
+            let matched = (def.run)(&encoded, &cells).map_err(|error| query_error(error.to_string()))?;
+            // A cursor row that no longer matches still has a place in the order, as a keyset has it.
+            let locate = |cursor: &str| -> Result<Position, String> {
+                let Some(found) = rows.iter().position(|(id, _)| id.as_str() == cursor) else {
+                    return Err(format!("Cursor \"{}\" names a row that no longer exists", cursor));
+                };
+                let twin = |index: &usize| -> Vec<Cell> { def.order_fields.iter().map(|field| cell(rows[*index].1.get(field))).collect() };
+                let mut subset: Vec<Vec<Cell>> = matched.iter().map(twin).collect();
+                subset.push(twin(&found));
+                let order_input: Vec<Cell> = def.order_inputs.iter().map(|key| cell(input.get(*key))).collect();
+                let placed = (def.order)(&order_input, &subset).map_err(|error| error.to_string())?;
+                let index = placed.iter().position(|index| *index == subset.len() - 1).unwrap_or(subset.len() - 1);
+                Ok(Position { index, exact: false })
+            };
+            let id_of = |index: &usize| rows[*index].0.clone();
+            let (page, start, end) = page_of(&matched, &window, &id_of, Some(&locate)).map_err(query_error)?;
+            let edges: Vec<Value> = page.iter().map(|index| {
+                let id = rows[*index].0;
+                json!({ "entity": def.entity, "id": id, "key": format!("{}:{}", def.entity, id) })
+            }).collect();
+            let requirements: Option<Vec<Requirement>> = select.map(|select| page.iter().filter(|_| select.entity == def.entity).map(|index| Requirement {
+                entity: select.entity.clone(), id: rows[*index].0.clone(), fields: select.fields.clone(),
+                windows: select.windows.clone(), relations: select.relations.clone(), renames: None,
+            }).collect());
+            (edges, start, end, requirements)
         };
-        let id_of = |index: &usize| rows[*index].0.clone();
-        let (page, start, end) = page_of(&matched, &window, &id_of, Some(&locate)).map_err(query_error)?;
-        let edges: Vec<Value> = page.iter().map(|index| {
-            let id = rows[*index].0;
-            json!({ "entity": def.entity, "id": id, "key": format!("{}:{}", def.entity, id) })
-        }).collect();
-        let Some(select) = select else { return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end) })) };
-        let requirements: Vec<Requirement> = page.iter().filter(|_| select.entity == def.entity).map(|index| Requirement {
-            entity: select.entity.clone(), id: rows[*index].0.clone(), fields: select.fields.clone(),
-            windows: select.windows.clone(), relations: select.relations.clone(), renames: None,
-        }).collect();
+        let Some(requirements) = requirements else { return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end) })) };
         if requirements.is_empty() {
             return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": [], "settled": [] }));
         }

@@ -172,7 +172,7 @@ const compile = <Rpcs extends Rpc.Any>(
             `&[${slots.map((slot) => Rs.stringLiteral(slot.key).text).join(", ")}]`;
           return {
             validator: inputValidator(query.name, query.Input, i),
-            definition: `remote_engine::QueryDef { name: ${Rs.stringLiteral(query.name).text}, entity: ${Rs.stringLiteral(entity).text}, valid: remote_query_valid_${i}, fields: ${list(analysis.fields)}, inputs: ${list(analysis.inputs)}, run: foldkit_eval::r_q${i}, order: foldkit_eval::r_q${i}_order, order_fields: ${list(twin.fields)}, order_inputs: ${list(twin.inputs)}, cells: std::sync::OnceLock::new() }`,
+            definition: `remote_engine::QueryDef { name: ${Rs.stringLiteral(query.name).text}, entity: ${Rs.stringLiteral(entity).text}, valid: remote_query_valid_${i}, fields: ${list(analysis.fields)}, inputs: ${list(analysis.inputs)}, run: foldkit_eval::r_q${i}, order: foldkit_eval::r_q${i}_order, order_fields: ${list(twin.fields)}, order_inputs: ${list(twin.inputs)}, cells: std::sync::Mutex::new(None) }`,
           };
         });
         return {
