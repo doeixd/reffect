@@ -22,6 +22,7 @@ import {
   undefinedOrItem,
   literalsOf,
 } from "./kernel.ts";
+import { refContent, refType } from "./ref-model.ts";
 import { rustFieldNames, rustLiteralVariants, rustVariantName } from "./records.ts";
 import type { Expr, OperationRef, Program, RecordQuery } from "./kernel.ts";
 import type { SchedulePlan } from "./schedule.ts";
@@ -34,7 +35,7 @@ import type { Computation } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
 import { Rs, escapeJsonContent } from "./rust-emit.ts";
-import type { RsExpr, RsType } from "./rust-emit.ts";
+import type { RsExpr, RsStmt, RsType } from "./rust-emit.ts";
 import { SourceArtifacts, checkArtifactPolicy } from "./artifact-policy.ts";
 import type {
   ArtifactPolicy,
@@ -154,6 +155,22 @@ interface Parameter {
   readonly type: IRType<unknown>;
 }
 type HelperBody =
+  | {
+      readonly _tag: "RefScope";
+      readonly initial: RustBlock;
+      readonly binder: string;
+      readonly content: IRType<unknown>;
+      readonly body: number;
+    }
+  | { readonly _tag: "RefGet"; readonly ref: string }
+  | {
+      readonly _tag: "RefModify";
+      readonly ref: string;
+      readonly binder: string;
+      readonly content: IRType<unknown>;
+      readonly result: RustBlock;
+      readonly next: RustBlock;
+    }
   | { readonly _tag: "Scope"; readonly body: number }
   | { readonly _tag: "AddFinalizer"; readonly finalizer: number }
   | {
@@ -459,6 +476,16 @@ export function lowerFunctions(
               FileScope: (n) => {
                 computation(n.body);
                 computation(n.afterClose);
+              },
+              RefMake: (n) => expression(n.initial),
+              RefScope: (n) => {
+                expression(n.initial);
+                computation(n.body);
+              },
+              RefGet: () => {},
+              RefModify: (n) => {
+                expression(n.result);
+                expression(n.next);
               },
               FileSize: () => {},
               AcquireUseRelease: (n) => {
@@ -830,6 +857,41 @@ export function lowerFunctions(
                 afterClose: effectHelper(n.afterClose, scope, error, `${path}.afterClose`),
               };
             },
+            RefMake: (): HelperBody => {
+              throw fail(
+                "RESOURCE_ESCAPE",
+                "lower",
+                path,
+                "Ref.make must be bound by Effect.flatMap",
+              );
+            },
+            RefScope: (n): HelperBody => ({
+              _tag: "RefScope",
+              initial: block(n.initial, scope, `${path}.initial`),
+              binder: `b${index}`,
+              content: n.initial.type,
+              body: effectHelper(
+                n.body,
+                nestedScope(scope, n.binder, refType(n.initial.type), index),
+                error,
+                `${path}.body`,
+              ),
+            }),
+            RefGet: (n): HelperBody => ({
+              _tag: "RefGet",
+              ref: scope.bindings.get(n.binder)![0].name,
+            }),
+            RefModify: (n): HelperBody => {
+              const nested = nestedScope(scope, n.binder, n.content, index);
+              return {
+                _tag: "RefModify",
+                ref: scope.bindings.get(n.ref)![0].name,
+                binder: `b${index}`,
+                content: n.content,
+                result: block(n.result, nested, `${path}.result`),
+                next: block(n.next, nested, `${path}.next`),
+              };
+            },
             FileSize: (n): HelperBody => ({ _tag: "FileSize", file: scope.files.get(n.binder)! }),
             AcquireUseRelease: (n): HelperBody => ({
               _tag: "AcquireUseRelease",
@@ -990,6 +1052,9 @@ export function lowerFunctions(
                 Repeat: () => true,
                 Retry: () => true,
                 FileScope: () => true,
+                RefScope: (n) => helpers.get(n.body)?.asynchronous ?? false,
+                RefGet: () => false,
+                RefModify: () => false,
                 FileSize: () => false,
                 Ensuring: () => true,
                 AcquireUseRelease: () => true,
@@ -1200,6 +1265,8 @@ export const emitFunctions = (
   // Set when a reachable witness renders as serde_json::Value (UNK-003).
   let usesJson = false;
   const rsTypeOf = (type: IRType<unknown>): RsType => {
+    const content = refContent(type);
+    if (content) return rsTypeOf(content);
     if (IRType.same(type, U64Type)) return Rs.namedType("u64");
     if (IRType.same(type, BoolType)) return Rs.namedType("bool");
     if (IRType.same(type, UnitType)) return Rs.unitType();
@@ -1244,6 +1311,8 @@ export const emitFunctions = (
   // Helpers borrow non-Copy values from their caller; scalars stay by value (REC-004).
   // Read-only helpers take slices for arrays (architecture §15) and `&str` for strings.
   const helperParameterType = (type: IRType<unknown>): string => {
+    const content = refContent(type);
+    if (content) return Rs.mutRefType(rsTypeOf(content)).text;
     if (copyable(type)) return typeName(type);
     if (IRType.same(type, StringType)) return "&str";
     const item = arrayItem(type);
@@ -1251,7 +1320,11 @@ export const emitFunctions = (
   };
   // `&name` coerces from an owned value or an existing borrow alike.
   const helperArgument = (p: { readonly name: string; readonly type: IRType<unknown> }) =>
-    copyable(p.type) ? Rs.ident(p.name).text : `&${Rs.ident(p.name).text}`;
+    refContent(p.type)
+      ? Rs.mutRefExpr(Rs.prefix("*", Rs.identExpr(Rs.ident(p.name)))).text
+      : copyable(p.type)
+        ? Rs.ident(p.name).text
+        : `&${Rs.ident(p.name).text}`;
   const write = (text: string | { readonly text: string }) =>
     writer.write(typeof text === "string" ? text : text.text);
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
@@ -1307,6 +1380,9 @@ export const emitFunctions = (
             AcquireRelease: (n) => depth(n.acquire),
             RegisteredFile: (n) => depth(n.body),
             FileScope: (n) => child(n.body, n.afterClose),
+            RefScope: (n) => depth(n.body),
+            RefGet: () => 0,
+            RefModify: () => 0,
             FileSize: () => 0,
             AcquireUseRelease: (n) => child(n.acquire, n.use, n.release),
             Ensuring: (n) => child(n.body, n.finalizer),
@@ -1654,6 +1730,12 @@ export const emitFunctions = (
             ),
             role,
           );
+    const refPlaceholder = Rs.identExpr(Rs.ident("__reffect_ref_expression"));
+    // Typed binding syntax surrounds the original mapped expression, preserving its byte ranges.
+    const refBindingFragment = (statement: RsStmt, expression: MappedFragment): MappedFragment => {
+      const [before, after] = statement.text.split(refPlaceholder.text);
+      return joinFragments([before, expression, after]);
+    };
     const renderBlock = (block: RustBlock): MappedFragment => {
       const parts: Array<string | MappedFragment> = ["{\n"];
       for (const binding of block.bindings) {
@@ -1712,6 +1794,9 @@ export const emitFunctions = (
           CatchAll: () => "catchAll",
           AcquireUseRelease: () => "acquireUseRelease",
           FileScope: () => "fileScope",
+          RefScope: () => "refScope",
+          RefGet: () => "refGet",
+          RefModify: () => "refModify",
           FileSize: () => "fileSize",
           AddFinalizer: () => "addFinalizer",
           AcquireRelease: () => "acquireRelease",
@@ -1847,6 +1932,63 @@ export const emitFunctions = (
               ` } else { Ok(value) } }, ${failureArm(helper, "fileScope")} } }, Err(_) => `,
               ioFailure.text,
               " } }",
+            ]);
+          },
+          RefScope: (n) => {
+            const initializer = refBindingFragment(
+              Rs.letMut(Rs.ident("ref_slot"), rsTypeOf(n.content), refPlaceholder),
+              renderBlock(n.initial),
+            );
+            const borrow = Rs.let_(
+              Rs.ident(n.binder),
+              undefined,
+              Rs.mutRefExpr(Rs.identExpr(Rs.ident("ref_slot"))),
+            );
+            return joinFragments([
+              "{ ",
+              initializer,
+              " ",
+              borrow.text,
+              " match ",
+              adaptFrag(n.body, helper.output, use("body")),
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "refScope")} } }`,
+            ]);
+          },
+          RefGet: (n) =>
+            textFragment(Rs.block([], Rs.ok(Rs.prefix("*", Rs.identExpr(Rs.ident(n.ref))))).text),
+          RefModify: (n) => {
+            const snapshot = Rs.let_(
+              Rs.ident(n.binder),
+              rsTypeOf(n.content),
+              Rs.prefix("*", Rs.identExpr(Rs.ident(n.ref))),
+            );
+            const result = refBindingFragment(
+              Rs.let_(Rs.ident("ref_result"), undefined, refPlaceholder),
+              renderBlock(n.result),
+            );
+            const next = refBindingFragment(
+              Rs.let_(Rs.ident("ref_next"), rsTypeOf(n.content), refPlaceholder),
+              renderBlock(n.next),
+            );
+            const commit = Rs.assign(
+              Rs.prefix("*", Rs.identExpr(Rs.ident(n.ref))),
+              Rs.identExpr(Rs.ident("ref_next")),
+            );
+            const success = Rs.call(Rs.identExpr(Rs.ident("Ok")), [
+              Rs.identExpr(Rs.ident("ref_result")),
+            ]);
+            return joinFragments([
+              "{ ",
+              snapshot.text,
+              " ",
+              result,
+              " ",
+              next,
+              " ",
+              commit.text,
+              " ",
+              success.text,
+              " }",
             ]);
           },
           FileSize: (n) => {

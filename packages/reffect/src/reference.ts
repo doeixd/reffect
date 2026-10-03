@@ -1,7 +1,8 @@
-import { Fn, PureReference } from "./kernel.ts";
+import { Fn, PureReference, fail } from "./kernel.ts";
 import type { CompileError, IRType, Inputs } from "./kernel.ts";
 import { EffectFn, EffectReference } from "./effect-ir.ts";
 import type { FramedExit } from "./effect-ir.ts";
+import { containsRef } from "./ref-model.ts";
 import { Effect, Exit } from "effect";
 
 function runUnknown<I extends readonly IRType<unknown>[], A>(
@@ -13,6 +14,19 @@ function runUnknown<I extends readonly IRType<unknown>[], A, E>(
   args: readonly unknown[],
 ): Effect.Effect<A, E | CompileError>;
 function runUnknown(f: Fn | EffectFn, args: readonly unknown[]): Effect.Effect<unknown, unknown> {
+  if (
+    f.input.some(containsRef) ||
+    containsRef(f.output) ||
+    (f instanceof EffectFn && containsRef(f.error))
+  )
+    return Effect.fail(
+      fail(
+        "RESOURCE_ESCAPE",
+        "check",
+        "function",
+        "Public channels cannot contain lexical Ref handles",
+      ),
+    );
   return f instanceof EffectFn
     ? EffectReference.runUnknown(f, args)
     : PureReference.runUnknown(f, args);
@@ -43,6 +57,19 @@ function runWithFramesUnknown(
   args: readonly unknown[],
   basePath?: string,
 ): Effect.Effect<FramedExit<unknown, unknown>, CompileError> {
+  if (
+    f.input.some(containsRef) ||
+    containsRef(f.output) ||
+    (f instanceof EffectFn && containsRef(f.error))
+  )
+    return Effect.fail(
+      fail(
+        "RESOURCE_ESCAPE",
+        "check",
+        "function",
+        "Public channels cannot contain lexical Ref handles",
+      ),
+    );
   return f instanceof EffectFn
     ? EffectReference.runWithFramesUnknown(f, args, basePath)
     : PureReference.runUnknown(f, args).pipe(

@@ -35,6 +35,21 @@ export {
   apply,
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
+export { OptionIR } from "./option.ts";
+export type { OptionValue, OptionType } from "./option.ts";
+export { ResultIR, effectResult } from "./result.ts";
+export type { ResultValue } from "./result.ts";
+export { DurationIR } from "./duration.ts";
+export type { Duration, DurationInput } from "./duration.ts";
+export { EffectCombinators } from "./effect-combinators.ts";
+export { RefIR } from "./ref.ts";
+export {
+  ArrayCombinators,
+  BooleanCombinators,
+  PredicateCombinators,
+  RecordCombinators,
+} from "./collection-combinators.ts";
+export type { SymbolicPredicate } from "./collection-combinators.ts";
 export {
   Struct,
   TaggedUnion,

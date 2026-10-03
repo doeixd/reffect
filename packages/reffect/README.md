@@ -34,6 +34,46 @@ const addOneThenDouble = R.flow(addOne, double); // Fn<[u64], bigint>
 
 Plain (non-IR) function composition is Effect's own `flow`; import it from `effect` when composing builder callbacks. Composed components are inlined and are not separate logical-frame or naming boundaries; read the [design record](../../docs/research/flow-composition.md) for the boundary and refusals.
 
+## Option, Result and compositional helpers
+
+`R.Option(T)` and `R.Result(A, E)` create checked tagged-data witnesses using the existing native enum representation. `R.Option.some(value)` infers its item witness; `none(T)` supplies it explicitly. Result constructors are `succeed(value, errorWitness)` and `fail(error, successWitness)`. These are plain structural values; upstream instance branding and methods are outside this profile.
+
+```ts
+const Find = R.fn([R.Array(R.U64)], R.Option(R.U64), (values) =>
+  values.pipe(R.Array.findFirst((value) => R.U64.lt(value, R.U64.literal(5n)))),
+);
+const Read = R.fn([R.Option(R.U64)], R.U64, (value) =>
+  value.pipe(
+    R.Option.map((n) => R.U64.add(n, R.U64.literal(1n))),
+    R.Option.getOrElse(() => R.U64.literal(0n)),
+  ),
+);
+```
+
+Option supplies checked matching, mapping/chaining, filtering, fallbacks, presence conversions and composition. Result supplies matching (pure or effectful branches), mapping/error mapping, `mapBoth`, chaining, fallbacks and variant predicates. Result chaining requires the same error witness; broader implicit unions are refused. `R.Effect.result` captures typed failures as Result data; interruption and compiler defects bypass it. `R.Effect.matchEffect` invokes handlers outside source recovery, so a handler failure cannot trigger the opposite handler.
+
+Additional helpers include `R.Effect.catch`, `tap`, `as`, `asVoid`, `catchIf`; `R.Array.some/every/findFirst` and empty predicates; `R.Record.isEmptyRecord`; and `R.Boolean.and/or/not` plus symbolic `R.Predicate.and/or/not`. `R.Bool` remains the original type witness. Array searches skip predicates once decided but still traverse remaining items; retained String search results may clone during that traversal.
+
+`R.Duration` exposes pinned official constructors, conversions and arithmetic for **authoring configuration**. For example, `R.Effect.sleep(R.Duration.millis(10))` erases to a checked millisecond literal. Sleep admits integral 0–60000 milliseconds and refuses lossy fractional, negative, infinite or oversized delays; raw numeric NaN remains refused. There is no runtime Duration witness. Schedule retains its existing timing rules.
+
+[Coverage and priorities](../../docs/effect-module-coverage.md) distinguish shipped bounded profiles from remaining module work; [the decision index](../../docs/effect-modules.md#prioritized-module-expansion) links their conformance evidence and limitations.
+
+## Lexical Ref
+
+`R.Ref.make/get/set/update/modify` support sequential nonescaping Bool, U64 and Unit cells. Consume make directly through ordinary flatMap:
+
+```ts
+const Counter = R.fn([], R.U64, R.Never, () =>
+  R.Effect.flatMap(R.Ref.make(R.U64.literal(0n)), (cell) =>
+    R.Ref.update(cell, (n) => R.U64.add(n, R.U64.literal(1n))).pipe(
+      R.Effect.andThen(R.Ref.get(cell)),
+    ),
+  ),
+);
+```
+
+Each execution owns a native local cell; helpers borrow it across sequential awaits. No per-cell heap allocation, metadata registry or synchronization primitive is generated. Public/composite handle escape, cross-task sharing and registered cleanup captures are refused. Compiler-erased lexical Layer sharing inside the region is supported. See [Ref decisions and measured cost limits](../../docs/research/ref-module.md).
+
 ## Supported semantics
 
 - `R.U64` is an exact bigint in `0..2^64-1`, with native Rust `u64`. `literal`, `add`, `sub`, `mul`, `eq`, and `lt` construct immutable expressions. Arithmetic is modulo `2^64` in every build profile.

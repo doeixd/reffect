@@ -1,4 +1,5 @@
-import { Effect, Exit, Match, Option, Pipeable, Schema, Schedule } from "effect";
+import { Duration, Effect, Exit, Match, Option, Pipeable, Ref, Schema, Schedule } from "effect";
+import { checkedMilliseconds } from "./duration.ts";
 import type { Scope } from "effect";
 import { Schedule as ScheduleValue, validSchedulePlan, validTimes } from "./schedule.ts";
 import type { SchedulePlan } from "./schedule.ts";
@@ -28,7 +29,12 @@ import { LaunchHost } from "./launch-host.ts";
 import { analyzeScopes } from "./scope-analysis.ts";
 export { maxScopeFinalizers } from "./scope-analysis.ts";
 
+import { containsRef, refContent, refScalar, refType } from "./ref-model.ts";
+
 export const SyncEffects = Object.freeze({
+  RefMake: SemanticRef.effect("reffect/ref/make@1"),
+  RefGet: SemanticRef.effect("reffect/ref/get@1"),
+  RefModify: SemanticRef.effect("reffect/ref/modify@1"),
   CatchAll: SemanticRef.effect("reffect/effect/catch-all@1"),
   ForEach: SemanticRef.effect("reffect/effect/for-each@1"),
   Succeed: SemanticRef.effect("reffect/effect/succeed@1"),
@@ -84,6 +90,22 @@ const checkLogName = (kind: string, value: string): void => {
     );
 };
 export type ComputationNode =
+  | { readonly _tag: "RefMake"; readonly initial: Expr<unknown> }
+  | {
+      readonly _tag: "RefScope";
+      readonly initial: Expr<unknown>;
+      readonly binder: symbol;
+      readonly body: Computation<unknown, unknown>;
+    }
+  | { readonly _tag: "RefGet"; readonly binder: symbol; readonly content: IRType<unknown> }
+  | {
+      readonly _tag: "RefModify";
+      readonly ref: symbol;
+      readonly content: IRType<unknown>;
+      readonly binder: symbol;
+      readonly result: Expr<unknown>;
+      readonly next: Expr<unknown>;
+    }
   | { readonly _tag: "Scope"; readonly body: Computation<unknown, unknown> }
   | { readonly _tag: "AddFinalizer"; readonly finalizer: Computation<void, never> }
   | {
@@ -271,6 +293,21 @@ export const substituteComputation = (
             ? self
             : rebuild({ _tag: "Launch", values });
         },
+        RefMake: (n) => {
+          const initial = substituting(n.initial);
+          return initial === n.initial ? self : rebuild({ ...n, initial });
+        },
+        RefScope: (n) => {
+          const initial = substituting(n.initial);
+          const body = walk(n.body);
+          return initial === n.initial && body === n.body ? self : rebuild({ ...n, initial, body });
+        },
+        RefGet: () => self,
+        RefModify: (n) => {
+          const result = substituting(n.result);
+          const next = substituting(n.next);
+          return result === n.result && next === n.next ? self : rebuild({ ...n, result, next });
+        },
         FileSize: () => self,
         Succeed: (n) => {
           const value = substituting(n.value);
@@ -391,14 +428,8 @@ const succeed = <A>(value: Expr<A>): Computation<A> =>
   Computation.make(value.type, NeverType, { _tag: "Succeed", value });
 const failValue = <E>(error: Expr<E>): Computation<never, E> =>
   Computation.make(NeverType, error.type, { _tag: "Fail", error });
-const sleep = (milliseconds: number): Computation<void> => {
-  if (!validDelay(milliseconds))
-    throw fail(
-      "INVALID_DELAY",
-      "authoring",
-      "sleep",
-      "Delay requires an integer literal from 0 to 60000 milliseconds",
-    );
+const sleep = (duration: Duration.Input): Computation<void> => {
+  const milliseconds = checkedMilliseconds(duration, "sleep");
   return Computation.make(UnitType, NeverType, { _tag: "Sleep", milliseconds });
 };
 const scalarLaunch = (type: IRType<unknown>): boolean =>
@@ -535,6 +566,10 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         AcquireRelease: () => true,
         RegisteredFile: () => true,
         FileScope: () => true,
+        RefMake: () => false,
+        RefScope: (n) => walk(n.body),
+        RefGet: () => false,
+        RefModify: () => false,
         FileSize: () => true,
         Sleep: () => true,
         Launch: () => true,
@@ -580,7 +615,20 @@ const flatMap: {
     const binder = Symbol("reffect/flatMap");
     const body = build(Expr.parameter(self.output, binder, 0));
     const error = joinType(self.error, body.error) as IRType<E | E2>;
-    return Computation.make(body.output, error, { _tag: "FlatMap", source: self, binder, body });
+    const node = Match.value(self.node).pipe(
+      Match.tag("RefMake", (allocation): ComputationNode => ({
+        _tag: "RefScope",
+        initial: allocation.initial,
+        binder,
+        body,
+      })),
+      Match.orElse((): ComputationNode => ({ _tag: "FlatMap", source: self, binder, body })),
+    );
+    const computation = Computation.make(body.output, error, node);
+    return Match.value(self.node).pipe(
+      Match.tag("RefMake", () => computation.withSource(self.source)),
+      Match.orElse(() => computation),
+    );
   },
 );
 export const matchComputation = <A, E, B, E2>(
@@ -670,6 +718,19 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
       return;
     }
     active.add(c);
+    if (
+      !Match.value(c.node).pipe(
+        Match.tag("RefMake", () => true),
+        Match.orElse(() => false),
+      ) &&
+      (containsRef(c.output) || containsRef(c.error))
+    )
+      issues.push({
+        code: "RESOURCE_ESCAPE",
+        stage: "check",
+        path: at,
+        message: "Ref handles cannot escape as computation values",
+      });
     const expression = (e: Expr<unknown>, step: string) =>
       issues.push(...checkExpression(e, bindings, `${at}.${step}`));
     Match.value(c.node).pipe(
@@ -741,6 +802,65 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           nested.set(n.binder, [FileHandleType]);
           walk(n.body, nested, `${at}.body`);
           walk(n.afterClose, bindings, `${at}.afterClose`);
+        },
+        RefMake: () => {
+          issues.push({
+            code: "RESOURCE_ESCAPE",
+            stage: "check",
+            path: at,
+            message: "Consume Ref.make directly through Effect.flatMap within a lexical region",
+          });
+        },
+        RefScope: (n) => {
+          if (
+            !refScalar(n.initial.type) ||
+            !IRType.same(c.output, n.body.output) ||
+            !IRType.same(c.error, n.body.error)
+          )
+            add(at, "Ref region requires scalar initial state and preserves body channels");
+          expression(n.initial, "initial");
+          const nested = new Map(bindings);
+          nested.set(n.binder, [refType(n.initial.type)]);
+          walk(n.body, nested, `${at}.body`);
+        },
+        RefGet: (n) => {
+          if (
+            !refScalar(n.content) ||
+            !IRType.same(c.output, n.content) ||
+            !IRType.same(c.error, NeverType)
+          )
+            add(at, "Ref.get preserves scalar state and Never error channel");
+          const handle = bindings.get(n.binder)?.[0];
+          if (!handle || !refContent(handle) || !IRType.same(refContent(handle)!, n.content))
+            issues.push({
+              code: "RESOURCE_ESCAPE",
+              stage: "check",
+              path: at,
+              message: "Ref access requires a live matching lexical region",
+            });
+        },
+        RefModify: (n) => {
+          if (
+            !refScalar(n.content) ||
+            !IRType.same(n.next.type, n.content) ||
+            !IRType.same(c.output, n.result.type) ||
+            !IRType.same(c.error, NeverType)
+          )
+            add(at, "Ref.modify requires matching scalar state and pure result expressions");
+          const handle = bindings.get(n.ref)?.[0];
+          if (!handle || !refContent(handle) || !IRType.same(refContent(handle)!, n.content))
+            issues.push({
+              code: "RESOURCE_ESCAPE",
+              stage: "check",
+              path: at,
+              message: "Ref mutation requires a live matching lexical region",
+            });
+          const nested = new Map(bindings);
+          nested.set(n.binder, [n.content]);
+          issues.push(
+            ...checkExpression(n.result, nested, `${at}.result`),
+            ...checkExpression(n.next, nested, `${at}.next`),
+          );
         },
         FileSize: (n) => {
           if (!IRType.same(c.output, U64Type) || !IRType.same(c.error, BoolType))
@@ -958,6 +1078,13 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
   };
   if (!agrees(f.body.output, f.output) || !agrees(f.body.error, f.error))
     add(path, "Effect function body differs from declared success/error witnesses");
+  if (f.input.some(containsRef) || containsRef(f.output) || containsRef(f.error))
+    issues.push({
+      code: "RESOURCE_ESCAPE",
+      stage: "check",
+      path,
+      message: "Public function channels cannot contain lexical Ref handles",
+    });
   walk(f.body, new Map([[f.binder, f.input]]), `${path}.body`);
   issues.push(...analyzeScopes(f.body, `${path}.body`).diagnostics);
   return issues;
@@ -1032,6 +1159,27 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
                   Effect.asVoid,
                   Effect.orDie,
                 ),
+            ),
+          RefMake: (n) => expression(n.initial).pipe(Effect.flatMap(Ref.make)),
+          RefScope: (n) =>
+            expression(n.initial).pipe(
+              Effect.flatMap(Ref.make),
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return evaluate(n.body, nested);
+              }),
+            ),
+          RefGet: (n) => Ref.get(bindings.get(n.binder)![0] as Ref.Ref<unknown>),
+          RefModify: (n) =>
+            Ref.modify(bindings.get(n.ref)![0] as Ref.Ref<unknown>, (old) => {
+              const nested = new Map(bindings);
+              nested.set(n.binder, [old]);
+              return [evaluateExpression(n.result, nested), evaluateExpression(n.next, nested)];
+            }).pipe(
+              Effect.catchDefect((cause) =>
+                Effect.fail(fail("REFERENCE_FAILURE", "reference", "Ref.modify", String(cause))),
+              ),
             ),
           FileSize: (n) => {
             const file = bindings.get(n.binder)?.[0];
@@ -1179,6 +1327,9 @@ export interface LogicalFrame {
     | "registeredFile"
     | "acquireUseRelease"
     | "fileScope"
+    | "refScope"
+    | "refGet"
+    | "refModify"
     | "fileSize"
     | "log";
 }
@@ -1247,6 +1398,10 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.afterClose, `${path}.afterClose`);
         },
+        RefMake: () => {},
+        RefScope: (n) => adaptNode(n.body, `${path}.body`),
+        RefGet: () => {},
+        RefModify: () => {},
         FileSize: () => {},
         CatchAll: (n) => {
           adaptNode(n.source, `${path}.source`);
@@ -1387,6 +1542,31 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   Effect.orDie,
                 ),
             ).pipe(Effect.mapError((failure) => outward(failure, "fileScope"))),
+          RefMake: (n) => expression(n.initial, `${path}.initial`).pipe(Effect.flatMap(Ref.make)),
+          RefScope: (n) =>
+            expression(n.initial, `${path}.initial`).pipe(
+              Effect.flatMap(Ref.make),
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return evaluate(n.body, nested);
+              }),
+              Effect.mapError((failure) => outward(failure, "refScope")),
+            ),
+          RefGet: (n) => Ref.get(bindings.get(n.binder)![0] as Ref.Ref<unknown>),
+          RefModify: (n) =>
+            Ref.modify(bindings.get(n.ref)![0] as Ref.Ref<unknown>, (old) => {
+              const nested = new Map(bindings);
+              nested.set(n.binder, [old]);
+              return [evaluateExpression(n.result, nested), evaluateExpression(n.next, nested)];
+            }).pipe(
+              Effect.catchDefect(() =>
+                Effect.fail<FramedFailure>({
+                  _tag: "Internal",
+                  cause: fail("REFERENCE_FAILURE", "reference", "Ref.modify", "Expression failed"),
+                }),
+              ),
+            ),
           FileSize: (n) => {
             const file = bindings.get(n.binder)?.[0];
             return file instanceof FileLease

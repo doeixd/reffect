@@ -32,6 +32,37 @@ import {
 import { FileIR } from "./file-resource.ts";
 import { ScheduleIR } from "./schedule.ts";
 import { ScopedIR } from "./scoped-sequence.ts";
+import { OptionIR } from "./option.ts";
+import { ResultIR, effectResult } from "./result.ts";
+import { DurationIR } from "./duration.ts";
+import { EffectCombinators } from "./effect-combinators.ts";
+import { RefIR } from "./ref.ts";
+import {
+  ArrayCombinators,
+  BooleanCombinators,
+  PredicateCombinators,
+  RecordCombinators,
+} from "./collection-combinators.ts";
+
+const ArrayModule = Object.freeze(
+  Object.assign(
+    Object.defineProperty(<A>(item: IRType<A>) => ArrayIR(item), "length", {
+      value: ArrayIR.length,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    }),
+    ArrayIR,
+    ArrayCombinators,
+  ),
+);
+const RecordModule = Object.freeze(
+  Object.assign(
+    <A>(key: IRType<string>, value: IRType<A>) => RecordIR(key, value),
+    RecordIR,
+    RecordCombinators,
+  ),
+);
 
 function fn<const I extends readonly IRType<unknown>[], A>(
   input: I,
@@ -89,17 +120,31 @@ export const R = Object.freeze({
   UndefinedOr,
   optional,
   optionalKey,
-  Array: ArrayIR,
-  Record: RecordIR,
+  Array: ArrayModule,
+  Record: RecordModule,
+  Option: OptionIR,
+  Result: ResultIR,
+  Duration: DurationIR,
+  Ref: RefIR,
+  Boolean: Object.freeze({ not: BoolType.not, ...BooleanCombinators }),
   Literals,
   Match: Object.freeze({ bool, valueTags }),
   Predicate: Object.freeze({
-    not: BoolType.not,
     eqU64: U64Type.eq,
     ltU64: U64Type.lt,
     eqBool: BoolType.eq,
+    ...PredicateCombinators,
   }),
-  Effect: Object.freeze({ ...EffectIR, ...ScopedIR, catchAll, mapError, orElse, forEach }),
+  Effect: Object.freeze({
+    ...EffectIR,
+    ...ScopedIR,
+    catchAll,
+    mapError,
+    orElse,
+    forEach,
+    ...EffectCombinators,
+    result: effectResult,
+  }),
   Schedule: ScheduleIR,
   Log: LogIR,
   Context: ContextIR,

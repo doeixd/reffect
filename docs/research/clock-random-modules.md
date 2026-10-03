@@ -1,0 +1,67 @@
+# Next bounded Clock and Random modules
+
+Prepared 2026-10-02 against Effect **4.0.0-rc.118**. This is a researched next patch, not shipped support. It supplements [runtime lowering](../runtime-lowering.md), [Duration configuration](duration-module.md) and [observability timing](../observability.md); it does not change the core roadmap.
+
+## Verified primary sources
+
+- [Clock.ts](https://unpkg.com/effect@4.0.0-rc.118/src/Clock.ts) exposes `currentTimeMillis: Effect<number>`, `currentTimeNanos: Effect<bigint>` and `monotonicTimeNanos: Effect<bigint>`. There is no `Clock.now` accessor in this pinned module.
+- [Internal clock implementation](https://unpkg.com/effect@4.0.0-rc.118/src/internal/effect.ts) uses `Date.now()` for milliseconds. Monotonic nanoseconds use Node `process.hrtime.bigint()`, then `performance.now()` rounded to nanoseconds, then a nondecreasing Date-based fallback. Their origin is arbitrary; only differences from the same clock are meaningful.
+- Wall nanoseconds project a cached epoch offset onto monotonic time. Every read samples both clocks and reanchors when absolute drift from wall time is **greater than** 1 second. A direct `SystemTime::now().as_nanos()` mapping does not reproduce this adapter.
+- The same Clock service supplies Sleep: nonpositive durations yield, positive finite durations set interruptible timers, infinite durations never finish. Existing compiled Sleep retains its narrower integral 0–60000 ms profile; clock-read work must preserve that contract.
+- [Random.ts](https://unpkg.com/effect@4.0.0-rc.118/src/Random.ts) and [internal/random.ts](https://unpkg.com/effect@4.0.0-rc.118/src/internal/random.ts) define a service with `nextDoubleUnsafe()` and `nextIntUnsafe()`. Default draws use `Math.random()` and are explicitly not cryptographically secure.
+- `next` returns a double in `[0, 1)`. `nextBoolean` is **draw > 0.5**, so exactly 0.5 is false. `nextInt` uses `floor(draw * (MAX_SAFE_INTEGER - MIN_SAFE_INTEGER + 1)) + MIN_SAFE_INTEGER`.
+- `nextIntBetween(min,max,{halfOpen})` rounds min up and max down; default upper endpoint is inclusive. It consumes one double even for singleton ranges. `nextBetween` corrects finite-upper-endpoint floating rounding with its immediate predecessor. Ordinary integer modulo/rejection sampling changes the pinned draw sequence and mapping.
+- `withSeed` uses the embedded ISAAC implementation, not ChaCha. It combines two unsigned 32-bit outputs (21 low bits of the first plus all 32 bits of the second) into a 53-bit fraction. String seeds are UTF-8, packed little-endian into signed 32-bit words; addition and shifts wrap at 32 bits.
+- Rust substrate references: [SystemTime](https://doc.rust-lang.org/std/time/struct.SystemTime.html), [Instant](https://doc.rust-lang.org/std/time/struct.Instant.html), [rand](https://docs.rs/rand/latest/rand/). These are candidates, not dependency approvals or seed-parity claims.
+
+## Priority and concrete public surface
+
+1. Add `R.Clock.currentTimeMillis: Computation<number, never>` using existing `R.Number`/native `f64`. Reads happen during execution, never when constructing the authoring graph. This enables timestamping and deterministic injected-clock tests without adding a numeric witness.
+2. Add `R.Random.next: Computation<number, never>` and `R.Random.nextBoolean: Computation<boolean, never>` against an injected runtime Random implementation. Add checked finite/safe-integer range functions only after exact rounding and endpoint fixtures pass. Existing Number/Bool witnesses suffice; randomness must not become a U64 surrogate.
+3. Implement live Random backend and exact seeded-service ownership when justified by the next workload. Then admit `withSeed(self, seed)` / `self.pipe(withSeed(seed))`; do not expose a resetting wrapper under that name beforehand.
+4. Admit wall/monotonic nanosecond accessors only after defining a checked bigint representation. U64 cannot represent arbitrary official injected bigint values or negative epoch timestamps; converting nanoseconds to Number loses precision. A bounded signed representation needs explicit rejection and codec contracts.
+
+The first workload: one invocation reads wall milliseconds, draws a Boolean, conditionally performs existing Sleep, reads wall milliseconds again, and returns a Number or logs a tagged result. Fake service values prove exact ordering and branch behavior; a live clock run proves runtime reads and cancellation remain available.
+
+## Decisions recorded before implementation
+
+- **CLOCK-001 — Reads are effects:** add a `ClockReadMillis` computation node, semantic effect identity and reachable Clock requirement. Reference interpretation delegates to official `Clock.currentTimeMillis`. Derivation/checking/lowering/provenance/frame handling must recognize the node. Common-subexpression elimination, hoisting outside loops, retry memoization and folding to an authoring Date value are prohibited. Two occurrences can observe different values.
+- **CLOCK-002 — Explicit owned runtime implementation:** select a concrete Clock driver during planning and pass its invocation-owned context to sync and async generated functions that reach Clock. Reuse the owned execution-context path rather than a global mutable clock, thread-local hidden service, metadata on each Number, or boxed trait per read. Zero-context pure functions must retain their existing signatures and allocations. This may require widening the sync context path; that is a prerequisite rather than a reason to mark reads async artificially.
+- **CLOCK-003 — Units and adapter are observable:** live millis uses Rust std SystemTime with checked signed epoch conversion and exact representable integer bounds before f64 conversion. Handle pre-epoch times and platform errors explicitly; Never means no typed domain error, not permission to wrap/zero an internal defect. Milliseconds remain wall time and can decrease. A future monotonic driver owns an Instant origin; wall-nanos additionally needs the pinned projection/reanchor state machine. Instant elapsed time alone cannot supply an epoch timestamp.
+- **CLOCK-004 — Injection includes timers and observation:** compiler-owned runtime implementation specifications may select a live or deterministic test driver; reference tests provide a complete official `Clock.Clock`, including Sleep. No new dynamic public `R.Context` service is implied. Fake timestamp reads do not constitute virtual-time Sleep: scripted tests can delegate Sleep to the existing real timer until a coordinated virtual-clock adapter exists. Logging/tracing also read Clock upstream; deterministic fixtures must account for those reads or use a stable-value test clock, not silently subtract inconvenient reads. Define and verify the native observer-clock boundary before claiming generic Clock substitution parity.
+- **RANDOM-001 — Preserve draw contract and order:** add a `RandomDraw` computation node returning Number and a Random requirement; nextBoolean can map that node using the existing comparison operation. Reference interpretation delegates to official Random. Bounds validate once during authoring; draw and range mapping execute each time. No pure seeded-expression substitution, CSE, pre-drawing unused branches, or optimizer-driven reordered draws. Live service algorithms need not reproduce Math.random's unspecified sequence; injected/seeded sequences must reproduce their documented observable contract.
+- **RANDOM-002 — Seeded identity is a lifecycle decision:** `Random.withSeed` constructs its ISAAC service when the combinator is called. Reusing the same seeded Effect across two runs continues its generator; constructing the wrapper twice resets it. Native request-local initialization at the start of every call therefore differs from a reused official graph. Defer this API until service identity/lifetime can represent persistent seeded instances, or a separately specified invocation-fresh builder constructs the official wrapper inside each execution. Do not silently redefine `withSeed` as per-request reset.
+- **RANDOM-003 — Compatibility algorithm before crate convenience:** deterministic seed parity requires selectively porting pinned ISAAC including initialization, signed shifts, UTF-8 packing, wrapping arithmetic, output order and two-word draw consumption. A crate named ISAAC still needs byte-for-byte vectors; rand/ChaCha with the same seed is incompatible. Initial test injection needs no crate. Live randomness may later use a pinned optional rand backend that constructs one owned generator per admitted service lifetime; crypto randomness is a distinct capability/API, not a security claim attached to Effect Random.
+- **RANDOM-004 — Preserve mapping, document bias:** default integer/range functions scale and floor a 53-bit grid; arbitrary widths can have unequal bucket counts. Do not replace that behavior with unbiased rejection sampling under the same compatibility operation. Test full signed-safe range, fractional bounds, singleton ranges and half-open endpoints. Initially reject nonfinite, reversed/empty, unsafe, or overflow-prone ranges explicitly as an admitted subset; this narrowing differs from upstream's permissive arithmetic and requires authoring diagnostics. `nextBetween` additionally needs predecessor handling and noncontracted IEEE operations (avoid fused multiply-add).
+
+## Seed-lifetime evidence
+
+The following executable installed-version probe produced the recorded sequence:
+
+```ts
+const reused = Random.next.pipe(Random.withSeed("example"));
+await Effect.runPromise(reused); // 0.1633802591287037
+await Effect.runPromise(reused); // 0.690650922132836
+await Effect.runPromise(Random.next.pipe(Random.withSeed("example"))); // 0.1633802591287037
+```
+
+This is a differential acceptance fixture for future native service identity, not proof of the unimplemented port.
+
+## Runtime injection and costs
+
+The next patch should introduce an internal checked implementation specification shared by compiler/reference test harnesses: live clock or stable/scripted clock, and scripted Random doubles. Native test probes instantiate generated concrete contexts directly; no unauthenticated RPC request field or machine-stdout protocol change chooses a test clock/seed. Script exhaustion/invalid Random values are structured harness/internal failures, not ordinary typed errors, and must bypass catchAll.
+
+Scripted Random values must be finite in `[0,1)` and preserve one draw per executed node. Keep scripts separate from scalar results and provenance. Runtime implementation selection belongs in reachable requirements/implementation registries, not the static scalar Layer API. A future HTTP host may deliberately supply long-lived generators or per-request service instances, with ownership and sharing recorded.
+
+Live millis has no inherent heap allocation or Cargo dependency; context state should be omitted when only direct live millis reads are reachable and no injected/stateful implementation is requested. Script buffers allocate in test setup and carry a per-invocation cursor. Monotonic origins/projection state add fixed context fields only when reachable. ISAAC has two 256-entry u32 arrays (2048 bytes) plus counters: avoid copying it into every scalar or retaining it when Random is absent. Exact native layout, initialization costs, compiler growth and draw costs remain unmeasured.
+
+Do not add a universal heavyweight RuntimeServices struct to existing pure programs. Measure no-Clock/no-Random artifacts against their prior context/dependency baselines; then measure enabled concrete-context size and allocations separately. Cross-fiber generator sharing and split/fork behavior stay out of this first sequential profile.
+
+## Gates for the next patch
+
+- Verify public types, zero author casts, graph checks, structured unsupported-operation diagnostics, service implementation selection, generated provenance and both failure-frame policies. No runtime Clock/Random globals installed by library code.
+- Differential fake Clock readings across branch, Repeat/Retry, typed recovery and cancellation. Clock can move backward; failed/unused branches cannot read it. Preserve native cancellation/finalizer ordering around existing Sleep. Stable-clock logging fixtures establish which observer reads share the service before scripted-count claims.
+- Differential injected Random at `0`, `0.5`, the closest double below `1`, and just above `0.5`; repeated runs must consume in order. Finalization/recovery must not rewind state. Exhaustion and invalid draws bypass typed recovery consistently.
+- Before `withSeed`: vectors longer than 256 generator words, numeric/string/non-ASCII/long seeds, repeated wrapper reuse, independently reconstructed wrappers, nested service shadow/restore, exact next/Boolean/range consumption. Confirm admission for lone-surrogate seeds (TextEncoder replacement versus the project's well-formed string policy).
+- Live smoke tests check representable wall-clock range and monotonic nondecrease without tight latency assertions or comparing clocks sampled at different instants. Seeded exact bits and controlled-clock events provide conformance; statistical samples alone cannot prove parity or lack of bias.
+- Full integrated semantic tests and compiler checks; native enabled/disabled cost probes; pinned crate/MSRV/features only if a new dependency becomes reachable. Update the module inventory as proposed until this end-to-end slice passes.

@@ -239,6 +239,9 @@ const decodeFrames = (name: string, stderr: string) =>
           "retry",
           "fileScope",
           "fileSize",
+          "refScope",
+          "refGet",
+          "refModify",
           "log",
         ].includes(frame.kind)
       )

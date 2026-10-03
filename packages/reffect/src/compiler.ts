@@ -7,6 +7,7 @@ import { Cargo } from "./cargo.ts";
 import { Foldkit } from "./foldkit.ts";
 import { EffectFn, SyncEffects, AsyncEffects, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
+import { containsRef } from "./ref-model.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -324,6 +325,18 @@ const check = Effect.fn("Compile.check")(function* (program: Program) {
           },
         ]
       : []),
+    ...(f.input.some(containsRef) ||
+    containsRef(f.output) ||
+    (f instanceof EffectFn && containsRef(f.error))
+      ? [
+          {
+            code: "RESOURCE_ESCAPE",
+            stage: "check",
+            path: `functions.${name}`,
+            message: "Public channels cannot contain lexical Ref handles",
+          },
+        ]
+      : []),
     ...(f instanceof EffectFn
       ? checkEffectFunction(f, `functions.${name}`)
       : checkFunction(f, `functions.${name}`)),
@@ -448,6 +461,23 @@ const derive = Effect.fn("Compile.derive")(function* (
           effectRefs.add(AsyncEffects.FileScope);
           walkComputation(n.body);
           walkComputation(n.afterClose);
+        },
+        RefMake: (n) => {
+          effectRefs.add(SyncEffects.RefMake);
+          walk(n.initial);
+        },
+        RefScope: (n) => {
+          effectRefs.add(SyncEffects.RefMake);
+          walk(n.initial);
+          walkComputation(n.body);
+        },
+        RefGet: () => {
+          effectRefs.add(SyncEffects.RefGet);
+        },
+        RefModify: (n) => {
+          effectRefs.add(SyncEffects.RefModify);
+          walk(n.result);
+          walk(n.next);
         },
         FileSize: () => {
           effectRefs.add(AsyncEffects.FileSize);

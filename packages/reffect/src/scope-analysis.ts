@@ -161,6 +161,34 @@ export const analyzeScopes = (
           finalizer(n.afterClose, "afterClose", false);
           return child(n.body, "body");
         },
+        RefMake: (n) => {
+          expression(n.initial, "initial");
+          return 0;
+        },
+        RefScope: (n) => {
+          expression(n.initial, "initial");
+          return child(n.body, "body");
+        },
+        RefGet: () => {
+          if (delayed)
+            diagnostic(
+              "RESOURCE_ESCAPE",
+              at,
+              "Registered cleanup cannot capture lexical Ref cells",
+            );
+          return 0;
+        },
+        RefModify: (n) => {
+          if (delayed)
+            diagnostic(
+              "RESOURCE_ESCAPE",
+              at,
+              "Registered cleanup cannot capture lexical Ref cells",
+            );
+          expression(n.result, "result");
+          expression(n.next, "next");
+          return 0;
+        },
         FileSize: () => {
           if (delayed)
             diagnostic(
