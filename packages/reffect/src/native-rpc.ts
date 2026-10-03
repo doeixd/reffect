@@ -913,6 +913,11 @@ type CompileOptions = {
    * Defaults: 64 KiB bodies and 64-request batches.
    */
   readonly limits?: { readonly bodyBytes?: number; readonly batch?: number };
+  /**
+   * The wire serialization, chosen as `RpcSerialization.layerJson`/`layerNdjson` is (STREAM-001):
+   * one JSON value per body, or one message per line. Defaults to JSON.
+   */
+  readonly serialization?: "json" | "ndjson";
 };
 const limitOf = (value: number | undefined, fallback: number, path: string): number => {
   if (value === undefined) return fallback;
@@ -1753,6 +1758,7 @@ ${
             prepared.asynchronous,
             prepared.ranges,
             prepared.layered,
+            options.serialization === "ndjson",
           ),
         ),
       ],

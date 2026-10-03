@@ -55,8 +55,10 @@ export const rpcRuntime = (
   asynchronous = false,
   ranges = false,
   layered = false,
+  ndjson = false,
 ): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
+use axum::response::{Response, IntoResponse};
 use serde_json::{json, Value};
 
 fn success(value: Value) -> Value { json!({"_tag":"Success", "value":value}) }
@@ -69,6 +71,45 @@ fn die(id: &Value, message: String) -> Value {
 }
 fn invalid(message: &str) -> Value {
     json!({"_tag":"Defect", "defect":{"name":"ProtocolError", "message":message}})
+}
+/// The configured RpcSerialization (STREAM-001): \`layerJson\` reads one value, an array being a
+/// batch; \`layerNdjson\` reads one message per complete line.
+const NDJSON: bool = ${ndjson};
+/// The request body's messages, or the answer to a body that has none.
+fn read_body(body: &[u8]) -> Result<(Vec<Value>, bool), Response> {
+    if !NDJSON {
+        return match serde_json::from_slice::<Value>(body) {
+            Ok(Value::Array(batch)) => Ok((batch, true)),
+            Ok(value) => Ok((vec![value], false)),
+            Err(_) => Err(write_body(StatusCode::OK, vec![json!({"_tag":"Defect", "defect":{"name":"SyntaxError", "message":"Invalid JSON"}})])),
+        };
+    }
+    // As RpcSerialization.ndjson: a line that does not parse is skipped, and text after the last
+    // newline waits for more input that never comes.
+    let text = String::from_utf8_lossy(body);
+    let mut messages = Vec::new();
+    let mut rest: &str = &text;
+    while let Some(end) = rest.find('\n') {
+        if let Ok(message) = serde_json::from_str::<Value>(&rest[..end]) { messages.push(message); }
+        rest = &rest[end + 1..];
+    }
+    // The official server answers a body without messages with an empty 500.
+    if messages.is_empty() { return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()); }
+    Ok((messages, true))
+}
+const CONTENT_TYPE: &str = if NDJSON { "application/ndjson" } else { "application/json" };
+/// Responses as the configured serialization writes them: a JSON array, or one line each.
+fn encode_body(responses: Vec<Value>) -> String {
+    if NDJSON { responses.iter().map(|response| format!("{}\n", response)).collect() } else { Value::Array(responses).to_string() }
+}
+fn write_body(status: StatusCode, responses: Vec<Value>) -> Response {
+    let mut response = (status, encode_body(responses)).into_response();
+    response.headers_mut().insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static(CONTENT_TYPE));
+    response
+}
+/// NDJSON hands a line that is not a request object to the server as an unknown request.
+fn unframed(message: &Value) -> Option<Value> {
+    (NDJSON && !message.is_object()).then(|| json!({"_tag":"Defect", "defect":"Unknown request tag: undefined"}))
 }
 fn field<'a>(payload: &'a Value, name: &str) -> Result<&'a Value, String> {
     payload.as_object().and_then(|o| o.get(name)).ok_or_else(|| path_error("Missing key", Some(name)))
@@ -113,25 +154,22 @@ ${
             shutdownForwarder + "    let (sender, response) = tokio::sync::oneshot::channel();",
           )
       : asyncHttpRuntime
-    : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> (StatusCode, Json<Value>) {
-    let messages: Value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => return (StatusCode::OK, Json(json!([{"_tag":"Defect", "defect":{"name":"SyntaxError", "message":"Invalid JSON"}}]))),
-    };
-    let responses = if let Some(batch) = messages.as_array() {
-        if batch.len() > MAX_BATCH { return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!([invalid("Batch limit exceeded")]))); }
+    : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> Response {
+    let (batch, batched) = match read_body(&body) { Ok(messages) => messages, Err(response) => return response };
+    if batched {
+        if batch.len() > MAX_BATCH { return write_body(StatusCode::PAYLOAD_TOO_LARGE, vec![invalid("Batch limit exceeded")]); }
         let mut ids: Vec<&Value> = Vec::with_capacity(batch.len());
-        for message in batch {
+        for message in &batch {
             if let Some(id) = message.get("id") {
                 if ids.iter().any(|prior| same_id(prior, id)) {
-                    return (StatusCode::OK, Json(json!([invalid("Duplicate request id")])));
+                    return write_body(StatusCode::OK, vec![invalid("Duplicate request id")]);
                 }
                 ids.push(id);
             }
         }
-        batch.iter().map(|message| request(message, &headers, &state)).collect::<Vec<_>>()
-    } else { vec![request(&messages, &headers, &state)] };
-    (StatusCode::OK, Json(Value::Array(responses)))
+    }
+    let responses = batch.iter().map(|message| unframed(message).unwrap_or_else(|| request(message, &headers, &state))).collect::<Vec<_>>();
+    write_body(StatusCode::OK, responses)
 }
 `
 }
@@ -244,10 +282,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /** A pending response owns cancellation; its worker is never aborted on body drop. */
 const asyncHttpRuntime = String.raw`
-use axum::response::{Response, IntoResponse};
 use std::{pin::Pin, task::{Context, Poll}, future::Future};
 struct PendingResponse {
-    response: tokio::sync::oneshot::Receiver<Value>,
+    response: tokio::sync::oneshot::Receiver<Vec<Value>>,
     cancellation: Option<tokio::sync::watch::Sender<bool>>,
 }
 impl http_body::Body for PendingResponse {
@@ -259,8 +296,8 @@ impl http_body::Body for PendingResponse {
             Poll::Pending => Poll::Pending,
             Poll::Ready(result) => {
                 self.cancellation.take();
-                let value = result.unwrap_or_else(|_| json!([invalid("Handler worker failed")]));
-                Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(value.to_string())))))
+                let value = result.unwrap_or_else(|_| vec![invalid("Handler worker failed")]);
+                Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(encode_body(value))))))
             }
         }
     }
@@ -271,17 +308,14 @@ impl Drop for PendingResponse {
     }
 }
 async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> Response {
-    let messages: Value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => return (StatusCode::OK, Json(json!([{"_tag":"Defect", "defect":{"name":"SyntaxError", "message":"Invalid JSON"}}]))).into_response(),
-    };
-    if let Some(batch) = messages.as_array() {
-        if batch.len() > MAX_BATCH { return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!([invalid("Batch limit exceeded")]))).into_response(); }
+    let (batch, batched) = match read_body(&body) { Ok(messages) => messages, Err(response) => return response };
+    if batched {
+        if batch.len() > MAX_BATCH { return write_body(StatusCode::PAYLOAD_TOO_LARGE, vec![invalid("Batch limit exceeded")]); }
         let mut ids: Vec<&Value> = Vec::with_capacity(batch.len());
-        for message in batch {
+        for message in &batch {
             if let Some(id) = message.get("id") {
                 if ids.iter().any(|prior| same_id(prior, id)) {
-                    return (StatusCode::OK, Json(json!([invalid("Duplicate request id")]))).into_response();
+                    return write_body(StatusCode::OK, vec![invalid("Duplicate request id")]);
                 }
                 ids.push(id);
             }
@@ -291,18 +325,17 @@ async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes)
     let (sender, response) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let mut responses = Vec::new();
-        if let Some(batch) = messages.as_array() {
-            for message in batch {
-                if *receiver.borrow() || receiver.has_changed().is_err() { break; }
-                responses.push(request(message, &headers, &state, &receiver).await);
+        for message in &batch {
+            if *receiver.borrow() || receiver.has_changed().is_err() { break; }
+            match unframed(message) {
+                Some(defect) => responses.push(defect),
+                None => responses.push(request(message, &headers, &state, &receiver).await),
             }
-        } else {
-            responses.push(request(&messages, &headers, &state, &receiver).await);
         }
-        let _ = sender.send(Value::Array(responses));
+        let _ = sender.send(responses);
     });
     let mut response = Response::new(axum::body::Body::new(PendingResponse { response, cancellation: Some(cancellation) }));
-    response.headers_mut().insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"));
+    response.headers_mut().insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static(CONTENT_TYPE));
     response
 }
 `;
