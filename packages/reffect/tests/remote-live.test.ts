@@ -263,8 +263,17 @@ test(
           const child = yield* ChildProcess.make(
             `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
             ["--port", "0"],
+            { env: { REFFECT_LIVE_TRACE: "1" }, extendEnv: true },
           );
-          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+          const trace: string[] = [];
+          yield* Stream.splitLines(Stream.decodeText(child.stderr)).pipe(
+            Stream.runForEach((record) =>
+              Effect.sync(() => {
+                if (record.startsWith('{"schema":"reffect.live@1"')) trace.push(record);
+              }),
+            ),
+            Effect.forkScoped,
+          );
           const ready = yield* Stream.runHead(
             Stream.splitLines(Stream.decodeText(child.stdout)),
           ).pipe(Effect.timeout("10 seconds"));
@@ -284,6 +293,13 @@ test(
           expect(nativeRun.aLines).toEqual(officialRun.aLines);
           expect(nativeRun.bLines).toEqual(officialRun.bLines);
           expect(nativeRun.answers).toEqual(officialRun.answers);
+          // LR-2: each disconnect unsubscribed natively, as `hub.size` shows officially.
+          expect(trace.map((record) => JSON.parse(record))).toEqual([
+            { schema: "reffect.live@1", event: "subscribed", subscribers: 1 },
+            { schema: "reffect.live@1", event: "subscribed", subscribers: 2 },
+            { schema: "reffect.live@1", event: "unsubscribed", subscribers: 1 },
+            { schema: "reffect.live@1", event: "unsubscribed", subscribers: 0 },
+          ]);
           // A stock RpcClient over NDJSON, under Remote's client layer, decodes the same events.
           const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
             Effect.provide(

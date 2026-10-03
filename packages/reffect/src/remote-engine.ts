@@ -633,7 +633,19 @@ mod remote_engine {
     pub struct Unsubscribe { hub: Option<&'static Hub>, id: u64 }
     impl Drop for Unsubscribe {
         fn drop(&mut self) {
-            if let Some(hub) = self.hub { hub.lock().retain(|subscriber| subscriber.id != self.id); }
+            if let Some(hub) = self.hub {
+                let mut subscribers = hub.lock();
+                subscribers.retain(|subscriber| subscriber.id != self.id);
+                trace("unsubscribed", subscribers.len());
+            }
+        }
+    }
+    /// With REFFECT_LIVE_TRACE set, each subscribe and unsubscribe writes a stderr record with
+    /// the hub's subscriber count, so tests and operators can see subscriptions end (LR-2).
+    fn trace(event: &str, subscribers: usize) {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ENABLED.get_or_init(|| std::env::var_os("REFFECT_LIVE_TRACE").is_some()) {
+            eprintln!("{}", json!({ "schema": "reffect.live@1", "event": event, "subscribers": subscribers }));
         }
     }
     fn live_error(message: String) -> Value { json!({ "_tag": "RemoteLiveError", "message": message }) }
@@ -665,7 +677,10 @@ mod remote_engine {
             let after = payload.get("after").map(number).unwrap_or(f64::NAN);
             let (queue, events) = tokio::sync::mpsc::unbounded_channel();
             let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.lock().push(Arc::new(Subscriber { id, selected, principal, queue, cursor: Mutex::new(after) }));
+            let mut subscribers = self.lock();
+            subscribers.push(Arc::new(Subscriber { id, selected, principal, queue, cursor: Mutex::new(after) }));
+            trace("subscribed", subscribers.len());
+            drop(subscribers);
             Ok(Subscription { events, guard: Unsubscribe { hub: Some(self), id } })
         }
         /// Numbers the change on the subscriber's own cursor; a closed stream drops it.

@@ -1283,8 +1283,8 @@ export const compileServer = (
                 Rs.ok(
                   Rs.verbatimExpr(
                     servedStream
-                      ? // Disconnect closes `out`; cancellation is the server stopping (STREAM-003).
-                        `match ${served.call} { Err(error) => failure(error), Ok(mut subscription) => { let mut cancellation = cancellation.clone(); let ended = loop { if *cancellation.borrow() { break false; } let first = tokio::select! { biased; _ = cancellation.changed() => break false, _ = context.out.closed() => break false, event = subscription.events.recv() => event }; let Some(first) = first else { break true }; let mut values = vec![first]; while let Ok(next) = subscription.events.try_recv() { values.push(next); } if context.out.send(Outgoing::Message(json!({"_tag":"Chunk", "requestId":context.id, "values":values}))).await.is_err() { break false; } }; drop(subscription); if ended { success(Value::Null) } else { interrupted() } } }`
+                      ? // The forwarder stops on disconnect or cancellation; dropping the subscription unsubscribes.
+                        `match ${served.call} { Err(error) => failure(error), Ok(mut subscription) => { let ended = forward_chunks(context.out, context.id, cancellation, &mut subscription.events).await; drop(subscription); if ended { success(Value::Null) } else { interrupted() } } }`
                       : `match Served::from(${served.call}) { Served::Success(value) => success(value), Served::Failure(error) => failure(error), Served::Interrupted => ${runtimeFunctions.length ? "interrupted()" : 'unreachable!("only runtime functions are interrupted")'} }`,
                   ),
                 ),
@@ -1542,11 +1542,11 @@ export const compileServer = (
                 [
                   "let (sink, mut chunks) = tokio::sync::mpsc::channel::<Vec<Value>>(1);",
                   "execution.set_stream_sink(sink);",
-                  "let (out, id) = (context.out, context.id);",
+                  "let (out, id, watch) = (context.out, context.id, cancellation.clone());",
                   // Each future owns its end: when the client goes away the forwarder stops, its
                   // receiver drops, and the producer's next send interrupts it (STREAM-003).
                   `let run = async move { let result = ${compiledCall.text}.await; drop(execution); result };`,
-                  'let forward = async move { while let Some(values) = chunks.recv().await { if out.send(Outgoing::Message(json!({"_tag":"Chunk", "requestId":id, "values":values}))).await.is_err() { break; } } };',
+                  "let forward = async move { forward_chunks(out, id, &watch, &mut chunks).await; };",
                   "let (result, ()) = tokio::join!(run, forward);",
                 ].join(" "),
               ),
