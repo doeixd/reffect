@@ -1,7 +1,7 @@
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Context, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
-import { RpcSerialization, RpcServer } from "effect/rpc";
+import { RpcMiddleware, RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { Entity } from "foldkit-entity";
 import { Mutation, Remote, RemoteRpc } from "foldkit-remote";
@@ -13,6 +13,7 @@ import {
   CompileError,
   LiveHubHost,
   NativeRemote,
+  NativeRpc,
   R,
   Reference,
   RemoteStoreHost,
@@ -20,6 +21,7 @@ import {
 } from "../src/index.ts";
 import type { NativeRemoteMutation } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
+import { memoryRead, memoryTables } from "./fixtures/foldkit-remote-memory.ts";
 
 // LIVE-001..004: R mutations signal upstream's own liveHub in the reference and the native hub
 // port natively; live subscriptions on both servers receive the same Chunk lines.
@@ -158,11 +160,12 @@ const listen = (post: Post, body: string) => {
   })();
   return {
     lines: () => text.split("\n").filter((line) => line.length > 0),
-    // Cancelling the body is the disconnect the official handler observes (STREAM-003).
+    // Cancelling the body is the disconnect the official handler observes (STREAM-003). A
+    // stream that never sent a chunk has no Response to cancel yet, so the wait is bounded.
     close: async () => {
       await reader?.cancel();
       abort.abort();
-      await reading;
+      await Promise.race([reading, pause(500)]);
     },
   };
 };
@@ -294,6 +297,204 @@ test(
           expect(a).not.toContain('"Again"');
           expect(officialRun.answers.at(-2)).toContain("RemoteProtocolError");
           expect(officialRun.answers.at(-1)).toContain('Too many \\"Project\\" ids');
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(0) + 180000,
+);
+
+// LIVE-006: each subscriber is re-authorized under its own principal on every change.
+class CurrentPrincipal extends Context.Service<CurrentPrincipal, bigint>()(
+  "reffect/test/LivePrincipal",
+) {}
+class Authentication extends RpcMiddleware.Service<
+  Authentication,
+  { provides: CurrentPrincipal }
+>()("reffect/test/LiveAuthentication", { error: Schema.Literal("Unauthorized") }) {}
+const Protected = RemoteRpc.middleware(Authentication);
+const auth = NativeRpc.bearer(Authentication, CurrentPrincipal, {
+  credentialsEnv: "REFFECT_LIVE_CREDENTIALS",
+});
+const credentials = [
+  { token: "admin-token", principal: "1" },
+  { token: "member-token", principal: "2" },
+];
+const Touch = Mutation.make("Touch", {
+  Input: { id: Schema.String, fields: Schema.Array(Schema.String) },
+  Output: {},
+});
+const people = Remote.define({
+  entities: [Entity.define("User", Schema.Struct({ id: Schema.String }))],
+  mutations: [Touch],
+});
+const peopleRows = { User: [{ id: "u1", name: "Ada", email: "ada@example.test" }] };
+// Admins read every field; members never see emails.
+const authorizeUser = R.fn([R.U64, R.Array(R.String)], R.Array(R.String), (principal, fields) =>
+  R.Array.filter(fields, (field) =>
+    R.Boolean.or(
+      R.U64.eq(principal, R.U64.literal(1n)),
+      R.Bool.not(R.String.eq(field, R.String.literal("email"))),
+    ),
+  ),
+);
+const touch = NativeRemote.mutation(Touch, ({ input }) =>
+  R.Effect.flatMap(
+    R.LiveHub.changed(
+      { entity: "User", id: R.Struct.get(input, "id") },
+      R.Struct.get(input, "fields"),
+    ),
+    () => R.Effect.succeed(NativeRemote.outcome(Touch).make({ output: R.Struct({}).make({}) })),
+  ),
+);
+const signed = (body: string, token: string | undefined) =>
+  `${JSON.stringify({
+    ...JSON.parse(body),
+    headers: token === undefined ? [] : [["authorization", `Bearer ${token}`]],
+  })}\n`;
+const watchUser = (fields: readonly string[], after: number) =>
+  live([{ entity: "User", id: "u1", fields }], after);
+const touchUser = (fields: readonly string[]) => mutate("Touch", { id: "u1", fields });
+
+/** Two admins and a member subscribe; one member watches only what it may not read. */
+const exerciseAuth = async (post: Post) => {
+  const listeners = [
+    listen(post, signed(watchUser(["name", "email"], 0), "admin-token")),
+    listen(post, signed(watchUser(["email", "name"], 100), "admin-token")),
+    listen(post, signed(watchUser(["name", "email"], 0), "member-token")),
+    listen(post, signed(watchUser(["email"], 0), "member-token")),
+  ];
+  await pause(300);
+  const answers: string[] = [];
+  for (const fields of [["name", "email"], ["email"]]) {
+    answers.push(await (await post(signed(touchUser(fields), "member-token"))).text());
+    await pause(150);
+  }
+  const lines = listeners.map((listener) => listener.lines());
+  for (const listener of listeners) await listener.close();
+  answers.push(await (await post(signed(watchUser(["name"], 0), undefined))).text());
+  return { lines, answers };
+};
+
+const officialAuth = Effect.gen(function* () {
+  const tables = memoryTables(peopleRows);
+  let hub: LiveHub<bigint> | undefined;
+  const server = RemoteServer.make<bigint>({
+    entities: [
+      RemoteServer.entity<bigint>(
+        { name: "User" },
+        {
+          read: memoryRead(tables, "User"),
+          authorize: (principal, fields) =>
+            Effect.runSync(Reference.run(authorizeUser, [principal, fields]).pipe(Effect.orDie)),
+        },
+      ),
+    ],
+    mutations: [
+      RemoteServer.mutation(Touch, ({ input }) =>
+        Reference.run(touch.fn, [input]).pipe(
+          Effect.provideService(LiveHubHost, {
+            changed: (ref, fields) => hub!.changed(ref, fields),
+            deleted: (ref) => hub!.deleted(ref),
+          }),
+          Effect.catch((error) => Effect.die(error)),
+          Effect.as({ output: {} }),
+        ),
+      ),
+    ],
+  });
+  const liveHub = yield* RemoteServer.liveHub([...server.entities.values()]);
+  hub = liveHub;
+  const authentication = Layer.succeed(Authentication, (effect, metadata) => {
+    const header = metadata.headers.authorization;
+    const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+    const credential = credentials.find((c) => c.token === token);
+    if (!credential) return Effect.fail("Unauthorized" as const);
+    return effect.pipe(Effect.provideService(CurrentPrincipal, BigInt(credential.principal)));
+  });
+  // `handlers` binds one principal, so each request binds the middleware's.
+  const handlersFor = (principal: bigint) =>
+    RemoteServer.handlers(server, principal, { live: liveHub });
+  const http = yield* RpcServer.toHttpEffect(Protected, { disableTracing: true }).pipe(
+    Effect.provide([
+      Protected.toLayer({
+        FoldkitRemoteRead: (payload) =>
+          Effect.flatMap(CurrentPrincipal, (p) => handlersFor(p).FoldkitRemoteRead(payload)),
+        FoldkitRemoteQuery: (payload) =>
+          Effect.flatMap(CurrentPrincipal, (p) => handlersFor(p).FoldkitRemoteQuery(payload)),
+        FoldkitRemoteMutate: (payload) =>
+          Effect.flatMap(CurrentPrincipal, (p) => handlersFor(p).FoldkitRemoteMutate(payload)),
+        FoldkitRemoteLive: (payload) =>
+          Stream.unwrap(
+            Effect.map(CurrentPrincipal, (p) => handlersFor(p).FoldkitRemoteLive(payload)),
+          ),
+      }),
+      authentication,
+      RpcSerialization.layerNdjson,
+    ]),
+  );
+  return HttpEffect.toWebHandler(http);
+});
+
+test(
+  "each live subscriber is re-authorized under its own principal, as upstream",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reference = yield* officialAuth;
+          const officialRun = yield* Effect.promise(() =>
+            exerciseAuth((body, signal) =>
+              reference(new Request("http://reffect.test/rpc", { method: "POST", body, signal })),
+            ),
+          );
+
+          const fs = yield* FileSystem.FileSystem;
+          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-live-auth-" });
+          const artifact = yield* NativeRemote.compile(Protected, {
+            domain: people,
+            rows: peopleRows,
+            auth,
+            authorize: { User: authorizeUser },
+            mutations: [touch],
+            live: true,
+            serialization: "ndjson",
+          });
+          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+          yield* CargoApi.fetch(directory);
+          yield* CargoApi.build(directory, "debug");
+          const child = yield* ChildProcess.make(
+            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+            ["--port", "0"],
+            { env: { REFFECT_LIVE_CREDENTIALS: JSON.stringify(credentials) }, extendEnv: true },
+          );
+          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+          const ready = yield* Stream.runHead(
+            Stream.splitLines(Stream.decodeText(child.stdout)),
+          ).pipe(Effect.timeout("10 seconds"));
+          if (!Option.isSome(ready)) throw new Error("Missing ready record");
+          const { address } = Schema.decodeUnknownSync(
+            Schema.Struct({
+              schema: Schema.Literal("reffect.rpc.ready@1"),
+              address: Schema.String,
+            }),
+          )(JSON.parse(ready.value));
+          const nativeRun = yield* Effect.promise(() =>
+            exerciseAuth((body, signal) =>
+              fetch(`http://${address}/rpc`, { method: "POST", body, signal }),
+            ),
+          );
+
+          expect(nativeRun).toEqual(officialRun);
+          const [admin, adminAgain, member, memberEmail] = officialRun.lines.map((lines) =>
+            lines.join("\n"),
+          );
+          expect(admin).toContain('"values":{"name":"Ada","email":"ada@example.test"}');
+          expect(adminAgain).toContain('"cursor":101,');
+          expect(member).toContain('"values":{"name":"Ada"},"changed":["name"]');
+          expect(member).not.toContain("ada@example.test");
+          expect(memberEmail).toBe("");
+          expect(officialRun.answers.at(-1)).toContain("Unauthorized");
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );
