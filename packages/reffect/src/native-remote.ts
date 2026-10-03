@@ -26,6 +26,7 @@ import { planQuery, storageOf } from "./sql-plan.ts";
 import type { BindingLike, SqlDialect, SqlParam, SqlStatement, SqlStorage } from "./sql-plan.ts";
 import { sqlRuntime } from "./sql-runtime.ts";
 import { remoteEngineRuntime } from "./remote-engine.ts";
+import { PortedRuntimes } from "./ported-runtime.ts";
 import { Rs } from "./rust-emit.ts";
 
 /** One entity's rows in their wire shape (`foldkit-remote-server`'s `MemoryRows`). */
@@ -779,6 +780,16 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
       },
       {
         procedures,
+        ported: [
+          ...(group.requests.has(READ) ? [PortedRuntimes.RemoteRead] : []),
+          ...(group.requests.has(MUTATE) ? [PortedRuntimes.RemoteMutate] : []),
+          ...(prepared.backend === "sql"
+            ? [PortedRuntimes.RemoteQuerySql]
+            : group.requests.has(QUERY)
+              ? [PortedRuntimes.RemoteQueryMemory]
+              : []),
+          ...(options.live && group.requests.has(LIVE) ? [PortedRuntimes.LiveHub] : []),
+        ],
         // The engine awaits its source (SQLX-007), so the server is asynchronous.
         asynchronous: true,
         modules: [

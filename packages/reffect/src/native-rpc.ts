@@ -3,6 +3,8 @@ import type { Stream as EffectStream } from "effect";
 import type { StreamFn } from "./stream-ir.ts";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
+import { PortedRuntimes, verifyUpstream } from "./ported-runtime.ts";
+import type { PortedRuntime, UpstreamCheck } from "./ported-runtime.ts";
 import {
   StableStringify,
   jsonDecodedWitness,
@@ -183,6 +185,10 @@ export interface RpcArtifact extends GeneratedFiles {
     readonly id: "rust/axum-unary-json@1";
     readonly crates: readonly string[];
     readonly handlerProfile: "synchronous-scalars" | "suspended-scalars";
+    /** The ported protocol engines this server runs, with their upstream pins (LIVE-010). */
+    readonly ported: readonly PortedRuntime[];
+    /** Whether those pins were checked against the installed packages. */
+    readonly upstream: UpstreamCheck;
     /** Server-lifetime service IDs in launch-tuple order; empty without a layer. */
     readonly services: readonly string[];
     readonly auth:
@@ -916,6 +922,8 @@ export interface RpcRuntime {
     /** The session's `live` signals reach a hub (LIVE-001). */
     readonly live?: boolean;
   };
+  /** The ported engines these procedures run, listed in the artifact and version-checked. */
+  readonly ported?: readonly PortedRuntime[];
   /** Pure R functions compiled into the program, callable as `reffect_generated::r_<name>`. */
   readonly helpers?: { readonly [name: string]: Fn<readonly IRType<unknown>[], unknown> };
   readonly modules: readonly string[];
@@ -1860,6 +1868,8 @@ ${
       ],
       "\n",
     ).text;
+    const ported = Object.freeze([PortedRuntimes.RpcHttp, ...(runtime?.ported ?? [])]);
+    const upstream = yield* verifyUpstream(ported);
     return Object.freeze({
       sourceArtifacts: SourceArtifacts.None,
       failureFrames: core.failureFrames,
@@ -1896,6 +1906,8 @@ ${
           ),
         ),
         handlerProfile: prepared.asynchronous ? "suspended-scalars" : "synchronous-scalars",
+        ported,
+        upstream,
         services: Object.freeze(prepared.services),
         auth: prepared.auth
           ? Object.freeze({

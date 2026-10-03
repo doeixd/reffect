@@ -193,3 +193,5 @@ export { StreamIR } from "./stream-ir.ts";
 export type { StreamFn } from "./stream-ir.ts";
 export { StreamSinkHost } from "./stream-host.ts";
 export type { StreamSinkApi } from "./stream-host.ts";
+export { PortedRuntimes, verifyUpstream } from "./ported-runtime.ts";
+export type { PortedRuntime, UpstreamCheck, UpstreamPin } from "./ported-runtime.ts";
