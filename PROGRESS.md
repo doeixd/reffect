@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-10-03 — Milestone 4 acceptance for Read and Query
+
+- [remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts) runs the stock Foldkit Remote client flow (`Data.prefetch`, `projection.read`, `Data.more`) twice:
+  - once against upstream's own `RemoteServer.memory(...).layer`, entirely official code;
+  - once through `Remote.clientLayer` over an ordinary Effect RPC HTTP client to the native server.
+
+  It covers an entity with a relation, an absent id, a paged to-many relation, a query read forward over three pages and backward. The resulting projections are strictly equal.
+
+- A native engine that ignores `first` makes the test fail. `foldkit-surface` 0.6.0 is now an exact devDependency (it was only transitive).
+- **Upstream finding:** `RemoteRpcClient` admits only Remote's errors, so a stock Effect RPC client (which adds `RpcClientError`) needs a small transport adapter (`catchTag("RpcClientError", die)`). Upstream examples avoid it with hand-written transports. Remote could accept, or document mapping, transport errors.
+
 ## 2026-10-02 — Native Remote Query
 
 - Recorded the [Query design](docs/research/native-remote.md#query-design-step-3-accepted-2026-10-02) (NR-014–017). `NativeRemote.compile(group, { domain, rows })` now takes the same `Remote.define`/`Remote.make` descriptor as `RemoteServer.memory`, and refuses body-less queries as `memory` does.
