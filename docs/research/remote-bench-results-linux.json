@@ -1,0 +1,69 @@
+{
+  "checked": "2026-10-03",
+  "target": "linux/x64",
+  "node": "v22.22.2",
+  "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "effect": "4.0.0",
+  "foldkitRemoteServer": "0.10.0",
+  "setup": {
+    "rows": {
+      "User": 500,
+      "Project": 5000
+    },
+    "requests": 4000,
+    "concurrency": 32,
+    "warmup": 300,
+    "client": "oha 1.16.0, same machine"
+  },
+  "peakServerMemoryMiB": {
+    "native": 15.4,
+    "official": 334.6
+  },
+  "results": {
+    "read-one": {
+      "responseBytes": 235,
+      "native": {
+        "requestsPerSecond": 14175,
+        "p50ms": 2.267,
+        "p95ms": 2.392,
+        "p99ms": 2.575
+      },
+      "official": {
+        "requestsPerSecond": 2545,
+        "p50ms": 11.467,
+        "p95ms": 15.687,
+        "p99ms": 20.22
+      }
+    },
+    "read-batch-50": {
+      "responseBytes": 8244,
+      "native": {
+        "requestsPerSecond": 1225,
+        "p50ms": 26.861,
+        "p95ms": 28.445,
+        "p99ms": 29.392
+      },
+      "official": {
+        "requestsPerSecond": 1032,
+        "p50ms": 29.85,
+        "p95ms": 36.523,
+        "p99ms": 66.705
+      }
+    },
+    "query-page-20": {
+      "responseBytes": 4166,
+      "native": {
+        "requestsPerSecond": 1438,
+        "p50ms": 22.799,
+        "p95ms": 23.754,
+        "p99ms": 25.432
+      },
+      "official": {
+        "requestsPerSecond": 743,
+        "p50ms": 42.021,
+        "p95ms": 48.825,
+        "p99ms": 56.582
+      }
+    }
+  }
+}

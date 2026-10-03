@@ -30,6 +30,26 @@ Status: **measured 2026-10-03** on win32/x64 (Node 24.21 under `vp exec`, rustc 
 
 **HTTP numbers are client-bound and must not be read as server throughput.** On this machine every Node `fetch` costs at least about 15.6 ms, which is the Windows timer tick. Sequential latency is 15.4 ms for every workload against _both_ servers. In-process engine time is well under 1 ms. The HTTP table shows native is never slower end to end, but how fast each server really is needs a native load generator (for example `oha`) or a Linux host.
 
+## Linux with a native load generator (BENCH-003)
+
+Measured 2026-10-03 on WSL2 Ubuntu (linux/x64, glibc allocator), Node 22.22.2, rustc 1.99.0, the same data and workloads, with [oha](https://github.com/hatoo/oha) 1.16.0 as the client (32 connections, 300 warm-up and 4,000 measured requests) and peak resident memory from `VmHWM`. The native server includes the writable store (one `RwLock`, version-keyed query cells). [Raw results](remote-bench-results-linux.json).
+
+| Measure                       | Native                      | Official                |
+| ----------------------------- | --------------------------- | ----------------------- |
+| Peak server memory (resident) | **15.4 MiB**                | 334.6 MiB               |
+| read-one (req/s; p50, p99)    | **14,175**; 2.3 ms, 2.6 ms  | 2,545; 11.5 ms, 20.2 ms |
+| read-batch-50                 | 1,225; 26.9 ms, 29.4 ms     | 1,032; 29.9 ms, 66.7 ms |
+| query-page-20                 | **1,438**; 22.8 ms, 25.4 ms | 743; 42.0 ms, 56.6 ms   |
+
+Reading these numbers:
+
+- The client is no longer the bottleneck, so these are server numbers. Both servers use one core (`current_thread` Tokio, one Node event loop).
+- Small requests are dominated by protocol overhead, where native is about 5.6× faster with much tighter tails.
+- The batch read is dominated by engine work and response building (about 0.8 ms per request natively). Native is only about 1.2× faster here, with a far better p99. This is the allocation cost found in-process, and BENCH-002 still applies to it.
+- Query is about 1.9× faster, helped by the cached cells.
+- The memory result holds on Linux: about 22× less resident memory.
+- Not measured: Linux with mimalloc, so BENCH-001 is unchanged. Multi-core scaling is also unmeasured.
+
 ## Findings and changes
 
 1. **Query rebuilt every row's evaluator cells per request** (5,000 rows, UTF-16 re-encoding). Each query definition now caches its cells; query throughput over HTTP went from 103 to 400 req/s. The cache is keyed by the store version, so writes invalidate it (RS-005).

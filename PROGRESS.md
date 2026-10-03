@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-10-03 — Linux measurements and the writable store
+
+- **Linux benchmark** ([remote-bench.md](docs/research/remote-bench.md#linux-with-a-native-load-generator-bench-003), oha 1.16.0 as the client, glibc):
+  - Native uses 15.4 MiB resident memory against 334.6 MiB for the official server.
+  - read-one: 14,175 versus 2,545 req/s.
+  - read-batch-50: 1,225 versus 1,032 req/s; engine allocation dominates, as recorded under BENCH-002.
+  - query-page-20: 1,438 versus 743 req/s.
+  - The bench now retries its pre-timing equality check once, because oha leaves fetch's pooled socket past the server's keep-alive.
+- **Store phase A** ([remote-mutations.md](docs/research/remote-mutations.md#store-progress)):
+  - The memory tables are one writable store behind an `RwLock`, with a version counter.
+  - Rows are shared `Arc<JsObject>` values.
+  - `get`/`write`/`remove` follow upstream `MemoryStore`.
+  - Query cells are cached per store version.
+  - Remote read, query and acceptance pass (6/6).
+- **Design:** mutations use typed, wire-shaped values (RM-006, RS-001/RM-001 refined), because upstream `Remote.patch` takes `Partial<Struct.Encoded<F>>`. The next step is `R.Schema.encodeSync(R.Schema.toCodecJson(witness))`, built on NativeRpc's verified encoders.
+
 ## 2026-10-03 — First native versus official Remote measurements
 
 - Added a benchmark ([remote-bench.md](docs/research/remote-bench.md)): both servers in separate processes, the same workloads, and answers checked equal first. **Peak memory: native 20 MiB versus official about 270 MiB.**

@@ -190,9 +190,12 @@ const results: Record<string, Record<string, unknown>> = {};
 for (const workload of workloads) {
   // Same answer from both servers before timing either.
   const answers = await Promise.all(
-    servers.map(async (server) =>
-      (await fetch(server.url, { method: "POST", body: workload.body })).text(),
-    ),
+    servers.map(async (server) => {
+      const ask = async () =>
+        (await fetch(server.url, { method: "POST", body: workload.body })).text();
+      // With oha doing the load, fetch's pooled socket can outlive the server's 5 s keep-alive.
+      return ask().catch(ask);
+    }),
   );
   if (JSON.stringify(JSON.parse(answers[0])) !== JSON.stringify(JSON.parse(answers[1])))
     throw new Error(`${workload.name}: servers disagree`);
@@ -220,7 +223,7 @@ const record = {
     concurrency: CONCURRENCY,
     warmup: WARMUP,
     client: OHA
-      ? `oha ${execFileSync(OHA, ["--version"]).toString().trim()}, same machine`
+      ? `${execFileSync(OHA, ["--version"]).toString().trim()}, same machine`
       : `node fetch (keep-alive) in ${WORKERS} worker threads, same machine`,
   },
   peakServerMemoryMiB: memory,
