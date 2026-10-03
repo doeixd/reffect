@@ -8,6 +8,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
+**[SSR with Remote data](research/ssr-data.md)** is the milestone 9 plan: upstream prefetch and snapshot resume, native projections in R views, async pages, and the decision to take milestone 9 before 8B.
+
 **[Open work](open-work.md)** registers everything still to be done — deferred slices, open questions, refusals expected to widen, owed measurements and future milestones — each linked to the record that owns it.
 
 The roadmap governs current sequencing and the active frontier. The [design revision overview](op-expr-revision-convo.md) explains historical changes; use it as architecture background, not a prerequisite archaeology exercise.

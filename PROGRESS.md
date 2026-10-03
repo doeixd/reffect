@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-10-03 — Milestone 9 plan; milestone 9 before 8B
+
+- [ssr-data.md](docs/research/ssr-data.md) records upstream's SSR data path in foldkit-remote 0.11.0: `Data.prefetch` through a `RemoteClient`, then a `RemotePersistence` snapshot (`snapshotOf`/`dehydrate`/`hydrate`/`mergeStores`, cache version 5).
+- **Plan M9-1..5:**
+  1. pages that read the request, with Flags;
+  2. a native snapshot;
+  3. R projections and async pages;
+  4. `todo-remote`'s first screen;
+  5. the showcase.
+- **Decision.** By user decision, milestone 9 is taken before 8B.
+
 ## 2026-10-03 — Milestone 8A step 5: native page serving
 
 - **Change.** NativeRpc's `pages` option serves an R page beside `/rpc`, as foldkit's `handleRequest` does. The template is split at build time by upstream `injectIntoTemplate`. Host rules are ported to Rust, with WHATWG paths via `url` 2.5.8.
