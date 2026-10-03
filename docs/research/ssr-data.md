@@ -24,6 +24,14 @@ The user agreed to take milestone 9 before 8B.
    - `pages.render` takes the request URL.
    - Flags are encoded into the hydratable render as upstream does: a `<script type="application/json" data-foldkit-flags>` payload with `<` escaped. The Flags round trip runs before `init`.
    - Differential against `renderToString` with Flags and `handleRequest`.
+
+   **Delivered 2026-10-03.**
+   - `pages.render` may take the request URL: its target resolved against `pages.origin` (default `http://localhost`, never the Host header) as WHATWG does.
+   - `R.Html.renderToString(document, { flags })` appends upstream's payload. It is `JSON.stringify` of `Schema.encodeSync(toCodecJson(F))`, written by a JS-exact JSON writer (serde string escaping, `ryu-js` numbers), with `<` turned into `<`.
+   - Flags witnesses holding Numbers are refused while compiling: upstream hands `init` the decoded round trip, which turns `-0` into `0`. Without Numbers the round trip is the identity.
+   - [html-flags.test.ts](../../packages/reffect/tests/html-flags.test.ts) compares five targets with `handleRequest` around upstream `renderToString`, using the same Flags schema, `init` and R view. Bodies and statuses are equal, including dot segments, encoded queries and non-ASCII paths.
+   - **Divergence.** A raw non-ASCII byte in the request target is refused by Hyper (400) before the page; browsers percent-encode.
+
 2. **Native snapshot (M9-2).**
    - A ported `snapshotOf` + `dehydrate` over the engine's store.
    - Byte-compared with upstream on stores the engine produces, and pinned to foldkit-remote (LIVE-010).

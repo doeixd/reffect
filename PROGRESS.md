@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-03 — M9-1: pages read the request and carry Flags
+
+- **Change.** Native pages may read their request URL, resolved against a configured origin. `R.Html.renderToString` takes Flags and writes upstream's payload with a JS-exact JSON writer. Flags holding Numbers are refused.
+- **Validation.**
+  - `vp test tests/html-flags.test.ts` passed: five targets equal `handleRequest` around upstream `renderToString` with the same Flags, `init` and view.
+  - `html-page`, `html-native`, `html` and `number-text` pass.
+  - `vp check` is clean.
+- **Divergence.** Hyper refuses raw non-ASCII bytes in request targets; this is recorded in native divergences.
+- **Next:** M9-2, a native snapshot (`snapshotOf`/`dehydrate`).
+
 ## 2026-10-03 — Fallible tasks and lexical coordination preparation
 
 - Implemented common Bool/U64/Unit failures for static All/Race, ordered bounded Cause propagation, cancellation-aware recovery and Cause-preserving framed reference execution. The CLI reconstructs compound exits; NativeRpc explicitly refuses the new failure profile pending protocol conformance. Scalar values and legacy infallible artifacts keep their existing representation.
