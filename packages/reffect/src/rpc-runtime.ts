@@ -114,8 +114,15 @@ fn unframed(message: &Value) -> Option<Value> {
 fn field<'a>(payload: &'a Value, name: &str) -> Result<&'a Value, String> {
     payload.as_object().and_then(|o| o.get(name)).ok_or_else(|| path_error("Missing key", Some(name)))
 }
-${decodeArgs(ranges)}struct RequestContext<'a> { id: &'a Value, tag: &'a str, principal: Option<u64> }
-${asynchronous ? "async " : ""}fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState${asynchronous ? ", cancellation: &tokio::sync::watch::Receiver<bool>" : ""}) -> Value {
+${decodeArgs(ranges)}${
+  asynchronous
+    ? String.raw`/// What a body's worker sends: each message as it is ready, then Done (STREAM-002).
+enum Outgoing { Message(Value), Done }
+type Out = tokio::sync::mpsc::Sender<Outgoing>;
+struct RequestContext<'a> { id: &'a Value, tag: &'a str, principal: Option<u64>, out: &'a Out }`
+    : "struct RequestContext<'a> { id: &'a Value, tag: &'a str, principal: Option<u64> }"
+}
+${asynchronous ? "async " : ""}fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState${asynchronous ? ", cancellation: &tokio::sync::watch::Receiver<bool>, out: &Out" : ""}) -> Value {
     let Some(object) = message.as_object() else { return invalid("Expected Request object") };
     let Some(id) = object.get("id").filter(|v| v.is_string() || v.is_number()) else { return invalid("Invalid request id") };
     let Some(tag) = object.get("tag").and_then(Value::as_str) else { return invalid("Invalid request tag") };
@@ -133,7 +140,7 @@ ${asynchronous ? "async " : ""}fn request(message: &Value, headers: &HeaderMap, 
     if object.get("sampled").map(|v| !v.is_boolean()).unwrap_or(false) { return invalid("Invalid trace context") }
     // TLS cleanup applies to synchronous calls; suspended handlers own their diagnostic state.
     ${frameCleanup?.text ?? ""}
-    let mut context = RequestContext { id, tag, principal: None };
+    let mut context = RequestContext { id, tag, principal: None${asynchronous ? ", out" : ""} };
     let result = dispatch(tag, payload, headers, message, state, &mut context${asynchronous ? ", cancellation).await" : ")"};
     ${frameCleanup?.text ?? ""}
     match result { Ok(value) => exit(id, value), Err(error) => die(id, error) }
@@ -150,8 +157,9 @@ ${
             "cancellation: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,",
           )
           .replace(
-            "    let (sender, response) = tokio::sync::oneshot::channel();",
-            shutdownForwarder + "    let (sender, response) = tokio::sync::oneshot::channel();",
+            "    // The official server buffers 16 messages between its handlers and the body (STREAM-002).",
+            shutdownForwarder +
+              "    // The official server buffers 16 messages between its handlers and the body (STREAM-002).",
           )
       : asyncHttpRuntime
     : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -282,9 +290,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /** A pending response owns cancellation; its worker is never aborted on body drop. */
 const asyncHttpRuntime = String.raw`
-use std::{pin::Pin, task::{Context, Poll}, future::Future};
+use std::{pin::Pin, task::{Context, Poll}};
+/// The response body: NDJSON forwards each message as it arrives; JSON writes the array once the
+/// worker is done. Dropping it cancels the worker's requests (STREAM-003).
 struct PendingResponse {
-    response: tokio::sync::oneshot::Receiver<Vec<Value>>,
+    lines: tokio::sync::mpsc::Receiver<Outgoing>,
+    buffered: Vec<Value>,
     cancellation: Option<tokio::sync::watch::Sender<bool>>,
 }
 impl http_body::Body for PendingResponse {
@@ -292,12 +303,23 @@ impl http_body::Body for PendingResponse {
     type Error = std::convert::Infallible;
     fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
         if self.cancellation.is_none() { return Poll::Ready(None); }
-        match Pin::new(&mut self.response).poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(result) => {
-                self.cancellation.take();
-                let value = result.unwrap_or_else(|_| vec![invalid("Handler worker failed")]);
-                Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(encode_body(value))))))
+        loop {
+            match self.lines.poll_recv(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Outgoing::Message(value))) => {
+                    if NDJSON { return Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(format!("{}\n", value)))))); }
+                    self.buffered.push(value);
+                }
+                Poll::Ready(done) => {
+                    self.cancellation.take();
+                    // A worker that stops before Done failed.
+                    let finished = matches!(done, Some(Outgoing::Done));
+                    if NDJSON {
+                        return if finished { Poll::Ready(None) } else { Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(encode_body(vec![invalid("Handler worker failed")])))))) };
+                    }
+                    let values = if finished { std::mem::take(&mut self.buffered) } else { vec![invalid("Handler worker failed")] };
+                    return Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(encode_body(values))))));
+                }
             }
         }
     }
@@ -322,19 +344,20 @@ async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes)
         }
     }
     let (cancellation, receiver) = tokio::sync::watch::channel(false);
-    let (sender, response) = tokio::sync::oneshot::channel();
+    // The official server buffers 16 messages between its handlers and the body (STREAM-002).
+    let (out, lines) = tokio::sync::mpsc::channel::<Outgoing>(16);
     tokio::spawn(async move {
-        let mut responses = Vec::new();
         for message in &batch {
             if *receiver.borrow() || receiver.has_changed().is_err() { break; }
-            match unframed(message) {
-                Some(defect) => responses.push(defect),
-                None => responses.push(request(message, &headers, &state, &receiver).await),
-            }
+            let response = match unframed(message) {
+                Some(defect) => defect,
+                None => request(message, &headers, &state, &receiver, &out).await,
+            };
+            if out.send(Outgoing::Message(response)).await.is_err() { return; }
         }
-        let _ = sender.send(responses);
+        let _ = out.send(Outgoing::Done).await;
     });
-    let mut response = Response::new(axum::body::Body::new(PendingResponse { response, cancellation: Some(cancellation) }));
+    let mut response = Response::new(axum::body::Body::new(PendingResponse { lines, buffered: Vec::new(), cancellation: Some(cancellation) }));
     response.headers_mut().insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static(CONTENT_TYPE));
     response
 }
