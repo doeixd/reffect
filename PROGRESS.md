@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Milestone 5 step 4: SQL mutations in one transaction each
+
+- The Remote store is now a per-mutation session: an `Arc<dyn RemoteStore>` with async operations, plus `finish`/`failure`. The host commits it on success and rolls it back on failure or interruption.
+  - A store failure aborts like a defect: R cannot catch it, finalizers run, and the answer is `Database query failed`.
+  - Memory sessions apply at once, as upstream's memory backend does. SQL sessions are `BEGIN IMMEDIATE` transactions doing update-then-insert of the given columns.
+- Found while testing: an upsert cannot partially update a row with NOT NULL columns in SQLite (NOT NULL is checked before `ON CONFLICT`). SQLX-006 is revised to update-then-insert.
+- [remote-sql-mutate.test.ts](packages/reffect/tests/remote-sql-mutate.test.ts) passes: 17 stateful steps against the reference running the same R sources in a SQLite transaction, including both kinds of rollback. Details are in [sqlx-remote.md](docs/research/sqlx-remote.md#order-of-work).
+
 ## 2026-10-03 — Milestone 5 step 3: Remote Read and Query over SQLite with SQLx
 
 - `NativeRemote` gains an `sql` backend: `foldkit-remote-drizzle` bindings plus a database-URL environment variable. It is served by a SQLx 0.9.0 / bundled SQLite 3.51.3 source ([sql-runtime.ts](packages/reffect/src/sql-runtime.ts)).

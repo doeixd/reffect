@@ -229,17 +229,17 @@ const mutation = <M extends MutationLike>(
   const result = outcome(definition);
   let readsPrincipal = false;
   const body = (value: Expr<WireValue<M["Input"]>>, principal: Expr<bigint>) => {
-    const succeeded = EffectIR.map(
-      build({
-        input: value,
-        get principal() {
-          readsPrincipal = true;
-          return principal;
-        },
-      }),
-      encode(result),
-    );
-    // A source that cannot fail has nothing to encode on its error channel.
+    const built = build({
+      input: value,
+      get principal() {
+        readsPrincipal = true;
+        return principal;
+      },
+    });
+    // A source that cannot succeed, or cannot fail, has nothing to encode on that channel.
+    const succeeded = IRType.same(built.output, NeverType)
+      ? built
+      : EffectIR.map(built, encode(result));
     return IRType.same(succeeded.error, NeverType)
       ? succeeded
       : mapError(succeeded, encode(RemoteServerError));
@@ -544,11 +544,6 @@ const compile = <Rpcs extends Rpc.Any>(
           const sql = options.sql;
           if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(sql.databaseUrlEnv))
             throw unsupported("sql.databaseUrlEnv", "Name an uppercase environment variable");
-          if (mutations.length)
-            throw unsupported(
-              "mutations",
-              "Mutations over SQL arrive with transactions (SQLX-006)",
-            );
           const storages = new Map<string, SqlStorage>();
           for (const [entity, binding] of Object.entries(sql.bindings)) {
             if (!options.domain.registry.entities.has(entity) || binding.name !== entity)
@@ -578,6 +573,16 @@ const compile = <Rpcs extends Rpc.Any>(
             backend: "sql" as const,
             source: "&REMOTE_SQL",
             server: sqlServer(Array.from(storages.values()), plans, sql.databaseUrlEnv),
+            store: {
+              begin:
+                "REMOTE_SQL.begin().await.map(|session| std::sync::Arc::new(session) as std::sync::Arc<dyn reffect_generated::RemoteStore>)",
+              impl: `impl reffect_generated::RemoteStore for remote_sql::Session {
+    fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::write(self, entity, id, values)) }
+    fn remove<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::remove(self, entity, id)) }
+    fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(remote_sql::Session::finish(self, commit)) }
+    fn failure(&self) -> Option<String> { remote_sql::Session::failure(self) }
+}`,
+            },
             mutations,
             authorize,
           };
@@ -625,6 +630,24 @@ ${embedded.rust || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, PartialE
           backend: "memory" as const,
           source: "remote_memory()",
           server,
+          // The memory backend is not transactional, as upstream's is not: writes apply at once.
+          store: {
+            begin:
+              "Ok::<std::sync::Arc<dyn reffect_generated::RemoteStore>, String>(std::sync::Arc::new(MemorySession(remote_memory())))",
+            impl: `struct MemorySession(&'static remote_engine::Memory);
+impl reffect_generated::RemoteStore for MemorySession {
+    fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> reffect_generated::StoreFuture<'a> {
+        if let serde_json::Value::Object(values) = values { self.0.write(entity, id, values.into_iter().collect()); }
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn remove<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::StoreFuture<'a> {
+        self.0.remove(entity, id);
+        Box::pin(std::future::ready(Ok(())))
+    }
+    fn finish(&self, _commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(std::future::ready(Ok(()))) }
+    fn failure(&self) -> Option<String> { None }
+}`,
+          },
           mutations,
           authorize,
         };
@@ -650,6 +673,7 @@ ${arms}        _ => return Served::Failure(remote_engine::mutation_error(format!
         RuntimeCall::Success(outcome) => Served::Success(remote_engine::mutation_result(outcome)),
         RuntimeCall::Failure(error) => Served::Failure(remote_engine::mutation_error(error.get("message").and_then(serde_json::Value::as_str).unwrap_or_default().to_string())),
         RuntimeCall::Interrupted => Served::Interrupted,
+        RuntimeCall::StoreFailed(message) => Served::Failure(remote_engine::mutation_error(message)),
     }
 }`;
     // Each entity's authorize for the request's principal; others permit every requested field.
@@ -705,16 +729,7 @@ ${prepared.authorize
             { fn: source.fn, input: source.input, principal: source.principal },
           ]),
         ),
-        store: {
-          expr: prepared.source,
-          impl: `impl reffect_generated::RemoteStore for remote_engine::Memory {
-    fn write(&self, entity: &str, id: &str, values: serde_json::Value) {
-        let serde_json::Value::Object(values) = values else { return };
-        remote_engine::Memory::write(self, entity, id, values.into_iter().collect());
-    }
-    fn remove(&self, entity: &str, id: &str) { remote_engine::Memory::remove(self, entity, id) }
-}`,
-        },
+        store: prepared.store,
         dependencies: [
           'ryu-js = { version = "=1.0.3", default-features = false }\n',
           ...(prepared.backend === "sql"

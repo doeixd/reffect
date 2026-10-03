@@ -2267,14 +2267,18 @@ export const emitFunctions = (
                 : "Err(error)",
               " }",
             ]),
-          // Synchronous store operations: no suspension point, so they cannot be interrupted.
+          // A store operation awaits its session; a failure aborts through the interruption path.
           RemoteStore: (n) =>
             joinFragments([
-              `{ ctx.remote_store().${n.op === "Write" ? "write" : "remove"}(${Rs.stringLiteral(n.entity).text}, &(`,
+              "{ match ctx.remote_store(",
+              ...(n.values ? ["Some(", renderBlock(n.values), ")"] : ["None"]),
+              `, ${Rs.stringLiteral(n.entity).text}, &(`,
               renderBlock(n.id),
-              ")",
-              ...(n.values ? [", ", renderBlock(n.values)] : []),
-              "); Ok(()) }",
+              ")).await { Ok(()) => Ok(()), ",
+              captureFrames
+                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
+                : "Err(error) => Err(error)",
+              " } }",
             ]),
           Repeat: (n) =>
             joinFragments([

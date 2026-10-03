@@ -171,6 +171,107 @@ mod remote_sql {
         FAILED.to_string()
     }
 
+    /// One mutation's transaction (SQLX-006): BEGIN IMMEDIATE, upserts of exactly the given
+    /// columns, deletes by id, then commit or roll back. A failed statement records its reason.
+    pub struct Session {
+        entities: &'static [Entity],
+        tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, sqlx::Sqlite>>>,
+        failure: std::sync::Mutex<Option<String>>,
+    }
+    impl Sql {
+        pub async fn begin(&'static self) -> Result<Session, String> {
+            let tx = self.pool()?.begin_with("BEGIN IMMEDIATE").await.map_err(failed)?;
+            Ok(Session { entities: self.entities, tx: tokio::sync::Mutex::new(Some(tx)), failure: std::sync::Mutex::new(None) })
+        }
+    }
+    impl Session {
+        fn fail(&self, message: String) -> String {
+            *self.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message.clone());
+            message
+        }
+        pub fn failure(&self) -> Option<String> { self.failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone() }
+        fn entity(&self, name: &str) -> Result<&'static Entity, String> {
+            self.entities.iter().find(|entity| entity.name == name).ok_or_else(|| {
+                eprintln!("[reffect] the store has no table for {}", name);
+                FAILED.to_string()
+            })
+        }
+        /// Runs one statement in the transaction; the rows it changed.
+        async fn run(&self, query: Query1<'_>) -> Result<u64, String> {
+            let mut guard = self.tx.lock().await;
+            let Some(tx) = guard.as_mut() else { return Err(FAILED.to_string()) };
+            query.execute(&mut **tx).await.map(|done| done.rows_affected()).map_err(failed)
+        }
+        /// MemoryStore.write per column: the row becomes { ...existing, id, ...values }.
+        pub async fn write(&self, entity: &str, id: &str, values: Value) -> Result<(), String> {
+            let result = self.write_now(entity, id, values).await;
+            result.map_err(|message| self.fail(message))
+        }
+        async fn write_now(&self, entity: &str, id: &str, values: Value) -> Result<(), String> {
+            let entity = self.entity(entity)?;
+            let Value::Object(values) = values else { return Err(FAILED.to_string()) };
+            let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+            let mut columns: Vec<String> = Vec::new();
+            let mut bound: Vec<Value> = Vec::new();
+            for (field, value) in values {
+                if field == "id" { continue; }
+                if let Some(column) = entity.columns.iter().find(|column| column.field == field) {
+                    columns.push(quote(column.column));
+                    bound.push(value);
+                } else if let Some(one) = entity.relations.iter().find(|one| one.field == field) {
+                    // A ref Target:id stores the target's id in the foreign key.
+                    let key = match &value {
+                        Value::Null => Value::Null,
+                        Value::String(reference) => match reference.split_once(':') {
+                            Some((target, key)) if target == one.target => Value::String(key.to_string()),
+                            _ => { eprintln!("[reffect] {} is not a {} ref", reference, one.target); return Err(FAILED.to_string()) }
+                        },
+                        _ => return Err(FAILED.to_string()),
+                    };
+                    columns.push(quote(one.column));
+                    bound.push(key);
+                } else {
+                    eprintln!("[reffect] {} has no column for {}", entity.name, field);
+                    return Err(FAILED.to_string());
+                }
+            }
+            // { ...existing, id, ...values }: an existing row takes only the given columns. An upsert
+            // cannot do this, because SQLite checks NOT NULL on the inserted row before ON CONFLICT.
+            // Identifiers come from build-time storage; every value is bound.
+            let table = quote(entity.table);
+            let update = if columns.is_empty() {
+                format!("UPDATE {} SET {} = {} WHERE {} = ?1", table, quote(entity.id), quote(entity.id), quote(entity.id))
+            } else {
+                let sets: Vec<String> = columns.iter().enumerate().map(|(i, column)| format!("{} = ?{}", column, i + 2)).collect();
+                format!("UPDATE {} SET {} WHERE {} = ?1", table, sets.join(", "), quote(entity.id))
+            };
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(id.to_string());
+            for value in &bound { query = bind_json(query, Some(value)); }
+            if self.run(query).await? > 0 { return Ok(()); }
+            // A new row goes in with exactly the given columns; a missing NOT NULL column fails.
+            let names: Vec<String> = std::iter::once(quote(entity.id)).chain(columns.iter().cloned()).collect();
+            let placeholders: Vec<String> = (1..=names.len()).map(|i| format!("?{}", i)).collect();
+            let insert = format!("INSERT INTO {} ({}) VALUES ({})", table, names.join(", "), placeholders.join(", "));
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(insert)).bind(id.to_string());
+            for value in &bound { query = bind_json(query, Some(value)); }
+            self.run(query).await.map(|_| ())
+        }
+        /// MemoryStore.remove: deleting an absent row changes nothing.
+        pub async fn remove(&self, entity: &str, id: &str) -> Result<(), String> {
+            let result = async {
+                let entity = self.entity(entity)?;
+                let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+                let sql = format!("DELETE FROM {} WHERE {} = ?1", quote(entity.table), quote(entity.id));
+                self.run(sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id.to_string())).await.map(|_| ())
+            }.await;
+            result.map_err(|message| self.fail(message))
+        }
+        pub async fn finish(&self, commit: bool) -> Result<(), String> {
+            let Some(tx) = self.tx.lock().await.take() else { return Ok(()) };
+            if commit { tx.commit().await.map_err(failed) } else { tx.rollback().await.map_err(failed) }
+        }
+    }
+
     impl Source for Sql {
         fn has_source(&self, entity: &str) -> bool { self.entity(entity).is_some() }
         fn declares(&self, entity: &str, field: &str) -> bool {

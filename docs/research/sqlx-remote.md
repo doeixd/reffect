@@ -69,7 +69,7 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
   - **Nullable sort columns are refused** while compiling. Upstream's keyset predicate is wrong for them on SQLite, so admitting them would copy a bug.
   - `select` reads through the read path, as before.
 - **SQLX-006 — writes and transactions.**
-  - `R.RemoteStore.write(entity, id, values)` becomes an upsert of exactly the given columns: `INSERT INTO t (id, …) VALUES (…) ON CONFLICT (id) DO UPDATE SET c = excluded.c`. This matches `{ ...existing, id, ...values }` per column.
+  - `R.RemoteStore.write(entity, id, values)` writes exactly the given columns: `UPDATE t SET … WHERE id = ?`, then `INSERT (id, …)` only if no row was updated. This matches `{ ...existing, id, ...values }` per column. _Revised 2026-10-03:_ the first design was an upsert (`INSERT … ON CONFLICT DO UPDATE`), but SQLite checks NOT NULL on the inserted row before `ON CONFLICT`, so an upsert cannot update some columns of an existing row with other NOT NULL columns. Both the native server and the oracle failed the same way, and the test's path assertions caught it.
   - A ref value `Entity:id` becomes its foreign key.
   - A missing NOT NULL column on insert fails as `RemoteServerError`.
   - `remove` becomes `DELETE … WHERE id = ?`.
@@ -122,7 +122,23 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
      - Reads: a relation through its foreign key, a mixed-order batch with a missing id, nulls, undeclared fields, the id field, a singular-relation window, an unknown entity.
      - Queries: default, first, after, last, before, a cursor outside the query, a gone cursor, first plus last, first 0, a fractional size, `select` through the owner, ASCII-folded and wildcard-escaped searches, wrong input, an unknown query.
    - **Not yet:** writes (step 4), Postgres (step 5), `many`/`manyToMany`/computed relations, and numeric ids or foreign keys.
-4. Writes and transactions through mutation sources; stock-client acceptance over SQL.
+4. **Done (2026-10-03):** writes and transactions through mutation sources.
+   - **Store sessions.** The generated `RemoteStore` trait is one mutation's _session_, shared as an `Arc` with structured-concurrency children. It has async `write`/`remove`, `finish(commit)` and `failure()`. A failed operation aborts like a defect: R cannot catch it, it unwinds through the interruption path so finalizers run, and the session keeps the reason.
+   - **The host** opens a session per mutation, commits on success, and rolls back on a typed failure or interruption. A store failure answers `RemoteMutationError("Database query failed")`; `RuntimeCall::StoreFailed`.
+   - **Memory** sessions write through at once and never fail, as upstream's memory backend is not transactional.
+   - **SQL** sessions are `BEGIN IMMEDIATE` transactions doing update-then-insert of the given columns. A ref value's target id goes to the foreign key, and `remove` is `DELETE … WHERE id`.
+   - A source that can never succeed (its output is `Never`) no longer trips output encoding.
+   - **Validation:** [remote-sql-mutate.test.ts](../../packages/reffect/tests/remote-sql-mutate.test.ts) passes, with 17 stateful wire steps against the same R sources run by the reference over a raw-SQL MemoryStore inside `BEGIN IMMEDIATE` … `COMMIT`/`ROLLBACK` on the official server's own `node:sqlite` connection. It covers:
+     - rename (a partial update of a NOT NULL row), create with a ref, archive, archiving an absent row;
+     - a NOT NULL store failure, rolled back;
+     - a typed failure after a write, rolled back;
+     - a store failure after a successful write, both rolled back;
+     - invalid input;
+     - reads and queries in between, observing each effect.
+
+     Each server mutates its own copy of the seed. Path assertions confirm every outcome.
+
+   - Stock-client acceptance over SQL remains.
 5. Postgres as a second dialect, executed.
 
 ## Acceptance

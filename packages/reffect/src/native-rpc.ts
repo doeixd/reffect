@@ -883,10 +883,12 @@ export interface RpcRuntime {
     };
   };
   /**
-   * The server's Remote store (RS-003): `expr` is a `&'static dyn RemoteStore`, set on every
-   * execution context, and `impl` implements the generated trait. Used only when reachable.
+   * The server's Remote store (RS-003, SQLX-006): `begin` is an async Rust expression opening one
+   * session, `Result<Arc<dyn RemoteStore>, String>`, and `impl` implements the generated trait.
+   * Each async runtime function runs in its own session, committed when it succeeds and rolled
+   * back otherwise. Used only when the store is reachable.
    */
-  readonly store?: { readonly expr: string; readonly impl: string };
+  readonly store?: { readonly begin: string; readonly impl: string };
   /** Pure R functions compiled into the program, callable as `reffect_generated::r_<name>`. */
   readonly helpers?: { readonly [name: string]: Fn<readonly IRType<unknown>[], unknown> };
   readonly modules: readonly string[];
@@ -1631,7 +1633,6 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
 fn execution_context(cancellation: tokio::sync::watch::Receiver<bool>, context: &RequestContext) -> reffect_generated::AsyncContext {
     let mut execution = reffect_generated::AsyncContext::new(cancellation);
     ${hasLogs ? 'execution.set_request(json!({"id":context.id, "tag":context.tag, "principal":context.principal.map(|p| p.to_string())}).to_string());' : "let _ = context;"}
-    ${usesStore ? `execution.set_remote_store(${runtime!.store!.expr});` : ""}
     execution
 }`
             : ""
@@ -1652,7 +1653,7 @@ ${
   prepared.runtimeFunctions.length
     ? `/// A runtime function's outcome; \`Invalid\` means its input failed the generated decoder.
 #[allow(dead_code)]
-enum RuntimeCall { Invalid(String), Success(Value), Failure(Value), Interrupted }
+enum RuntimeCall { Invalid(String), Success(Value), Failure(Value), Interrupted, StoreFailed(String) }
 `
     : ""
 }${prepared.runtimeFunctions
@@ -1666,14 +1667,29 @@ enum RuntimeCall { Invalid(String), Success(Value), Failure(Value), Interrupted 
             return `async fn runtime_${f.name}(context: &RequestContext<'_>, cancellation: &tokio::sync::watch::Receiver<bool>, input: &Value) -> RuntimeCall {
     let arg = match ${decodeCall(f.kind)} { Ok(arg) => arg, Err(message) => return RuntimeCall::Invalid(message) };
 ${
-  f.asynchronous
+  f.asynchronous && usesStore
     ? `    let mut execution = execution_context(cancellation.clone(), context);
+    // One store session per run: committed on success, rolled back on failure or interruption.
+    let store = match ${runtime!.store!.begin} { Ok(store) => store, Err(message) => return RuntimeCall::StoreFailed(message) };
+    execution.set_remote_store(store.clone());
+    let outcome = ${call}(&mut execution, ${args}).await;
+    drop(execution);
+    match outcome {
+        Ok(value) => match store.finish(true).await { Ok(()) => RuntimeCall::Success(value), Err(message) => RuntimeCall::StoreFailed(message) },
+        Err(reffect_generated::AsyncError::Fail(error)) => { let _ = store.finish(false).await; ${failure} }
+        Err(reffect_generated::AsyncError::Interrupted) => {
+            let _ = store.finish(false).await;
+            match store.failure() { Some(message) => RuntimeCall::StoreFailed(message), None => RuntimeCall::Interrupted }
+        }
+    }`
+    : f.asynchronous
+      ? `    let mut execution = execution_context(cancellation.clone(), context);
     match ${call}(&mut execution, ${args}).await {
         Ok(value) => RuntimeCall::Success(value),
         Err(reffect_generated::AsyncError::Fail(error)) => ${failure},
         Err(reffect_generated::AsyncError::Interrupted) => RuntimeCall::Interrupted,
     }`
-    : `    let _ = cancellation;
+      : `    let _ = cancellation;
     match in_context(context, || ${call}(${args})) { Ok(value) => RuntimeCall::Success(value), Err(error) => ${failure} }`
 }
 }

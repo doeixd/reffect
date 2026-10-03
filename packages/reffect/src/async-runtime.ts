@@ -37,10 +37,17 @@ impl ScopeFrame {
 }
 ${
   store
-    ? `/// The Remote store a host serves (RS-003): MemoryStore semantics, one lock per operation.
+    ? `/// One store operation's completion; an error is the reason the mutation aborts.
+pub type StoreFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>;
+/// One mutation's session of the Remote store a host serves (RS-003, SQLX-006): MemoryStore
+/// semantics per operation, and for SQL one transaction the host commits or rolls back.
 pub trait RemoteStore: Send + Sync {
-    fn write(&self, entity: &str, id: &str, values: serde_json::Value);
-    fn remove(&self, entity: &str, id: &str);
+    fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> StoreFuture<'a>;
+    fn remove<'a>(&'a self, entity: &'a str, id: &'a str) -> StoreFuture<'a>;
+    /// Ends the session: commit when the source succeeded, otherwise roll back.
+    fn finish(&self, commit: bool) -> StoreFuture<'_>;
+    /// Why an operation failed, if one did; the host answers it instead of an interruption.
+    fn failure(&self) -> Option<String>;
 }
 `
     : ""
@@ -52,7 +59,7 @@ pub trait RemoteStore: Send + Sync {
     ${frames ? "frames: Option<Box<FrameTrail>>," : ""}
     ${scopeDepth ? `scopes: [Option<ScopeFrame>; ${scopeDepth}], scope_depth: usize,` : ""}
     ${launch ? "launch: Option<tokio::sync::oneshot::Sender<LaunchValues>>," : ""}
-    ${store ? "store: Option<&'static dyn RemoteStore>," : ""}
+    ${store ? "store: Option<std::sync::Arc<dyn RemoteStore>>," : ""}
 }
 impl AsyncContext {
     pub fn new(cancellation: tokio::sync::watch::Receiver<bool>) -> Self {
@@ -72,7 +79,7 @@ impl AsyncContext {
         let mut child = Self::new(cancellation);
         child.interruptible = race || self.interruptible;
         ${logging ? "child.annos = self.annos.clone(); child.spans = self.spans.clone(); child.request = self.request.clone();" : ""}
-        ${store ? "child.store = self.store;" : ""}
+        ${store ? "child.store = self.store.clone();" : ""}
         child
     }`
         : ""
@@ -83,8 +90,14 @@ impl AsyncContext {
     ${logging ? "pub fn set_request(&mut self, request: String) { self.request = Some(request); }" : ""}
     ${
       store
-        ? `pub fn set_remote_store(&mut self, store: &'static dyn RemoteStore) { self.store = Some(store); }
-    fn remote_store(&self) -> &'static dyn RemoteStore { self.store.expect("a RemoteStore host sets its store before running") }`
+        ? `pub fn set_remote_store(&mut self, store: std::sync::Arc<dyn RemoteStore>) { self.store = Some(store); }
+    /// A failed operation aborts like a defect: R cannot catch it, and unwinding runs finalizers.
+    /// The session keeps the reason, so the host can answer it.
+    async fn remote_store<E>(&mut self, write: Option<serde_json::Value>, entity: &str, id: &str) -> Result<(), AsyncError<E>> {
+        let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };
+        let done = match write { Some(values) => store.write(entity, id, values).await, None => store.remove(entity, id).await };
+        done.map_err(|_| AsyncError::Interrupted)
+    }`
         : ""
     }
     ${

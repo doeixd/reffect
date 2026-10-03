@@ -1,105 +1,22 @@
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import { HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { drizzle } from "drizzle-orm/node-sqlite";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { Entity, Expr, Order, Relation } from "foldkit-entity";
-import { Query, Remote, RemoteRpc } from "foldkit-remote";
-import { bind, databaseLayer, query, source } from "foldkit-remote-drizzle";
+import { RemoteRpc } from "foldkit-remote";
+import { databaseLayer, query, source } from "foldkit-remote-drizzle";
 import { RemoteServer } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, NativeRemote } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
+import { ByStatus, Search, bound, domain, seed } from "./fixtures/remote-sql-domain.ts";
 
 // Milestone 5 step 3: Read and Query over SQLite through SQLx, against the official server with
 // upstream foldkit-remote-drizzle sources over the same database file (SQLX-002).
 const Group = RemoteRpc.omit("FoldkitRemoteLive", "FoldkitRemoteMutate");
-
-const users = sqliteTable("users", {
-  id: text("id").primaryKey(),
-  name: text("display_name").notNull(),
-  email: text("email"),
-});
-const projects = sqliteTable("projects", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  status: text("status").notNull(),
-  rank: integer("rank").notNull(),
-  done: integer("done", { mode: "boolean" }).notNull(),
-  note: text("note"),
-  ownerId: text("owner_id"),
-});
-const UserBase = Entity.define(
-  "User",
-  Schema.Struct({ id: Schema.String, name: Schema.String, email: Schema.NullOr(Schema.String) }),
-);
-const ProjectBase = Entity.define(
-  "Project",
-  Schema.Struct({
-    id: Schema.String,
-    name: Schema.String,
-    status: Schema.String,
-    rank: Schema.Number,
-    done: Schema.Boolean,
-    note: Schema.NullOr(Schema.String),
-  }),
-);
-const domainEntities = Entity.relate(
-  { User: UserBase, Project: ProjectBase },
-  { Project: { owner: Relation.one(UserBase, { optional: true }) } },
-);
-const { Project } = domainEntities;
-const bound = bind(domainEntities, {
-  User: { table: users },
-  Project: { table: projects, relations: { owner: { field: projects.ownerId } } },
-});
-const ByStatus = Query.define("ByStatus", { status: Schema.String }, ({ input }) =>
-  Query.from(Project).pipe(
-    Query.where(Expr.eq(Project.fields.status, input.status)),
-    Query.orderBy(Order.desc(Project.fields.rank), Order.asc(Project.fields.name)),
-  ),
-);
-const Search = Query.define("Search", { term: Schema.String }, ({ input }) =>
-  Query.from(Project).pipe(
-    Query.where(Expr.contains(Project.fields.name, input.term)),
-    Query.orderBy(Order.asc(Project.fields.name)),
-  ),
-);
-const domain = Remote.define({
-  entities: [domainEntities.User, Project],
-  queries: [ByStatus, Search],
-});
-
-const seed = (file: string) => {
-  const db = new DatabaseSync(file);
-  db.exec(`
-    create table users (id text primary key not null, display_name text not null, email text);
-    create table projects (id text primary key not null, name text not null, status text not null,
-      rank integer not null, done integer not null, note text, owner_id text);
-  `);
-  for (const [id, name, email] of [
-    ["u1", "Ada", "ada@example.test"],
-    ["u2", "Grace", null],
-    ["u3", "Édith", "e@example.test"],
-  ] as const)
-    db.prepare("insert into users values (?, ?, ?)").run(id, name, email);
-  const names = ["Apollo", "borealis", "Ceres", "apollo", "Éclipse", "a_b", "50%", "Zeta"];
-  for (let i = 0; i < 14; i++)
-    db.prepare("insert into projects values (?, ?, ?, ?, ?, ?, ?)").run(
-      `p${String(i).padStart(2, "0")}`,
-      names[i % names.length],
-      ["active", "draft"][i % 2],
-      i % 3,
-      i % 4 === 0 ? 1 : 0,
-      i % 5 === 0 ? null : `note ${i}`,
-      i % 6 === 5 ? null : `u${(i % 3) + 1}`,
-    );
-  return db;
-};
 
 const envelope = (tag: string, payload: unknown) =>
   JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] });
