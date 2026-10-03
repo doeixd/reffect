@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-02 — foldkit-entity 0.6.0
+
+- Moved reffect's `foldkit-entity` pin from 0.4.0 to **0.6.0**, the version `foldkit-remote` 0.10.0 builds queries with (NR-007 recheck). The 0.4.0 → 0.6.0 dist diff adds `SchemaShape`/`Words`, tightens an internal `tagOf`, and refactors entity input mapping into `switch`es. `Expr`, `Query` and `evaluate` are unchanged.
+- Validation: `foldkit.test.ts` and `foldkit-upstream.test.ts` (milestone-1 Query conformance through official `evaluate`, Drizzle/SQLite and native debug/release, plus the shared upstream conformance cases) and `remote-read.test.ts` pass 13/13. The Query operation IDs keep `@0.4.0`, since they name semantics first verified at that version and unchanged since.
+
 ## 2026-10-02 — Native Remote read engine
 
 - Ported the reference read path into a Rust runtime module ([remote-engine.ts](packages/reffect/src/remote-engine.ts), NR-008–013):
