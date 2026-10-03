@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-03 — Milestone 8A step 5: native page serving
+
+- **Change.** NativeRpc's `pages` option serves an R page beside `/rpc`, as foldkit's `handleRequest` does. The template is split at build time by upstream `injectIntoTemplate`. Host rules are ported to Rust, with WHATWG paths via `url` 2.5.8.
+- **Validation.**
+  - `vp test tests/html-page.test.ts` passed: 21 requests equal upstream `handleRequest` in status, content type, `Vary`, `Allow` and body, and TRACE/TRACK are refused as upstream refuses them.
+  - Removing one asset extension makes the test fail.
+  - `html-native`, `html-hydrate`, `rpc-ndjson` and `ported-runtime` pass.
+  - `vp check` is clean.
+- **Next:** the todo example's first screen rendered natively (step 6). Pages that read the request (URL and Flags) follow.
+
 ## 2026-10-03 — Milestone 8A step 4: the stock client hydrates native HTML
 
 - **Change.** With `happy-dom` 20.14.5, foldkit's own test DOM, the stock `Runtime.hydrate` adopts HTML from a native server. Every server node is kept, and a click on an adopted node updates it.

@@ -171,6 +171,24 @@ Hydration is therefore tolerant. **Byte equality with upstream is the right acce
    - **Found on the way.** Under a DOM environment the compiler module is not served from a `file:` URL, and the LIVE-010 version guard threw. It now starts from the working directory there.
 
 5. **Page serving.** The template splice and `handleRequest` rules, as a native route beside `/rpc`.
+   **Delivered 2026-10-03.**
+   - `NativeRpc.compile(group, bindings, { pages: { template, render, containerId? } })` serves pages beside `/rpc`. `render` is a zero-input R function returning `R.Result(R.Html.Rendered, R.Html.RenderError)`.
+   - [ssr-page.ts](../../packages/reffect/src/ssr-page.ts) does two things:
+     - It splits the template once at build time, by running upstream `injectIntoTemplate` on a sentinel render and cutting around the root and title.
+     - It ports `handleRequest`/`toResponse`/`host.js` to a Rust fallback route:
+       - CONNECT/TRACE/TRACK are refused with 405 and `allow`;
+       - `index.html` resolution on WHATWG paths, via the `url` 2.5.8 crate, with strict `decodeURIComponent` and dot-segment normalization;
+       - path assets (33 extensions) and destination assets (16 values) are 404s;
+       - `Accept` is negotiated with quote-aware splitting and JS `Number`/`trim` q-values;
+       - `Vary` is merged, HEAD gets no body, and `text/html; charset=utf-8` is set;
+       - the title is escaped with `escapeText`.
+   - A page's render failure, or a title holding NUL, answers 500 and writes a `reffect.ssr.page@1` record. That is our choice: upstream leaves `renderPage` rejection to the host.
+   - It is registered as `foldkit/ssr-host@1`, and `foldkit/ssr-serialize@1` is now listed whenever Html operations are compiled.
+   - [html-page.test.ts](../../packages/reffect/tests/html-page.test.ts) checks 21 requests against upstream `handleRequest` with the same template and rendered application. Status, `content-type`, `vary`, `allow` and body are equal.
+     - It covers root, `index.html` variants and dot segments, pages, path/encoded/upper-case assets, malformed escapes, destinations, nine `Accept` forms, HEAD and POST.
+     - It also checks that TRACE/TRACK get upstream's `HOST_METHOD_ANSWERS` (the Fetch API cannot construct them), and that `/rpc` still answers.
+     - Removing `js` from the native asset list fails it.
+
 6. **Example.** `examples/todo-remote` renders its first screen natively. This also needs Remote data in SSR, which is milestone 9 (`Data.satisfy`). Until then the example's SSR shows the initial Model only.
 
 ## Open questions resolved (2026-10-03)
