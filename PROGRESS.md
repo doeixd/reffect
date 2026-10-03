@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — The browser "regression" diagnosis retracted
+
+- **Finding.** An in-page trace shows the read entry's `QueryStarted` and `ConnectionMerged` reaching `update`. A Node emulation of Foldkit's subscription loop reaches a `Ready` list for both the original and the live app.
+- **Likely cause.** Foldkit renders on `requestAnimationFrame`, which pauses in background tabs, so the stale `Initial` screen most likely came from an automation tab that was never visible.
+- **Correction.** The previous entry's "client-side regression, suspected in foldkit-remote 0.11.0" is withdrawn. The record and the example README are corrected.
+- **Unconfirmed.** The browser extension disconnected before tab visibility could be checked. The visible-tab check remains open.
+
 ## 2026-10-03 — Browser live rendering, and a browser regression found
 
 - **Change.** `examples/todo-remote/web/app.ts` follows every visible todo with one `Data.live` read, composed with `Projection.struct`. Strict `tsc` and `vp check` pass.

@@ -63,7 +63,7 @@ Open the printed address. New todos get IDs from a per-tab session prefix passed
 
 - The memory backend holds rows in the server's memory, as upstream's does. The SQL backend serves the same sources (milestone 5) and applies live signals after commit.
 - The browser app follows every visible todo with one `Data.live` read, composed with `Projection.struct` into one active entry. Live patches update the entity store the list reads.
-- **The browser app is currently broken (2026-10-03).** The list stays `Initial`. This is unrelated to the native server: it reproduces with upstream's in-browser memory backend and with the pre-live JSON build. It worked at milestone 4 with foldkit-remote 0.10.0; see [remote-live](../../docs/research/remote-live.md#review-fixes-delivered-2026-10-03). The Node session above is unaffected.
+- **Browser verification is pending.** In an automated browser session the list stayed `Initial` on screen, but traces show the data arriving in the Model. Foldkit renders on `requestAnimationFrame`, which browsers pause in background tabs, so the likeliest cause is a tab that was never visible. Re-check in a visible tab; see [remote-live](../../docs/research/remote-live.md#review-fixes-delivered-2026-10-03).
 - Authorization (RM-004) and `Live` (milestones 6–7) are not served yet.
 - Mutation schemas use the portable subset: finite numbers, no `Schema.optional`, and no numbers in outputs.
 - The full profile and divergences are in [the native RemoteServer design](../../docs/research/native-remote.md) and [native divergences](../../docs/native-divergences.md).
