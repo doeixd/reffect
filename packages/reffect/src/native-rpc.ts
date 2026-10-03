@@ -1443,15 +1443,14 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
       files: Object.freeze({
         "Cargo.toml":
           core.files["Cargo.toml"].split("\n[dependencies]")[0] +
-          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'
-            .replace(
-              '["macros", "rt", "net", "time", "sync"]',
-              prepared.layered
-                ? '["macros", "rt", "net", "time", "sync", "signal"]'
-                : prepared.asynchronous
-                  ? '["macros", "rt", "net", "time", "sync"]'
-                  : '["macros", "rt", "net"]',
-            ) +
+          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'.replace(
+            '["macros", "rt", "net", "time", "sync"]',
+            prepared.layered
+              ? '["macros", "rt", "net", "time", "sync", "signal"]'
+              : prepared.asynchronous
+                ? '["macros", "rt", "net", "time", "sync"]'
+                : '["macros", "rt", "net"]',
+          ) +
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
           (runtime?.dependencies ?? []).join(""),

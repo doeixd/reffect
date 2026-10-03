@@ -188,7 +188,9 @@ test(
             // Byte-identical: schema key order and the same JSON text (REC-005 closed).
             expect(yield* raw(url, body), `${label} bytes`).toBe(
               yield* Effect.promise(async () =>
-                (await official(new Request("http://reffect.test/rpc", { method: "POST", body }))).text(),
+                (
+                  await official(new Request("http://reffect.test/rpc", { method: "POST", body }))
+                ).text(),
               ),
             );
           }
