@@ -35,6 +35,23 @@ Status: **proposed (2026-10-03)**, not implemented. Step 4 of the [native Remote
   - The principal comes from the checked bearer adapter (u64) or `Unit` for public servers. R already has `Array.filter`, string equality and booleans, so typical rules ("owner sees `email`") compile today.
 - **RM-005 — `connectionIdentity` and patch helpers as R functions.** `Remote.patch` and `RemoteServer.prepend/append/remove` become R builders producing the wire structs. A connection identity is the query name plus canonical input text, which needs canonical JSON of the input, so it waits for RM-003.
 
+## RM-002 refined: `RemoteStore` as a service implementation (2026-10-03)
+
+The Store is not an R value. It is a native resource whose operations the runtime implements: the **service implementation** family of [runtime lowering](../runtime-lowering.md#three-implementation-registries). It follows the [Clock/Random precedent](clock-random-modules.md) (CLOCK-001/002).
+
+- **RS-001 — store operations are effect nodes.**
+  - `R.RemoteStore.get(entity, id)` returns `Computation<UndefinedOr<Record<String, Unknown>>, never>`.
+  - `write(entity, id, values)` and `remove(entity, id)` return `Computation<void, never>`.
+  - Each node has a semantic effect identity and a reachable `RemoteStore` requirement. Derivation, checking, provenance and lowering must recognize the nodes, and graph construction never touches the store.
+- **RS-002 — the reference uses upstream's own store.** The reference interpreter provides the requirement from an Effect `Context.Service` whose memory implementation is the `MemoryStore` returned by `RemoteServer.memory(...)` (`rows`/`write`/`remove`, with `get` as a lookup in `rows`). Store semantics therefore come straight from the published package, without vendoring.
+- **RS-003 — native implementation selected while planning.**
+  - The memory store lives in server-lifetime state, and Read and Query use the same store.
+  - The plan explanation lists it as a service implementation. A later SQLx implementation (milestone 5) satisfies the same requirement.
+  - Generated functions receive it through the invocation-owned execution context, never a hidden global.
+- **RS-004 — ordering and concurrency.** The memory operations are synchronous and the reference runs them between awaits. Native requests are dispatched on one `current_thread` runtime, and store operations hold the lock per operation, so a request's operations interleave with others exactly where the reference's can, at suspension points. Asynchronous sources (SQLx) must record their own isolation policy.
+- **RS-005 — caches follow the store.** Writes and removes bump a store version. Per-query evaluator cells (BENCH, query cache) are keyed by that version, so a read after a write sees the change, as `memory`'s next read does.
+- **RS-006 — ownership (BENCH-002).** Stored rows are shared immutable values (`Arc`), so reads hand out shared rows rather than deep copies, and `write` replaces a row (`{ ...existing, id, ...values }`) copy-on-write. This is the first workload where the ownership stage shares instead of cloning.
+
 ## Order of work
 
 1. RM-002 store with read/query sharing it (no behaviour change), then `RemoteStore` R service operations, with differential tests against `MemoryStore` semantics.
