@@ -1,16 +1,56 @@
+import type { SqlDialect } from "./sql-plan.ts";
+
+/** What differs per dialect in the emitted module (SQLX-009); everything else is shared. */
+const DIALECT = {
+  sqlite: {
+    db: "sqlx::Sqlite",
+    placeholder: "?",
+    begin: "BEGIN IMMEDIATE",
+    // SQLx's SQLite decoder is strict, so a value is read by its storage class.
+    cell: `let class = raw.type_info().name().to_string();
+        Ok(match class.as_str() {
+            "INTEGER" => Cell::Integer(row.try_get(index)?),
+            "REAL" => Cell::Real(row.try_get(index)?),
+            "TEXT" => Cell::Text(row.try_get(index)?),
+            _ => Cell::Null,
+        })`,
+  },
+  postgres: {
+    db: "sqlx::Postgres",
+    placeholder: "$",
+    begin: "BEGIN ISOLATION LEVEL SERIALIZABLE",
+    // Postgres values are typed on the wire; only the admitted column types decode (SQLX-010).
+    cell: `let name = raw.type_info().name().to_string();
+        Ok(match name.as_str() {
+            "TEXT" | "VARCHAR" | "BPCHAR" | "NAME" => Cell::Text(row.try_get(index)?),
+            "INT2" => Cell::Integer(row.try_get::<i16, _>(index)? as i64),
+            "INT4" => Cell::Integer(row.try_get::<i32, _>(index)? as i64),
+            "INT8" => Cell::Integer(row.try_get(index)?),
+            "FLOAT8" => Cell::Real(row.try_get(index)?),
+            "BOOL" => Cell::Bool(row.try_get(index)?),
+            other => return Err(sqlx::Error::Decode(format!("unsupported column type {}", other).into())),
+        })`,
+  },
+} as const;
+
 /**
- * The native SQL source (SQLX-004, SQLX-005): a `remote_engine::Source` over SQLx and SQLite,
- * running the statements `sql-plan.ts` fixed at build time. Reads, window shaping and page
+ * The native SQL source (SQLX-004, SQLX-005, SQLX-009): a `remote_engine::Source` over SQLx and
+ * one dialect (SQLite or Postgres), running the statements `sql-plan.ts` fixed at build time. Reads, window shaping and page
  * boundaries port `foldkit-remote-drizzle` 0.9.0's `source` and `query` (`shapeWindow`, `buildPage`,
  * `toQueryPage`). Upstream: foldkit-plus `packages/remote-drizzle/src`, MIT, Copyright (c) 2026
  * Patrick Glenn; its keyset logic is adapted from fate (MIT, Nakazawa Tech).
  */
-export const sqlRuntime = String.raw`
+export const sqlRuntime = (dialect: SqlDialect): string => String.raw`
 mod remote_sql {
     use super::remote_engine::{Boundary, EntityRecord, JsObject, PageIds, Source, Window};
     use serde_json::Value;
-    use sqlx::sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow};
     use sqlx::{Row, TypeInfo, ValueRef};
+
+    type Db = ${DIALECT[dialect].db};
+    type DbPool = sqlx::Pool<Db>;
+    type DbRow = <Db as sqlx::Database>::Row;
+    /// The n-th (1-based) placeholder of runtime-built statements.
+    fn placeholder(n: usize) -> String { format!("${DIALECT[dialect].placeholder}{}", n) }
 
     #[derive(Clone, Copy, PartialEq)]
     pub enum Kind { Text, Number, Boolean }
@@ -26,11 +66,12 @@ mod remote_sql {
     }
     /// A statement parameter, bound per request (sql-plan.ts SqlParam).
     pub enum Param {
-        Input(&'static str),
+        /// An input, bound as the kind its context gives it (SQLX-011).
+        Input(&'static str, Kind),
         Text(&'static str),
         Number(f64),
         Bool(bool),
-        Null,
+        Null(Kind),
         /// upstream escapeLike over an input or a literal search; None stays null.
         PatternInput(&'static str),
         PatternText(&'static str),
@@ -53,32 +94,27 @@ mod remote_sql {
         pub entities: &'static [Entity],
         pub queries: &'static [Query],
         pub url_env: &'static str,
-        pub pool: std::sync::OnceLock<Option<SqlitePool>>,
+        pub pool: std::sync::OnceLock<Option<DbPool>>,
     }
 
     const FAILED: &str = "Database query failed";
     const DEFAULT_PAGE_SIZE: f64 = 20.0;
     const MAX_PAGE_SIZE: f64 = 100.0;
 
-    /// A value as SQLite holds it, decoded by its storage class and bound back the same way.
+    /// A value as the database holds it, decoded by its type and bound back the same way.
     #[derive(Clone)]
-    enum Cell { Null, Integer(i64), Real(f64), Text(String) }
-    fn cell(row: &SqliteRow, index: usize) -> Result<Cell, sqlx::Error> {
+    enum Cell { Null, Integer(i64), Real(f64), Text(String), Bool(bool) }
+    fn cell(row: &DbRow, index: usize) -> Result<Cell, sqlx::Error> {
         let raw = row.try_get_raw(index)?;
         if raw.is_null() { return Ok(Cell::Null); }
-        let class = raw.type_info().name().to_string();
-        Ok(match class.as_str() {
-            "INTEGER" => Cell::Integer(row.try_get(index)?),
-            "REAL" => Cell::Real(row.try_get(index)?),
-            "TEXT" => Cell::Text(row.try_get(index)?),
-            _ => Cell::Null,
-        })
+        ${DIALECT[dialect].cell}
     }
     fn text_of(cell: &Cell) -> String {
         match cell {
             Cell::Text(text) => text.clone(),
             Cell::Integer(n) => n.to_string(),
             Cell::Real(x) => x.to_string(),
+            Cell::Bool(flag) => flag.to_string(),
             Cell::Null => String::new(),
         }
     }
@@ -88,10 +124,11 @@ mod remote_sql {
         if x.fract() == 0.0 && x.abs() < 9007199254740992.0 { return Value::from(x as i64); }
         serde_json::Number::from_f64(x).map(Value::Number).unwrap_or(Value::Null)
     }
-    /// What Drizzle's column mapping hands upstream: text, a JS number, or a boolean mode's 0/1.
+    /// What Drizzle's column mapping hands upstream: text, a JS number, or a boolean.
     fn json_of(cell: &Cell, kind: Kind) -> Value {
         match (cell, kind) {
             (Cell::Null, _) => Value::Null,
+            (Cell::Bool(flag), _) => Value::Bool(*flag),
             (Cell::Integer(n), Kind::Boolean) => Value::Bool(*n != 0),
             (Cell::Integer(n), _) => number(*n as f64),
             (Cell::Real(x), _) => number(*x),
@@ -99,8 +136,17 @@ mod remote_sql {
         }
     }
 
-    type Query1<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>;
-    fn bind_json<'q>(query: Query1<'q>, value: Option<&Value>) -> Query1<'q> {
+    type Query1<'q> = sqlx::query::Query<'q, Db, <Db as sqlx::Database>::Arguments>;
+    /// A null of the kind its context expects: Postgres will not assign a text null to a number.
+    fn bind_null<'q>(query: Query1<'q>, kind: Kind) -> Query1<'q> {
+        match kind {
+            Kind::Text => query.bind(Option::<String>::None),
+            Kind::Number => query.bind(Option::<f64>::None),
+            Kind::Boolean => query.bind(Option::<bool>::None),
+        }
+    }
+    /// A JSON value by its own type; a safe integer binds as an integer, as the JS drivers send it.
+    fn bind_json<'q>(query: Query1<'q>, value: Option<&Value>, kind: Kind) -> Query1<'q> {
         match value {
             Some(Value::String(text)) => query.bind(text.clone()),
             Some(Value::Bool(flag)) => query.bind(*flag),
@@ -108,12 +154,13 @@ mod remote_sql {
                 let x = n.as_f64().unwrap_or(f64::NAN);
                 if x.fract() == 0.0 && x.abs() < 9007199254740992.0 { query.bind(x as i64) } else { query.bind(x) }
             }
-            _ => query.bind(Option::<String>::None),
+            _ => bind_null(query, kind),
         }
     }
     fn bind_cell<'q>(query: Query1<'q>, cell: &Cell) -> Query1<'q> {
         match cell {
             Cell::Null => query.bind(Option::<String>::None),
+            Cell::Bool(flag) => query.bind(*flag),
             Cell::Integer(n) => query.bind(*n),
             Cell::Real(x) => query.bind(*x),
             Cell::Text(text) => query.bind(text.clone()),
@@ -134,11 +181,11 @@ mod remote_sql {
         let mut query = sqlx::query(statement.sql);
         for param in statement.params {
             query = match param {
-                Param::Input(key) => bind_json(query, values.input.get(*key)),
+                Param::Input(key, kind) => bind_json(query, values.input.get(*key), *kind),
                 Param::Text(text) => query.bind(*text),
-                Param::Number(x) => bind_json(query, serde_json::Number::from_f64(*x).map(Value::Number).as_ref()),
+                Param::Number(x) => bind_json(query, serde_json::Number::from_f64(*x).map(Value::Number).as_ref(), Kind::Number),
                 Param::Bool(flag) => query.bind(*flag),
-                Param::Null => query.bind(Option::<String>::None),
+                Param::Null(kind) => bind_null(query, *kind),
                 Param::PatternInput(key) => match values.input.get(*key).and_then(Value::as_str) {
                     Some(search) => query.bind(like_pattern(search)),
                     None => query.bind(Option::<String>::None),
@@ -153,10 +200,10 @@ mod remote_sql {
     }
 
     impl Sql {
-        fn pool(&self) -> Result<&SqlitePool, String> {
+        fn pool(&self) -> Result<&DbPool, String> {
             let pool = self.pool.get_or_init(|| {
                 let url = std::env::var(self.url_env).unwrap_or_default();
-                match SqlitePoolOptions::new().connect_lazy(&url) {
+                match sqlx::pool::PoolOptions::<Db>::new().connect_lazy(&url) {
                     Ok(pool) => Some(pool),
                     Err(error) => { eprintln!("[reffect] database {} is not usable: {}", self.url_env, error); None }
                 }
@@ -171,16 +218,16 @@ mod remote_sql {
         FAILED.to_string()
     }
 
-    /// One mutation's transaction (SQLX-006): BEGIN IMMEDIATE, upserts of exactly the given
-    /// columns, deletes by id, then commit or roll back. A failed statement records its reason.
+    /// One mutation's transaction (SQLX-006, SQLX-012): writes of exactly the given columns,
+    /// deletes by id, then commit or roll back. A failed statement records its reason.
     pub struct Session {
         entities: &'static [Entity],
-        tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, sqlx::Sqlite>>>,
+        tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, Db>>>,
         failure: std::sync::Mutex<Option<String>>,
     }
     impl Sql {
         pub async fn begin(&'static self) -> Result<Session, String> {
-            let tx = self.pool()?.begin_with("BEGIN IMMEDIATE").await.map_err(failed)?;
+            let tx = self.pool()?.begin_with("${DIALECT[dialect].begin}").await.map_err(failed)?;
             Ok(Session { entities: self.entities, tx: tokio::sync::Mutex::new(Some(tx)), failure: std::sync::Mutex::new(None) })
         }
     }
@@ -212,12 +259,12 @@ mod remote_sql {
             let Value::Object(values) = values else { return Err(FAILED.to_string()) };
             let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
             let mut columns: Vec<String> = Vec::new();
-            let mut bound: Vec<Value> = Vec::new();
+            let mut bound: Vec<(Value, Kind)> = Vec::new();
             for (field, value) in values {
                 if field == "id" { continue; }
                 if let Some(column) = entity.columns.iter().find(|column| column.field == field) {
                     columns.push(quote(column.column));
-                    bound.push(value);
+                    bound.push((value, column.kind));
                 } else if let Some(one) = entity.relations.iter().find(|one| one.field == field) {
                     // A ref Target:id stores the target's id in the foreign key.
                     let key = match &value {
@@ -229,31 +276,31 @@ mod remote_sql {
                         _ => return Err(FAILED.to_string()),
                     };
                     columns.push(quote(one.column));
-                    bound.push(key);
+                    bound.push((key, Kind::Text));
                 } else {
                     eprintln!("[reffect] {} has no column for {}", entity.name, field);
                     return Err(FAILED.to_string());
                 }
             }
             // { ...existing, id, ...values }: an existing row takes only the given columns. An upsert
-            // cannot do this, because SQLite checks NOT NULL on the inserted row before ON CONFLICT.
+            // cannot do this on SQLite, which checks NOT NULL on the inserted row before ON CONFLICT.
             // Identifiers come from build-time storage; every value is bound.
             let table = quote(entity.table);
             let update = if columns.is_empty() {
-                format!("UPDATE {} SET {} = {} WHERE {} = ?1", table, quote(entity.id), quote(entity.id), quote(entity.id))
+                format!("UPDATE {} SET {} = {} WHERE {} = {}", table, quote(entity.id), quote(entity.id), quote(entity.id), placeholder(1))
             } else {
-                let sets: Vec<String> = columns.iter().enumerate().map(|(i, column)| format!("{} = ?{}", column, i + 2)).collect();
-                format!("UPDATE {} SET {} WHERE {} = ?1", table, sets.join(", "), quote(entity.id))
+                let sets: Vec<String> = columns.iter().enumerate().map(|(i, column)| format!("{} = {}", column, placeholder(i + 2))).collect();
+                format!("UPDATE {} SET {} WHERE {} = {}", table, sets.join(", "), quote(entity.id), placeholder(1))
             };
             let mut query = sqlx::query(sqlx::AssertSqlSafe(update)).bind(id.to_string());
-            for value in &bound { query = bind_json(query, Some(value)); }
+            for (value, kind) in &bound { query = bind_json(query, Some(value), *kind); }
             if self.run(query).await? > 0 { return Ok(()); }
             // A new row goes in with exactly the given columns; a missing NOT NULL column fails.
             let names: Vec<String> = std::iter::once(quote(entity.id)).chain(columns.iter().cloned()).collect();
-            let placeholders: Vec<String> = (1..=names.len()).map(|i| format!("?{}", i)).collect();
+            let placeholders: Vec<String> = (1..=names.len()).map(placeholder).collect();
             let insert = format!("INSERT INTO {} ({}) VALUES ({})", table, names.join(", "), placeholders.join(", "));
             let mut query = sqlx::query(sqlx::AssertSqlSafe(insert)).bind(id.to_string());
-            for value in &bound { query = bind_json(query, Some(value)); }
+            for (value, kind) in &bound { query = bind_json(query, Some(value), *kind); }
             self.run(query).await.map(|_| ())
         }
         /// MemoryStore.remove: deleting an absent row changes nothing.
@@ -261,7 +308,7 @@ mod remote_sql {
             let result = async {
                 let entity = self.entity(entity)?;
                 let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
-                let sql = format!("DELETE FROM {} WHERE {} = ?1", quote(entity.table), quote(entity.id));
+                let sql = format!("DELETE FROM {} WHERE {} = {}", quote(entity.table), quote(entity.id), placeholder(1));
                 self.run(sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id.to_string())).await.map(|_| ())
             }.await;
             result.map_err(|message| self.fail(message))
@@ -292,7 +339,7 @@ mod remote_sql {
                 Selected::Column(column) => quote(column.column),
                 Selected::One(one) => quote(one.column),
             })).collect();
-            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+            let placeholders: Vec<String> = (1..=ids.len()).map(placeholder).collect();
             // The generated text holds placeholders only; every value is bound.
             let sql = format!("select {} from {} where {}.{} in ({})", columns.join(", "), quote(entity.table), quote(entity.table), quote(entity.id), placeholders.join(", "));
             let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));

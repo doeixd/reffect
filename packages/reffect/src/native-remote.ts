@@ -23,7 +23,7 @@ import type { RpcArtifact, WireValue } from "./native-rpc.ts";
 import { ArrayIR, Literals, Struct, TaggedUnion, optionalKey } from "./records.ts";
 import { SchemaIR, StableStringify } from "./schema-json.ts";
 import { planQuery, storageOf } from "./sql-plan.ts";
-import type { BindingLike, SqlParam, SqlStatement, SqlStorage } from "./sql-plan.ts";
+import type { BindingLike, SqlDialect, SqlParam, SqlStatement, SqlStorage } from "./sql-plan.ts";
 import { sqlRuntime } from "./sql-runtime.ts";
 import { remoteEngineRuntime } from "./remote-engine.ts";
 import { Rs } from "./rust-emit.ts";
@@ -53,6 +53,8 @@ export interface NativeRemoteOptions {
    * and the environment variable holding the database URL at run time (never compiled in).
    */
   readonly sql?: {
+    /** The database the bindings describe (SQLX-009); only its SQLx driver is a dependency. */
+    readonly dialect: SqlDialect;
     readonly bindings: Readonly<Record<string, BindingLike>>;
     readonly databaseUrlEnv: string;
   };
@@ -386,13 +388,15 @@ const checkRows = (
  * `FoldkitRemoteQuery` are served by the ported engine; mutations wait for step 4, and streaming
  * `Live` for milestones 6–7.
  */
+const KIND = { string: "Text", number: "Number", boolean: "Boolean" } as const;
 const rustParam = (param: SqlParam): string =>
   Match.value(param).pipe(
     Match.tagsExhaustive({
-      Input: (input) => `remote_sql::Param::Input(${Rs.stringLiteral(input.key).text})`,
+      Input: (input) =>
+        `remote_sql::Param::Input(${Rs.stringLiteral(input.key).text}, remote_sql::Kind::${KIND[input.kind]})`,
       Literal: (literal) =>
         literal.value === null
-          ? "remote_sql::Param::Null"
+          ? `remote_sql::Param::Null(remote_sql::Kind::${KIND[literal.kind]})`
           : typeof literal.value === "string"
             ? `remote_sql::Param::Text(${Rs.stringLiteral(literal.value).text})`
             : typeof literal.value === "boolean"
@@ -411,7 +415,7 @@ const rustParam = (param: SqlParam): string =>
           Match.tag("Literal", (literal) =>
             typeof literal.value === "string"
               ? `remote_sql::Param::PatternText(${Rs.stringLiteral(literal.value).text})`
-              : "remote_sql::Param::Null",
+              : "remote_sql::Param::Null(remote_sql::Kind::Text)",
           ),
           Match.orElse(() => {
             throw unsupported("sql", "A search pattern reads an input or a literal");
@@ -424,7 +428,6 @@ const rustParam = (param: SqlParam): string =>
   );
 const rustStatement = (statement: SqlStatement): string =>
   `remote_sql::Statement { sql: ${Rs.stringLiteral(statement.sql).text}, params: &[${statement.params.map(rustParam).join(", ")}] }`;
-const KIND = { string: "Text", number: "Number", boolean: "Boolean" } as const;
 /** The SQL backend's statics: entity storage, planned queries and the pool's URL variable. */
 const sqlServer = (
   storages: ReadonlyArray<SqlStorage>,
@@ -551,7 +554,7 @@ const compile = <Rpcs extends Rpc.Any>(
                 `sql.bindings.${entity}`,
                 `The domain declares no entity ${entity}`,
               );
-            const storage = storageOf(binding);
+            const storage = storageOf(binding, sql.dialect);
             for (const field of [...storage.columns, ...storage.relations])
               if (field.column.length === 0)
                 throw unsupported(`sql.bindings.${entity}`, "Empty column name");
@@ -565,12 +568,13 @@ const compile = <Rpcs extends Rpc.Any>(
             if (!storage) throw unsupported(`queries.${query.name}`, `No binding for ${entity}`);
             return {
               validator: inputValidator(query.name, query.Input, i),
-              plan: planQuery(query.name, query.body!, storage),
+              plan: planQuery(query.name, query.body!, storage, sql.dialect),
               index: i,
             };
           });
           return {
             backend: "sql" as const,
+            dialect: sql.dialect,
             source: "&REMOTE_SQL",
             server: sqlServer(Array.from(storages.values()), plans, sql.databaseUrlEnv),
             store: {
@@ -717,7 +721,7 @@ ${prepared.authorize
         asynchronous: true,
         modules: [
           remoteEngineRuntime,
-          ...(prepared.backend === "sql" ? [sqlRuntime] : []),
+          ...(prepared.backend === "sql" ? [sqlRuntime(prepared.dialect)] : []),
           prepared.server,
           authorizer,
           ...(group.requests.has(MUTATE) ? [mutate] : []),
@@ -732,16 +736,24 @@ ${prepared.authorize
         store: prepared.store,
         dependencies: [
           'ryu-js = { version = "=1.0.3", default-features = false }\n',
-          ...(prepared.backend === "sql"
-            ? [
-                'sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "sqlite-bundled"] }\n',
-                'libsqlite3-sys = "=0.37.0"\n',
-              ]
-            : []),
+          ...(prepared.backend !== "sql"
+            ? []
+            : prepared.dialect === "postgres"
+              ? [
+                  'sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres"] }\n',
+                ]
+              : [
+                  'sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "sqlite-bundled"] }\n',
+                  'libsqlite3-sys = "=0.37.0"\n',
+                ]),
         ],
         crates: [
           "ryu-js@1.0.3",
-          ...(prepared.backend === "sql" ? ["sqlx@0.9.0", "libsqlite3-sys@0.37.0"] : []),
+          ...(prepared.backend !== "sql"
+            ? []
+            : prepared.dialect === "postgres"
+              ? ["sqlx@0.9.0"]
+              : ["sqlx@0.9.0", "libsqlite3-sys@0.37.0"]),
         ],
       },
     );

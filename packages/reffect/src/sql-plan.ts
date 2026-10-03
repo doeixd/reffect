@@ -9,7 +9,7 @@ import { isPredicate } from "foldkit-entity";
 import type { AnyExpr, AnyQuery, OrderTerm, Predicate } from "foldkit-entity";
 import { fail } from "./kernel.ts";
 
-export type SqlDialect = "sqlite";
+export type SqlDialect = "sqlite" | "postgres";
 export type SqlKind = "string" | "number" | "boolean";
 
 export interface SqlColumn {
@@ -37,6 +37,7 @@ export interface SqlStorage {
 interface ColumnLike {
   readonly name: string;
   readonly dataType: string;
+  readonly columnType: string;
   readonly notNull: boolean;
 }
 /** The parts of an `EntityBinding` storage extraction reads; read structurally. */
@@ -60,14 +61,34 @@ const KINDS: Readonly<Record<string, SqlKind>> = {
   number: "number",
   boolean: "boolean",
 };
+/**
+ * The Drizzle column types each dialect admits (SQLX-010): ones both drivers read as the same JS
+ * value. `real` is out because SQLx widens float4 while node-postgres parses its text; `char` pads;
+ * a Postgres enum is a custom type.
+ */
+const ADMITTED: Readonly<Record<SqlDialect, ReadonlySet<string>>> = {
+  sqlite: new Set(["SQLiteText", "SQLiteInteger", "SQLiteReal", "SQLiteBoolean"]),
+  postgres: new Set([
+    "PgText",
+    "PgVarchar",
+    "PgSmallInt",
+    "PgInteger",
+    "PgSerial",
+    "PgSmallSerial",
+    "PgBigInt53",
+    "PgBigSerial53",
+    "PgDoublePrecision",
+    "PgBoolean",
+  ]),
+};
 
 // Drizzle 1.0 data types name the kind first (`number int53`, `number double`, `string`).
-const kindOf = (column: ColumnLike, path: string): SqlKind => {
+const kindOf = (column: ColumnLike, dialect: SqlDialect, path: string): SqlKind => {
   const kind = KINDS[column.dataType.split(" ")[0]];
-  if (!kind)
+  if (!kind || !ADMITTED[dialect].has(column.columnType))
     throw unsupported(
       path,
-      `Column type ${column.dataType} is outside the string/number/boolean profile`,
+      `Column type ${column.columnType} (${column.dataType}) is outside the ${dialect} string/number/boolean profile`,
     );
   return kind;
 };
@@ -82,6 +103,7 @@ const columnOf = (value: unknown): ColumnLike | undefined =>
   value !== null &&
   typeof Reflect.get(value, "name") === "string" &&
   typeof Reflect.get(value, "dataType") === "string" &&
+  typeof Reflect.get(value, "columnType") === "string" &&
   typeof Reflect.get(value, "notNull") === "boolean"
     ? (value as ColumnLike)
     : undefined;
@@ -90,7 +112,7 @@ const columnOf = (value: unknown): ColumnLike | undefined =>
  * Static storage of one binding (SQLX-003). Callbacks are arbitrary Drizzle SQL, so `visible`,
  * computed members and relations other than an owner's `one` are refused rather than guessed.
  */
-export const storageOf = (binding: BindingLike): SqlStorage => {
+export const storageOf = (binding: BindingLike, dialect: SqlDialect = "sqlite"): SqlStorage => {
   const at = `storage.${binding.name}`;
   if (binding.visible !== undefined)
     throw unsupported(`${at}.visible`, "visible is a Drizzle SQL callback; it is not native yet");
@@ -100,7 +122,7 @@ export const storageOf = (binding: BindingLike): SqlStorage => {
   const columns = Object.entries(binding.columns).map(([field, column]): SqlColumn => ({
     field,
     column: column.name,
-    kind: kindOf(column, `${at}.${field}`),
+    kind: kindOf(column, dialect, `${at}.${field}`),
     nullable: !column.notNull,
   }));
   const id = columns.find((column) => column.field === "id");
@@ -121,15 +143,24 @@ export const storageOf = (binding: BindingLike): SqlStorage => {
         : undefined;
     if (!column || typeof target !== "string")
       throw unsupported(`${at}.${field}`, "Expected a foreign-key column and a target entity");
+    if (kindOf(column, dialect, `${at}.${field}`) !== "string")
+      throw unsupported(`${at}.${field}`, "Foreign keys are text ids");
     return { field, column: column.name, target, nullable: !column.notNull };
   });
   return { entity: binding.name, table, id: id.column, columns, relations };
 };
 
-/** A statement parameter, bound per request in placeholder order. */
+/**
+ * A statement parameter, bound per request in placeholder order. Values carry the kind their
+ * context gives them, so a null binds as a typed null (SQLX-011).
+ */
 export type SqlParam =
-  | { readonly _tag: "Input"; readonly key: string }
-  | { readonly _tag: "Literal"; readonly value: string | number | boolean | null }
+  | { readonly _tag: "Input"; readonly key: string; readonly kind: SqlKind }
+  | {
+      readonly _tag: "Literal";
+      readonly value: string | number | boolean | null;
+      readonly kind: SqlKind;
+    }
   /** `%escaped%` built at bind time from a search value, as upstream's `escapeLike` does. */
   | { readonly _tag: "Pattern"; readonly search: SqlParam }
   /** The cursor row's value for order term `index` (keyset). */
@@ -160,12 +191,13 @@ export interface QueryPlan {
 
 const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
-/** Collects parameters for one statement, numbering placeholders `?1`, `?2`, … (SQLite). */
+/** Collects parameters for one statement, numbering placeholders `?1` (SQLite) or `$1` (Postgres). */
 class Params {
   readonly list: SqlParam[] = [];
+  constructor(readonly dialect: SqlDialect) {}
   add(param: SqlParam): string {
     this.list.push(param);
-    return `?${this.list.length}`;
+    return `${this.dialect === "postgres" ? "$" : "?"}${this.list.length}`;
   }
 }
 
@@ -192,7 +224,16 @@ export const planQuery = (
     if (!column) throw unsupported(path, `${storage.entity}.${key} has no column`);
     return column;
   };
-  const operand = (expr: AnyExpr, params: Params, path: string): string =>
+  // The kind a value takes from the column it meets, or its own when no column is involved.
+  const literalKind = (value: unknown): SqlKind =>
+    typeof value === "number" ? "number" : typeof value === "boolean" ? "boolean" : "string";
+  const kindAgainst = (other: AnyExpr, path: string): SqlKind =>
+    other._tag === "Field"
+      ? columnFor(other.key, path).kind
+      : other._tag === "Literal" && other.value !== null
+        ? literalKind(other.value)
+        : "string";
+  const operand = (expr: AnyExpr, params: Params, path: string, kind: SqlKind): string =>
     Match.value(expr).pipe(
       Match.tagsExhaustive({
         Field: (field) => {
@@ -206,9 +247,13 @@ export const planQuery = (
             throw unsupported(path, "Literals are strings, numbers, booleans or null");
           if (typeof value === "number" && !Number.isFinite(value))
             throw unsupported(path, "Number literals are finite");
-          return params.add({ _tag: "Literal", value: value as string | number | boolean | null });
+          return params.add({
+            _tag: "Literal",
+            value: value as string | number | boolean | null,
+            kind: value === null ? kind : literalKind(value),
+          });
         },
-        Input: (input) => params.add({ _tag: "Input", key: input.key }),
+        Input: (input) => params.add({ _tag: "Input", key: input.key, kind }),
       }),
     );
   const predicate = (node: Predicate, params: Params, path: string): string =>
@@ -240,15 +285,20 @@ export const planQuery = (
                 throw unsupported(path, "A predicate is compared with a boolean");
               return against.value ? predicate(asked, params, path) : negated();
             }
-            const value = params.add({ _tag: "Input", key: against.key });
-            return `CASE ${value} WHEN 1 THEN (${predicate(asked, params, path)}) WHEN 0 THEN (${negated()}) END`;
+            const value = params.add({ _tag: "Input", key: against.key, kind: "boolean" });
+            // Postgres has no boolean = integer; both forms are unknown for a null input.
+            return dialect === "postgres"
+              ? `CASE WHEN ${value} THEN (${predicate(asked, params, path)}) WHEN NOT ${value} THEN (${negated()}) END`
+              : `CASE ${value} WHEN 1 THEN (${predicate(asked, params, path)}) WHEN 0 THEN (${negated()}) END`;
           }
           if (isPredicate(eq.left) || isPredicate(eq.right))
             throw unsupported(path, "Comparing two predicates is not native yet");
-          return `${operand(eq.left as AnyExpr, params, `${path}.left`)} = ${operand(eq.right as AnyExpr, params, `${path}.right`)}`;
+          const left = eq.left as AnyExpr;
+          const right = eq.right as AnyExpr;
+          return `${operand(left, params, `${path}.left`, kindAgainst(right, path))} = ${operand(right, params, `${path}.right`, kindAgainst(left, path))}`;
         },
         Null: (isNull) =>
-          `${operand(isNull.operand, params, `${path}.operand`)} IS ${isNull.present ? "NOT NULL" : "NULL"}`,
+          `${operand(isNull.operand, params, `${path}.operand`, "string")} IS ${isNull.present ? "NOT NULL" : "NULL"}`,
         Contains: (contains) => {
           if (isPredicate(contains.search)) throw unsupported(path, "A search is a scalar");
           const search = contains.search;
@@ -257,15 +307,15 @@ export const planQuery = (
               Literal: (literal): SqlParam => {
                 if (literal.value !== null && typeof literal.value !== "string")
                   throw unsupported(path, "A search is text");
-                return { _tag: "Literal", value: literal.value as string | null };
+                return { _tag: "Literal", value: literal.value as string | null, kind: "string" };
               },
-              Input: (input): SqlParam => ({ _tag: "Input", key: input.key }),
+              Input: (input): SqlParam => ({ _tag: "Input", key: input.key, kind: "string" }),
               Field: (): SqlParam => {
                 throw unsupported(path, "Searching for a column's value is not native yet");
               },
             }),
           );
-          const value = operand(contains.value, params, `${path}.value`);
+          const value = operand(contains.value, params, `${path}.value`, "string");
           return `lower(${value}) LIKE lower(${params.add({ _tag: "Pattern", search: source })}) ESCAPE '\\'`;
         },
       }),
@@ -276,7 +326,8 @@ export const planQuery = (
     if (term.expr.owner.name !== storage.entity)
       throw unsupported(path, `The body orders by ${term.expr.owner.name}.${term.expr.key}`);
     const column = columnFor(term.expr.key, path);
-    // Upstream's keyset predicate assumes Postgres NULL placement, which SQLite does not use.
+    // Upstream's keyset predicate assumes Postgres NULL placement, which SQLite does not use;
+    // admitting them on Postgres is a later widening (SQLX-014).
     if (column.nullable)
       throw unsupported(
         path,
@@ -316,14 +367,14 @@ export const planQuery = (
       )
       .join(", ")}`;
   const page = (traversal: "forward" | "backward", cursor: boolean): SqlStatement => {
-    const params = new Params();
+    const params = new Params(dialect);
     const parts = where(params);
     if (cursor) parts.push(keyset(traversal, params));
     const sql = `SELECT ${quote(storage.id)} ${from}${conditions(parts)}${orderBy(traversal)} LIMIT ${params.add({ _tag: "Limit" })}`;
     return { sql, params: params.list };
   };
   const cursorRow = (() => {
-    const params = new Params();
+    const params = new Params(dialect);
     const parts = where(params);
     parts.push(`${quote(storage.id)} = ${params.add({ _tag: "CursorId" })}`);
     return {

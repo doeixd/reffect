@@ -400,7 +400,7 @@ test(
             });
           const artifact = yield* NativeRemote.compile(Group, {
             domain,
-            sql: { bindings: bound, databaseUrlEnv: "REFFECT_DATABASE_URL" },
+            sql: { dialect: "sqlite", bindings: bound, databaseUrlEnv: "REFFECT_DATABASE_URL" },
             mutations,
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
@@ -548,7 +548,7 @@ test(
 
           const artifact = yield* NativeRemote.compile(Group, {
             domain,
-            sql: { bindings: bound, databaseUrlEnv: "REFFECT_DATABASE_URL" },
+            sql: { dialect: "sqlite", bindings: bound, databaseUrlEnv: "REFFECT_DATABASE_URL" },
             mutations,
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);

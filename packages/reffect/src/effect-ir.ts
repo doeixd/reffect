@@ -509,11 +509,13 @@ const remoteStoreReference = (
         onNone: () =>
           Effect.die(new Error("RemoteStore requires a RemoteStoreHost in the reference")),
         onSome: (store) =>
-          Effect.sync(() =>
-            op === "Write"
-              ? store.write(entity, String(id), values as Readonly<Record<string, unknown>>)
-              : store.remove(entity, String(id)),
-          ),
+          Effect.suspend(() => {
+            const done =
+              op === "Write"
+                ? store.write(entity, String(id), values as Readonly<Record<string, unknown>>)
+                : store.remove(entity, String(id));
+            return Effect.isEffect(done) ? done : Effect.void;
+          }),
       }),
     ),
   );
