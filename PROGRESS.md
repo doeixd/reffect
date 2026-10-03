@@ -15,7 +15,7 @@
   - `html-page`, `html-native`, `html` and `number-text` pass.
   - `vp check` is clean.
 - **Divergence.** Hyper refuses raw non-ASCII bytes in request targets; this is recorded in native divergences.
-- **Next:** M9-2, redesigned (2026-10-03). The server records its Query/Read exchanges into the Flags, and the client `init` replays them through upstream `Data.satisfy`. An upstream-only probe showed equal Models, a `Ready` read and no planned fetch. The `RemotePersistence` snapshot was dropped because `Hydrated` restores connections as stale with unknown boundaries ([design change](docs/research/ssr-data.md#design-change-resume-from-protocol-answers-not-the-snapshot-2026-10-03)).
+- **M9-2 upstream half delivered** (`reffect/remote-resume`: `record`/`replay`, tested on entity, windowed, paged and second-pass reads). **Next:** M9-3, native recording from R pages. M9-2 was redesigned (2026-10-03). The server records its Query/Read exchanges into the Flags, and the client `init` replays them through upstream `Data.satisfy`. An upstream-only probe showed equal Models, a `Ready` read and no planned fetch. The `RemotePersistence` snapshot was dropped because `Hydrated` restores connections as stale with unknown boundaries ([design change](docs/research/ssr-data.md#design-change-resume-from-protocol-answers-not-the-snapshot-2026-10-03)).
 
 ## 2026-10-03 — Fallible tasks and lexical coordination preparation
 

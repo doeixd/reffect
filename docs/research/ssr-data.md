@@ -80,6 +80,17 @@ Results:
 2. **Resume from protocol answers (M9-2).** Redesigned 2026-10-03, see [the design change](#design-change-resume-from-protocol-answers-not-the-snapshot-2026-10-03); it replaces the planned native snapshot.
    - The server records its Query/Read exchanges into the Flags.
    - The client `init` replays them through upstream `Data.satisfy` and a replay `RemoteClient`.
+
+   **Delivered (upstream half) 2026-10-03.**
+   - [`reffect/remote-resume`](../../packages/reffect/src/remote-resume.ts) is browser-safe (effect and foldkit-remote only; foldkit-remote is an optional peer). It provides:
+     - the `RemoteResume` schema (`now`, ordered `RemoteExchange`s over upstream's `QueryRequest`/`QueryResult`/`ReadBatch`/`ReadBatchResult`);
+     - `record(effect)`;
+     - `replay(exchanges)`, a synchronous `RemoteClient` keyed by `stableStringify` of the encoded request, whose misses fail with `RemoteQueryError`/`RemoteReadError`.
+   - [remote-resume.test.ts](../../packages/reffect/tests/remote-resume.test.ts) runs the server satisfy against `RemoteServer.memory(...).layer` and sends the resume through the JSON codec, as Flags would. The client satisfy in `runSyncExit` gives a Model `toStrictEqual` to the server's.
+     - It covers an entity read with a relation, a windowed query, a paged to-many relation, and a Surface that reads only on the second pass.
+     - Every read is `Ready` and every read entry plans nothing; a dropped exchange fails with `RemoteQueryError`.
+   - **Moved to M9-3.** The exchanges recorded natively: the page satisfies against the native engine, whose answers are already differential-tested against `RemoteServer`. M9-3 also needs Numbers admitted in these Flags.
+
 3. **Projections in R views, with async pages (M9-3).**
    - `R.Remote` projection reads inside `R.Html` views.
    - The reference is upstream `Data.query(...).read(model)`, so the browser view stays Foldkit's own. Natively the read comes from a per-request store the engine fills.
