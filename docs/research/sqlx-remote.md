@@ -1,6 +1,6 @@
 # Milestone 5: Remote over SQL with SQLx
 
-Status: **proposed (2026-10-03)**, not implemented. Scope: [implementation milestones §22](../implementation-milestones.md#22-milestone-5--native-query--sqlx) and [Foldkit Remote and SQL](../foldkit-remote.md#remote-drizzle-becomes-remote-sqlx-conceptually). It builds on the accepted [native RemoteServer](native-remote.md) (milestone 4), the [store design](remote-mutations.md#rm-002-refined-remotestore-as-a-service-implementation-2026-10-03) (RS-001..006) and the [milestone-1 Query adapter](foldkit-query.md).
+Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation milestones §22](../implementation-milestones.md#22-milestone-5--native-query--sqlx) and [Foldkit Remote and SQL](../foldkit-remote.md#remote-drizzle-becomes-remote-sqlx-conceptually). It builds on the accepted [native RemoteServer](native-remote.md) (milestone 4), the [store design](remote-mutations.md#rm-002-refined-remotestore-as-a-service-implementation-2026-10-03) (RS-001..006) and the [milestone-1 Query adapter](foldkit-query.md).
 
 ## Sources (checked 2026-10-03)
 
@@ -79,15 +79,15 @@ Status: **proposed (2026-10-03)**, not implemented. Scope: [implementation miles
   - A server-lifetime pool is opened at startup from an environment variable named at compile time, like bearer credentials, so no connection string is compiled in.
   - SQLx uses `default-features = false` with `runtime-tokio` and `sqlite`, and the bundled `libsqlite3-sys` is pinned exactly so the SQLite version is deterministic.
 
-## Open decisions (owner's call)
+## Decided (2026-10-03, delegated by the owner)
 
-1. **SQLx version and toolchain.**
-   - **0.9.0** (current; needs Rust ≥ 1.94, while this machine has 1.90.0, so `rustup update`).
-   - **0.8.6** (no toolchain change; the older API line; SQLite 3.46.0).
-
-   Recommendation: upgrade the toolchain and pin 0.9.0. The generated SQL is `&'static str`, which 0.9's `SqlSafeStr` suits, and pinning the older line on day one creates migration work.
-
-2. **Which oracle governs SQL behaviour** (SQLX-002). Recommendation: the Drizzle-backed upstream server, because that is what a native SQL server replaces.
+- **SQLX-008 — SQLx 0.9.0, with the toolchain upgraded.**
+  - Pin `sqlx = "=0.9.0"` (`default-features = false`) and pin the bundled `libsqlite3-sys` exactly.
+  - Upgrade the local stable toolchain with `rustup update` (from 1.90.0 to at least the 1.94 MSRV). Rust is backward-compatible, and rustup can reinstall 1.90 if a regression appears; representative native suites are re-run after the upgrade.
+  - 0.8.6 would avoid the upgrade but starts the milestone on the previous API line, with a migration to follow. 0.9's `SqlSafeStr` suits SQL that is fixed at build time.
+- **SQLX-002 is accepted: the Drizzle-backed server governs SQL behaviour.**
+  - Making SQL behave like the memory backend would need a custom UTF-16 collation and Unicode folding that upstream's own SQL path does not have, so the native server would match neither deployment exactly.
+  - Every SQL-versus-evaluator difference is registered in [native divergences](../native-divergences.md) and, where it is upstream's, linked to its issue.
 
 ## Order of work
 

@@ -20,7 +20,8 @@
   - Nullable sort columns are refused, because upstream's keyset predicate is wrong for them on SQLite.
   - Writes are upserts, with one transaction per mutation.
 - Added `foldkit-remote-drizzle` 0.9.0 as an exact devDependency. It depends on exactly our pinned Foldkit versions and imports on Effect 4.0.0, replacing the vendored compiler snapshot as a future oracle.
-- Open owner decisions: SQLx 0.9.0 (needs Rust ≥ 1.94; local 1.90.0) or 0.8.6; and which oracle governs SQL behaviour.
+- Decided (delegated by the owner): SQLx 0.9.0, with the toolchain upgraded (SQLX-008); the Drizzle-backed server governs SQL behaviour (SQLX-002).
+- `rustup update` took the local stable toolchain from 1.90.0 to 1.99.0. The foldkit, string-profile, remote-read, rpc-auth, async-effect and failure-frames suites pass on it (6 files, 20 tests).
 
 ## 2026-10-03 — Bounded structured task kernel
 
