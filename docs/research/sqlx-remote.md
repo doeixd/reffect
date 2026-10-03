@@ -138,7 +138,7 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
 
      Each server mutates its own copy of the seed. Path assertions confirm every outcome.
 
-   - Stock-client acceptance over SQL remains.
+   - **Stock-client acceptance (2026-10-03):** a stock `Remote.clientLayer` session runs over the native SQL server and over the official server. Each server has its own seeded SQLite file, and upstream's `RemoteServer.handlers` serves as the client transport, so no HTTP is involved on the official side. The session prefetches a page, applies `mutateInto` for rename, create and archive, sends a refused mutation, then reloads. Every model read matches the official one with `toStrictEqual`. Assertions on the official run confirm that each step observes its effect, so the comparison cannot pass vacuously.
 5. Postgres as a second dialect, executed.
 
 ## Acceptance
