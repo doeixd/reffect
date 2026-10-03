@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./rpc-codecs": "./src/rpc-codecs.ts"
+    "./rpc-codecs": "./src/rpc-codecs.ts",
+    "./remote-resume": "./src/remote-resume.ts"
   },
   "scripts": {
     "build": "vp pack",
@@ -15,6 +16,14 @@
     "@effect/platform-node": "4.0.0",
     "effect": "4.0.0",
     "foldkit-entity": "0.7.0"
+  },
+  "peerDependencies": {
+    "foldkit-remote": "0.11.0"
+  },
+  "peerDependenciesMeta": {
+    "foldkit-remote": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "26.1.1",
