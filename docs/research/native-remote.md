@@ -65,6 +65,13 @@ Checked 2026-10-02 with `npm view` and a scratch install:
 
   The full suite passes; six heavy native suites timed out under parallel Cargo builds and pass 17/17 when run serially.
 
+**Upgrade status (checked 2026-10-02):**
+
+- foldkit-plus `main` already moved to Effect 4.0.0 in commit `7e3ffdd0` ("deps: Effect 4.0.0 stable and Foldkit 0.165.0"). In remote and remote-server, only import paths changed (3 lines across `wire.ts` and `persistence.ts`); the changelog states behaviour is unchanged.
+- Release 0.13.0 is prepared but not committed or published: `foldkit-remote`/`foldkit-remote-server` 0.10.0 and `foldkit-entity` 0.6.0. npm still serves 0.9.0/0.5.0.
+- Once published, the vendored wire fixture can be replaced by the real `RemoteRpc` (identical schemas expected), and `RemoteServer.memory` + `handlers` become the engine oracle without vendoring engine code.
+- The reference read path is about 400 lines (`readHelper`, `splitAliases`, `groupByEntity`, `pageOf`, `memory`), and its scenario tests are about 2,000 lines (memory, nested, nestedShared, alias, queryPayload, server). Effect 4.0.0's reversed `partition` does not affect reffect (no calls).
+
 ## Open questions
 
 - Whether foldkit-plus changes any Remote wire schema during the 4.0.0 upgrade. The locally mirrored schemas must be re-diffed against the upgraded `foldkit-remote` wire module.
