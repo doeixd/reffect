@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-03 — Milestone 6 step 3: streaming RPC procedures
+
+- **`R.Stream.fn`** answers `stream: true` procedures. Native servers send each chunk as a `Chunk` message, then the `Exit`. Under NDJSON chunks stream as they are produced, through the 16-message body channel; under JSON they are buffered.
+- **Reference.** `Reference.stream` serves the official oracle.
+- **Validation:**
+  - `vp test tests/stream-rpc.test.ts`: 2 passed, NDJSON and JSON, with a stock client;
+  - `stream`, `rpc-ndjson`, `async-effect`, `remote-mutate` and `schema-json-rpc` pass.
+- **Next:** step 4, interruption by disconnect with timed and effectful operators (`fromSchedule`, `ensuring`).
+
 ## 2026-10-03 — Bounded Exit/Cause values
 
 - Recorded stable Effect 4.0.0 source checks, independent mixed-Cause probes and representation decisions in [exit-cause.md](docs/research/exit-cause.md), before implementation. The first slice uses explicit Fail-only Cause data and Exit values over existing checked records/unions/arrays; synchronous Effect.exit refuses async and Clock/Random work inside capture. Runtime mixed causes, defects and child handles remain separate gates. Cause arrays allocate only when represented data is requested; scalar values and execution context gain no fields.

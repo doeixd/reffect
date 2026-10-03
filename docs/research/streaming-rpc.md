@@ -104,12 +104,20 @@ A stream's successful `Exit` carries `"value":null`.
 
    Original step: **NDJSON serialization** for NativeRpc (STREAM-001), unary first. Done when native answers equal an official `layerNdjson` server's, byte for byte, across the existing unary corpora.
 
-3. **Next.** The plan:
-   - **Authoring and binding:** a stream function (`R.Stream.fn(inputs, error, build)`), bound as `NativeRpc.bindStream`.
-   - **Native consumer:** a `StreamEmit` node. It encodes each chunk with the verified JSON encoders and awaits sending it to the request's sink, a bounded channel of 16 messages.
-   - **Runtime:** wraps chunks as `Chunk` messages and ends with `Exit`. NDJSON streams them through the response body; JSON buffers them.
-   - **Disconnect:** dropping the body cancels the producer through the existing cancellation path.
-   - **Reference:** builds the official `Stream` directly.
+3. **Done (2026-10-03).**
+   - **Authoring.** `R.Stream.fn(inputs, error, build)` is a `StreamFn`. Its `StreamEmit` body encodes each chunk with the verified JSON encoders, then awaits handing it to the host's sink. A closed sink or cancellation interrupts.
+   - **Binding.** NativeRpc binds it to a `stream: true` procedure. The request runs the function beside a forwarder that wraps chunks as `Chunk` messages on the body's 16-message channel. It then answers `Exit` `Success` with `null`, or the encoded failure.
+   - **Async response bodies** now go through that channel. NDJSON streams it, JSON buffers it.
+   - **Reference.** `Reference.stream` gives the official `Stream` for an RPC oracle. `StreamSinkHost` runs a streaming body in the reference directly.
+   - **Validation:** [stream-rpc.test.ts](../../packages/reffect/tests/stream-rpc.test.ts) matches the official server, byte for byte under NDJSON and as parsed JSON, for:
+     - a multi-chunk stream, an empty one, and one failing part-way;
+     - Unicode strings;
+     - a stream batched with a unary call;
+     - an invalid payload.
+
+     A stock `RpcClient` consumes the streams over both serializations.
+
+   - Showing incremental delivery (the first chunk before the stream ends) needs a timed source, so it moves to step 4.
 
    Original step: **Streaming procedures** (STREAM-006). Done when native responses equal the official server's byte for byte for the probe's table, under NDJSON and JSON, and a stock `RpcClient` over `layerNdjson` consumes a native stream incrementally (the first chunk arrives before the stream ends).
 
