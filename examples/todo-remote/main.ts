@@ -11,14 +11,16 @@ import { NodeServices } from "@effect/platform-node";
 import { Entity } from "foldkit-entity";
 import { ConnectionChangeSchema, NormalizedEntity, Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
+import type { MemoryStore } from "foldkit-remote-server";
 import {
   CargoApi,
   CompileError,
   NativeRemote,
   Reference,
   RemoteStoreHost,
+  memoryStoreApi,
 } from "../../packages/reffect/src/index.ts";
-import type { NativeRemoteMutation, RemoteStoreApi } from "../../packages/reffect/src/index.ts";
+import type { NativeRemoteMutation } from "../../packages/reffect/src/index.ts";
 import { AddTodo, Data, DeleteTodo, ToggleTodo, Todo, Todos, initial, rows } from "./domain.ts";
 import { addTodo, deleteTodo, mutations, toggleTodo } from "./sources.ts";
 
@@ -41,7 +43,7 @@ const session = Effect.gen(function* () {
   model = (yield* Remote.mutateInto(Data, model, AddTodo, { id: "t3", title: "Ship it" }, "r1"))
     .model;
   screens.push(["add t3", show(list.read(model))]);
-  model = (yield* Remote.mutateInto(Data, model, ToggleTodo, { id: "t2", done: true }, "r2")).model;
+  model = (yield* Remote.mutateInto(Data, model, ToggleTodo, { id: "t2" }, "r2")).model;
   screens.push(["toggle t2", show(list.read(model))]);
   model = (yield* Remote.mutateInto(Data, model, DeleteTodo, { id: "t1" }, "r3")).model;
   screens.push(["delete t1", show(list.read(model))]);
@@ -62,10 +64,10 @@ const Outcome = Schema.Struct({
 });
 // Upstream's memory backend running the same R sources over its own store.
 const reference =
-  (native: NativeRemoteMutation, store: RemoteStoreApi) =>
+  (native: NativeRemoteMutation, store: MemoryStore) =>
   ({ input }: { readonly input: unknown }) =>
     Reference.run(native.fn, [input]).pipe(
-      Effect.provideService(RemoteStoreHost, store),
+      Effect.provideService(RemoteStoreHost, memoryStoreApi(store)),
       Effect.catch((error) =>
         error instanceof CompileError
           ? Effect.die(error)

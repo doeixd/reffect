@@ -32,15 +32,27 @@ export const addTodo = NativeRemote.mutation(AddTodo, ({ input }) => {
   );
 });
 
+// Read-modify-write: the stored row is read and decoded, and its `done` flipped.
 export const toggleTodo = NativeRemote.mutation(ToggleTodo, ({ input }) => {
   const id = R.Struct.get(input, "id");
-  const values = Done.make({ done: R.Struct.get(input, "done") });
-  return R.Effect.flatMap(R.RemoteStore.write("Todo", id, values), () =>
-    R.Effect.succeed(
-      NativeRemote.outcome(ToggleTodo).make({
-        output: R.Struct({}).make({}),
-        entities: R.Array.make(NativeRemote.patch(Todo, id, values)),
-      }),
+  return R.Effect.flatMap(R.RemoteStore.get("Todo", id), (row) =>
+    R.Option(Done).match(
+      R.Option.flatMap(row, R.Schema.decodeUnknownOption(R.Schema.toCodecJson(Done))),
+      {
+        None: () => R.Effect.fail(NativeRemote.ServerError.make({ message: text("No such todo") })),
+        Some: (found) => {
+          const stored = R.Struct.get(found, "value");
+          const values = Done.make({ done: R.Boolean.not(R.Struct.get(stored, "done")) });
+          return R.Effect.flatMap(R.RemoteStore.write("Todo", id, values), () =>
+            R.Effect.succeed(
+              NativeRemote.outcome(ToggleTodo).make({
+                output: R.Struct({}).make({}),
+                entities: R.Array.make(NativeRemote.patch(Todo, id, values)),
+              }),
+            ),
+          );
+        },
+      },
     ),
   );
 });

@@ -249,6 +249,34 @@ mod remote_sql {
             let Some(tx) = guard.as_mut() else { return Err(FAILED.to_string()) };
             query.execute(&mut **tx).await.map(|done| done.rows_affected()).map_err(failed)
         }
+        /// The row as the wire holds it (RS-007): every column by kind and each foreign key as a
+        /// Target:id ref, read in this transaction.
+        pub async fn get(&self, entity: &str, id: &str) -> Result<Option<Value>, String> {
+            let result = self.get_now(entity, id).await;
+            result.map_err(|message| self.fail(message))
+        }
+        async fn get_now(&self, entity: &str, id: &str) -> Result<Option<Value>, String> {
+            let entity = self.entity(entity)?;
+            let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+            let columns: Vec<String> = entity.columns.iter().map(|column| quote(column.column)).chain(entity.relations.iter().map(|one| quote(one.column))).collect();
+            // Identifiers come from build-time storage; the ID is bound.
+            let sql = format!("SELECT {} FROM {} WHERE {} = {}", columns.join(", "), quote(entity.table), quote(entity.id), placeholder(1));
+            let mut guard = self.tx.lock().await;
+            let Some(tx) = guard.as_mut() else { return Err(FAILED.to_string()) };
+            let Some(row) = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id.to_string()).fetch_optional(&mut **tx).await.map_err(failed)? else { return Ok(None) };
+            let mut object = serde_json::Map::new();
+            for (index, column) in entity.columns.iter().enumerate() {
+                object.insert(column.field.to_string(), json_of(&cell(&row, index).map_err(failed)?, column.kind));
+            }
+            for (offset, one) in entity.relations.iter().enumerate() {
+                let value = match cell(&row, entity.columns.len() + offset).map_err(failed)? {
+                    Cell::Null => Value::Null,
+                    key => Value::String(format!("{}:{}", one.target, text_of(&key))),
+                };
+                object.insert(one.field.to_string(), value);
+            }
+            Ok(Some(Value::Object(object)))
+        }
         /// MemoryStore.write per column: the row becomes { ...existing, id, ...values }.
         pub async fn write(&self, entity: &str, id: &str, values: Value) -> Result<(), String> {
             let result = self.write_now(entity, id, values).await;

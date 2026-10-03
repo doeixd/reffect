@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import type { Duration } from "effect";
 import { FetchHttpClient, HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
@@ -63,6 +64,10 @@ const RenameThenRefuse = Mutation.make("RenameThenRefuse", {
   Input: { id: Schema.String, name: Schema.String },
   Output: {},
 });
+// Read-modify-write (RS-007): the stored rank, read in the mutation's transaction, plus one.
+const Bump = Mutation.make("Bump", { Input: { id: Schema.String }, Output: {} });
+// The same with a pause between the read and the write, so two can overlap.
+const SlowBump = Mutation.make("SlowBump", { Input: { id: Schema.String }, Output: {} });
 const RenameThenBreak = Mutation.make("RenameThenBreak", {
   Input: { id: Schema.String, name: Schema.String, fresh: Schema.String },
   Output: {},
@@ -161,7 +166,41 @@ const renameThenBreak = NativeRemote.mutation(RenameThenBreak, ({ input }) =>
       ),
   ),
 );
+const Ranked = R.Struct({ rank: R.Number });
+const bumpBy = (descriptor: typeof Bump | typeof SlowBump, pause: Duration.Input) =>
+  NativeRemote.mutation(descriptor, ({ input }) => {
+    const id = R.Struct.get(input, "id");
+    return R.Effect.flatMap(R.RemoteStore.get("Project", id), (row) =>
+      R.Option(Ranked).match(
+        R.Option.flatMap(row, R.Schema.decodeUnknownOption(R.Schema.toCodecJson(Ranked))),
+        {
+          None: () =>
+            R.Effect.fail(NativeRemote.ServerError.make({ message: text("No numeric rank") })),
+          Some: (found) => {
+            const stored = R.Struct.get(found, "value");
+            const values = Ranked.make({
+              rank: R.Number.add(R.Struct.get(stored, "rank"), R.Number.literal(1)),
+            });
+            return R.Effect.flatMap(R.Effect.sleep(pause), () =>
+              R.Effect.flatMap(R.RemoteStore.write("Project", id, values), () =>
+                R.Effect.succeed(
+                  NativeRemote.outcome(descriptor).make({
+                    output: empty.make({}),
+                    entities: R.Array.make(NativeRemote.patch(Project, id, values)),
+                  }),
+                ),
+              ),
+            );
+          },
+        },
+      ),
+    );
+  });
+const bump = bumpBy(Bump, 0);
+const slowBump = bumpBy(SlowBump, 400);
 const mutations: ReadonlyArray<NativeRemoteMutation> = [
+  bump,
+  slowBump,
   rename,
   create,
   archive,
@@ -231,6 +270,10 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
     mutate("RenameThenBreak", { id: "p07", name: "Gone", fresh: "p92" }),
   ],
   ["read after the second failure", read("p07")],
+  ["bump", mutate("Bump", { id: "p01" })],
+  ["bump again, reading the first bump", mutate("Bump", { id: "p01" })],
+  ["read bumped", read("p01")],
+  ["bump an absent row", mutate("Bump", { id: "zz" })],
   [
     "invalid input",
     mutate("Create", {
@@ -262,6 +305,11 @@ const officialServer = (db: SqlDatabase, bindings: SqlBackend["bindings"]) => {
             ),
           );
         const guarded: RemoteStoreApi = {
+          get: (entity, id) =>
+            Effect.suspend(() => {
+              const row = transaction.store.get(entity, id);
+              return Effect.isEffect(row) ? row : Effect.succeed(row);
+            }),
           write: (entity, id, values) =>
             Effect.suspend(() => guard(transaction.store.write(entity, id, values))),
           remove: (entity, id) => Effect.suspend(() => guard(transaction.store.remove(entity, id))),
@@ -296,6 +344,8 @@ const officialServer = (db: SqlDatabase, bindings: SqlBackend["bindings"]) => {
       RemoteServer.mutation(Broken, run(broken)),
       RemoteServer.mutation(RenameThenRefuse, run(renameThenRefuse)),
       RemoteServer.mutation(RenameThenBreak, run(renameThenBreak)),
+      RemoteServer.mutation(Bump, run(bump)),
+      RemoteServer.mutation(SlowBump, run(slowBump)),
     ],
   });
   return server;
@@ -318,6 +368,36 @@ const oracle = (db: SqlDatabase, bindings: SqlBackend["bindings"]) =>
       ]),
     );
     return HttpEffect.toWebHandler(http);
+  });
+
+/** The native SQL server over `db`, compiled for the backend's dialect; its address. */
+const startNative = (backend: SqlBackend, db: SqlDatabase, parent: string) =>
+  Effect.gen(function* () {
+    const artifact = yield* NativeRemote.compile(Group, {
+      domain,
+      sql: {
+        dialect: backend.dialect,
+        bindings: backend.bindings,
+        databaseUrlEnv: "REFFECT_DATABASE_URL",
+      },
+      mutations,
+    });
+    const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+    yield* CargoApi.fetch(directory);
+    yield* CargoApi.build(directory, "debug");
+    const child = yield* ChildProcess.make(
+      `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+      ["--port", "0"],
+      { env: { REFFECT_DATABASE_URL: db.url }, extendEnv: true },
+    );
+    yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+    const ready = yield* Stream.runHead(Stream.splitLines(Stream.decodeText(child.stdout))).pipe(
+      Effect.timeout("10 seconds"),
+    );
+    if (!Option.isSome(ready)) throw new Error("Missing ready record");
+    return Schema.decodeUnknownSync(
+      Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
+    )(JSON.parse(ready.value)).address;
   });
 
 for (const backend of sqlBackends)
@@ -343,37 +423,7 @@ for (const backend of sqlBackends)
                 );
                 return { status: response.status, body: await response.text() };
               });
-            const artifact = yield* NativeRemote.compile(Group, {
-              domain,
-              sql: {
-                dialect: backend.dialect,
-                bindings: backend.bindings,
-                databaseUrlEnv: "REFFECT_DATABASE_URL",
-              },
-              mutations,
-            });
-            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-            yield* CargoApi.fetch(directory);
-            yield* CargoApi.build(directory, "debug");
-            const child = yield* ChildProcess.make(
-              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-              ["--port", "0"],
-              {
-                env: { REFFECT_DATABASE_URL: nativeDb.url },
-                extendEnv: true,
-              },
-            );
-            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-            const ready = yield* Stream.runHead(
-              Stream.splitLines(Stream.decodeText(child.stdout)),
-            ).pipe(Effect.timeout("10 seconds"));
-            if (!Option.isSome(ready)) throw new Error("Missing ready record");
-            const { address } = Schema.decodeUnknownSync(
-              Schema.Struct({
-                schema: Schema.Literal("reffect.rpc.ready@1"),
-                address: Schema.String,
-              }),
-            )(JSON.parse(ready.value));
+            const address = yield* startNative(backend, nativeDb, parent);
             const post = (body: string) =>
               Effect.promise(async () => {
                 const response = await fetch(`http://${address}/rpc`, { method: "POST", body });
@@ -402,6 +452,8 @@ for (const backend of sqlBackends)
             expect(answer("a store failure after a write")).toContain("Database query failed");
             expect(answer("read after the second failure")).not.toContain("Gone");
             expect(answer("invalid input")).toContain("Invalid mutation input");
+            expect(answer("read bumped")).toContain('"rank":3');
+            expect(answer("bump an absent row")).toContain("No numeric rank");
           }),
         ).pipe(Effect.provide(NodeServices.layer)),
       );
@@ -500,37 +552,7 @@ for (const backend of sqlBackends)
             expect(seen(official.reloaded)).toContain("Zephyr");
             expect(seen(official.reloaded)).not.toContain("Zeta");
 
-            const artifact = yield* NativeRemote.compile(Group, {
-              domain,
-              sql: {
-                dialect: backend.dialect,
-                bindings: backend.bindings,
-                databaseUrlEnv: "REFFECT_DATABASE_URL",
-              },
-              mutations,
-            });
-            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-            yield* CargoApi.fetch(directory);
-            yield* CargoApi.build(directory, "debug");
-            const child = yield* ChildProcess.make(
-              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-              ["--port", "0"],
-              {
-                env: { REFFECT_DATABASE_URL: nativeDb.url },
-                extendEnv: true,
-              },
-            );
-            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-            const ready = yield* Stream.runHead(
-              Stream.splitLines(Stream.decodeText(child.stdout)),
-            ).pipe(Effect.timeout("10 seconds"));
-            if (!Option.isSome(ready)) throw new Error("Missing ready record");
-            const { address } = Schema.decodeUnknownSync(
-              Schema.Struct({
-                schema: Schema.Literal("reffect.rpc.ready@1"),
-                address: Schema.String,
-              }),
-            )(JSON.parse(ready.value));
+            const address = yield* startNative(backend, nativeDb, parent);
             const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
               Effect.provide(
                 RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
@@ -540,6 +562,63 @@ for (const backend of sqlBackends)
             );
             const native = yield* session.pipe(Effect.provide(Remote.clientLayer(rpc)));
             expect(native).toStrictEqual(official);
+          }),
+        ).pipe(Effect.provide(NodeServices.layer)),
+      );
+    },
+    nativeTestBudget(0) + 300000,
+  );
+
+// SQLX-012 with RS-007: two read-modify-writes of one row that overlap. Postgres SERIALIZABLE
+// refuses one rather than lose an update; SQLite's BEGIN IMMEDIATE runs them one after the other.
+// The official oracle shares one SQLite connection, so it joins only on Postgres.
+for (const backend of sqlBackends)
+  test.skipIf(backend.unavailable !== undefined)(
+    `overlapping read-modify-writes lose no update on ${backend.dialect}`,
+    async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sql-overlap-" });
+            const open = yield* backend.databases;
+            const nativeDb = yield* open("native");
+            const address = yield* startNative(backend, nativeDb, parent);
+            const servers: Array<readonly [string, (body: string) => Promise<string>]> = [
+              [
+                "native",
+                (body) =>
+                  fetch(`http://${address}/rpc`, { method: "POST", body }).then((r) => r.text()),
+              ],
+            ];
+            if (backend.dialect === "postgres") {
+              const official = yield* oracle(yield* open("official"), backend.bindings);
+              servers.push([
+                "official",
+                (body) =>
+                  official(new Request("http://reffect.test/rpc", { method: "POST", body })).then(
+                    (r) => r.text(),
+                  ),
+              ]);
+            }
+            const rankOf = (answer: string) => Number(/"rank":(\d+)/.exec(answer)?.[1]);
+            for (const [name, post] of servers) {
+              const before = rankOf(yield* Effect.promise(() => post(read("p02"))));
+              const answers = yield* Effect.promise(() =>
+                Promise.all([
+                  post(mutate("SlowBump", { id: "p02" })),
+                  post(mutate("SlowBump", { id: "p02" })),
+                ]),
+              );
+              const after = rankOf(yield* Effect.promise(() => post(read("p02"))));
+              const succeeded = answers.filter((a) => a.includes('"_tag":"Success"')).length;
+              const refused = answers.filter((a) => a.includes("Database query failed")).length;
+              expect(succeeded + refused, `${name} ${answers.join(" | ")}`).toBe(2);
+              // No lost update: the rank moved once per mutation that committed.
+              expect(after, name).toBe(before + succeeded);
+              if (backend.dialect === "postgres") expect(refused, name).toBe(1);
+              else expect(succeeded, name).toBe(2);
+            }
           }),
         ).pipe(Effect.provide(NodeServices.layer)),
       );

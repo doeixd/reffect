@@ -1,10 +1,14 @@
 /**
  * `Schema.encodeSync(Schema.toCodecJson(S))` for R witnesses (RM-006): typed values become the
- * `Unknown` JSON the wire carries. The reference runs the official codec. Natively, a NativeRpc
+ * `Unknown` JSON the wire carries; `Schema.decodeUnknownOption(Schema.toCodecJson(S))` (RS-007)
+ * reads such JSON back as an Option. The reference runs the official codec. Natively, a NativeRpc
  * host supplies each encoder from its codecs verified against that same codec, so a target
  * without the `JsonEncoders` capability refuses the operation instead of guessing an encoding.
  */
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
+import { OptionIR } from "./option.ts";
+import type { OptionValue } from "./option.ts";
+import { UndefinedOr } from "./records.ts";
 import {
   Capabilities,
   Expr,
@@ -51,6 +55,40 @@ const encodeOperation = (witness: IRType<unknown>): EncodeJson => {
   return operation;
 };
 
+type DecodeJson = Operation<readonly [IRType<unknown>], unknown>;
+const decodersByWitness = new Map<string, DecodeJson>();
+const decodedWitnesses = new WeakMap<object, IRType<unknown>>();
+/**
+ * The decode half: `Unknown` to `UndefinedOr<W>`, undefined when the JSON is not a `W`. Natively
+ * that is Rust `Option<W>`, from the same verified decoder the server uses for requests.
+ */
+const decodeOperation = (witness: IRType<unknown>): DecodeJson => {
+  const known = decodersByWitness.get(witness.id);
+  if (known) {
+    if (!IRType.same(decodedWitnesses.get(known)!, witness))
+      throw fail(
+        "TYPE_MISMATCH",
+        "authoring",
+        "Schema.toCodecJson",
+        `Witness ID ${witness.id} is reused with a different schema`,
+      );
+    return known;
+  }
+  if (IRType.same(witness, NeverType))
+    throw fail("TYPE_MISMATCH", "authoring", "Schema.toCodecJson", "Never has no values");
+  const decode = Schema.decodeUnknownOption(Schema.toCodecJson(witness.schema));
+  const operation: DecodeJson = Operation.make(
+    SemanticRef.operation(`reffect/schema.decode-json-option@1/${witness.id}`),
+    [UnknownType] as const,
+    UndefinedOr(witness),
+    (value) => Option.getOrUndefined(decode(value)),
+  ).pipe(Operation.withCapabilities([Capabilities.Json, Capabilities.JsonEncoders]));
+  decodersByWitness.set(witness.id, operation);
+  decodedWitnesses.set(operation, witness);
+  hostFunctions.set(operation, jsonDecoderName(witness));
+  return operation;
+};
+
 /** The host function implementing an operation, for operations a NativeRpc host supplies. */
 export const hostFunctionOf = (operation: AnyOperation): string | undefined =>
   hostFunctions.get(operation);
@@ -82,6 +120,9 @@ hostFunctions.set(StableStringify, "stable_stringify");
 /** The witness an encode operation encodes, or undefined for any other operation. */
 export const jsonEncodedWitness = (operation: AnyOperation): IRType<unknown> | undefined =>
   witnesses.get(operation);
+/** The witness a decode operation decodes, or undefined for any other operation. */
+export const jsonDecodedWitness = (operation: AnyOperation): IRType<unknown> | undefined =>
+  decodedWitnesses.get(operation);
 
 // FNV-1a: encoder names only need to be stable and distinct per witness ID.
 const digest = (text: string): string => {
@@ -95,6 +136,9 @@ const digest = (text: string): string => {
 /** The Rust function a host defines in `crate::reffect_json` for this witness. */
 export const jsonEncoderName = (witness: IRType<unknown>): string =>
   `json_${digest(witness.id)}_${witness.id.length}`;
+/** The Rust decoder a host defines in `crate::reffect_json` for this witness. */
+export const jsonDecoderName = (witness: IRType<unknown>): string =>
+  `json_decode_${digest(witness.id)}_${witness.id.length}`;
 
 /** A witness's canonical JSON codec, `Schema.toCodecJson`. */
 export interface JsonCodec<A> {
@@ -114,5 +158,23 @@ export const SchemaIR = Object.freeze({
           "The value's witness differs from the codec's",
         );
       return Expr.apply(encodeOperation(codec.witness), value);
+    },
+  /**
+   * `Schema.decodeUnknownOption(codec)(value)`: `Some` of the decoded value, or `None` when the
+   * JSON is not one; the parse issue itself is not represented yet.
+   */
+  decodeUnknownOption:
+    <A>(codec: JsonCodec<A>) =>
+    (value: Expr<unknown>): Expr<OptionValue<A>> => {
+      if (!IRType.same(value.type, UnknownType))
+        throw fail(
+          "TYPE_MISMATCH",
+          "authoring",
+          "Schema.decodeUnknownOption",
+          "Decodes an Unknown value",
+        );
+      return OptionIR.fromUndefinedOr(
+        Expr.apply(decodeOperation(codec.witness), value) as Expr<A | undefined>,
+      );
     },
 });

@@ -9,7 +9,7 @@ import { drizzle as drizzleSqlite } from "drizzle-orm/node-sqlite";
 import { drizzle as drizzlePostgres } from "drizzle-orm/node-postgres";
 import { databaseLayer } from "foldkit-remote-drizzle";
 import type { DrizzleDatabase } from "foldkit-remote-drizzle";
-import type { RemoteStoreApi, SqlDialect } from "../../src/index.ts";
+import type { RemoteStoreApi, SqlDialect, StoredRow } from "../../src/index.ts";
 import { bound, pgBound, schemaSql, seed, seedProjects, seedUsers } from "./remote-sql-domain.ts";
 import { postgresServer, postgresUnavailable } from "./postgres.ts";
 
@@ -49,6 +49,7 @@ const sqlStore = (
   dialect: SqlDialect,
   bindings: typeof bound | typeof pgBound,
   run: (sql: string, params: ReadonlyArray<unknown>) => Effect.Effect<number>,
+  select: (sql: string, params: ReadonlyArray<unknown>) => Effect.Effect<StoredRow>,
 ): RemoteStoreApi => {
   const at = (n: number) => `${dialect === "postgres" ? "$" : "?"}${n}`;
   const tableOf = (entity: string) => (entity === "Project" ? "projects" : "users");
@@ -65,7 +66,23 @@ const sqlStore = (
     if (typeof value === "string" || typeof value === "number" || value === null) return value;
     throw new Error(`Unexpected value for ${field}`);
   };
+  // A stored row as the wire holds it: fields by binding key, booleans as booleans, refs.
+  const wire = (entity: string, row: Readonly<Record<string, unknown>>) => {
+    const binding = entity === "Project" ? bindings.Project : bindings.User;
+    const out: Record<string, unknown> = {};
+    for (const [field, column] of Object.entries(binding.columns)) {
+      const value = row[column.name];
+      out[field] = column.dataType === "boolean" && typeof value === "number" ? value !== 0 : value;
+    }
+    if (entity === "Project")
+      out.owner = typeof row.owner_id === "string" ? `User:${row.owner_id}` : null;
+    return out;
+  };
   return {
+    get: (entity, id) =>
+      select(`select * from ${tableOf(entity)} where id = ${at(1)}`, [id]).pipe(
+        Effect.map((row) => (row === undefined ? undefined : wire(entity, row))),
+      ),
     write: (entity, id, values) =>
       Effect.gen(function* () {
         const entries = Object.entries(values).filter(([field]) => field !== "id");
@@ -106,13 +123,12 @@ export const sqliteBackend: SqlBackend = {
           (db) => Effect.sync(() => db.close()),
         );
         const exec = (sql: string) => Effect.sync(() => db.exec(sql));
+        const sqlParams = (params: ReadonlyArray<unknown>) =>
+          params.map((param) => param as string | number | null);
         const run = (sql: string, params: ReadonlyArray<unknown>) =>
-          Effect.sync(() =>
-            Number(
-              db.prepare(sql).run(...params.map((param) => param as string | number | null))
-                .changes,
-            ),
-          );
+          Effect.sync(() => Number(db.prepare(sql).run(...sqlParams(params)).changes));
+        const select = (sql: string, params: ReadonlyArray<unknown>) =>
+          Effect.sync((): StoredRow => db.prepare(sql).get(...sqlParams(params)));
         const url = `sqlite:${file.replaceAll("\\", "/")}`;
         return {
           dialect: "sqlite" as const,
@@ -121,7 +137,7 @@ export const sqliteBackend: SqlBackend = {
           layer: databaseLayer(drizzleSqlite({ client: db })),
           begin: exec("BEGIN IMMEDIATE").pipe(
             Effect.as({
-              store: sqlStore("sqlite", bound, run),
+              store: sqlStore("sqlite", bound, run, select),
               commit: exec("COMMIT"),
               rollback: exec("ROLLBACK"),
             }),
@@ -159,10 +175,17 @@ export const postgresBackend: SqlBackend = {
               }
             });
           return {
-            store: sqlStore("postgres", pgBound, (sql, params) =>
-              Effect.promise(() => client.query(sql, [...params])).pipe(
-                Effect.map((result) => result.rowCount ?? 0),
-              ),
+            store: sqlStore(
+              "postgres",
+              pgBound,
+              (sql, params) =>
+                Effect.promise(() => client.query(sql, [...params])).pipe(
+                  Effect.map((result) => result.rowCount ?? 0),
+                ),
+              (sql, params) =>
+                Effect.promise(() => client.query(sql, [...params])).pipe(
+                  Effect.map((result): StoredRow => result.rows[0]),
+                ),
             ),
             commit: end("COMMIT"),
             rollback: end("ROLLBACK"),

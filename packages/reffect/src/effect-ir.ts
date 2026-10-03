@@ -35,6 +35,7 @@ import {
   arrayItem,
   fail,
   structLayout,
+  undefinedOrItem,
   unionCases,
 } from "./kernel.ts";
 import type { Diagnostic, Inputs, MatchCase, Symbols } from "./kernel.ts";
@@ -185,10 +186,13 @@ export type ComputationNode =
     }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
   | { readonly _tag: "Launch"; readonly values: readonly Expr<unknown>[] }
-  /** A Remote memory store write or removal (RS-001); `values` is the encoded row patch. */
+  /**
+   * A Remote store read, write or removal (RS-001, RS-007); `values` is the encoded row patch of
+   * a write. A read yields the stored row as `UndefinedOr<Unknown>`.
+   */
   | {
       readonly _tag: "RemoteStore";
-      readonly op: "Write" | "Remove";
+      readonly op: "Get" | "Write" | "Remove";
       readonly entity: string;
       readonly id: Expr<unknown>;
       readonly values: Expr<unknown> | undefined;
@@ -497,24 +501,39 @@ export const remoteStore = (
   values: Expr<unknown> | undefined,
 ): Computation<void, never> =>
   Computation.make(UnitType, NeverType, { _tag: "RemoteStore", op, entity, id, values });
+/** The stored row, wire-shaped JSON (RS-007); `output` is the `UndefinedOr<Unknown>` witness. */
+export const remoteStoreGet = (
+  entity: string,
+  id: Expr<string>,
+  output: IRType<unknown>,
+): Computation<unknown, never> =>
+  Computation.make(output, NeverType, {
+    _tag: "RemoteStore",
+    op: "Get",
+    entity,
+    id,
+    values: undefined,
+  });
 const remoteStoreReference = (
-  op: "Write" | "Remove",
+  op: "Get" | "Write" | "Remove",
   entity: string,
   id: unknown,
   values: unknown,
-): Effect.Effect<void> =>
+): Effect.Effect<unknown> =>
   Effect.serviceOption(RemoteStoreHost).pipe(
     Effect.flatMap(
       Option.match({
         onNone: () =>
           Effect.die(new Error("RemoteStore requires a RemoteStoreHost in the reference")),
         onSome: (store) =>
-          Effect.suspend(() => {
+          Effect.suspend((): Effect.Effect<unknown> => {
             const done =
-              op === "Write"
-                ? store.write(entity, String(id), values as Readonly<Record<string, unknown>>)
-                : store.remove(entity, String(id));
-            return Effect.isEffect(done) ? done : Effect.void;
+              op === "Get"
+                ? store.get(entity, String(id))
+                : op === "Write"
+                  ? store.write(entity, String(id), values as Readonly<Record<string, unknown>>)
+                  : store.remove(entity, String(id));
+            return Effect.isEffect(done) ? done : Effect.succeed(done);
           }),
       }),
     ),
@@ -1012,8 +1031,18 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           });
         },
         RemoteStore: (n) => {
-          if (!IRType.same(c.output, UnitType) || !IRType.same(c.error, NeverType))
-            add(at, "RemoteStore operations require Unit/Never channels");
+          const row = undefinedOrItem(c.output);
+          const typed =
+            n.op === "Get"
+              ? row !== undefined && IRType.same(row, UnknownType)
+              : IRType.same(c.output, UnitType);
+          if (!typed || !IRType.same(c.error, NeverType))
+            add(
+              at,
+              n.op === "Get"
+                ? "RemoteStore.get yields UndefinedOr<Unknown> and never fails"
+                : "RemoteStore writes require Unit/Never channels",
+            );
           if (n.entity.length === 0) add(at, "RemoteStore entity names are nonempty");
           if (!IRType.same(n.id.type, StringType)) add(`${at}.id`, "Row IDs are Strings");
           if (

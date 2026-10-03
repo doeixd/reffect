@@ -581,6 +581,7 @@ const compile = <Rpcs extends Rpc.Any>(
               begin:
                 "REMOTE_SQL.begin().await.map(|session| std::sync::Arc::new(session) as std::sync::Arc<dyn reffect_generated::RemoteStore>)",
               impl: `impl reffect_generated::RemoteStore for remote_sql::Session {
+    fn get<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::RowFuture<'a> { Box::pin(remote_sql::Session::get(self, entity, id)) }
     fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::write(self, entity, id, values)) }
     fn remove<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::remove(self, entity, id)) }
     fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(remote_sql::Session::finish(self, commit)) }
@@ -640,6 +641,11 @@ ${embedded.rust || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, PartialE
               "Ok::<std::sync::Arc<dyn reffect_generated::RemoteStore>, String>(std::sync::Arc::new(MemorySession(remote_memory())))",
             impl: `struct MemorySession(&'static remote_engine::Memory);
 impl reffect_generated::RemoteStore for MemorySession {
+    // The row as stored, in its JS key order, as upstream's rows(entity) holds it.
+    fn get<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::RowFuture<'a> {
+        let row = self.0.get(entity, id).map(|row| serde_json::Value::Object(row.iter().map(|(key, value)| (key.clone(), value.clone())).collect()));
+        Box::pin(std::future::ready(Ok(row)))
+    }
     fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> reffect_generated::StoreFuture<'a> {
         if let serde_json::Value::Object(values) = values { self.0.write(entity, id, values.into_iter().collect()); }
         Box::pin(std::future::ready(Ok(())))

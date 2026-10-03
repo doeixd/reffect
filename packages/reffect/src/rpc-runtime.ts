@@ -1,29 +1,10 @@
 import type { RsStmt } from "./rust-emit.ts";
 
-/** Audited HTTP substrate; dynamic tags/fields/calls are emitted separately through Rs. */
-export const rpcRuntime = (
-  frameCleanup?: RsStmt,
-  asynchronous = false,
-  ranges = false,
-  layered = false,
-): string => String.raw`
-use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
-use serde_json::{json, Value};
-
-fn success(value: Value) -> Value { json!({"_tag":"Success", "value":value}) }
-fn failure(error: Value) -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Fail", "error":error}]}) }
-fn exit(id: &Value, value: Value) -> Value {
-    json!({"_tag":"Exit", "requestId":id, "exit":value})
-}
-fn die(id: &Value, message: String) -> Value {
-    exit(id, json!({"_tag":"Failure", "cause":[{"_tag":"Die", "defect":message}]}))
-}
-fn invalid(message: &str) -> Value {
-    json!({"_tag":"Defect", "defect":{"name":"ProtocolError", "message":message}})
-}
-fn field<'a>(payload: &'a Value, name: &str) -> Result<&'a Value, String> {
-    payload.as_object().and_then(|o| o.get(name)).ok_or_else(|| path_error("Missing key", Some(name)))
-}
+/**
+ * The scalar JSON argument decoders with the official messages: the server's request decoding
+ * and the library's `reffect_json` decoders (RS-007) share this text.
+ */
+export const decodeArgs = (ranges: boolean): string => String.raw`
 fn path_error(message: &str, name: Option<&str>) -> String {
     match name { None => message.to_string(), Some(name) => format!("{}\n  at [{}]", message, serde_json::to_string(name).unwrap()) }
 }
@@ -66,7 +47,33 @@ fn bool_arg(value: &Value, name: Option<&str>) -> Result<bool, String> {
 fn unit_arg(value: &Value, name: Option<&str>) -> Result<(), String> {
     if value.is_null() { Ok(()) } else { Err(path_error("Expected null", name)) }
 }
-struct RequestContext<'a> { id: &'a Value, tag: &'a str, principal: Option<u64> }
+`;
+
+/** Audited HTTP substrate; dynamic tags/fields/calls are emitted separately through Rs. */
+export const rpcRuntime = (
+  frameCleanup?: RsStmt,
+  asynchronous = false,
+  ranges = false,
+  layered = false,
+): string => String.raw`
+use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
+use serde_json::{json, Value};
+
+fn success(value: Value) -> Value { json!({"_tag":"Success", "value":value}) }
+fn failure(error: Value) -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Fail", "error":error}]}) }
+fn exit(id: &Value, value: Value) -> Value {
+    json!({"_tag":"Exit", "requestId":id, "exit":value})
+}
+fn die(id: &Value, message: String) -> Value {
+    exit(id, json!({"_tag":"Failure", "cause":[{"_tag":"Die", "defect":message}]}))
+}
+fn invalid(message: &str) -> Value {
+    json!({"_tag":"Defect", "defect":{"name":"ProtocolError", "message":message}})
+}
+fn field<'a>(payload: &'a Value, name: &str) -> Result<&'a Value, String> {
+    payload.as_object().and_then(|o| o.get(name)).ok_or_else(|| path_error("Missing key", Some(name)))
+}
+${decodeArgs(ranges)}struct RequestContext<'a> { id: &'a Value, tag: &'a str, principal: Option<u64> }
 ${asynchronous ? "async " : ""}fn request(message: &Value, headers: &HeaderMap, state: &RuntimeState${asynchronous ? ", cancellation: &tokio::sync::watch::Receiver<bool>" : ""}) -> Value {
     let Some(object) = message.as_object() else { return invalid("Expected Request object") };
     let Some(id) = object.get("id").filter(|v| v.is_string() || v.is_number()) else { return invalid("Invalid request id") };

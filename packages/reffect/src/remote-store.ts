@@ -4,10 +4,18 @@
  * `RemoteServer.memory(...)`'s own store; natively the server passes its store through the
  * execution context (RS-003).
  */
-import { Computation, remoteStore } from "./effect-ir.ts";
-import { Expr, IRType, StringType, fail, structLayout } from "./kernel.ts";
+import { Computation, EffectIR, remoteStore, remoteStoreGet } from "./effect-ir.ts";
+import { Expr, IRType, StringType, UnknownType, fail, structLayout } from "./kernel.ts";
+import { OptionIR } from "./option.ts";
+import type { OptionValue } from "./option.ts";
+import { UndefinedOr } from "./records.ts";
 import { SchemaIR } from "./schema-json.ts";
-export { RemoteStoreHost, type RemoteStoreApi } from "./remote-store-host.ts";
+export {
+  RemoteStoreHost,
+  memoryStoreApi,
+  type RemoteStoreApi,
+  type StoredRow,
+} from "./remote-store-host.ts";
 
 const entityName = (entity: string, at: string): string => {
   if (entity.length === 0)
@@ -15,6 +23,19 @@ const entityName = (entity: string, at: string): string => {
   return entity;
 };
 export const RemoteStoreIR = Object.freeze({
+  /**
+   * The stored row with this ID, as the wire holds it (RS-007), read where the mutation runs: in
+   * its transaction on SQL. Decode it with `Schema.decodeUnknownOption(Schema.toCodecJson(W))`.
+   */
+  get: (entity: string, id: Expr<string>): Computation<OptionValue<unknown>, never> =>
+    EffectIR.map(
+      remoteStoreGet(
+        entityName(entity, "RemoteStore.get"),
+        checkedId(id, "RemoteStore.get"),
+        UndefinedOr(UnknownType),
+      ),
+      (row) => OptionIR.fromUndefinedOr(row),
+    ),
   /**
    * `store.write(entity, id, values)`: the row becomes `{ ...existing, id, ...values }`. `values`
    * is a Struct of the entity's wire-shaped fields, stored as its JSON encoding (RM-006).

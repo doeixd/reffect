@@ -29,7 +29,7 @@ export const Message = defineMessageUnion({
   GotRemoteMessage: { message: Remote.Message },
   ChangedDraft: { value: Schema.String },
   SubmittedDraft: {},
-  ClickedToggle: { id: Schema.String, done: Schema.Boolean },
+  ClickedToggle: { id: Schema.String },
   ClickedDelete: { id: Schema.String },
 });
 export type Message = typeof Message.Type;
@@ -74,8 +74,8 @@ export const update = (
         commands: [started.command],
       };
     },
-    ClickedToggle: ({ id, done }) => {
-      const started = foldData.mutate(model, ToggleTodo, { id, done });
+    ClickedToggle: ({ id }) => {
+      const started = foldData.mutate(model, ToggleTodo, { id });
       return { model: started.model, commands: [started.command] };
     },
     ClickedDelete: ({ id }) => {
@@ -104,7 +104,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => {
                     h.input([
                       h.Type("checkbox"),
                       h.Checked(todo.done),
-                      h.OnClick(Message.ClickedToggle({ id, done: !todo.done })),
+                      h.OnClick(Message.ClickedToggle({ id })),
                     ]),
                     h.span([], [todo.title]),
                     h.button([h.OnClick(Message.ClickedDelete({ id }))], ["Delete"]),

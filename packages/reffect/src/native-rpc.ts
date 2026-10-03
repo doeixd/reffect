@@ -1,7 +1,13 @@
 import { Cause, Effect, Exit, Match, Option, Schema, SchemaAST, SchemaIssue } from "effect";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
-import { StableStringify, jsonEncodedWitness, jsonEncoderName } from "./schema-json.ts";
+import {
+  StableStringify,
+  jsonDecodedWitness,
+  jsonDecoderName,
+  jsonEncodedWitness,
+  jsonEncoderName,
+} from "./schema-json.ts";
 import { FailureFrames } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
@@ -52,7 +58,7 @@ import type { RsExpr } from "./rust-emit.ts";
 import { RpcCodecs, u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
 import { rpcAuthRuntime } from "./rpc-auth-runtime.ts";
-import { rpcRuntime } from "./rpc-runtime.ts";
+import { decodeArgs, rpcRuntime } from "./rpc-runtime.ts";
 
 const U64Json = RpcCodecs.U64Json;
 const StringJson = RpcCodecs.StringJson;
@@ -1013,23 +1019,37 @@ const jsonModule = (plan: Plan): { readonly text: string; readonly stable: boole
     const witness = jsonEncodedWitness(operation);
     return witness ? [witness] : [];
   });
+  const decoded = plan.analysis.operations.flatMap((operation) => {
+    const witness = jsonDecodedWitness(operation);
+    return witness ? [witness] : [];
+  });
   const stable = plan.analysis.operations.some(
     (operation) => operation.ref === StableStringify.ref,
   );
-  if (witnesses.length === 0 && !stable) return { text: "", stable };
+  if (witnesses.length === 0 && decoded.length === 0 && !stable) return { text: "", stable };
   const registry: Registry = new Map();
-  const encoders = witnesses.map((type) => {
+  const codecOf = (type: IRType<unknown>, decode: boolean) => {
     const path = `Schema.toCodecJson(${type.id})`;
-    const kind = codec(contractSchemaOf(type, path).ast, path, false, registry, false);
+    const kind = codec(contractSchemaOf(type, path).ast, path, decode, registry, false);
     if (kind === "never" || !IRType.same(witnessOf(kind), type))
       throw unsupported(path, "No verified JSON codec maps back onto this witness");
-    return { name: jsonEncoderName(type), type, codec: kind };
-  });
+    return kind;
+  };
+  const encoders = witnesses.map((type) => ({
+    name: jsonEncoderName(type),
+    type,
+    codec: codecOf(type, false),
+  }));
+  const decoders = decoded.map((type) => ({
+    name: jsonDecoderName(type),
+    type,
+    codec: codecOf(type, true),
+  }));
   return {
     text: `
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 pub mod reffect_json {
-${compositeCodecs(Array.from(registry.values()), encoders)}${stable ? stableStringifyRust : ""}}
+${compositeCodecs(Array.from(registry.values()), encoders, decoders)}${stable ? stableStringifyRust : ""}}
 `,
     stable,
   };
@@ -1833,6 +1853,7 @@ interface JsonEncoder {
 const compositeCodecs = (
   composites: readonly Composite[],
   encoders?: readonly JsonEncoder[],
+  decoders: readonly JsonEncoder[] = [],
 ): string => {
   const rustType = (type: IRType<unknown>): string => {
     const item = arrayItem(type);
@@ -2031,22 +2052,8 @@ const compositeCodecs = (
       encode: `fn encode_${name}(value: &${rustType(shape.type)}) -> Value {\n    match value {\n${variants.map((v) => v.encode).join("")}    }\n}\n`,
     };
   });
-  if (encoders)
-    return `use crate as reffect_generated;
-use serde_json::Value;
-${
-  composites.some((shape) => shape.number !== undefined) ? jsNumber : ""
-}${items.map((item) => item.encode).join("")}${encoders
-      .map((encoder) =>
-        // Read-only inputs arrive borrowed (`&str`, slices); owned values coerce to them.
-        IRType.same(encoder.type, StringType)
-          ? `pub fn ${encoder.name}(value: &str) -> Value { Value::String(value.to_string()) }
-`
-          : `pub fn ${encoder.name}(value: &${borrowedType(encoder.type)}) -> Value { ${encodeField(encoder.codec, "(*value)")} }
-`,
-      )
-      .join("")}`;
-  return `struct Path<'a> { parent: Option<&'a Path<'a>>, name: &'a str, index: bool }
+  // Paths, scalar readers and JS-shaped helpers the decoders call.
+  const decodePrelude = `struct Path<'a> { parent: Option<&'a Path<'a>>, name: &'a str, index: bool }
 fn at(message: &str, path: Option<&Path>) -> String {
     let mut names = Vec::new();
     let mut current = path;
@@ -2101,5 +2108,34 @@ fn array_index(key: &str) -> Option<u32> {
 `
       : ""
   }
-${items.map((item) => item.decode + item.encode).join("")}`;
+`;
+  const encoderFns = (list: readonly JsonEncoder[]): string =>
+    list
+      .map((encoder) =>
+        // Read-only inputs arrive borrowed (`&str`, slices); owned values coerce to them.
+        IRType.same(encoder.type, StringType)
+          ? `pub fn ${encoder.name}(value: &str) -> Value { Value::String(value.to_string()) }
+`
+          : `pub fn ${encoder.name}(value: &${borrowedType(encoder.type)}) -> Value { ${encodeField(encoder.codec, "(*value)")} }
+`,
+      )
+      .join("");
+  if (encoders && decoders.length > 0)
+    // The library decodes stored JSON (RS-007) with the server's verified decoders and helpers.
+    return `use crate as reffect_generated;
+use serde_json::Value;
+${decodeArgs(true)}${decodePrelude}${items.map((item) => item.decode + item.encode).join("")}${encoderFns(encoders)}${decoders
+      .map(
+        (decoder) =>
+          `pub fn ${decoder.name}(value: &Value) -> Option<${rustType(decoder.type)}> { ${decodeField(decoder.codec, "value", "None")}.ok() }
+`,
+      )
+      .join("")}`;
+  if (encoders)
+    return `use crate as reffect_generated;
+use serde_json::Value;
+${
+  composites.some((shape) => shape.number !== undefined) ? jsNumber : ""
+}${items.map((item) => item.encode).join("")}${encoderFns(encoders)}`;
+  return `${decodePrelude}${items.map((item) => item.decode + item.encode).join("")}`;
 };

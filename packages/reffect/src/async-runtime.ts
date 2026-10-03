@@ -41,7 +41,10 @@ ${
 pub type StoreFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>;
 /// One mutation's session of the Remote store a host serves (RS-003, SQLX-006): MemoryStore
 /// semantics per operation, and for SQL one transaction the host commits or rolls back.
+pub type RowFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<serde_json::Value>, String>> + Send + 'a>>;
 pub trait RemoteStore: Send + Sync {
+    /// The stored row, wire-shaped, read in the session (RS-007).
+    fn get<'a>(&'a self, entity: &'a str, id: &'a str) -> RowFuture<'a>;
     fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> StoreFuture<'a>;
     fn remove<'a>(&'a self, entity: &'a str, id: &'a str) -> StoreFuture<'a>;
     /// Ends the session: commit when the source succeeded, otherwise roll back.
@@ -97,6 +100,10 @@ impl AsyncContext {
         let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };
         let done = match write { Some(values) => store.write(entity, id, values).await, None => store.remove(entity, id).await };
         done.map_err(|_| AsyncError::Interrupted)
+    }
+    async fn remote_store_get<E>(&mut self, entity: &str, id: &str) -> Result<Option<serde_json::Value>, AsyncError<E>> {
+        let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };
+        store.get(entity, id).await.map_err(|_| AsyncError::Interrupted)
     }`
         : ""
     }

@@ -6,6 +6,7 @@ import { NodeServices } from "@effect/platform-node";
 import { Entity, Expr, Order, Relation } from "foldkit-entity";
 import { ConnectionChangeSchema, Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
+import type { MemoryStore } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import {
   CargoApi,
@@ -15,8 +16,9 @@ import {
   R,
   Reference,
   RemoteStoreHost,
+  memoryStoreApi,
 } from "../src/index.ts";
-import type { NativeRemoteMutation, RemoteStoreApi } from "../src/index.ts";
+import type { NativeRemoteMutation } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
 
@@ -61,10 +63,12 @@ const Create = Mutation.make("Create", {
   Output: { id: Schema.String },
 });
 const Archive = Mutation.make("Archive", { Input: { id: Schema.String }, Output: {} });
+// Read-modify-write (RS-007): the stored rank is read, decoded and incremented.
+const Bump = Mutation.make("Bump", { Input: { id: Schema.String }, Output: {} });
 const domain = Remote.define({
   entities: [User, Project],
   queries: [ByStatus, Labeled],
-  mutations: [Rename, Create, Archive, Ping],
+  mutations: [Rename, Create, Archive, Ping, Bump],
 });
 const rows = {
   User: [
@@ -155,7 +159,35 @@ const archive = NativeRemote.mutation(Archive, ({ input }) => {
     ),
   );
 });
-const mutations: readonly NativeRemoteMutation[] = [rename, create, archive, ping];
+const Ranked = R.Struct({ rank: R.Number });
+// None when the row is absent or its rank is not a number (null), each a typed refusal.
+const bump = NativeRemote.mutation(Bump, ({ input }) => {
+  const id = R.Struct.get(input, "id");
+  return R.Effect.flatMap(R.RemoteStore.get("Project", id), (row) =>
+    R.Option(Ranked).match(
+      R.Option.flatMap(row, R.Schema.decodeUnknownOption(R.Schema.toCodecJson(Ranked))),
+      {
+        None: () =>
+          R.Effect.fail(NativeRemote.ServerError.make({ message: text("No numeric rank") })),
+        Some: (found) => {
+          const stored = R.Struct.get(found, "value");
+          const values = Ranked.make({
+            rank: R.Number.add(R.Struct.get(stored, "rank"), R.Number.literal(1)),
+          });
+          return R.Effect.flatMap(R.RemoteStore.write("Project", id, values), () =>
+            R.Effect.succeed(
+              NativeRemote.outcome(Bump).make({
+                output: R.Struct({}).make({}),
+                entities: R.Array.make(NativeRemote.patch(Project, id, values)),
+              }),
+            ),
+          );
+        },
+      },
+    ),
+  );
+});
+const mutations: readonly NativeRemoteMutation[] = [rename, create, archive, ping, bump];
 
 const request = (tag: string, payload: unknown) =>
   JSON.stringify({ _tag: "Request", id: "1", tag, payload, headers: [] });
@@ -197,6 +229,11 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
     mutate("Create", { id: "p2", name: "Apex", owner: "User:u2", rank: -0 }),
   ],
   ["read overwritten", read("p2")],
+  ["bump", mutate("Bump", { id: "p1" })],
+  ["bump again, reading the first bump", mutate("Bump", { id: "p1" })],
+  ["read bumped", read("p1")],
+  ["bump a null rank", mutate("Bump", { id: "p5" })],
+  ["bump an absent row", mutate("Bump", { id: "zz" })],
   ["archive", mutate("Archive", { id: "p5" })],
   ["read archived", read("p5")],
   ["drafts after archive", byStatus("draft")],
@@ -221,10 +258,10 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
 const oracle = Effect.gen(function* () {
   // The R source over upstream's store, its outcome as upstream types it.
   const run =
-    (store: RemoteStoreApi, native: NativeRemoteMutation) =>
+    (store: MemoryStore, native: NativeRemoteMutation) =>
     ({ input }: { readonly input: unknown }) =>
       Reference.run(native.fn, [input]).pipe(
-        Effect.provideService(RemoteStoreHost, store),
+        Effect.provideService(RemoteStoreHost, memoryStoreApi(store)),
         Effect.catch((error) =>
           error instanceof CompileError
             ? Effect.die(error)
@@ -265,6 +302,7 @@ const oracle = Effect.gen(function* () {
       RemoteServer.mutation(Rename, run(store, rename)),
       RemoteServer.mutation(Create, run(store, create)),
       RemoteServer.mutation(Archive, run(store, archive)),
+      RemoteServer.mutation(Bump, run(store, bump)),
       RemoteServer.mutation(Ping, run(store, ping)),
     ],
   }).server;
@@ -393,6 +431,9 @@ test(
           // The corpus reaches each path, not only agreeing failures.
           const answer = (label: string) => answers.get(label) ?? "";
           expect(answer("read after rename")).toContain("Zephyr");
+          expect(answer("read bumped")).toContain('"rank":4');
+          expect(answer("bump a null rank")).toContain("No numeric rank");
+          expect(answer("bump an absent row")).toContain("No numeric rank");
           expect(answer("rename")).toContain('"entities":[{"entity":"Project","id":"p1"');
           expect(answer("rename refused")).toContain("Name required");
           expect(answer("read created")).toContain("Aurora");

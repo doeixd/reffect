@@ -19,8 +19,9 @@ export const AddTodo = Mutation.make("AddTodo", {
   Input: { id: Schema.String, title: Schema.String },
   Output: { id: Schema.String },
 });
+// The server reads the stored todo and flips it, so the client sends only which one.
 export const ToggleTodo = Mutation.make("ToggleTodo", {
-  Input: { id: Schema.String, done: Schema.Boolean },
+  Input: { id: Schema.String },
   Output: {},
 });
 export const DeleteTodo = Mutation.make("DeleteTodo", {

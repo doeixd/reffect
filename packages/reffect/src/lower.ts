@@ -264,7 +264,7 @@ type HelperBody =
     }
   | {
       readonly _tag: "RemoteStore";
-      readonly op: "Write" | "Remove";
+      readonly op: "Get" | "Write" | "Remove";
       readonly entity: string;
       readonly id: RustBlock;
       readonly values: RustBlock | undefined;
@@ -2269,17 +2269,27 @@ export const emitFunctions = (
             ]),
           // A store operation awaits its session; a failure aborts through the interruption path.
           RemoteStore: (n) =>
-            joinFragments([
-              "{ match ctx.remote_store(",
-              ...(n.values ? ["Some(", renderBlock(n.values), ")"] : ["None"]),
-              `, ${Rs.stringLiteral(n.entity).text}, &(`,
-              renderBlock(n.id),
-              ")).await { Ok(()) => Ok(()), ",
-              captureFrames
-                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
-                : "Err(error) => Err(error)",
-              " } }",
-            ]),
+            n.op === "Get"
+              ? joinFragments([
+                  `{ match ctx.remote_store_get(${Rs.stringLiteral(n.entity).text}, &(`,
+                  renderBlock(n.id),
+                  ")).await { Ok(row) => Ok(row), ",
+                  captureFrames
+                    ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
+                    : "Err(error) => Err(error)",
+                  " } }",
+                ])
+              : joinFragments([
+                  "{ match ctx.remote_store(",
+                  ...(n.values ? ["Some(", renderBlock(n.values), ")"] : ["None"]),
+                  `, ${Rs.stringLiteral(n.entity).text}, &(`,
+                  renderBlock(n.id),
+                  ")).await { Ok(()) => Ok(()), ",
+                  captureFrames
+                    ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
+                    : "Err(error) => Err(error)",
+                  " } }",
+                ]),
           Repeat: (n) =>
             joinFragments([
               "{ let mut completed: u64 = 0u64; loop { match ",

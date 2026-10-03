@@ -14,6 +14,7 @@ import { defineMessageUnion } from "foldkit/message";
 import { Entity, Expr, Order, Relation } from "foldkit-entity";
 import { Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
+import type { MemoryStore } from "foldkit-remote-server";
 import { Surface } from "foldkit-surface";
 import { expect, test } from "vite-plus/test";
 import {
@@ -23,8 +24,9 @@ import {
   R,
   Reference,
   RemoteStoreHost,
+  memoryStoreApi,
 } from "../src/index.ts";
-import type { NativeRemoteMutation, RemoteStoreApi } from "../src/index.ts";
+import type { NativeRemoteMutation } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 
 // The domain of foldkit-remote-server's memory test, plus a paged to-many relation.
@@ -241,10 +243,10 @@ const editing = Effect.gen(function* () {
 });
 /** A reference source: the R function over upstream's store, its outcome as upstream types it. */
 const referenceRun =
-  (native: NativeRemoteMutation, store: RemoteStoreApi) =>
+  (native: NativeRemoteMutation, store: MemoryStore) =>
   ({ input }: { readonly input: unknown }) =>
     Reference.run(native.fn, [input]).pipe(
-      Effect.provideService(RemoteStoreHost, store),
+      Effect.provideService(RemoteStoreHost, memoryStoreApi(store)),
       Effect.catch((error) =>
         error instanceof CompileError
           ? Effect.die(error)
