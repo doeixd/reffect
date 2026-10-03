@@ -186,7 +186,21 @@ Checked against [implementation milestones §20](../implementation-milestones.md
 | Mutations, connection changes, compiled sources                   | [remote-mutate](../../packages/reffect/tests/remote-mutate.test.ts)                                                                                                         |
 | Stock `Remote.clientLayer` with no native-specific client code    | [remote-acceptance](../../packages/reffect/tests/remote-acceptance.test.ts), [todo-remote example](../../examples/todo-remote/README.md): reads, queries, mutations in Node |
 
-**Accepted in Node, with one item outstanding:** a real browser running a stock Foldkit app against the native server. That needs CORS or a same-origin host, and has not been demonstrated yet.
+**Accepted (2026-10-03), including the browser.** [`examples/todo-remote/web`](../../examples/todo-remote/web) is a stock Foldkit application:
+
+- `Runtime.makeApplication` with Remote in the Model and `Remote.fold`;
+- `Data.active` for the list read;
+- `foldData.mutate` from `update`;
+- a stock `RpcClient` as `resources`.
+
+It ran in Chrome against the native server through a Vite same-origin proxy, with no native-specific client code:
+
+- the list rendered from the native Query;
+- an added todo appeared through its `append` connection change;
+- a toggle and a delete updated in place;
+- a reload showed all three persisted on the server.
+
+The `/rpc` POSTs answered 200, and the console showed no errors. This was a manual run with browser automation, not a repeatable test.
 
 Out of milestone 4 by design:
 

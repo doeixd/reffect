@@ -18,6 +18,23 @@ reload               [x] Compile it natively   [ ] Ship it
 native screens equal upstream's memory backend
 ```
 
+## In a browser
+
+[`web/`](web) is the same list as an ordinary Foldkit application:
+
+- Remote lives in the Model, and the list read is active through `Data.active`.
+- `foldData.mutate` starts the three mutations from `update`.
+- A stock `RpcClient` reaches `/rpc` on its own origin.
+
+Start the native server, then the Vite dev server, which proxies `/rpc` to it:
+
+```sh
+vp exec node --experimental-transform-types examples/todo-remote/main.ts --serve 8787
+vp dev examples/todo-remote/web
+```
+
+Open the printed address. New todos get IDs from a per-tab session prefix passed as Flags, so `update` stays pure.
+
 ## The files
 
 - **[domain.ts](domain.ts)** holds ordinary Foldkit declarations: the `Todo` entity, the `Todos` query (`Query.define`, ordered by title) and three mutations. Browser code imports only this file.

@@ -89,29 +89,36 @@ const upstream = RemoteServer.memory({
   ],
 });
 
-const native = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-remote-" });
-  const artifact = yield* NativeRemote.compile(RemoteRpc.omit("FoldkitRemoteLive"), {
-    domain: Data,
-    rows,
-    mutations,
+/** Compiles, builds and starts the native server; its address once it is listening. */
+const startServer = (port: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-remote-" });
+    const artifact = yield* NativeRemote.compile(RemoteRpc.omit("FoldkitRemoteLive"), {
+      domain: Data,
+      rows,
+      mutations,
+    });
+    const directory = yield* CargoApi.write(artifact, `${parent}/server`);
+    yield* CargoApi.fetch(directory);
+    yield* CargoApi.build(directory);
+    const server = yield* ChildProcess.make(
+      `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+      ["--port", port],
+    );
+    yield* Stream.runDrain(server.stderr).pipe(Effect.forkScoped);
+    const ready = yield* Stream.runHead(Stream.splitLines(Stream.decodeText(server.stdout))).pipe(
+      Effect.timeout("10 seconds"),
+    );
+    if (!Option.isSome(ready)) throw new Error("Missing server ready record");
+    const { address } = Schema.decodeUnknownSync(
+      Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
+    )(JSON.parse(ready.value));
+    return address;
   });
-  const directory = yield* CargoApi.write(artifact, `${parent}/server`);
-  yield* CargoApi.fetch(directory);
-  yield* CargoApi.build(directory);
-  const server = yield* ChildProcess.make(
-    `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-    ["--port", "0"],
-  );
-  yield* Stream.runDrain(server.stderr).pipe(Effect.forkScoped);
-  const ready = yield* Stream.runHead(Stream.splitLines(Stream.decodeText(server.stdout))).pipe(
-    Effect.timeout("10 seconds"),
-  );
-  if (!Option.isSome(ready)) throw new Error("Missing server ready record");
-  const { address } = Schema.decodeUnknownSync(
-    Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
-  )(JSON.parse(ready.value));
+
+const native = Effect.gen(function* () {
+  const address = yield* startServer("0");
   const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true }).pipe(
     Effect.provide(
       RpcClient.layerProtocolHttp({ url: `http://${address}/rpc` }).pipe(
@@ -134,13 +141,23 @@ const native = Effect.gen(function* () {
   return yield* session.pipe(Effect.provideContext(client));
 });
 
+// `--serve [port]` keeps the native server running for the browser app in `web/`.
+const serve = process.argv.indexOf("--serve");
 await Effect.runPromise(
-  Effect.gen(function* () {
-    const expected = yield* session.pipe(Effect.provide(upstream.layer));
-    const screens = yield* Effect.scoped(native);
-    for (const [label, screen] of screens) console.log(`${label.padEnd(20)} ${screen}`);
-    if (JSON.stringify(screens) !== JSON.stringify(expected))
-      throw new Error("The native server's screens differ from upstream's memory backend");
-    console.log("native screens equal upstream's memory backend");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  serve >= 0
+    ? Effect.scoped(
+        Effect.gen(function* () {
+          const address = yield* startServer(process.argv[serve + 1] ?? "8787");
+          console.log(`native todo server listening on http://${address}/rpc (Ctrl-C stops it)`);
+          return yield* Effect.never;
+        }),
+      ).pipe(Effect.provide(NodeServices.layer))
+    : Effect.gen(function* () {
+        const expected = yield* session.pipe(Effect.provide(upstream.layer));
+        const screens = yield* Effect.scoped(native);
+        for (const [label, screen] of screens) console.log(`${label.padEnd(20)} ${screen}`);
+        if (JSON.stringify(screens) !== JSON.stringify(expected))
+          throw new Error("The native server's screens differ from upstream's memory backend");
+        console.log("native screens equal upstream's memory backend");
+      }).pipe(Effect.provide(NodeServices.layer)),
 );

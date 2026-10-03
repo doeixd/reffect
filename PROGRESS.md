@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Milestone 4 accepted in a browser
+
+- Added [`examples/todo-remote/web`](examples/todo-remote/web): a stock Foldkit application with `Remote.fold`, `Data.active` and `foldData.mutate`, and a stock `RpcClient` as `resources`.
+  - It reaches the native server through a Vite same-origin proxy. `main.ts --serve` keeps the native server running.
+- Ran it in Chrome: the list rendered; add (by connection change), toggle and delete worked; a reload showed the server persisted them. `/rpc` answered 200 and the console showed no errors.
+- With that run, milestone 4 is accepted within the memory profile ([status](docs/research/native-remote.md#milestone-4-status-2026-10-03)).
+- The example type-checks (`vp check`). The browser run was manual with browser automation; it is not a repeatable test.
+
 ## 2026-10-03 — R language direction, simplified
 
 - Replaced [R language direction](docs/r-language.md) with the smaller design that converges back on the original architecture: **TypeScript is the unrestricted macro/metaprogramming language; R is the tiny typed semantic language it constructs.**
