@@ -538,20 +538,7 @@ for (const backend of sqlBackends)
                 ),
               ),
             );
-            // Remote's transport admits only Remote's errors (foldkit-plus#141).
-            const transport: RemoteRpcClient = {
-              FoldkitRemoteRead: (payload) =>
-                rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-              FoldkitRemoteQuery: (payload) =>
-                rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-              FoldkitRemoteMutate: (payload) =>
-                rpc
-                  .FoldkitRemoteMutate(payload)
-                  .pipe(Effect.catchTag("RpcClientError", Effect.die)),
-              FoldkitRemoteLive: (payload) =>
-                rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
-            };
-            const native = yield* session.pipe(Effect.provide(Remote.clientLayer(transport)));
+            const native = yield* session.pipe(Effect.provide(Remote.clientLayer(rpc)));
             expect(native).toStrictEqual(official);
           }),
         ).pipe(Effect.provide(NodeServices.layer)),

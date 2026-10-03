@@ -243,7 +243,7 @@ const checked = (name: string, body: AnyQuery): CheckedQuery => {
             strategy: "generated" as const,
             rationale:
               op === "contains"
-                ? "Verified non-NUL ASCII folding with literal substring search"
+                ? "foldkit-entity 0.7.0 containment: ASCII folding over UTF-16 units, NUL refused"
                 : "Encoded primitive comparison with SQL unknown propagation",
           }),
         ),
@@ -387,12 +387,30 @@ const emitQuery = (query: CheckedQuery): string => {
       ),
     ),
   ]);
+  // foldkit-entity 0.7.0 checks every key before sorting, term by term in row order, so its
+  // refusal names the first null key whatever the sort would compare (foldkit-plus#142). Kinds
+  // are fixed per field here, so the mixed-kind refusal cannot arise.
+  const nullKey = (term: { readonly index: number }) =>
+    `[foldkit-entity] query "${query.analysis.entity}" orders by "${query.analysis.fields[term.index].key}", which is null in a row; where nulls sort is a thing databases disagree about, so it is outside what this interpreter will answer for`;
   const validateOrder = query.order.map((term) =>
     Rs.blockStmt(
       Rs.forLoop(
         Rs.pat("index"),
         Rs.refExpr(Rs.identExpr(Rs.ident("selected"))),
         Rs.inlineStmtBlock(
+          Rs.blockStmt(
+            Rs.if_(
+              Rs.cmp(
+                rowKey(
+                  Rs.indexExpr(rowsRef, Rs.prefix("*", Rs.identExpr(Rs.ident("index")))),
+                  term,
+                ),
+                "==",
+                Rs.pathExpr(Rs.path([Rs.ident("Value"), Rs.ident("Null")])),
+              ),
+              Rs.inlineStmtBlock(Rs.stmt(Rs.return_(Rs.err(Rs.stringLiteral(nullKey(term)))))),
+            ),
+          ),
           Rs.stmt(
             Rs.try_(
               Rs.call(Rs.identExpr(Rs.ident("compare")), [

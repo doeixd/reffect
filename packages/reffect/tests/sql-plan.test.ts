@@ -148,6 +148,9 @@ const agree = async (
   return full;
 };
 
+const postgresFolding = new Set([
+  "contains folds ASCII letters only: an accented capital does not match its lowercase",
+]);
 const dialects = [
   { dialect: "sqlite" as const, unavailable: undefined },
   { dialect: "postgres" as const, unavailable: postgresUnavailable },
@@ -206,7 +209,12 @@ for (const { dialect, unavailable } of dialects)
           };
           const source = query(descriptor, { entity: binding });
           const full = await agree(db, plan, source, testCase.input as Row, testCase.what);
-          expect(full, testCase.what).toEqual(testCase.expected);
+          // Upstream's Postgres SQL folds `contains` with `lower()`, by the database collation,
+          // while its evaluator folds ASCII only (foldkit-entity 0.7.0). Native follows the
+          // Drizzle source (SQLX-002); this fails once upstream makes the two agree.
+          if (dialect === "postgres" && postgresFolding.has(testCase.what))
+            expect(full, testCase.what).not.toEqual(testCase.expected);
+          else expect(full, testCase.what).toEqual(testCase.expected);
           compared++;
         }
         // Every shared case is inside the profile: its inputs are already wire-shaped primitives.

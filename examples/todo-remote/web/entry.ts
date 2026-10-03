@@ -2,30 +2,18 @@
  * Boots the app with a stock Effect RPC client for the published Remote contract. `/rpc` is the
  * same origin: the Vite dev server proxies it to the native server.
  */
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { Runtime } from "foldkit";
 import { Remote, RemoteRpc } from "foldkit-remote";
-import type { RemoteRpcClient } from "foldkit-remote";
 import { Flags, Message, Model, init, subscriptions, update, view } from "./app.ts";
 
-// Remote's transport admits only Remote's errors: a transport failure is a defect here
-// (foldkit-plus#141).
+// Remote.clientLayer takes the stock client; a transport failure becomes a Remote error.
 const RemoteLive = Layer.unwrap(
   Effect.gen(function* () {
     const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true });
-    const transport: RemoteRpcClient = {
-      FoldkitRemoteRead: (payload) =>
-        rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-      FoldkitRemoteQuery: (payload) =>
-        rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-      FoldkitRemoteMutate: (payload) =>
-        rpc.FoldkitRemoteMutate(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-      FoldkitRemoteLive: (payload) =>
-        rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
-    };
-    return Remote.clientLayer(transport);
+    return Remote.clientLayer(rpc);
   }),
 ).pipe(
   Layer.provide(

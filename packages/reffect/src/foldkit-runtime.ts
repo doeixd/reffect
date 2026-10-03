@@ -11,18 +11,20 @@ pub fn eq(a: &Value, b: &Value) -> Value {
 pub fn null(a: &Value, present: bool) -> Value {
     Value::Bool(matches!(a, Value::Null) != present)
 }
+/// foldkit-entity 0.7.0 \`contains\`: unknown for null, NUL refused, ASCII letters folded and
+/// every other UTF-16 unit compared as it is (as SQLite's \`lower\` without ICU).
 pub fn contains(a: &Value, b: &Value) -> Result<Value, &'static str> {
     if matches!(a, Value::Null) || matches!(b, Value::Null) { return Ok(Value::Null); }
     match (a, b) {
         (Value::Text(a), Value::Text(b)) => {
-            if a.iter().chain(b).any(|v| *v == 0 || *v > 127) {
-                return Err("UNSUPPORTED_CONTAINMENT: only non-NUL ASCII operands have verified three-interpreter semantics");
+            if a.iter().chain(b).any(|v| *v == 0) {
+                return Err("[foldkit-entity] a containment test was given text holding a NUL character, which SQL text cannot hold portably");
             }
             let fold = |s: &[u16]| -> Vec<u16> { s.iter().map(|v| if (65..=90).contains(v) { v + 32 } else { *v }).collect() };
             let a = fold(a); let b = fold(b);
             Ok(Value::Bool(b.is_empty() || a.windows(b.len()).any(|w| w == b)))
         }
-        _ => Err("INVALID_CONTAINMENT: operands must be text or null"),
+        _ => Err("[foldkit-entity] a containment test was given something that is not text"),
     }
 }
 pub fn compare(a: &Value, b: &Value) -> Result<Ordering, &'static str> {

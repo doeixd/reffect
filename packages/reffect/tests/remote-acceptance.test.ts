@@ -13,7 +13,6 @@ import { NodeServices } from "@effect/platform-node";
 import { defineMessageUnion } from "foldkit/message";
 import { Entity, Expr, Order, Relation } from "foldkit-entity";
 import { Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
-import type { RemoteRpcClient } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import { Surface } from "foldkit-surface";
 import { expect, test } from "vite-plus/test";
@@ -145,19 +144,7 @@ const nativeClient = (artifact: Parameters<typeof CargoApi.write>[0]) =>
         ),
       ),
     );
-    // RemoteRpcClient admits only Remote's own errors, so any Effect RPC transport turns its
-    // RpcClientError into a defect; upstream's examples use hand-written transports instead.
-    const transport: RemoteRpcClient = {
-      FoldkitRemoteRead: (payload) =>
-        rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-      FoldkitRemoteQuery: (payload) =>
-        rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-      FoldkitRemoteMutate: (payload) =>
-        rpc.FoldkitRemoteMutate(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-      FoldkitRemoteLive: (payload) =>
-        rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
-    };
-    return yield* Layer.build(Remote.clientLayer(transport));
+    return yield* Layer.build(Remote.clientLayer(rpc));
   });
 
 test(

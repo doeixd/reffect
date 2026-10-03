@@ -185,6 +185,17 @@ for (const backend of sqlBackends)
             expect(answer("first and last together")).toContain("cannot combine");
             expect(answer("select through the owner")).toContain('"entity":"User"');
             expect(answer("search for an underscore")).toContain('"id":"p05"');
+            // foldkit-remote-drizzle 0.9.1 refuses a NUL search as a protocol defect; native answers
+            // the same message as a typed RemoteQueryError (registered in native divergences).
+            const nul = ask("Search", { term: "a\u0000b" });
+            const message =
+              '[foldkit-remote-drizzle] query \\"Search\\" searches for text holding a NUL character';
+            const officialNul = (yield* officialPost(nul)).body;
+            expect(officialNul).toContain('"_tag":"Defect"');
+            expect(officialNul).toContain(message);
+            const nativeNul = (yield* post(nul)).body;
+            expect(nativeNul).toContain('"_tag":"RemoteQueryError"');
+            expect(nativeNul).toContain(message);
             if (backend.dialect === "postgres")
               expect(answer("search folds per database")).toContain('"id":"p04"');
             else expect(answer("search folds per database")).toContain('"edges":[]');

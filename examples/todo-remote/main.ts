@@ -10,7 +10,6 @@ import { RpcClient, RpcSerialization } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
 import { Entity } from "foldkit-entity";
 import { ConnectionChangeSchema, NormalizedEntity, Remote, RemoteRpc } from "foldkit-remote";
-import type { RemoteRpcClient } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import {
   CargoApi,
@@ -126,18 +125,7 @@ const native = Effect.gen(function* () {
       ),
     ),
   );
-  // Remote's transport admits only Remote's errors: a transport failure is a defect here.
-  const transport: RemoteRpcClient = {
-    FoldkitRemoteRead: (payload) =>
-      rpc.FoldkitRemoteRead(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-    FoldkitRemoteQuery: (payload) =>
-      rpc.FoldkitRemoteQuery(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-    FoldkitRemoteMutate: (payload) =>
-      rpc.FoldkitRemoteMutate(payload).pipe(Effect.catchTag("RpcClientError", Effect.die)),
-    FoldkitRemoteLive: (payload) =>
-      rpc.FoldkitRemoteLive(payload).pipe(Stream.catchTag("RpcClientError", Stream.die)),
-  };
-  const client = yield* Layer.build(Remote.clientLayer(transport));
+  const client = yield* Layer.build(Remote.clientLayer(rpc));
   return yield* session.pipe(Effect.provideContext(client));
 });
 

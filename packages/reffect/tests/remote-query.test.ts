@@ -207,32 +207,14 @@ test(
               successValue(reference.body),
             );
           }
-          // NR-017: ordering two rows by a null key is refused by both, with different text.
+          // NR-017 closed by foldkit-entity 0.7.0 (#142): ordering by a null key is refused before
+          // sorting, naming the first null in row order, so both servers answer the same bytes.
           const nullOrder = query("Ranked", { status: "draft" });
-          const failure = (body: string) => {
-            const parsed: unknown = JSON.parse(body);
-            const exit = Array.isArray(parsed) ? (parsed[0] as { exit: unknown }).exit : undefined;
-            return Schema.decodeUnknownSync(
-              Schema.Struct({
-                _tag: Schema.Literal("Failure"),
-                cause: Schema.Tuple([
-                  Schema.Struct({
-                    _tag: Schema.Literal("Fail"),
-                    error: Schema.Struct({
-                      _tag: Schema.Literal("RemoteQueryError"),
-                      message: Schema.String,
-                    }),
-                  }),
-                ]),
-              }),
-            )(exit);
-          };
-          const officialRefusal = failure((yield* officialPost(nullOrder)).body);
-          const nativeRefusal = failure((yield* post(nullOrder)).body);
-          expect(officialRefusal.cause[0].error.message).toContain(
-            'orders by "rank", which is null',
-          );
-          expect(nativeRefusal.cause[0].error.message).toContain("UNSUPPORTED_ORDERING");
+          const officialRefusal = yield* officialPost(nullOrder);
+          const nativeRefusal = yield* post(nullOrder);
+          expect(officialRefusal.body).toContain('orders by \\"rank\\", which is null in a row');
+          expect(nativeRefusal.status).toBe(officialRefusal.status);
+          expect(JSON.parse(nativeRefusal.body)).toStrictEqual(JSON.parse(officialRefusal.body));
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );

@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Cause, Effect, Exit, FileSystem, Option, Schema, SchemaGetter } from "effect";
 import { NodeServices } from "@effect/platform-node";
 import { Entity, Expr, Order, Query, evaluate } from "foldkit-entity";
-import type { AnyQuery, Row } from "foldkit-entity";
+import type { AnyQuery, Predicate, Row } from "foldkit-entity";
 import { cases, rows } from "foldkit-entity/conformance";
 import { and, asc, desc, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
@@ -10,7 +10,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, Compile, CompileError, Foldkit } from "../src/index.ts";
 import type { FoldkitArtifact } from "../src/index.ts";
-import { compileOrderBy, compileWhere } from "./fixtures/foldkit-drizzle-compile.ts";
+import { compileOrderBy, compileWhere } from "foldkit-remote-drizzle";
 import { nativeTestBudget } from "./native-test-budget.ts";
 
 const table = sqliteTable("conformance_rows", {
@@ -136,7 +136,8 @@ test(
             Object.entries(testQueries).concat([["snapshot", snapshot]]),
           );
           const artifact = yield* Foldkit.compile(queries);
-          Object.assign(literal, { value: "b" });
+          // Nodes are frozen as they are built (foldkit-plus#138), so the compiled snapshot cannot drift.
+          expect(Object.isFrozen(literal)).toBe(true);
           const fs = yield* FileSystem.FileSystem;
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-foldkit-edge-" });
           const crate = `${dir}/crate`;
@@ -200,20 +201,43 @@ test(
               ).toEqual(wildcardRows);
             }
           }
-          for (const input of [{ text: "é" }, { text: "\0" }]) {
-            const exit = yield* Effect.exit(
-              Foldkit.run(artifact, crate, "contains", input, [{ text: "ascii" }]),
+          // foldkit-entity 0.7.0 folds ASCII letters only and refuses NUL (foldkit-plus#136); native
+          // answers and refuses exactly as evaluate does.
+          const accented = [{ text: "Élan" }, { text: "ascii" }];
+          for (const text of ["é", "É", "élan", "Él", "LAN"])
+            expect(yield* Foldkit.run(artifact, crate, "contains", { text }, accented)).toEqual(
+              evaluate(testQueries.contains, { text }, accented),
             );
+          const refusal = (run: () => unknown) => {
+            try {
+              run();
+            } catch (error) {
+              // The native runner prints the message in Rust's Debug form, a quoted string.
+              return JSON.stringify(error instanceof Error ? error.message : String(error));
+            }
+            throw new Error("evaluate did not refuse");
+          };
+          for (const [input, rows] of [
+            [{ text: "\0" }, [{ text: "ascii" }]],
+            [{ text: "a" }, [{ text: "a\0b" }]],
+          ] as const) {
+            const exit = yield* Effect.exit(Foldkit.run(artifact, crate, "contains", input, rows));
             expect(Exit.isFailure(exit)).toBe(true);
             if (Exit.isFailure(exit))
-              expect(String(exit.cause)).toContain("UNSUPPORTED_CONTAINMENT");
+              expect(String(exit.cause)).toContain(
+                refusal(() => evaluate(testQueries.contains, input, rows)),
+              );
           }
+          // The refusal names the first null key in row order, as upstream now does (#142).
+          const nullRank = [{ rank: 1 }, { rank: null }, { rank: 2 }];
           const orderExit = yield* Effect.exit(
-            Foldkit.run(artifact, crate, "stable", {}, [{ rank: null }, { rank: 1 }]),
+            Foldkit.run(artifact, crate, "stable", {}, nullRank),
           );
           expect(Exit.isFailure(orderExit)).toBe(true);
           if (Exit.isFailure(orderExit))
-            expect(String(orderExit.cause)).toContain("UNSUPPORTED_ORDERING");
+            expect(String(orderExit.cause)).toContain(
+              refusal(() => evaluate(testQueries.stable, {}, nullRank)),
+            );
           const nonfinite = yield* Effect.exit(
             Foldkit.run(artifact, crate, "stable", {}, [{ rank: NaN }, { rank: 1 }]),
           );
@@ -327,11 +351,15 @@ test("compilation refuses unsupported representations, foreign identities, inval
       decoded: Query.from(Dated).pipe(Query.where(Expr.eq(Dated.fields.at, new Date()))),
     }),
   ).toContain("UNSUPPORTED_REPRESENTATION");
-  const predicate = Expr.eq(Item.fields.id, "a");
-  const query = from.pipe(Query.where(predicate));
+  // Upstream freezes nodes and checks ownership in Query.where (foldkit-plus#138), so malformed
+  // bodies are built as altered copies, bypassing it; reffect's own checks must still refuse them.
+  const altered = <A extends object>(node: A, change: object) => Object.assign({ ...node }, change);
+  const withWhere = (...where: ReadonlyArray<Predicate>) => ({ ...from, where });
   const impostor = Entity.define("Item", Schema.Struct({ id: Schema.String }));
-  Object.assign(predicate, { left: Expr.field(impostor.fields.id) });
-  expect(await codes({ foreign: query })).toContain("FOREIGN_FIELD");
+  const foreign = withWhere(
+    altered(Expr.eq(Item.fields.id, "a"), { left: Expr.field(impostor.fields.id) }),
+  );
+  expect(await codes({ foreign })).toContain("FOREIGN_FIELD");
   const conflicting = from.pipe(
     Query.where(
       Expr.eq(Item.fields.rank, Expr.input("x", Schema.Number)),
@@ -339,22 +367,20 @@ test("compilation refuses unsupported representations, foreign identities, inval
     ),
   );
   expect(await codes({ conflicting })).toContain("INPUT_WITNESS_MISMATCH");
-  const wrongField = Expr.field(Item.fields.rank);
-  const nullPredicate = Expr.isNull(wrongField);
-  const spoofed = from.pipe(Query.where(nullPredicate));
-  Object.assign(nullPredicate.operand, { schema: Schema.String });
+  const spoofed = withWhere(
+    altered(Expr.isNull(Item.fields.rank), {
+      operand: altered(Expr.field(Item.fields.rank), { schema: Schema.String }),
+    }),
+  );
   expect(await codes({ spoofed })).toContain("FIELD_WITNESS_MISMATCH");
-  const loop = Expr.eq(Item.fields.active, true);
-  const cyclic = from.pipe(Query.where(loop));
+  const loop = altered(Expr.eq(Item.fields.active, true), {});
   Object.assign(loop, { right: loop });
-  expect(await codes({ cyclic })).toContain("CYCLIC_IR");
-  const malformedNull = Expr.isNull(Item.fields.id);
-  const malformed = from.pipe(Query.where(malformedNull));
-  Object.assign(malformedNull, { present: "false" });
+  expect(await codes({ cyclic: withWhere(loop) })).toContain("CYCLIC_IR");
+  const malformed = withWhere(altered(Expr.isNull(Item.fields.id), { present: "false" }));
   expect(await codes({ malformed })).toContain("INVALID_IR");
-  const nonText = Expr.contains(Item.fields.text, "x");
-  const invalidContains = from.pipe(Query.where(nonText));
-  Object.assign(nonText, { value: Expr.field(Item.fields.rank) });
+  const invalidContains = withWhere(
+    altered(Expr.contains(Item.fields.text, "x"), { value: Expr.field(Item.fields.rank) }),
+  );
   expect(await codes({ invalidContains })).toContain("UNSUPPORTED_CONTAINMENT");
 });
 

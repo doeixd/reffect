@@ -307,6 +307,9 @@ export const planQuery = (
               Literal: (literal): SqlParam => {
                 if (literal.value !== null && typeof literal.value !== "string")
                   throw unsupported(path, "A search is text");
+                // As foldkit-remote-drizzle 0.9.1 refuses it: SQL text cannot hold NUL portably.
+                if (literal.value?.includes("\u0000"))
+                  throw unsupported(path, "A search holding NUL cannot be held in SQL text");
                 return { _tag: "Literal", value: literal.value as string | null, kind: "string" };
               },
               Input: (input): SqlParam => ({ _tag: "Input", key: input.key, kind: "string" }),

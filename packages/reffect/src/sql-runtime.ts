@@ -381,6 +381,12 @@ mod remote_sql {
             if (window.after.is_some() && window.before.is_some()) || (window.first.is_some() && window.last.is_some()) {
                 return Err("A query window cannot combine after with before, or first with last".to_string());
             }
+            // foldkit-remote-drizzle 0.9.1 refuses a search holding NUL, which SQL text cannot hold
+            // portably. Upstream throws it as a defect; a client's input answers a typed refusal here.
+            let nul = def.forward.params.iter().any(|param| matches!(param, Param::PatternInput(key) if input.get(*key).and_then(Value::as_str).is_some_and(|search| search.contains('\0'))));
+            if nul {
+                return Err(format!("[foldkit-remote-drizzle] query \"{}\" searches for text holding a NUL character, which SQL text cannot hold portably", def.name));
+            }
             // shapeWindow
             let requested = window.first.or(window.last);
             let size = match requested { Some(n) if n.is_finite() && n.fract() == 0.0 && n >= 0.0 => n, _ => DEFAULT_PAGE_SIZE }.min(MAX_PAGE_SIZE) as i64;
