@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-03 — Milestone 7 review
+
+- [remote-live.md § Review](docs/research/remote-live.md#review-2026-10-03) records the review of the milestone 7 commits (`900322b`..`9ecd4ad`).
+- **Defects (LR-1..4):**
+  - LR-1: a failed re-read after a SQL commit misreports the committed mutation and skips the remaining signals;
+  - LR-2: native unsubscription on disconnect is untested;
+  - LR-3: the status claims overstated delivery; PLAN.md and the record are corrected here;
+  - LR-4: `live: true` with JSON can never answer.
+- **Debts and minor items (LR-5..12)** are recorded in [open work](docs/open-work.md).
+- **What held up:** explicit signals checked against upstream's own hub, byte-exact differential tests, cursor/queue ordering under one lock, and shared limit and authorization code.
+- **Next:** fix LR-1..4 as `review(live):` commits.
+
 ## 2026-10-03 — Milestone 7 step 3: stock live client and a live todo example
 
 - **Stock client.** Remote's stock `RemoteClient.live`, over a stock `RpcClient` with NDJSON, decodes native Live into the same `LiveEvent`s as over upstream's handlers.

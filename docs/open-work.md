@@ -82,6 +82,19 @@ These block many items below.
 ### Engine
 
 - Per-entity live sources ([remote-live](research/remote-live.md#order-of-work-and-acceptance))
+- Live review fixes ([review](research/remote-live.md#review-2026-10-03)):
+  - LR-1: after a SQL commit, apply every signal and never fail the committed mutation;
+  - LR-2: evidence native unsubscription on disconnect;
+  - LR-3: run Foldkit's `Data.live` subscriptions and the browser example end to end;
+  - LR-4: refuse `live: true` without NDJSON.
+- Live design debts ([review](research/remote-live.md#review-2026-10-03)):
+  - LR-5: a separate `LiveHub` node or requirement;
+  - LR-6: check signal entity and field names against the domain;
+  - LR-8: a subscriber cap;
+  - LR-9: `ryu-js` cursor text;
+  - LR-10: timing-robust tests;
+  - LR-11: lower literal field lists directly;
+  - LR-12: fault-injection checks of the live tests.
 - Domain-specialized engine — entity/field enums, selection bitsets, generated dispatch — replacing the literal port (NR-001, R-3); later an engine authored in R (R-1) ([native-remote](research/native-remote.md#options))
 - Compiled R entity read sources beyond memory and SQL _(verify)_ (NR-005) ([native-remote](research/native-remote.md#decisions-proposed))
 - Declarative authorization rule as an alternative to compiled `authorize` functions; upstream portable authorization ([foldkit-remote](foldkit-remote.md#authorization-should-probably-move-in-the-same-direction), [milestones §21](implementation-milestones.md#21-authorization-must-become-portable))

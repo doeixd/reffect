@@ -1,6 +1,6 @@
 # Native Remote Live (milestone 7)
 
-Status: **steps 1–3 delivered (2026-10-03)**, except live rendering in the `todo-remote` browser app. It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
+Status: **steps 1–3 delivered (2026-10-03)**, with open review findings: native unsubscription is not yet evidenced (LR-2), SQL post-commit signal failures misreport mutations (LR-1), and live rendering in the `todo-remote` browser app is missing. See [Review](#review-2026-10-03). It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
 
 Sources, read 2026-10-03 from the installed packages (foldkit-plus 0.14.0):
 
@@ -132,6 +132,55 @@ With neither a per-entity source nor a hub, the merge is empty and the stream co
    - **Stock client.** `remote-live.test.ts` runs `RemoteClient.live` from `Remote.clientLayer` over a stock `RpcClient` (NDJSON) against the native server. Remote's live subscription entries make this same call. The decoded `LiveEvent`s equal those from the same client layer over upstream's in-process handlers.
    - **Example.** `examples/todo-remote` compiles with `live: true` and NDJSON. Toggle and delete signal the hub, and its session watches two todos live; the screens equal upstream's memory backend with `liveHub`.
    - **Open.** Upstream's client marks requirements live only for `Data.live(selection, id)` projections, not for query items, so the browser app needs per-item live projections before it renders changes.
+
+## Review (2026-10-03)
+
+This reviews commits `900322b`..`9ecd4ad` against this record and the code. Nothing below is fixed yet. Fixes land as `review(live):` commits and are recorded here when done.
+
+### Defects to fix
+
+- **LR-1: SQL signals after commit can misreport the mutation and drop later signals.** The generated SQL `finish` in `native-remote.ts` applies each queued signal with `changed(...).await?`. When one post-commit re-read fails:
+  - the mutation is answered as `RemoteMutationError("Database query failed")` although its transaction committed, so the stock client rolls back an optimistic update for a write that was kept;
+  - the signals after the failed one are never applied, so subscribers see part of the mutation.
+
+  LIVE-003 justified this by analogy with upstream's memory backend, but that analogy is weak. **Fix:** once the commit succeeds, the mutation's answer must not change. Apply every queued signal, log a re-read failure, and record the remaining gap in [native divergences](../native-divergences.md). That gap is that a missed event is invisible to the client.
+
+- **LR-2: native unsubscription on disconnect is not evidenced.** The official side asserts `hub.size == 0`. The native "disconnect" case shows only that the closed subscriber received nothing afterwards, which proves nothing, and that the remaining subscriber still works.
+
+  By reading [rpc-runtime.ts](../../packages/reffect/src/rpc-runtime.ts), the mechanism looks right. Dropping `PendingResponse` sends cancellation, which ends the forwarder, and dropping the `Unsubscribe` guard removes the subscriber, in JSON mode too. But no test observes it, so the milestone's "finalize on cancellation" acceptance is only half evidenced. **Fix:** emit a record when a subscriber is removed (or expose a count) and assert it from stderr, as [stream-interrupt.test.ts](../../packages/reffect/tests/stream-interrupt.test.ts) asserts the finalizer.
+
+- **LR-3: the status claims overstate delivery.** PLAN.md says milestone 7 "is implemented", but:
+  - LR-2 is open;
+  - Foldkit's `Data.live` subscription entries and runtime were not run end to end. Only `RemoteClient.live`, which they call, was tested;
+  - `examples/todo-remote/web/entry.ts` moved to NDJSON without the browser app being run.
+
+  **Fix:** state exactly what is delivered (this record and PLAN.md were corrected alongside this review), then close the gaps.
+
+- **LR-4: `live: true` with JSON serialization cannot work.** A Live stream never ends, so a JSON response buffers events in memory without bound and never answers. It also holds up any request batched with it. Upstream behaves the same, but the native compiler knows this statically. **Fix:** refuse `live: true` unless serialization is NDJSON. This is a compile-time refusal, not a runtime divergence.
+
+### Design debts to record
+
+- **LR-5: signals share the `RemoteStore` node.**
+  - `Changed`/`Deleted` are ops of the store node with their own effect identity (`reffect/effect/live-hub@1`). That avoided touching every pass.
+  - In exchange, diagnostics for misused signals mention "RemoteStore", the explanation shows no separate `LiveHub` requirement, and signals depend on a store session although the hub is a different service.
+  - This is acceptable while signals occur only inside NativeRemote mutations. Split the node, or at least the requirement, when signals are used elsewhere.
+- **LR-6: signal names are not checked against the domain.** `R.LiveHub.changed({ entity: "Projct", id }, ["nmae"])` compiles and does nothing, as upstream does at run time. NativeRemote has the domain, so it could refuse undeclared entities and statically known undeclared fields. The same check would help the `RemoteStore` ops.
+- **LR-7: backend asymmetry on failed mutations.** On memory, a mutation that signals and then fails still emits, because its write persists, as upstream's does. On SQL, the rollback drops the signal (LIVE-003). This is deliberate, but an application switching backends sees it. Keep it in the user-facing notes.
+- **LR-8: no subscription hardening.** There is no subscriber cap per connection or server, and each subscriber's queue is unbounded, as upstream's are. Every other native request path has hardening limits, so a configurable cap belongs with them.
+
+### Minor
+
+- **LR-9: cursor number text.** `js_number` writes non-integer or out-of-range cursors with serde's float formatting (`1e21`), where JS writes `1e+21`. Use `ryu-js`, which the engine already depends on.
+- **LR-10: timing-sensitive tests.** The differential tests compare exact chunk boundaries after fixed 150–300 ms pauses. They were stable here, but heavy CI load could chunk events differently on one side.
+- **LR-11: field lists are allocated twice.** A literal field list becomes a native array, and lowering then collects it into `Vec<String>` again. This is negligible next to the re-read, but a literal could lower straight to the vector.
+- **LR-12: the tests were not mutation-checked.** No implementation fault was injected to confirm the tests fail. Exact line equality and content assertions make a vacuous pass unlikely. The rollback case would fail if signals applied before commit, because the cursors and events would differ.
+
+### What held up
+
+- **LIVE-001.** Explicit signals mirroring `hub.changed`/`deleted`, not automatic signals from store writes, keep upstream's decoupling. They also let the oracle run upstream's own hub, so grouping, re-authorization and cursors are compared with the published package.
+- **Exact comparison.** Raw NDJSON bytes, including key order and chunk boundaries, are compared across windowed aliases, two principals, rollback, and Postgres.
+- **Cursor order.** The cursor increment and the queue send happen under one lock, so queue order equals cursor order even when two mutations re-read concurrently on SQL.
+- **Shared checks.** Limits and authorization reuse the Read engine's `check_ids_per_entity`, `check_pages_per_relation` and `allowed_fields`, so there is no second implementation to drift.
 
 ## Open questions
 
