@@ -16,6 +16,8 @@ The module records cover [Option](research/option-module.md), [Result](research/
 
 [Qwik optimizer closure-conversion research](research/qwik-closure-conversion.md) studies Qwik v2's Oxc/SWC capture analysis as prior art for milestone 8B. It recommends boundary-driven free-variable analysis and explicit reffect CapturePlans while normally erasing, rather than serializing, runtime closures.
 
+[**R language direction**](r-language.md) is the current design for evolving R into a small directly-authored typed language as well as the migration target: richer native types, named monomorphic calls, proper tail recursion, structured control flow, opaque native extensions and ownership inferred by the compiler.
+
 ## Revised design and implementation references
 
 **[Native divergences](native-divergences.md)** is the one register of observable differences between native artifacts and official Effect/Foldkit, with closed entries and the compile-time profile. Check it before deploying, and add to it whenever a decision accepts a difference.
@@ -65,7 +67,7 @@ The later [runtime lowering reference](runtime-lowering.md) integrates the suppl
 - [Resource-bearing Layers](research/resource-layer.md): scoped `Layer.effect` acquisition in a provide-owned scope, fallible acquisition, shared/fresh/nested memo inheritance and the registered-file size workload.
 - [Well-formed strings](research/string-profile.md): `R.String` semantics compared across UTF-16/UTF-8, literal `replaceAll`, owned/borrowed lowering and the Foldkit escaping differential.
 - [JS numbers](research/number-profile.md): `R.Number` as IEEE doubles, pinned `Schema.Number` JSON codec rules (non-finite strings, `isInt`/`isFinite`), structural check recognition and JS-compatible encoding.
-- [Native types](research/native-types.md) (proposed): JS-type Rust crates (`ryu-js`, Boa's `JsString`), and sized integers, tuples, fixed arrays and bytes as checked refinements of Effect schemas.
+- [Native types](research/native-types.md) (earlier research, updated by [R language direction](r-language.md)): JS-type Rust crates and representation details feeding the planned native type batch.
 - [Remote benchmark](research/remote-bench.md): native versus official Remote server memory, HTTP and in-process engine timings, the client-bound caveat, and optimizations (query cell cache, in-place merges, allocator finding).
 - [Remote mutations, Store and authorization](research/remote-mutations.md) (proposed): R-authored mutations over a native `RemoteStore` service, typed-to-`Unknown` encoding, and authorization as compiled R functions (milestone §21).
 - [Literal unions](research/literal-unions.md): `R.Literals([...])` string literal unions as Copy Rust enums, and their RPC codecs.
@@ -126,7 +128,7 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 [IR function composition](research/flow-composition.md) records why `flow` could not compose `R.fn` values and the implemented bounded substitution-based `R.flow`, keeping plain composition in `effect`.
 
-[Named function calls and recursion](research/function-calls.md) records the deferred Option D decision: why first-class function values are out of scope, the blast radius of a named call node, and the triggers that would justify it.
+[Named function calls and recursion](research/function-calls.md) preserves the earlier deferred-call analysis and per-pass blast radius; [R language direction](r-language.md) now promotes named monomorphic calls and proper tail recursion into the planned language foundation while keeping first-class function values out of scope.
 
 [Source-artifact policy preparation](research/source-artifact-policy.md) records the independent Full/None request policy, honest artifact types, skipped provenance/writer/hash work and validation before implementation.
 
