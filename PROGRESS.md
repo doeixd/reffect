@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — R language direction
+
+- Added [R language direction](docs/r-language.md), consolidating the decision to evolve R from a minimal Effect/Foldkit builder surface into a small directly-authored typed language and the canonical migration target.
+- Planned foundations: named monomorphic `FunctionRef`/`Call`; call-graph/SCC analysis; semantic tail-position detection; guaranteed bounded-stack lowering for self-tail recursion (loops) and mutually tail-recursive SCCs (state machines); structured control flow; a deliberate native type batch; explicit ordered/hash map and set families; and a structured opaque native-type/operation extension mechanism.
+- The design keeps first-class runtime function values and arbitrary JavaScript compilation out of scope, keeps semantic types separate from native representation types, and leaves borrow/move/copy/clone/share decisions to the ownership pass.
+- Updated [named-call research](docs/research/function-calls.md), [native-type research](docs/research/native-types.md), [PLAN.md](PLAN.md) and the [docs index](docs/README.md) so the earlier deferred language decisions no longer conflict with the new direction. The current milestone-4 → SQLx execution frontier is unchanged; language work is sequenced incrementally where it supports direct R workloads or milestone 8B.
+
 ## 2026-10-03 — Native Remote authentication and field authorization (RM-004a/b)
 
 - Runtime-served procedures accept the checked bearer middleware; authentication is shared with NativeRpc handlers.
