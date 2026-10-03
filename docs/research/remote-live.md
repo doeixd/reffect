@@ -1,6 +1,6 @@
 # Native Remote Live (milestone 7)
 
-Status: **steps 1–3 delivered (2026-10-03)**. Review fixes LR-1, LR-2 and LR-4 are delivered. LR-3 is open: Foldkit's `Data.live` subscriptions and the browser app have not run end to end. See [Review](#review-2026-10-03) and the [improvement plan](#improvement-plan-2026-10-03). It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
+Status: **steps 1–3 delivered (2026-10-03)**. Review fixes LR-1, LR-2 and LR-4 are delivered. LR-3 is delivered for Foldkit's `Data.live` Subscription entry and reducer. The browser app's live rendering remains open. See [Review](#review-2026-10-03) and the [improvement plan](#improvement-plan-2026-10-03). It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
 
 Sources, read 2026-10-03 from the installed packages (foldkit-plus 0.14.0):
 
@@ -212,6 +212,12 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
   - `remote-sql-live.test.ts` renames a selected column under the native SQLite server. The mutation still succeeds, and the subscriber receives its second signal at cursor 2 (a gap).
   - This is registered in [native divergences](../native-divergences.md).
 - **Limit of LIVE-007.** Foldkit's `classifyLive` is `cursor <= state.cursor ? duplicate : state.cursor === 0 || cursor === state.cursor + 1 ? applied : gap`. A skip is therefore noticed only when a later event arrives, and never before the client has applied one.
+- **LR-3: Foldkit's `Data.live` path (2026-10-03).**
+  - In `examples/todo-remote`, a second screen reads t2 with `Data.live`.
+  - Remote's live entry from `Data.subscriptions` derives its dependencies from that read, subscribes through `RemoteClient`, and emits `LiveReceived`, which `Data.reduce` folds.
+  - The screen shows the toggle without refetching, equally over the native server and upstream's memory backend with `liveHub`. This is Foldkit's real client path, run without a DOM runtime.
+  - **Harness note.** In-process, nothing yields after the mutation, so an un-joined consumer fiber never ran. The example joins the entry's stream (`take(1)`).
+  - **Still open:** the browser app renders the list, and Foldkit subscribes live only for `Data.live` reads, so it needs one live read per visible todo. A Chrome run is pending.
 - **Found on the way: SQLX-019.** SQLite read the renamed column as the literal `"name"`, because an unknown double-quoted identifier is a string in SQLite. SQLite identifiers are now backtick-quoted ([sqlx-remote](sqlx-remote.md#decisions)).
 
 ### Proposed decisions

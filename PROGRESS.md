@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — LR-3: Foldkit's `Data.live` path over the native server
+
+- **Change.** `examples/todo-remote` adds a second screen that reads t2 with `Data.live` and folds the `LiveReceived` messages of Remote's own live Subscription entry with `Data.reduce`. It shows the toggle without refetching, and its screens equal upstream's memory backend with `liveHub`.
+- **Harness note.** The in-process upstream session needs the entry's stream joined; an un-joined fiber never ran, because nothing yielded after the mutation.
+- **Validation.** `vp exec node --experimental-transform-types examples/todo-remote/main.ts` printed `second screen [x] Compile it natively` and "native screens equal upstream's memory backend". `vp check` is clean.
+- **Open:** browser live rendering (one `Data.live` read per todo) and a Chrome run.
+
 ## 2026-10-03 — Live review fixes LR-1, LR-2 and LR-4
 
 - **LR-4.** `live: true` requires NDJSON serialization.
