@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, FileSystem, Option, Result } from "effect";
+import { Cause, Effect, Exit, FileSystem, Option, Result, Stream } from "effect";
 import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
 import {
@@ -248,6 +248,23 @@ const asyncOuter = R.fn([R.U64], R.U64, R.Never, (n) =>
     R.Effect.map(R.Exit.match({ onSuccess: (v) => v, onFailure: () => R.U64.literal(0n) })),
   ),
 );
+const capturedStream = R.fn([R.Bool], R.U64, R.Never, (ok) =>
+  R.Effect.exit(
+    R.Match.bool(
+      ok,
+      R.Stream.runCollect(R.Stream.make(R.U64.literal(1n), R.U64.literal(2n))),
+      R.Stream.runCollect(R.Stream.fail(R.U64.literal(9n), R.U64)),
+    ),
+  ).pipe(
+    R.Effect.map(
+      R.Exit.match({
+        onSuccess: (values) => R.Array.length(values),
+        onFailure: (cause) =>
+          R.Option.getOrElse(R.Cause.findErrorOption(cause), () => R.U64.literal(0n)),
+      }),
+    ),
+  ),
+);
 
 const nativeText = R.fn([R.Bool, R.String], R.String, (ok, text) =>
   R.Exit.match(
@@ -273,7 +290,14 @@ test(
           const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-exit-" });
           for (const frames of [FailureFrames.None, FailureFrames.Bounded]) {
             const artifact = yield* Compile.make(
-              R.program({ countMapped, countExitMapped, captureScalar, asyncOuter, nativeText }),
+              R.program({
+                countMapped,
+                countExitMapped,
+                captureScalar,
+                asyncOuter,
+                nativeText,
+                capturedStream,
+              }),
             ).pipe(
               Compile.withTarget(Rust.tokio),
               Compile.withFailureFrames(frames),
@@ -328,6 +352,24 @@ test(
                 ),
               ).toEqual(Exit.succeed(9n));
               for (const ok of [true, false]) {
+                const collected = yield* Effect.exit(
+                  Stream.runCollect(ok ? Stream.make(1n, 2n) : Stream.fail(9n)),
+                );
+                const expected = Exit.match(collected, {
+                  onSuccess: (values) => BigInt(values.length),
+                  onFailure: (cause) => Option.getOrElse(Cause.findErrorOption(cause), () => 0n),
+                });
+                expect(
+                  yield* NativeRunner.run(
+                    artifact,
+                    directory,
+                    "capturedStream",
+                    capturedStream,
+                    [ok],
+                    profile,
+                  ),
+                ).toEqual(Exit.succeed(expected));
+                expect(yield* Reference.run(capturedStream, [ok])).toBe(expected);
                 const oracle = Exit.mapBoth(ok ? Exit.succeed("hi😀") : Exit.fail("hi😀"), {
                   onSuccess: (value) => `${value}!`,
                   onFailure: (error) => `${error}?`,

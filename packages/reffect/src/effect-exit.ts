@@ -23,6 +23,8 @@ const readsDriver = (root: Computation<unknown, unknown>): boolean => {
         ForEach: (n) => walk(n.body),
         Annotate: (n) => walk(n.body),
         Span: (n) => walk(n.body),
+        // The admitted finite Stream IR has pure expressions and typed Fail only.
+        StreamRunCollect: () => false,
         // Async graphs have already been refused before this traversal.
         TaskGroup: () => false,
         Scope: () => false,
