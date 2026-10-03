@@ -124,6 +124,13 @@ Read from the `foldkit-plus` source at `main` (`7e3ffdd0`):
 
    The vendored, unchanged contract ([fixture](../../packages/reffect/tests/fixtures/foldkit-remote-wire.ts)) compiles for Read, Mutate and Query, and matches the official server ([remote-wire-rpc.test.ts](../../packages/reffect/tests/remote-wire-rpc.test.ts)). `Live` is refused as a streaming procedure (NR-006). `NativeRpc.witness(schema)` derives the R witness of any contract schema for handlers and the engine.
 
-2. Move the oracle pin to Effect 4.0.0, then the engine port and memory backend for Read (NR-001, NR-003, NR-004), with the differential harness against the upgraded foldkit-plus releases (NR-007).
+2. Move the oracle pin to Effect 4.0.0, then the engine port and memory backend for Read (NR-001, NR-003, NR-004), with the differential harness against the upgraded foldkit-plus releases (NR-007). **Read done 2026-10-02:**
+   - [`remote-engine.ts`](../../packages/reffect/src/remote-engine.ts) ports `readHelper`, alias splitting, grouping, limits and the memory backend's paging into a Rust module.
+   - `NativeRemote.compile(group, { entities, rows })` serves `FoldkitRemoteRead` through a NativeRpc runtime hook (`compileServer`), after generated validation.
+   - [remote-read.test.ts](../../packages/reffect/tests/remote-read.test.ts) compares 27 wire scenarios with the published-shape `RemoteServer.handlers`. The scenarios cover aliases, pages, cursors, cycles, shared targets, nested chunking past 1,000 ids, both limits and JS-formatted version messages. Raw responses are equal, key order included.
+   - Mutations that drop window grouping or `ryu-js` number text fail the test.
+   - Recorded divergences:
+     - Field names that are `Object.prototype` members (`constructor`, `toString`): the reference's `in`/`renames[...]` lookups see prototype values; native sees own keys only.
+     - Memory rows must keep relation lists as string refs (checked while compiling).
 3. Query with the Query evaluator, then query `select`.
 4. Compiled Sources, authorization and mutations (NR-005).

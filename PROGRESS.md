@@ -1,5 +1,19 @@
 # Progress
 
+## 2026-10-02 — Native Remote read engine
+
+- Ported the reference read path into a Rust runtime module ([remote-engine.ts](packages/reffect/src/remote-engine.ts), NR-008–013):
+  - `readHelper`, `splitAliases`, `groupByEntity`, `mergeRelation`, `refsIn`, the id/page/depth limits with exact messages, the protocol check with JS number text (`ryu-js`), and the memory backend's `valueFor`/`pageOf`;
+  - JS objects (`JsObject`: index keys first), `Map`/`Set` insertion order, and absent/`undefined` collapsing to `Option`.
+- NativeRpc gained a runtime-procedure hook (`compileServer`, `RpcRuntime`). The generated decoder validates the payload with official messages, then runtime Rust serves it. Result contracts are admitted against a scratch registry, and payload types stay reachable so their native types are emitted.
+- `NativeRemote.compile(group, { entities, rows })` embeds memory rows at build time (JSON data; string ref lists) and serves `FoldkitRemoteRead`. Mutate and Query are refused until steps 3–4, and `Live` remains NR-006.
+- Validation (focused):
+  - `remote-read.test.ts` 3/3. The vendored wire fixture derives exactly the published `RemoteRpc` witnesses for Read, Mutate and Query.
+  - 27 wire scenarios match `RemoteServer.handlers` with memory sources, raw key order included; a stock `RpcClient` reads through the native engine.
+  - Mutations that drop window grouping or `ryu-js` number text fail.
+  - NativeRpc, remote-wire, TaggedError, schema, auth and server-layer suites pass, as does `vp check`.
+- **Pending:** foldkit-plus 0.13.0 (`foldkit-remote`/`-server` 0.10.0, `foldkit-entity` 0.6.0) is committed upstream but not yet on npm. The test ran against packages packed from the local release commit `16af1778` and installed without saving. The devDependencies (`foldkit-remote`, `foldkit-remote-server`, `foldkit` 0.165.0) will be declared once they are published.
+
 ## 2026-10-02 — Remote wire contract compiles natively
 
 - Vendored the `foldkit-remote` 0.9.0 wire module (MIT) as a [test fixture](packages/reffect/tests/fixtures/foldkit-remote-wire.ts). Only the Effect 4.0.0 import paths, class self types and an unrolled `relationLevel` changed; the schemas are identical.

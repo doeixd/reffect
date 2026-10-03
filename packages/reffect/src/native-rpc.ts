@@ -11,6 +11,7 @@ import { StaticLayer } from "./layer.ts";
 import {
   CompileError,
   BoolType,
+  Expr,
   Fn,
   IRType,
   NeverType,
@@ -851,16 +852,37 @@ const bindServices = <
     services: Object.freeze(Array.from(services)),
   });
 
+/**
+ * Procedures served by a dedicated semantic runtime (NR-012) instead of an R handler. The
+ * payload is still validated by the generated decoder, with the official messages, before the
+ * runtime `call` runs; it receives `payload: &Value` and returns the encoded success or failure.
+ */
+export interface RpcRuntime {
+  readonly procedures: { readonly [tag: string]: { readonly call: string } };
+  readonly modules: readonly string[];
+  /** Cargo dependency lines and the crate IDs they add to the explanation. */
+  readonly dependencies: readonly string[];
+  readonly crates: readonly string[];
+}
+type CompileOptions = {
+  readonly path?: string;
+  readonly auth?: RpcBearer;
+  readonly failureFrames?: FailureFramePolicy;
+  /** Built once at startup and released after in-flight requests on graceful shutdown. */
+  readonly layer?: StaticLayer<Service, unknown>;
+};
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
   bindings: Bindings<Rpcs>,
-  options: {
-    readonly path?: string;
-    readonly auth?: RpcBearer;
-    readonly failureFrames?: FailureFramePolicy;
-    /** Built once at startup and released after in-flight requests on graceful shutdown. */
-    readonly layer?: StaticLayer<Service, unknown>;
-  } = {},
+  options: CompileOptions = {},
+): Effect.Effect<RpcArtifact, import("./kernel.ts").CompileError> =>
+  compileServer(group, bindings, options, undefined);
+/** NativeRpc composition with runtime-served procedures; the public API keeps bindings typed. */
+export const compileServer = (
+  group: { readonly requests: ReadonlyMap<string, unknown> },
+  bindings: { readonly [tag: string]: RpcBinding },
+  options: CompileOptions,
+  runtime: RpcRuntime | undefined,
 ): Effect.Effect<RpcArtifact, import("./kernel.ts").CompileError> =>
   Effect.gen(function* () {
     const prepared = yield* Effect.try({
@@ -873,7 +895,11 @@ const compile = <Rpcs extends Rpc.Any>(
           );
         const entries = Array.from(group.requests.values());
         if (entries.length === 0) throw unsupported("group", "RPC group must contain a procedure");
-        if (Reflect.ownKeys(bindings).length !== entries.length)
+        const served = Object.keys(runtime?.procedures ?? {});
+        if (
+          Reflect.ownKeys(bindings).length + served.length !== entries.length ||
+          served.some((tag) => Object.hasOwn(bindings, tag) || !group.requests.has(tag))
+        )
           throw unsupported("bindings", "Bindings must match the RPC group exactly");
         const auth = options.auth;
         if (auth && !(auth instanceof RpcBearer))
@@ -898,6 +924,8 @@ const compile = <Rpcs extends Rpc.Any>(
           throw unsupported("layer", "Expected an R.Layer provider graph");
         // Launch tuple positions, deduplicated by service ID in first-binding order.
         const serverServices: Service[] = [];
+        // Runtime-served payload witnesses, kept reachable so their native types are emitted.
+        const runtimePayloads: IRType<unknown>[] = [];
         const servicePosition = (service: Service, procedure: string): number => {
           if (!(service instanceof Service))
             throw unsupported(procedure, "Expected an R.Context service");
@@ -918,6 +946,38 @@ const compile = <Rpcs extends Rpc.Any>(
           const rpc: Rpc.AnyWithProps = definition;
           const procedure = `rpc.${rpc._tag}`;
           if (!wellFormed(rpc._tag)) throw unsupported(procedure, "RPC tags must be valid Unicode");
+          const served = runtime?.procedures[rpc._tag];
+          if (served && Object.hasOwn(runtime!.procedures, rpc._tag)) {
+            if (rpc.middlewares.size !== 0)
+              throw unsupported(procedure, "Runtime-served procedures are public in this profile");
+            if (RpcSchema.isStreamSchema(rpc.successSchema))
+              throw unsupported(
+                procedure,
+                "Streaming procedures are not supported until milestones 6–7 (NR-006)",
+              );
+            if (rpc.defectSchema.ast !== Schema.Defect().ast)
+              throw unsupported(procedure, "Custom defect codecs are unsupported");
+            // The contract must be admitted even though the runtime encodes its own results, so
+            // results are checked against a scratch registry and emit no codecs.
+            codec(rpc.successSchema.ast, `${procedure}.success`, false, new Map(), false);
+            codec(rpc.errorSchema.ast, `${procedure}.error`, false, new Map(), false);
+            const kind = codec(rpc.payloadSchema.ast, `${procedure}.payload`, true, registry, true);
+            runtimePayloads.push(witnessOf(kind));
+            const validate = isScalar(kind)
+              ? callLocal(`${kind}_arg`, local("payload"), Rs.none())
+              : callLocal(`decode_${kind.name}`, local("payload"), Rs.none());
+            return {
+              pat: Rs.stringPat(rpc._tag),
+              body: Rs.block(
+                [Rs.stmt(Rs.try_(validate))],
+                Rs.ok(
+                  Rs.verbatimExpr(
+                    `match ${served.call} { Ok(value) => success(value), Err(error) => failure(error) }`,
+                  ),
+                ),
+              ),
+            };
+          }
           const descriptor = Object.getOwnPropertyDescriptor(bindings, rpc._tag);
           const binding: RpcBinding | undefined = descriptor?.value;
           if (!binding || (!(binding.fn instanceof Fn) && !(binding.fn instanceof EffectFn)))
@@ -1212,7 +1272,17 @@ const compile = <Rpcs extends Rpc.Any>(
           auth,
           ranges,
           composites: Array.from(registry.values()),
-          program: Program.make(functions),
+          // Validated runtime payloads decode into native types, which only reachable witnesses get.
+          program: Program.make(
+            runtimePayloads.length
+              ? {
+                  ...functions,
+                  runtime_payloads: Fn.make(runtimePayloads, BoolType, () =>
+                    Expr.literal(BoolType, true),
+                  ),
+                }
+              : functions,
+          ),
           arms,
           layered: layer !== undefined,
           services: serverServices.map((service) => service.id),
@@ -1353,6 +1423,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
         Rs.verbatimItem(contextRuntime),
         ...(executionRuntime ? [Rs.verbatimItem(executionRuntime)] : []),
         Rs.verbatimItem(authRuntime),
+        ...(runtime?.modules ?? []).map((module) => Rs.verbatimItem(module)),
         Rs.verbatimItem(
           rpcRuntime(
             clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined,
@@ -1389,7 +1460,8 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
                   : '["macros", "rt", "net"]',
             ) +
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
-          (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : ""),
+          (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
+          (runtime?.dependencies ?? []).join(""),
         "src/lib.rs": core.files["src/lib.rs"],
         "src/main.rs": main,
       }),
@@ -1399,6 +1471,7 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
           ["axum@0.8.9", "tokio@1.53.1", "serde_json@1.0.151"].concat(
             prepared.auth ? ["subtle@2.6.1"] : [],
             prepared.asynchronous ? ["http-body@1.0.1"] : [],
+            runtime?.crates ?? [],
           ),
         ),
         handlerProfile: prepared.asynchronous ? "suspended-scalars" : "synchronous-scalars",
