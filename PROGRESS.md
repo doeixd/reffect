@@ -1,11 +1,13 @@
 # Progress
 
-## 2026-10-03 — R language direction
+## 2026-10-03 — R language direction, simplified
 
-- Added [R language direction](docs/r-language.md), consolidating the decision to evolve R from a minimal Effect/Foldkit builder surface into a small directly-authored typed language and the canonical migration target.
-- Planned foundations: named monomorphic `FunctionRef`/`Call`; call-graph/SCC analysis; semantic tail-position detection; guaranteed bounded-stack lowering for self-tail recursion (loops) and mutually tail-recursive SCCs (state machines); structured control flow; a deliberate native type batch; explicit ordered/hash map and set families; and a structured opaque native-type/operation extension mechanism.
-- The design keeps first-class runtime function values and arbitrary JavaScript compilation out of scope, keeps semantic types separate from native representation types, and leaves borrow/move/copy/clone/share decisions to the ownership pass.
-- Updated [named-call research](docs/research/function-calls.md), [native-type research](docs/research/native-types.md), [PLAN.md](PLAN.md) and the [docs index](docs/README.md) so the earlier deferred language decisions no longer conflict with the new direction. The current milestone-4 → SQLx execution frontier is unchanged; language work is sequenced incrementally where it supports direct R workloads or milestone 8B.
+- Replaced [R language direction](docs/r-language.md) with the smaller design that converges back on the original architecture: **TypeScript is the unrestricted macro/metaprogramming language; R is the tiny typed semantic language it constructs.**
+- Public control stays minimal. `Match` is the branch primitive. There is no planned semantic `If`, `Let`, `Loop`, `While`, `For`, `Break`, `Continue`, `Return`, `Recur`, public `.call()`, `recursive()` annotation or `self` parameter.
+- `R.fn` / `R.Effect.fn` values should be naturally callable in TypeScript. Calling one with symbolic arguments creates a hidden statically resolved `Call(FunctionRef, args)`; lazy body materialization permits self and mutual references. SCC analysis discovers recursion; semantic tail analysis lowers self-tail recursion to loops and mutually tail-recursive SCCs to state machines with bounded native stack.
+- Pure naming/sharing uses ordinary TypeScript `const`; effect-result binding uses Effect composition. Future `loop`, `while`, `for`, `use`, guards, folds/unfolds and similar ergonomics belong first in ordinary build-time libraries over functions + Match + Effects. They become core only if they introduce a semantic fact the compiler cannot otherwise preserve.
+- Richer native value types and opaque native extensions remain planned but are orthogonal to control-flow minimalism. Backend lowering may freely use locals, mutation, CFGs, loops and returns; those are not R surface constructs.
+- Updated [PLAN.md](PLAN.md), the [docs index](docs/README.md) and [named-call research](docs/research/function-calls.md) to match. The milestone-4 → SQLx execution frontier remains unchanged.
 
 ## 2026-10-03 — Native Remote authentication and field authorization (RM-004a/b)
 
