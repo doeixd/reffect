@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-03 — Milestone 7 step 2: live signals after SQL commits
+
+- **Change.** On the SQL backend, `R.LiveHub` signals are queued in the mutation's session and applied after commit; a rollback drops them (LIVE-003).
+- **Validation.** `vp test tests/remote-sql-live.test.ts` passed on SQLite and Postgres: Chunk lines and answers equal the official server, which calls upstream's `liveHub` after its own commit. `remote-sql-mutate`, `remote-sql` and `remote-live` pass; `vp check` is clean.
+- **Open:** the stock `Data.live` client and live `todo-remote` (step 3).
+
 ## 2026-10-03 — Milestone 7 step 1: native Remote Live on the memory backend
 
 - **Signals and hub.** `R.LiveHub.changed(ref, fields)` and `R.LiveHub.deleted(ref)` signal a native port of `RemoteServer.liveHub` from R mutations. `NativeRemote.compile(..., { live: true, serialization: "ndjson" })` serves `FoldkitRemoteLive` from it. Without `live`, Live is an empty stream, as `handlers` serves it without a hub. NativeRpc gains runtime-served streaming procedures.

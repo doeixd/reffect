@@ -1,6 +1,6 @@
 # Native Remote Live (milestone 7)
 
-Status: **step 1 delivered (2026-10-03)**; steps 2–3 open. It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
+Status: **steps 1–2 delivered (2026-10-03)**; step 3 (stock client) open. It begins [milestone 7](../implementation-milestones.md#25-milestone-7--native-foldkit-remote-live) and absorbs milestone 6 step 5 (the `FoldkitRemoteLive` skeleton, [streaming-rpc](streaming-rpc.md#order-of-work-and-acceptance)). It closes NR-006 ([native-remote](native-remote.md#decisions-proposed)) once delivered.
 
 Sources, read 2026-10-03 from the installed packages (foldkit-plus 0.14.0):
 
@@ -116,6 +116,16 @@ With neither a per-entity source nor a hub, the merge is empty and the stream co
    - **Harness note.** A subscription that never receives a chunk has no official Response to cancel, so closing waits a bounded time.
 
 2. **SQL backend (LIVE-003).** Signals apply after commit and are dropped on rollback, checked against SQLite and Postgres.
+
+   **Delivered 2026-10-03.**
+   - **Native.** `remote_sql::Session` queues signals. The generated `finish` commits, then applies them to the hub, which re-reads through `REMOTE_SQL`'s pool. A rolled-back session drops its signals. If a post-commit re-read fails, the mutation fails with that store failure, just as a failing `hub.changed` fails an upstream mutation whose memory writes are already kept.
+   - **Oracle.** [remote-sql-live.test.ts](../../packages/reffect/tests/remote-sql-live.test.ts) runs the same R sources in a transaction on the official database. It holds the `LiveHubHost` signals and calls upstream's `liveHub` (over the Drizzle sources) after commit, which is how an application would call upstream's hub around its own transaction.
+   - **Cases**, with equal Chunk lines and answers on SQLite and Postgres:
+     - a committed rename re-read with an unchanged selected field;
+     - a mutation that signals, then fails and rolls back, so nothing reaches subscribers;
+     - a delete;
+     - a second rename at the next cursor.
+
 3. **Stock client.** A Foldkit `Data.live` subscription receives native changes (the milestone's "stock subscriptions" acceptance), then `examples/todo-remote` gains live updates.
 
 ## Open questions
