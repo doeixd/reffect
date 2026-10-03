@@ -163,11 +163,12 @@ The four open questions are settled. The checks behind each are listed below.
     2. hydrate the stock client;
     3. assert the server's element objects survive (`getElementById('count')` is the same node), and events still dispatch.
   - So add `happy-dom` as an exact (`=20.14.5`) dev dependency of `packages/reffect`, enabled per file with `// @vitest-environment happy-dom`, so other tests keep the Node environment. A Chrome run remains a manual cross-check, not the evidence.
-- **SSR-012: `R.Number.toString` via `ryu-js`.**
-  - The native code already writes doubles as JS `Number#toString` does with the pinned `ryu-js` 1.0.3 (`native-rpc.ts`, for foldkit-remote's `stableStringify`; `remote-engine.ts`, for protocol messages).
-  - `R.Number.toString(n)` lowers to `ryu_js::Buffer::format` (including `NaN`, `Infinity` and `-0` → `"0"`), and the reference uses `String(n)`.
-  - A differential corpus covers `-0`, `NaN`, `±Infinity`, `1e21`, `1e-7`, `5e-324`, `0.1 + 0.2` and integers around 2^53.
-  - Number keys then fingerprint `n:${text}`. This lifts the SSR-008 restriction once delivered.
+- **SSR-012: `R.String.fromNumber` via `ryu-js` (delivered 2026-10-03).**
+  - The native code already writes doubles as JS `Number#toString` does, with the pinned `ryu-js` 1.0.3.
+  - The operation is `R.String.fromNumber(n)`, after Effect's `fromNumber` naming. It cannot be a `toString` member, which would clash with `Object.prototype.toString`.
+  - It lowers to `ryu_js::Buffer::format` and adds the `ryu-js@1.0.3` crate to the plan and both manifests. The reference uses `String(n)`.
+  - [number-text.test.ts](../../packages/reffect/tests/number-text.test.ts) passes natively on 17 values: `-0`, `NaN`, `±Infinity`, `1e21`, `1e-7`, `5e-324`, `0.1 + 0.2`, `1/3`, integers around 2^53 and others.
+  - Number keys can now fingerprint `n:${text}`.
 
 **Remaining order:**
 

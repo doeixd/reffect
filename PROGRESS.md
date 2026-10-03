@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — SSR-012: `R.String.fromNumber`
+
+- **Change.** `R.String.fromNumber(n)` writes JS `String(n)` text, natively through the pinned `ryu-js`. The crate enters the plan, the core manifest and the RPC manifest only when the operation is reachable.
+- **Validation.**
+  - `vp test tests/number-text.test.ts tests/numbers.test.ts` passed. That covers 17 edge values, natively and in the reference.
+  - `vp check` is clean.
+
 ## 2026-10-03 — Milestone 8A open questions resolved (SSR-009..012)
 
 - **SSR-009.** `R.Html` mirrors Foldkit's data-first `h` (`html/index.d.ts`). Children are a list, or one mapped array.
