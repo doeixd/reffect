@@ -23,7 +23,8 @@ import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
 
 // RM-001: R mutation sources over the store, against the published handler and MemoryStore.
-const Group = RemoteRpc.omit("FoldkitRemoteLive");
+// Live is served without a hub, as `handlers` serves it without `live` (LIVE-004).
+const Group = RemoteRpc;
 
 const UserBase = Entity.define("User", Schema.Struct({ id: Schema.String, name: Schema.String }));
 const ProjectBase = Entity.define(
@@ -250,6 +251,18 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
   ["input missing a key", mutate("Rename", { id: "p1" })],
   ["input not an object", mutate("Archive", null)],
   [
+    "live without a hub ends at once",
+    request("FoldkitRemoteLive", {
+      version: 4,
+      requirements: [{ entity: "Project", id: "p1", fields: ["name"] }],
+      after: 0,
+    }),
+  ],
+  [
+    "live protocol mismatch",
+    request("FoldkitRemoteLive", { version: 5, requirements: [], after: 0 }),
+  ],
+  [
     "non-finite number as a string",
     mutate("Create", { id: "p8", name: "N", owner: "User:u1", rank: "NaN" }),
   ],
@@ -313,6 +326,7 @@ const oracle = Effect.gen(function* () {
         FoldkitRemoteRead: handlers.FoldkitRemoteRead,
         FoldkitRemoteQuery: handlers.FoldkitRemoteQuery,
         FoldkitRemoteMutate: handlers.FoldkitRemoteMutate,
+        FoldkitRemoteLive: handlers.FoldkitRemoteLive,
       }),
       RpcSerialization.layerJson,
     ]),
@@ -449,6 +463,8 @@ test(
             '"connections":[{"_tag":"Insert","connection":"ByStatus',
           );
           expect(answer("connection identities")).toContain('"position":"prepend"');
+          expect(answer("live without a hub ends at once")).toContain('"_tag":"Success"');
+          expect(answer("live protocol mismatch")).toContain("RemoteProtocolError");
           for (const label of [
             "input of the wrong kind",
             "input missing a key",

@@ -7,12 +7,16 @@
 import { Computation, EffectIR, remoteStore, remoteStoreGet } from "./effect-ir.ts";
 import { Expr, IRType, StringType, UnknownType, fail, structLayout } from "./kernel.ts";
 import { OptionIR } from "./option.ts";
+import { ArrayIR } from "./records.ts";
 import type { OptionValue } from "./option.ts";
 import { UndefinedOr } from "./records.ts";
 import { SchemaIR } from "./schema-json.ts";
 export {
+  LiveHubHost,
   RemoteStoreHost,
   memoryStoreApi,
+  type LiveHubApi,
+  type LiveRef,
   type RemoteStoreApi,
   type StoredRow,
 } from "./remote-store-host.ts";
@@ -70,3 +74,46 @@ const checkedId = (id: Expr<string>, at: string): Expr<string> => {
     throw fail("TYPE_MISMATCH", "authoring", at, "Row IDs are Strings");
   return id;
 };
+
+/** A row reference with a static entity, as `LiveHub.changed`/`deleted` take it. */
+export interface LiveRowRef {
+  readonly entity: string;
+  readonly id: Expr<string>;
+}
+const StringArray = ArrayIR(StringType);
+/**
+ * Signals for upstream's `LiveHub` (LIVE-001), run where a mutation changes data. Natively the
+ * server's hub re-reads the row for each subscriber; on the memory backend the signal applies
+ * when it runs (LIVE-003). Requires `NativeRemote.compile(..., { live: true })`.
+ */
+export const LiveHubIR = Object.freeze({
+  /** `hub.changed(ref, fields)`: subscribers selecting any of `fields` receive them, re-read. */
+  changed: (
+    ref: LiveRowRef,
+    fields: ReadonlyArray<string> | Expr<ReadonlyArray<string>>,
+  ): Computation<void, never> => {
+    const names =
+      fields instanceof Expr
+        ? fields
+        : Expr.arrayMake(
+            StringArray,
+            fields.map((field) => Expr.literal(StringType, field)),
+          );
+    if (!IRType.same(names.type, StringArray))
+      throw fail("TYPE_MISMATCH", "authoring", "LiveHub.changed", "Fields are an Array<String>");
+    return remoteStore(
+      "Changed",
+      entityName(ref.entity, "LiveHub.changed"),
+      checkedId(ref.id, "LiveHub.changed"),
+      names,
+    );
+  },
+  /** `hub.deleted(ref)`: subscribers selecting the row receive `EntityDeleted`. */
+  deleted: (ref: LiveRowRef): Computation<void, never> =>
+    remoteStore(
+      "Deleted",
+      entityName(ref.entity, "LiveHub.deleted"),
+      checkedId(ref.id, "LiveHub.deleted"),
+      undefined,
+    ),
+});

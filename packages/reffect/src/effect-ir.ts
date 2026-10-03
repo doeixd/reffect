@@ -44,7 +44,7 @@ import type { Diagnostic, Inputs, MatchCase, Symbols } from "./kernel.ts";
 import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
 import { LaunchHost } from "./launch-host.ts";
-import { RemoteStoreHost } from "./remote-store-host.ts";
+import { LiveHubHost, RemoteStoreHost } from "./remote-store-host.ts";
 import {
   StreamIR,
   mapStreamExpressions,
@@ -89,6 +89,7 @@ export const AsyncEffects = Object.freeze({
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
   Launch: SemanticRef.effect("reffect/effect/launch@1"),
   RemoteStore: SemanticRef.effect("reffect/effect/remote-store@1"),
+  LiveHub: SemanticRef.effect("reffect/effect/live-hub@1"),
   StreamEmit: SemanticRef.effect("reffect/stream/emit@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
   AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
@@ -199,12 +200,13 @@ export type ComputationNode =
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
   | { readonly _tag: "Launch"; readonly values: readonly Expr<unknown>[] }
   /**
-   * A Remote store read, write or removal (RS-001, RS-007); `values` is the encoded row patch of
-   * a write. A read yields the stored row as `UndefinedOr<Unknown>`.
+   * A Remote store read, write or removal (RS-001, RS-007), or a live hub signal (LIVE-001);
+   * `values` is the encoded row patch of a write or the changed fields' names. A read yields the
+   * stored row as `UndefinedOr<Unknown>`.
    */
   | {
       readonly _tag: "RemoteStore";
-      readonly op: "Get" | "Write" | "Remove";
+      readonly op: RemoteOp;
       readonly entity: string;
       readonly id: Expr<unknown>;
       readonly values: Expr<unknown> | undefined;
@@ -537,8 +539,11 @@ const scalarLaunch = (type: IRType<unknown>): boolean =>
  */
 export const launch = (values: readonly Expr<unknown>[]): Computation<never, never> =>
   Computation.make(NeverType, NeverType, { _tag: "Launch", values: Object.freeze([...values]) });
+/** Store operations, then live hub signals, which have their own effect identity. */
+export type RemoteOp = "Get" | "Write" | "Remove" | "Changed" | "Deleted";
+export const isLiveSignal = (op: RemoteOp): boolean => op === "Changed" || op === "Deleted";
 export const remoteStore = (
-  op: "Write" | "Remove",
+  op: "Write" | "Remove" | "Changed" | "Deleted",
   entity: string,
   id: Expr<string>,
   values: Expr<unknown> | undefined,
@@ -606,29 +611,45 @@ const emitReference = (
     ),
   );
 const remoteStoreReference = (
-  op: "Get" | "Write" | "Remove",
+  op: RemoteOp,
   entity: string,
   id: unknown,
   values: unknown,
 ): Effect.Effect<unknown> =>
-  Effect.serviceOption(RemoteStoreHost).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () =>
-          Effect.die(new Error("RemoteStore requires a RemoteStoreHost in the reference")),
-        onSome: (store) =>
-          Effect.suspend((): Effect.Effect<unknown> => {
-            const done =
-              op === "Get"
-                ? store.get(entity, String(id))
-                : op === "Write"
-                  ? store.write(entity, String(id), values as Readonly<Record<string, unknown>>)
-                  : store.remove(entity, String(id));
-            return Effect.isEffect(done) ? done : Effect.succeed(done);
+  isLiveSignal(op)
+    ? Effect.serviceOption(LiveHubHost).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.die(new Error("LiveHub requires a LiveHubHost in the reference")),
+            onSome: (hub) => {
+              const ref = { entity, id: String(id) };
+              return (
+                op === "Changed"
+                  ? hub.changed(ref, values as ReadonlyArray<string>)
+                  : hub.deleted(ref)
+              ).pipe(Effect.orDie);
+            },
           }),
-      }),
-    ),
-  );
+        ),
+      )
+    : Effect.serviceOption(RemoteStoreHost).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.die(new Error("RemoteStore requires a RemoteStoreHost in the reference")),
+            onSome: (store) =>
+              Effect.suspend((): Effect.Effect<unknown> => {
+                const done =
+                  op === "Get"
+                    ? store.get(entity, String(id))
+                    : op === "Write"
+                      ? store.write(entity, String(id), values as Readonly<Record<string, unknown>>)
+                      : store.remove(entity, String(id));
+                return Effect.isEffect(done) ? done : Effect.succeed(done);
+              }),
+          }),
+        ),
+      );
 const launchReference = (values: readonly unknown[]): Effect.Effect<never> =>
   Effect.serviceOption(LaunchHost).pipe(
     Effect.flatMap(
@@ -1140,11 +1161,18 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
             );
           if (n.entity.length === 0) add(at, "RemoteStore entity names are nonempty");
           if (!IRType.same(n.id.type, StringType)) add(`${at}.id`, "Row IDs are Strings");
-          if (
-            (n.op === "Write") !==
-            (n.values !== undefined && IRType.same(n.values.type, UnknownType))
-          )
-            add(`${at}.values`, "Only writes carry encoded values");
+          const carried =
+            n.op === "Write"
+              ? n.values !== undefined && IRType.same(n.values.type, UnknownType)
+              : n.op === "Changed"
+                ? n.values !== undefined &&
+                  IRType.same(arrayItem(n.values.type) ?? UnitType, StringType)
+                : n.values === undefined;
+          if (!carried)
+            add(
+              `${at}.values`,
+              "Writes carry encoded values and changed signals an Array<String> of fields",
+            );
           expression(n.id, "id");
           if (n.values) expression(n.values, "values");
         },

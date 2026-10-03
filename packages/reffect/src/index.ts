@@ -174,8 +174,8 @@ export type {
   NativeRemoteOptions,
   RemoteOutcome,
 } from "./native-remote.ts";
-export { RemoteStoreHost, memoryStoreApi } from "./remote-store-host.ts";
-export type { RemoteStoreApi, StoredRow } from "./remote-store-host.ts";
+export { LiveHubHost, RemoteStoreHost, memoryStoreApi } from "./remote-store-host.ts";
+export type { LiveHubApi, LiveRef, RemoteStoreApi, StoredRow } from "./remote-store-host.ts";
 export type { SqlDialect } from "./sql-plan.ts";
 export { RpcCodecs } from "./rpc-codecs.ts";
 

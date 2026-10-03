@@ -24,6 +24,23 @@ export class RemoteStoreHost extends Context.Service<RemoteStoreHost, RemoteStor
   "reffect/RemoteStoreHost",
 ) {}
 
+/** A row reference, as upstream's `LiveHub` takes it. */
+export interface LiveRef {
+  readonly entity: string;
+  readonly id: string;
+}
+/**
+ * The reference's live hub (LIVE-001): upstream `RemoteServer.liveHub(entities)` itself, whose
+ * `changed`/`deleted` the oracle server's subscribers observe. A failure is a defect.
+ */
+export interface LiveHubApi {
+  readonly changed: (ref: LiveRef, fields: ReadonlyArray<string>) => Effect.Effect<void, unknown>;
+  readonly deleted: (ref: LiveRef) => Effect.Effect<void, unknown>;
+}
+export class LiveHubHost extends Context.Service<LiveHubHost, LiveHubApi>()(
+  "reffect/LiveHubHost",
+) {}
+
 /**
  * A `RemoteStoreApi` over upstream's `MemoryStore`, whose rows are looked up as `memory` reads
  * them: by `String(row.id)`, in insertion order.

@@ -52,6 +52,10 @@ pub trait RemoteStore: Send + Sync {
     fn finish(&self, commit: bool) -> StoreFuture<'_>;
     /// Why an operation failed, if one did; the host answers it instead of an interruption.
     fn failure(&self) -> Option<String>;
+    /// A live hub signal (LIVE-001): changed with the fields, deleted without.
+    fn live<'a>(&'a self, _entity: &'a str, _id: &'a str, _fields: Option<Vec<String>>) -> StoreFuture<'a> {
+        Box::pin(std::future::ready(Err("This server has no live hub".to_string())))
+    }
 }
 `
     : ""
@@ -121,6 +125,10 @@ impl AsyncContext {
         let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };
         let done = match write { Some(values) => store.write(entity, id, values).await, None => store.remove(entity, id).await };
         done.map_err(|_| AsyncError::Interrupted)
+    }
+    async fn remote_live<E>(&mut self, fields: Option<Vec<String>>, entity: &str, id: &str) -> Result<(), AsyncError<E>> {
+        let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };
+        store.live(entity, id, fields).await.map_err(|_| AsyncError::Interrupted)
     }
     async fn remote_store_get<E>(&mut self, entity: &str, id: &str) -> Result<Option<serde_json::Value>, AsyncError<E>> {
         let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };

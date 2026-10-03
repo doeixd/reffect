@@ -11,7 +11,7 @@ import { CargoApi, NativeRemote } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { successValue } from "./raw-json.ts";
 
-// The published contract, served for Read only (Mutate/Query are steps 3–4, Live is NR-006).
+// The published contract, served for Read only.
 const ReadGroup = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteQuery", "FoldkitRemoteLive");
 
 // A domain shaped after foldkit-remote-server's memory, nested, nestedShared and alias tests.
@@ -252,13 +252,6 @@ const oracle = Effect.gen(function* () {
     ]),
   );
   return HttpEffect.toWebHandler(http);
-});
-
-test("streaming Live is refused until milestones 6–7", async () => {
-  const error = await Effect.runPromise(
-    NativeRemote.compile(RemoteRpc, { domain, rows }).pipe(Effect.flip),
-  );
-  expect(error.message).toContain("Streaming Live is deferred");
 });
 
 test(

@@ -601,16 +601,162 @@ mod remote_engine {
   "`readHelper`" +
   String.raw`.
     pub async fn read<S: Source>(server: &S, authorize: Authorize<'_>, payload: &Value) -> Result<Value, Value> {
-        let received = payload.get("version").map(number).unwrap_or(f64::NAN);
-        if received != PROTOCOL_VERSION {
-            let mut buffer = ryu_js::Buffer::new();
-            let printed = buffer.format(received).to_string();
-            let wire = if received.is_nan() { json!("NaN") } else if received.is_infinite() { json!(if received > 0.0 { "Infinity" } else { "-Infinity" }) } else if received == received.trunc() && received.abs() < 9007199254740992.0 { json!(received as i64) } else { json!(received) };
-            return Err(json!({ "_tag": "RemoteProtocolError", "message": format!("Remote protocol version {} is not 4", printed), "expected": 4, "received": wire }));
-        }
+        if let Some(mismatch) = protocol_mismatch(payload) { return Err(mismatch); }
         let requests: Vec<Requirement> = payload.get("requests").and_then(Value::as_array).map(|items| items.iter().map(requirement).collect()).unwrap_or_default();
         read_helper(server, authorize, requests).await
     }
+    // ---- Live (LIVE-002): a port of liveHub. Subscribers keep upstream's Set order.
+    /// A JS number as the wire's JSON codec writes it: integers plainly, non-finite as text.
+    fn js_number(x: f64) -> Value {
+        if x.is_nan() { json!("NaN") } else if x.is_infinite() { json!(if x > 0.0 { "Infinity" } else { "-Infinity" }) } else if x == x.trunc() && x.abs() < 9007199254740992.0 { json!(x as i64) } else { json!(x) }
+    }
+    fn protocol_mismatch(payload: &Value) -> Option<Value> {
+        let received = payload.get("version").map(number).unwrap_or(f64::NAN);
+        if received == PROTOCOL_VERSION { return None; }
+        let mut buffer = ryu_js::Buffer::new();
+        let printed = buffer.format(received).to_string();
+        Some(json!({ "_tag": "RemoteProtocolError", "message": format!("Remote protocol version {} is not 4", printed), "expected": 4, "received": js_number(received) }))
+    }
+    struct Selected { fields: OrderedSet, windows: JsObject<Window> }
+    struct Subscriber { id: u64, selected: Ordered<Selected>, principal: Option<u64>, queue: tokio::sync::mpsc::UnboundedSender<Value>, cursor: Mutex<f64> }
+    /// The hub's subscribers; ` +
+  "`changed`" +
+  String.raw` and ` +
+  "`deleted`" +
+  String.raw` are signalled by mutations (LIVE-001).
+    #[derive(Default)]
+    pub struct Hub { next: std::sync::atomic::AtomicU64, subscribers: Mutex<Vec<Arc<Subscriber>>> }
+    /// One live stream: its events, and a guard that unsubscribes when dropped (` +
+  "`Stream.ensuring`" +
+  String.raw`).
+    pub struct Subscription { pub events: tokio::sync::mpsc::UnboundedReceiver<Value>, pub guard: Unsubscribe }
+    pub struct Unsubscribe { hub: Option<&'static Hub>, id: u64 }
+    impl Drop for Unsubscribe {
+        fn drop(&mut self) {
+            if let Some(hub) = self.hub { hub.lock().retain(|subscriber| subscriber.id != self.id); }
+        }
+    }
+    fn live_error(message: String) -> Value { json!({ "_tag": "RemoteLiveError", "message": message }) }
+    /// The live stream without a hub: upstream merges no streams, so it ends at once.
+    pub fn no_live(payload: &Value) -> Result<Subscription, Value> {
+        if let Some(mismatch) = protocol_mismatch(payload) { return Err(mismatch); }
+        let (_, events) = tokio::sync::mpsc::unbounded_channel();
+        Ok(Subscription { events, guard: Unsubscribe { hub: None, id: 0 } })
+    }
+    impl Hub {
+        fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Subscriber>>> { self.subscribers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) }
+        /// ` +
+  "`handlers.FoldkitRemoteLive`" +
+  String.raw` with only the hub: protocol check, limits, then a subscriber.
+        pub fn subscribe(&'static self, payload: &Value, principal: Option<u64>) -> Result<Subscription, Value> {
+            if let Some(mismatch) = protocol_mismatch(payload) { return Err(mismatch); }
+            let requirements: Vec<Requirement> = payload.get("requirements").and_then(Value::as_array).map(|items| items.iter().map(requirement).collect()).unwrap_or_default();
+            if let Some(over) = check_ids_per_entity(&requirements) { return Err(live_error(format!("Too many \"{}\" ids in one live subscription", over))); }
+            let relations: Vec<Relation> = requirements.iter().map(|request| Relation { entity: request.entity.clone(), fields: request.fields.clone(), windows: request.windows.clone(), relations: request.relations.clone() }).collect();
+            if let Some(paged) = check_pages_per_relation(&relations) { return Err(live_error(format!("Too many pages of \"{}\" in one live subscription", paged))); }
+            let mut selected: Ordered<Selected> = Ordered::new();
+            for requirement in &requirements {
+                let key = format!("{}:{}", requirement.entity, requirement.id);
+                if selected.get(&key).is_none() { selected.set(key.clone(), Selected { fields: OrderedSet::default(), windows: JsObject::new() }); }
+                let entry = selected.get_mut(&key).unwrap();
+                for field in &requirement.fields { entry.fields.add(field); }
+                if let Some(windows) = &requirement.windows { for (field, window) in windows.iter() { entry.windows.set(field.clone(), window.clone()); } }
+            }
+            let after = payload.get("after").map(number).unwrap_or(f64::NAN);
+            let (queue, events) = tokio::sync::mpsc::unbounded_channel();
+            let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.lock().push(Arc::new(Subscriber { id, selected, principal, queue, cursor: Mutex::new(after) }));
+            Ok(Subscription { events, guard: Unsubscribe { hub: Some(self), id } })
+        }
+        /// Numbers the change on the subscriber's own cursor; a closed stream drops it.
+        fn emit(subscriber: &Subscriber, tag: &str, entity: &str, id: &str, rest: Option<(Value, Vec<String>)>) {
+            let mut cursor = subscriber.cursor.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            *cursor += 1.0;
+            // LiveChange's schema order: _tag, cursor, entity, id, then values and changed.
+            let mut change = Map::new();
+            change.insert("_tag".to_string(), json!(tag));
+            change.insert("cursor".to_string(), js_number(*cursor));
+            change.insert("entity".to_string(), json!(entity));
+            change.insert("id".to_string(), json!(id));
+            if let Some((values, changed)) = rest { change.insert("values".to_string(), values); change.insert("changed".to_string(), json!(changed)); }
+            let _ = subscriber.queue.send(Value::Object(change));
+        }
+        /// ` +
+  "`hub.changed(ref, fields)`" +
+  String.raw`: each subscriber selecting the row gets the fields it
+        /// selected, re-read once per principal and window group, authorized under that principal.
+        pub async fn changed<S: Source>(&self, server: &S, authorize: fn(Option<u64>, &str, &[String]) -> Vec<String>, entity: &str, id: &str, fields: &[String]) -> Result<(), String> {
+            if !server.has_source(entity) { return Ok(()); }
+            struct Group { windows: JsObject<Window>, renames: JsObject<String>, entries: Vec<(Arc<Subscriber>, Vec<String>)> }
+            let key = format!("{}:{}", entity, id);
+            let subscribers: Vec<Arc<Subscriber>> = self.lock().clone();
+            let mut groups: Vec<(Option<u64>, Ordered<Group>)> = Vec::new();
+            for subscriber in subscribers {
+                let Some(selected) = subscriber.selected.get(&key) else { continue };
+                let at = match groups.iter().position(|(principal, _)| *principal == subscriber.principal) {
+                    Some(at) => at,
+                    None => { groups.push((subscriber.principal, Ordered::new())); groups.len() - 1 }
+                };
+                let by_windows = &mut groups[at].1;
+                let mut join = |windows: JsObject<Window>, renames: JsObject<String>, wanted: Vec<String>| {
+                    let group_key = format!("{}\u{0}{}", stable_windows(&Some(windows.clone())), stable_renames(&Some(renames.clone())));
+                    if by_windows.get(&group_key).is_none() { by_windows.set(group_key.clone(), Group { windows, renames, entries: Vec::new() }); }
+                    by_windows.get_mut(&group_key).unwrap().entries.push((subscriber.clone(), wanted));
+                };
+                let wanted: Vec<String> = fields.iter().filter(|field| selected.fields.has(field)).cloned().collect();
+                if !wanted.is_empty() {
+                    let mut windows = JsObject::new();
+                    for field in &wanted { if let Some(window) = selected.windows.get(field) { windows.set(field.clone(), window.clone()); } }
+                    join(windows, JsObject::new(), wanted);
+                }
+                for alias in &selected.fields.items {
+                    let field = aliased_field(alias);
+                    let Some(window) = selected.windows.get(alias) else { continue };
+                    if field == alias || !fields.iter().any(|changed| changed == field) { continue; }
+                    let mut windows = JsObject::new();
+                    windows.set(field.to_string(), window.clone());
+                    let mut renames = JsObject::new();
+                    renames.set(field.to_string(), alias.clone());
+                    join(windows, renames, vec![field.to_string()]);
+                }
+            }
+            for (principal, by_windows) in groups {
+                for group in by_windows.into_values() {
+                    let mut requested = OrderedSet::default();
+                    for (_, wanted) in &group.entries { for field in wanted { requested.add(field); } }
+                    let permit = move |entity: &str, fields: &[String]| authorize(principal, entity, fields);
+                    let allowed = allowed_fields(server, &permit, entity, &requested.items);
+                    if allowed.is_empty() { continue; }
+                    let allowed_set: HashSet<&String> = allowed.iter().collect();
+                    let windows = windows_of(&Some(group.windows.clone()), &allowed);
+                    let records = server.read(entity, &[id.to_string()], &allowed, &windows).await?;
+                    let Some(record) = records.into_iter().find(|record| record.id == id) else { continue };
+                    for (subscriber, wanted) in &group.entries {
+                        let mut values: JsObject<Value> = JsObject::new();
+                        for field in wanted {
+                            if !allowed_set.contains(field) { continue; }
+                            if let Some(value) = record.values.get(field) { values.set(group.renames.get(field).cloned().unwrap_or_else(|| field.clone()), value.clone()); }
+                        }
+                        if values.is_empty() { continue; }
+                        let changed: Vec<String> = values.iter().map(|(key, _)| key.clone()).collect();
+                        Hub::emit(subscriber, "EntityPatched", entity, id, Some((into_object(values), changed)));
+                    }
+                }
+            }
+            Ok(())
+        }
+        /// ` +
+  "`hub.deleted(ref)`" +
+  String.raw`: every subscriber selecting the row, without a re-read.
+        pub fn deleted(&self, entity: &str, id: &str) {
+            let key = format!("{}:{}", entity, id);
+            let subscribers: Vec<Arc<Subscriber>> = self.lock().clone();
+            for subscriber in subscribers {
+                if subscriber.selected.get(&key).is_some() { Hub::emit(&subscriber, "EntityDeleted", entity, id, None); }
+            }
+        }
+    }
+
     // ---- Query (NR-014..017): a domain query's body, run by the milestone-1 evaluator.
     use super::foldkit_eval::Value as Cell;
     /// One registered query: its entity, its input check, its slots and its evaluators.

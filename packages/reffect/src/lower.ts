@@ -49,7 +49,7 @@ import {
   streamEmit,
   streamRunCollect,
 } from "./effect-ir.ts";
-import type { Computation } from "./effect-ir.ts";
+import type { Computation, RemoteOp } from "./effect-ir.ts";
 import type { Implementation } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
 import { Rs, escapeJsonContent } from "./rust-emit.ts";
@@ -314,7 +314,7 @@ type HelperBody =
     }
   | {
       readonly _tag: "RemoteStore";
-      readonly op: "Get" | "Write" | "Remove";
+      readonly op: RemoteOp;
       readonly entity: string;
       readonly id: RustBlock;
       readonly values: RustBlock | undefined;
@@ -2513,27 +2513,45 @@ export const emitFunctions = (
             ]),
           // A store operation awaits its session; a failure aborts through the interruption path.
           RemoteStore: (n) =>
-            n.op === "Get"
+            n.op === "Changed" || n.op === "Deleted"
               ? joinFragments([
-                  `{ match ctx.remote_store_get(${Rs.stringLiteral(n.entity).text}, &(`,
-                  renderBlock(n.id),
-                  ")).await { Ok(row) => Ok(row), ",
-                  captureFrames
-                    ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
-                    : "Err(error) => Err(error)",
-                  " } }",
-                ])
-              : joinFragments([
-                  "{ match ctx.remote_store(",
-                  ...(n.values ? ["Some(", renderBlock(n.values), ")"] : ["None"]),
+                  "{ match ctx.remote_live(",
+                  ...(n.values
+                    ? [
+                        "Some((",
+                        renderBlock(n.values),
+                        ").iter().map(|field| field.to_string()).collect::<Vec<String>>())",
+                      ]
+                    : ["None"]),
                   `, ${Rs.stringLiteral(n.entity).text}, &(`,
                   renderBlock(n.id),
                   ")).await { Ok(()) => Ok(()), ",
                   captureFrames
-                    ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
+                    ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "live hub").text})))`
                     : "Err(error) => Err(error)",
                   " } }",
-                ]),
+                ])
+              : n.op === "Get"
+                ? joinFragments([
+                    `{ match ctx.remote_store_get(${Rs.stringLiteral(n.entity).text}, &(`,
+                    renderBlock(n.id),
+                    ")).await { Ok(row) => Ok(row), ",
+                    captureFrames
+                      ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
+                      : "Err(error) => Err(error)",
+                    " } }",
+                  ])
+                : joinFragments([
+                    "{ match ctx.remote_store(",
+                    ...(n.values ? ["Some(", renderBlock(n.values), ")"] : ["None"]),
+                    `, ${Rs.stringLiteral(n.entity).text}, &(`,
+                    renderBlock(n.id),
+                    ")).await { Ok(()) => Ok(()), ",
+                    captureFrames
+                      ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "remote store").text})))`
+                      : "Err(error) => Err(error)",
+                    " } }",
+                  ]),
           Repeat: (n) =>
             joinFragments([
               "{ let mut completed: u64 = 0u64; loop { match ",

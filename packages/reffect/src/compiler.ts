@@ -7,7 +7,13 @@ import type { GeneratedFiles } from "./cargo.ts";
 import { locateCompileError } from "./provenance.ts";
 import { Cargo } from "./cargo.ts";
 import { Foldkit } from "./foldkit.ts";
-import { EffectFn, SyncEffects, AsyncEffects, checkEffectFunction } from "./effect-ir.ts";
+import {
+  EffectFn,
+  SyncEffects,
+  AsyncEffects,
+  checkEffectFunction,
+  isLiveSignal,
+} from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import {
   ClockRequirement,
@@ -598,7 +604,7 @@ const derive = Effect.fn("Compile.derive")(function* (
           n.values.forEach(walk);
         },
         RemoteStore: (n) => {
-          effectRefs.add(AsyncEffects.RemoteStore);
+          effectRefs.add(isLiveSignal(n.op) ? AsyncEffects.LiveHub : AsyncEffects.RemoteStore);
           walk(n.id);
           if (n.values) walk(n.values);
         },

@@ -80,6 +80,14 @@ export interface NativeRemoteOptions {
    * so the body limit defaults to 4 MiB rather than NativeRpc's 64 KiB.
    */
   readonly limits?: { readonly bodyBytes?: number; readonly batch?: number };
+  /**
+   * Serve `FoldkitRemoteLive` from a native port of `RemoteServer.liveHub` (LIVE-002), which
+   * mutations signal with `R.LiveHub`; the reference passes its hub to `handlers` as `live`.
+   * Without it, Live answers as `handlers` without `live`: an empty stream. Memory backend only.
+   */
+  readonly live?: boolean;
+  /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
+  readonly serialization?: "json" | "ndjson";
 }
 
 const unsupported = (path: string, message: string) =>
@@ -87,6 +95,7 @@ const unsupported = (path: string, message: string) =>
 const READ = "FoldkitRemoteRead";
 const QUERY = "FoldkitRemoteQuery";
 const MUTATE = "FoldkitRemoteMutate";
+const LIVE = "FoldkitRemoteLive";
 
 /** A patch in wire shape, `{ entity, id, values }`, as `Remote.patch` builds it. */
 export const RemotePatch = Struct({ entity: StringType, id: StringType, values: UnknownType });
@@ -474,13 +483,10 @@ const compile = <Rpcs extends Rpc.Any>(
     const prepared = yield* Effect.try({
       try: () => {
         for (const tag of group.requests.keys())
-          if (tag !== READ && tag !== QUERY && tag !== MUTATE)
-            throw unsupported(
-              `rpc.${tag}`,
-              tag === "FoldkitRemoteLive"
-                ? "Streaming Live is deferred to milestones 6–7 (NR-006)"
-                : "Only Read, Query and Mutate are served natively so far",
-            );
+          if (tag !== READ && tag !== QUERY && tag !== MUTATE && tag !== LIVE)
+            throw unsupported(`rpc.${tag}`, "Only the Remote contract's procedures are served");
+        if (options.live && options.sql)
+          throw unsupported("live", "Live signals after SQL commits are not supported yet");
         const authorize = Object.entries(options.authorize ?? {});
         if (authorize.length && !options.auth)
           throw unsupported("authorize", "authorize needs an authenticated principal (auth)");
@@ -500,16 +506,16 @@ const compile = <Rpcs extends Rpc.Any>(
               "authorize is an R function (principal: U64, fields: Array<String>) => Array<String>",
             );
         }
-        // Read and Query call authorize with the principal, so both must authenticate.
+        // Read, Query and a live hub call authorize with the principal, so all must authenticate.
         if (authorize.length)
-          for (const tag of [READ, QUERY]) {
+          for (const tag of options.live ? [READ, QUERY, LIVE] : [READ, QUERY]) {
             const definition: unknown = group.requests.get(tag);
             if (!Rpc.isRpc(definition)) continue;
             const rpc: Rpc.AnyWithProps = definition;
             if (!rpc.middlewares.has(options.auth!.middleware))
               throw unsupported(
                 `rpc.${tag}`,
-                "With authorize, Read and Query must carry the auth middleware",
+                "With authorize, Read, Query and live Live must carry the auth middleware",
               );
           }
         const mutations = options.mutations ?? [];
@@ -624,7 +630,13 @@ const compile = <Rpcs extends Rpc.Any>(
 static REMOTE_MEMORY: std::sync::OnceLock<remote_engine::Memory> = std::sync::OnceLock::new();
 fn remote_memory() -> &'static remote_engine::Memory {
     REMOTE_MEMORY.get_or_init(|| remote_engine::Memory::new(vec![${names.join(", ")}], &serde_json::from_str(REMOTE_ROWS).expect("embedded rows are JSON"), &REMOTE_QUERIES))
-}
+}${
+          options.live
+            ? `
+static REMOTE_HUB: std::sync::OnceLock<remote_engine::Hub> = std::sync::OnceLock::new();
+fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }`
+            : ""
+        }
 ${definitions.map((definition) => definition.validator).join("\n")}
 static REMOTE_QUERIES: [remote_engine::QueryDef; ${definitions.length}] = [${definitions.map((definition) => definition.definition).join(", ")}];
 #[allow(dead_code)]
@@ -655,8 +667,22 @@ impl reffect_generated::RemoteStore for MemorySession {
         Box::pin(std::future::ready(Ok(())))
     }
     fn finish(&self, _commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(std::future::ready(Ok(()))) }
-    fn failure(&self) -> Option<String> { None }
+    fn failure(&self) -> Option<String> { None }${
+      options.live
+        ? `
+    // Applied when signalled, as upstream's memory mutations call the hub (LIVE-003).
+    fn live<'a>(&'a self, entity: &'a str, id: &'a str, fields: Option<Vec<String>>) -> reffect_generated::StoreFuture<'a> {
+        Box::pin(async move {
+            match fields {
+                Some(fields) => remote_hub().changed(self.0, remote_authorize_for, entity, id, &fields).await,
+                None => { remote_hub().deleted(entity, id); Ok(()) }
+            }
+        })
+    }`
+        : ""
+    }
 }`,
+            live: options.live === true,
           },
           mutations,
           authorize,
@@ -702,8 +728,17 @@ ${prepared.authorize
   .join("")}            _ => fields.to_vec(),
         }
     }
-}`;
-    const procedures: Record<string, { readonly call: string }> = {};
+}
+#[allow(dead_code)]
+fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String]) -> Vec<String> { remote_authorize(principal)(entity, fields) }`;
+    const procedures: Record<string, { readonly call: string; readonly stream?: boolean }> = {};
+    if (group.requests.has(LIVE))
+      procedures[LIVE] = {
+        call: options.live
+          ? "remote_hub().subscribe(payload, context.principal)"
+          : "remote_engine::no_live(payload)",
+        stream: true,
+      };
     if (group.requests.has(MUTATE))
       procedures[MUTATE] = { call: "remote_mutate(context, cancellation, payload).await" };
     if (group.requests.has(READ))
@@ -720,6 +755,7 @@ ${prepared.authorize
       {
         limits: { bodyBytes: 4 * 1024 * 1024, ...options.limits },
         ...(options.auth ? { auth: options.auth } : {}),
+        ...(options.serialization ? { serialization: options.serialization } : {}),
       },
       {
         procedures,

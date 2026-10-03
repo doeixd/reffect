@@ -878,7 +878,17 @@ export interface RpcRuntime {
    * Each `call` is Rust evaluating to `Result<Value, Value>` or `Served`. In it, `payload`,
    * `context` and (in async servers) `cancellation` are in scope.
    */
-  readonly procedures: { readonly [tag: string]: { readonly call: string } };
+  readonly procedures: {
+    readonly [tag: string]: {
+      readonly call: string;
+      /**
+       * A streaming procedure (LIVE-004): `call` yields `Result<Subscription, Value>`, whose
+       * `events` are forwarded as chunks, each one wait plus whatever is queued (`takeAll`), until
+       * they end; its `guard` drops when the client disconnects or the request is cancelled.
+       */
+      readonly stream?: boolean;
+    };
+  };
   /** The runtime awaits in its calls, so the server must be asynchronous. */
   readonly asynchronous?: boolean;
   /**
@@ -900,7 +910,12 @@ export interface RpcRuntime {
    * Each async runtime function runs in its own session, committed when it succeeds and rolled
    * back otherwise. Used only when the store is reachable.
    */
-  readonly store?: { readonly begin: string; readonly impl: string };
+  readonly store?: {
+    readonly begin: string;
+    readonly impl: string;
+    /** The session's `live` signals reach a hub (LIVE-001). */
+    readonly live?: boolean;
+  };
   /** Pure R functions compiled into the program, callable as `reffect_generated::r_<name>`. */
   readonly helpers?: { readonly [name: string]: Fn<readonly IRType<unknown>[], unknown> };
   readonly modules: readonly string[];
@@ -1225,17 +1240,34 @@ export const compileServer = (
                 "Exactly one middleware with a matching bearer adapter is supported",
               );
             if (protectedServed) protectedCount++;
-            if (RpcSchema.isStreamSchema(rpc.successSchema))
+            const servedStream = RpcSchema.isStreamSchema(rpc.successSchema)
+              ? { success: rpc.successSchema.success, error: rpc.successSchema.error }
+              : undefined;
+            if ((servedStream !== undefined) !== (served.stream === true))
               throw unsupported(
                 procedure,
-                "Streaming procedures are not supported until milestones 6–7 (NR-006)",
+                "A runtime-served procedure streams exactly when its contract does",
               );
+            if (servedStream && !runtime!.asynchronous)
+              throw unsupported(procedure, "Runtime-served streams need an asynchronous server");
             if (rpc.defectSchema.ast !== Schema.Defect().ast)
               throw unsupported(procedure, "Custom defect codecs are unsupported");
             // The contract must be admitted even though the runtime encodes its own results, so
             // results are checked against a scratch registry and emit no codecs.
-            codec(rpc.successSchema.ast, `${procedure}.success`, false, new Map(), false);
-            codec(rpc.errorSchema.ast, `${procedure}.error`, false, new Map(), false);
+            codec(
+              (servedStream?.success ?? rpc.successSchema).ast,
+              `${procedure}.success`,
+              false,
+              new Map(),
+              false,
+            );
+            codec(
+              (servedStream?.error ?? rpc.errorSchema).ast,
+              `${procedure}.error`,
+              false,
+              new Map(),
+              false,
+            );
             const kind = codec(rpc.payloadSchema.ast, `${procedure}.payload`, true, registry, true);
             runtimePayloads.push(witnessOf(kind));
             const validate = isScalar(kind)
@@ -1250,7 +1282,10 @@ export const compileServer = (
                 ],
                 Rs.ok(
                   Rs.verbatimExpr(
-                    `match Served::from(${served.call}) { Served::Success(value) => success(value), Served::Failure(error) => failure(error), Served::Interrupted => ${runtimeFunctions.length ? "interrupted()" : 'unreachable!("only runtime functions are interrupted")'} }`,
+                    servedStream
+                      ? // Disconnect closes `out`; cancellation is the server stopping (STREAM-003).
+                        `match ${served.call} { Err(error) => failure(error), Ok(mut subscription) => { let mut cancellation = cancellation.clone(); let ended = loop { if *cancellation.borrow() { break false; } let first = tokio::select! { biased; _ = cancellation.changed() => break false, _ = context.out.closed() => break false, event = subscription.events.recv() => event }; let Some(first) = first else { break true }; let mut values = vec![first]; while let Ok(next) = subscription.events.try_recv() { values.push(next); } if context.out.send(Outgoing::Message(json!({"_tag":"Chunk", "requestId":context.id, "values":values}))).await.is_err() { break false; } }; drop(subscription); if ended { success(Value::Null) } else { interrupted() } } }`
+                      : `match Served::from(${served.call}) { Served::Success(value) => success(value), Served::Failure(error) => failure(error), Served::Interrupted => ${runtimeFunctions.length ? "interrupted()" : 'unreachable!("only runtime functions are interrupted")'} }`,
                   ),
                 ),
               ),
@@ -1686,11 +1721,19 @@ export const compileServer = (
     });
     const ryuJs = encoders.stable;
     const hasLogs = core.explanation.analysis.effects.includes(SyncEffects.Log);
-    const usesStore = core.explanation.analysis.effects.includes(AsyncEffects.RemoteStore);
+    // Live signals travel through the store session, so they need it too (LIVE-001).
+    const usesLive = core.explanation.analysis.effects.includes(AsyncEffects.LiveHub);
+    const usesStore =
+      usesLive || core.explanation.analysis.effects.includes(AsyncEffects.RemoteStore);
     if (usesStore && !runtime?.store)
       return yield* unsupported(
         "RemoteStore",
         "RemoteStore operations need a NativeRemote host store",
+      );
+    if (usesLive && !runtime?.store?.live)
+      return yield* unsupported(
+        "LiveHub",
+        "LiveHub signals need a NativeRemote live hub (live: true)",
       );
     const contextRuntime = hasLogs
       ? String.raw`
