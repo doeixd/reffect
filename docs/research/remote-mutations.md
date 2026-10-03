@@ -146,13 +146,37 @@ Checked against `foldkit-remote-server` 0.10.0: README "Authentication vs author
   - two principals, missing or wrong tokens denied.
 - **Not covered.** Live reauthorization (milestone 7) and arbitrary principal types.
 
+### RM-004a/b as implemented (2026-10-03)
+
+- **Authentication.**
+  - Runtime-served procedures accept exactly the bearer middleware. They share NativeRpc's authentication statements (payload validation, then the bearer check, and the denial literal), and they count toward the adapter's use.
+  - `NativeRemote.compile(…, { auth })` passes the adapter through. Read and Query call the engine with `remote_authorize(context.principal)`.
+- **Authorization.**
+  - `authorize: { [entity]: R.fn([R.U64, R.Array(R.String)], R.Array(R.String), …) }` compiles as pure helpers (`RpcRuntime.helpers`).
+  - The engine's `allowed_fields` ports `allowedFields`: nothing is asked of `authorize` for an empty request, and requested fields are kept in order, filtered by the permitted set.
+- **Refused while compiling.**
+  - `authorize` without `auth`.
+  - An entity the domain does not declare.
+  - A function of another shape.
+  - A Read or Query procedure without the auth middleware, which would call `authorize` with no principal.
+- **Validation.** [remote-auth.test.ts](../../packages/reffect/tests/remote-auth.test.ts) runs against `RemoteServer.handlers` bound per request to the middleware's principal, with the same R `authorize` functions run by the reference. It covers three principals, missing and wrong tokens, and these paths:
+  - withheld fields settled by name;
+  - an ID whose every field is withheld, which is not read;
+  - a relation the guest may not follow;
+  - a nested level authorized separately;
+  - query `select` filtered.
+
+  Parsed JSON and raw key order match. Path assertions confirm each principal sees a different answer.
+
+- **Remaining.** RM-004c (the principal in mutation and query sources) and Live reauthorization (milestone 7).
+
 ## Order of work
 
 1. RM-002 store with read/query sharing it (no behaviour change). **Done (phase A).**
 2. RM-006 typed → `Unknown` encoding, tested over NativeRpc against the official server. **Done** (see below).
 3. `RemoteStore` write/remove nodes (RS-001), tested through mutations. **Done.**
 4. RM-001 mutations (**done**, see below), with Rename-style and create/delete scenarios ported from the memory and server tests, compared over the wire and through `Data.mutate` acceptance.
-5. RM-004 authorization, with nested-authorization scenarios from `nested.test.ts` (authorized levels, a relation the principal may not read).
+5. RM-004 authorization (**a/b done**; c remains), with nested-authorization scenarios from `nested.test.ts` (authorized levels, a relation the principal may not read).
 
 ## Open questions
 

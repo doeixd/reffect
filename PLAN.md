@@ -89,7 +89,7 @@ Remaining, in order, driven by `examples/todo-remote` (native Remote server plus
 1. Done: [`examples/todo-remote`](examples/todo-remote/README.md). A `Todo` entity, a list query and add/toggle/delete mutations run through the stock client, with screens equal to upstream. Toggling sends the new `done` value, so `get` is not needed yet.
 2. Done: connection changes in mutation outcomes (RM-005), so created rows join the lists that show them.
 3. `RemoteStore.get` with typed decoding, so mutations can read the rows they change.
-4. Authorization as compiled R functions (RM-004), after researching how the principal reaches the native Remote server.
+4. Done: authentication by the bearer adapter and field authorization as compiled R functions (RM-004a/b). The principal in mutation sources (RM-004c) remains.
 5. Declare milestone 4 accepted within the memory profile; then milestone 5 compiles Query to SQL and gives the store an SQLx implementation (RS-003).
 
 The **bounded `Schedule`** slice is implemented: `recurs`/`spaced`/`exponential`/`forever` and `repeat`/`retry` lower to a concrete native loop with frame-aware retry. Schedule combinators, fixed cadence, jitter and `while`/`until` remain deferred.

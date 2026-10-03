@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-03 — Native Remote authentication and field authorization (RM-004a/b)
+
+- Runtime-served procedures accept the checked bearer middleware; authentication is shared with NativeRpc handlers.
+- `NativeRemote.compile` takes `auth` and per-entity `authorize` R functions. The engine ports `allowedFields`.
+- [remote-auth.test.ts](packages/reffect/tests/remote-auth.test.ts) passes 2/2 against `RemoteServer.handlers` bound per request: three principals, denials, settled withheld fields, IDs that are not read, relations not followed, query `select`. Details are in [remote-mutations.md](docs/research/remote-mutations.md#rm-004ab-as-implemented-2026-10-03).
+- Upstream finding recorded in [foldkit-plus issues](docs/research/foldkit-plus-issues.md): `RemoteServer.entity(Entity, …)` drops relation fields.
+
 ## 2026-10-03 — Owned Clock/Random drivers
 
 - Three agents implemented checked IR/reference/planning, native lowering/drivers and independent conformance after stable-source research. [CLOCK/RANDOM](docs/research/clock-random-modules.md), [RTS](docs/research/runtime-services-implementation.md), [DRV](docs/research/runtime-services-lowering.md) and [RTCONF](docs/research/runtime-services-conformance.md) decisions record configuration, lifetime, alternatives and limits. Core PLAN.md remains owned by the other instance; synchronized its Remote Query/Store, limits and benchmark work through b52f360.

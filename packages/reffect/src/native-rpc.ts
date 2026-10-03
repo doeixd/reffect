@@ -883,6 +883,8 @@ export interface RpcRuntime {
    * execution context, and `impl` implements the generated trait. Used only when reachable.
    */
   readonly store?: { readonly expr: string; readonly impl: string };
+  /** Pure R functions compiled into the program, callable as `reffect_generated::r_<name>`. */
+  readonly helpers?: { readonly [name: string]: Fn<readonly IRType<unknown>[], unknown> };
   readonly modules: readonly string[];
   /** Cargo dependency lines and the crate IDs they add to the explanation. */
   readonly dependencies: readonly string[];
@@ -1085,6 +1087,16 @@ export const compileServer = (
         const serverServices: Service[] = [];
         // Runtime-served payload witnesses, kept reachable so their native types are emitted.
         const runtimePayloads: IRType<unknown>[] = [];
+        for (const [name, fn] of Object.entries(runtime?.helpers ?? {})) {
+          if (!/^[a-z][a-z0-9_]*$/.test(name) || Object.hasOwn(functions, name))
+            throw unsupported(
+              `runtime.${name}`,
+              "Helper names are distinct lowercase Rust identifiers",
+            );
+          if (!(fn instanceof Fn))
+            throw unsupported(`runtime.${name}`, "Helpers are pure R functions");
+          functions[name] = fn;
+        }
         const runtimeFunctions = Object.entries(runtime?.functions ?? {}).map(
           ([name, { fn, input }]) => {
             const at = `runtime.${name}`;
@@ -1124,6 +1136,30 @@ export const compileServer = (
           serverServices.push(service);
           return serverServices.length - 1;
         };
+        // The bearer check, after payload validation: a denial answers with the adapter's literal.
+        const authenticate = (bearer: RpcBearer) => [
+          Rs.exprStmt(
+            Rs.letElse(
+              Rs.variantPat([Rs.ident("Some")], [Rs.identPat(Rs.ident("principal"))]),
+              callLocal("authenticate", local("headers"), local("message"), local("state")),
+              Rs.block([
+                Rs.stmt(
+                  Rs.return_(
+                    Rs.ok(
+                      callLocal(
+                        "failure",
+                        Rs.pathCall([Rs.ident("Value")], Rs.ident("String"), [
+                          Rs.dotCall(Rs.stringLiteral(bearer.denied), Rs.ident("to_string"), []),
+                        ]),
+                      ),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+          Rs.assign(Rs.field(local("context"), Rs.ident("principal")), Rs.some(local("principal"))),
+        ];
         const arms = entries.map((definition, index) => {
           if (!Rpc.isRpc(definition)) throw unsupported("group", "Expected a stock RPC definition");
           const rpc: Rpc.AnyWithProps = definition;
@@ -1131,8 +1167,16 @@ export const compileServer = (
           if (!wellFormed(rpc._tag)) throw unsupported(procedure, "RPC tags must be valid Unicode");
           const served = runtime?.procedures[rpc._tag];
           if (served && Object.hasOwn(runtime!.procedures, rpc._tag)) {
-            if (rpc.middlewares.size !== 0)
-              throw unsupported(procedure, "Runtime-served procedures are public in this profile");
+            const protectedServed = rpc.middlewares.size !== 0;
+            if (
+              protectedServed &&
+              (!auth || rpc.middlewares.size !== 1 || !rpc.middlewares.has(auth.middleware))
+            )
+              throw unsupported(
+                procedure,
+                "Exactly one middleware with a matching bearer adapter is supported",
+              );
+            if (protectedServed) protectedCount++;
             if (RpcSchema.isStreamSchema(rpc.successSchema))
               throw unsupported(
                 procedure,
@@ -1152,7 +1196,10 @@ export const compileServer = (
             return {
               pat: Rs.stringPat(rpc._tag),
               body: Rs.block(
-                [Rs.stmt(Rs.try_(validate))],
+                [
+                  Rs.stmt(Rs.try_(validate)),
+                  ...(protectedServed && auth ? authenticate(auth) : []),
+                ],
                 Rs.ok(
                   Rs.verbatimExpr(
                     `match Served::from(${served.call}) { Served::Success(value) => success(value), Served::Failure(error) => failure(error), Served::Interrupted => ${runtimeFunctions.length ? "interrupted()" : 'unreachable!("only runtime functions are interrupted")'} }`,
@@ -1356,36 +1403,7 @@ export const compileServer = (
           validationOrder.forEach((index) =>
             statements.push(Rs.let_(Rs.ident(`arg_${index}`), undefined, args[index])),
           );
-          if (protectedRpc && auth) {
-            statements.push(
-              Rs.exprStmt(
-                Rs.letElse(
-                  Rs.variantPat([Rs.ident("Some")], [Rs.identPat(Rs.ident("principal"))]),
-                  callLocal("authenticate", local("headers"), local("message"), local("state")),
-                  Rs.block([
-                    Rs.stmt(
-                      Rs.return_(
-                        Rs.ok(
-                          callLocal(
-                            "failure",
-                            Rs.pathCall([Rs.ident("Value")], Rs.ident("String"), [
-                              Rs.dotCall(Rs.stringLiteral(auth.denied), Rs.ident("to_string"), []),
-                            ]),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ]),
-                ),
-              ),
-            );
-            statements.push(
-              Rs.assign(
-                Rs.field(local("context"), Rs.ident("principal")),
-                Rs.some(local("principal")),
-              ),
-            );
-          }
+          if (protectedRpc && auth) statements.push(...authenticate(auth));
           const asynchronous = fn instanceof EffectFn && isAsyncComputation(fn.body);
           positions.forEach((position, i) =>
             statements.push(

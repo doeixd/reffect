@@ -480,7 +480,22 @@ mod remote_engine {
     /// ` +
   "`readHelper`" +
   String.raw`.
-    fn read_helper(server: &Memory, requests: Vec<Requirement>) -> Result<Value, Value> {
+    /// An entity source's ` +
+  "`authorize`" +
+  String.raw` for the bound principal: declared fields in, permitted fields out.
+    pub type Authorize<'a> = &'a dyn Fn(&str, &[String]) -> Vec<String>;
+    /// ` +
+  "`allowedFields`" +
+  String.raw`: requested fields ` +
+  "`authorize`" +
+  String.raw` permits, in request order; it can only remove.
+    fn allowed_fields(authorize: Authorize, entity: &str, requested: &[String]) -> Vec<String> {
+        // The memory backend declares no fields, so every requested field is declared.
+        if requested.is_empty() { return Vec::new(); }
+        let permitted: HashSet<String> = authorize(entity, requested).into_iter().collect();
+        requested.iter().filter(|field| permitted.contains(*field)).cloned().collect()
+    }
+    fn read_helper(server: &Memory, authorize: Authorize, requests: Vec<Requirement>) -> Result<Value, Value> {
         let mut entities: Vec<Value> = Vec::new();
         let mut settled: Ordered<(String, String, OrderedSet)> = Ordered::new();
         let mut fetched: HashMap<String, HashSet<String>> = HashMap::new();
@@ -496,8 +511,7 @@ mod remote_engine {
             for group in group_by_entity(&pending) {
                 let name = group.slice.entity.clone();
                 if !server.has_source(&name) { continue; }
-                // The memory backend declares no fields and authorizes nothing: all requested are allowed.
-                let allowed: Vec<String> = group.slice.fields.clone();
+                let allowed: Vec<String> = allowed_fields(authorize, &name, &group.slice.fields);
                 let allowed_set: HashSet<&String> = allowed.iter().collect();
                 let rename = |field: &String| -> String { group.renames.get(field).cloned().unwrap_or_else(|| field.clone()) };
                 let id_list: Vec<String> = group.ids.keys.clone();
@@ -573,7 +587,7 @@ mod remote_engine {
   String.raw` handler over a validated payload: protocol check, then ` +
   "`readHelper`" +
   String.raw`.
-    pub fn read(server: &Memory, payload: &Value) -> Result<Value, Value> {
+    pub fn read(server: &Memory, authorize: Authorize, payload: &Value) -> Result<Value, Value> {
         let received = payload.get("version").map(number).unwrap_or(f64::NAN);
         if received != PROTOCOL_VERSION {
             let mut buffer = ryu_js::Buffer::new();
@@ -582,7 +596,7 @@ mod remote_engine {
             return Err(json!({ "_tag": "RemoteProtocolError", "message": format!("Remote protocol version {} is not 4", printed), "expected": 4, "received": wire }));
         }
         let requests: Vec<Requirement> = payload.get("requests").and_then(Value::as_array).map(|items| items.iter().map(requirement).collect()).unwrap_or_default();
-        read_helper(server, requests)
+        read_helper(server, authorize, requests)
     }
     // ---- Query (NR-014..017): a domain query's body, run by the milestone-1 evaluator.
     use super::foldkit_eval::Value as Cell;
@@ -640,7 +654,7 @@ mod remote_engine {
     /// ` +
   "`handlers.FoldkitRemoteQuery`" +
   String.raw` with the memory backend's query sources.
-    pub fn query(server: &Memory, queries: &[QueryDef], payload: &Value) -> Result<Value, Value> {
+    pub fn query(server: &Memory, queries: &[QueryDef], authorize: Authorize, payload: &Value) -> Result<Value, Value> {
         let name = payload.get("query").and_then(Value::as_str).unwrap_or_default();
         let Some(def) = queries.iter().find(|def| def.name == name) else { return Err(query_error(format!("Unknown query: {}", name))) };
         let input = payload.get("input").unwrap_or(&Value::Null);
@@ -701,7 +715,7 @@ mod remote_engine {
         if requirements.is_empty() {
             return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": [], "settled": [] }));
         }
-        let read = read_helper(server, requirements).map_err(|error| query_error(error.get("message").and_then(Value::as_str).unwrap_or_default().to_string()))?;
+        let read = read_helper(server, authorize, requirements).map_err(|error| query_error(error.get("message").and_then(Value::as_str).unwrap_or_default().to_string()))?;
         Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": read["entities"], "settled": read["settled"] }))
     }
 }
