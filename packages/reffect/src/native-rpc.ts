@@ -6,7 +6,7 @@ import { FailureFrames } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { SourceArtifacts } from "./artifact-policy.ts";
 import type { GeneratedFiles } from "./cargo.ts";
-import { EffectFn, SyncEffects, isAsyncComputation, launch } from "./effect-ir.ts";
+import { AsyncEffects, EffectFn, SyncEffects, isAsyncComputation, launch } from "./effect-ir.ts";
 import { Service } from "./context.ts";
 import { StaticLayer } from "./layer.ts";
 import {
@@ -862,7 +862,27 @@ const bindServices = <
  * runtime `call` runs; it receives `payload: &Value` and returns the encoded success or failure.
  */
 export interface RpcRuntime {
+  /**
+   * Each `call` is Rust evaluating to `Result<Value, Value>` or `Served`. In it, `payload`,
+   * `context` and (in async servers) `cancellation` are in scope.
+   */
   readonly procedures: { readonly [tag: string]: { readonly call: string } };
+  /**
+   * R functions the runtime calls as `runtime_<name>(context, cancellation, input).await`,
+   * yielding a `RuntimeCall`. Each takes one input decoded by its schema's generated decoder and
+   * produces `Unknown` (or fails with `Unknown`). Their presence makes the server asynchronous.
+   */
+  readonly functions?: {
+    readonly [name: string]: {
+      readonly fn: EffectFn<readonly IRType<unknown>[], unknown, unknown>;
+      readonly input: Schema.Top;
+    };
+  };
+  /**
+   * The server's Remote store (RS-003): `expr` is a `&'static dyn RemoteStore`, set on every
+   * execution context, and `impl` implements the generated trait. Used only when reachable.
+   */
+  readonly store?: { readonly expr: string; readonly impl: string };
   readonly modules: readonly string[];
   /** Cargo dependency lines and the crate IDs they add to the explanation. */
   readonly dependencies: readonly string[];
@@ -1017,6 +1037,30 @@ export const compileServer = (
         const serverServices: Service[] = [];
         // Runtime-served payload witnesses, kept reachable so their native types are emitted.
         const runtimePayloads: IRType<unknown>[] = [];
+        const runtimeFunctions = Object.entries(runtime?.functions ?? {}).map(
+          ([name, { fn, input }]) => {
+            const at = `runtime.${name}`;
+            if (!/^[a-z][a-z0-9_]*$/.test(name))
+              throw unsupported(at, "Runtime function names are lowercase Rust identifiers");
+            if (!(fn instanceof EffectFn) || fn.input.length !== 1)
+              throw unsupported(at, "Runtime functions are R effect functions of one input");
+            if (
+              !IRType.same(fn.output, UnknownType) ||
+              !(IRType.same(fn.error, UnknownType) || IRType.same(fn.error, NeverType))
+            )
+              throw unsupported(at, "Runtime functions produce and fail with Unknown");
+            const kind = codec(input.ast, `${at}.input`, true, registry, true);
+            if (kind === "never" || !IRType.same(witnessOf(kind), fn.input[0]))
+              throw unsupported(at, "The input witness disagrees with its schema");
+            functions[`runtime_${name}`] = fn;
+            return {
+              name,
+              kind,
+              asynchronous: isAsyncComputation(fn.body),
+              fails: !IRType.same(fn.error, NeverType),
+            };
+          },
+        );
         const servicePosition = (service: Service, procedure: string): number => {
           if (!(service instanceof Service))
             throw unsupported(procedure, "Expected an R.Context service");
@@ -1063,7 +1107,7 @@ export const compileServer = (
                 [Rs.stmt(Rs.try_(validate))],
                 Rs.ok(
                   Rs.verbatimExpr(
-                    `match ${served.call} { Ok(value) => success(value), Err(error) => failure(error) }`,
+                    `match Served::from(${served.call}) { Served::Success(value) => success(value), Served::Failure(error) => failure(error), Served::Interrupted => ${runtimeFunctions.length ? "interrupted()" : 'unreachable!("only runtime functions are interrupted")'} }`,
                   ),
                 ),
               ),
@@ -1378,9 +1422,12 @@ export const compileServer = (
           arms,
           layered: layer !== undefined,
           services: serverServices.map((service) => service.id),
-          asynchronous: Object.values(functions).some(
-            (fn) => fn instanceof EffectFn && isAsyncComputation(fn.body),
-          ),
+          runtimeFunctions,
+          asynchronous:
+            runtimeFunctions.length > 0 ||
+            Object.values(functions).some(
+              (fn) => fn instanceof EffectFn && isAsyncComputation(fn.body),
+            ),
           hasSynchronousEffects: Object.values(functions).some(
             (fn) => fn instanceof EffectFn && !isAsyncComputation(fn.body),
           ),
@@ -1476,6 +1523,12 @@ export const compileServer = (
         cause instanceof CompileError ? cause : unsupported("Schema.toCodecJson", String(cause)),
     });
     const hasLogs = core.explanation.analysis.effects.includes(SyncEffects.Log);
+    const usesStore = core.explanation.analysis.effects.includes(AsyncEffects.RemoteStore);
+    if (usesStore && !runtime?.store)
+      return yield* unsupported(
+        "RemoteStore",
+        "RemoteStore operations need a NativeRemote host store",
+      );
     const contextRuntime = hasLogs
       ? String.raw`
 fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
@@ -1488,10 +1541,49 @@ fn in_context<T>(context: &RequestContext, f: impl FnOnce() -> T) -> T {
 fn execution_context(cancellation: tokio::sync::watch::Receiver<bool>, context: &RequestContext) -> reffect_generated::AsyncContext {
     let mut execution = reffect_generated::AsyncContext::new(cancellation);
     ${hasLogs ? 'execution.set_request(json!({"id":context.id, "tag":context.tag, "principal":context.principal.map(|p| p.to_string())}).to_string());' : "let _ = context;"}
+    ${usesStore ? `execution.set_remote_store(${runtime!.store!.expr});` : ""}
     execution
 }
 fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt"}]}) }
 `
+      : "";
+    const decodeCall = (kind: Codec): string =>
+      isScalar(kind) ? `${kind}_arg(input, None)` : `decode_${kind.name}(input, None)`;
+    const servedRuntime = runtime
+      ? `
+/// A runtime-served answer: success, typed failure, or interruption of a runtime function.
+enum Served { Success(Value), Failure(Value), ${prepared.runtimeFunctions.length ? "Interrupted" : "#[allow(dead_code)] Interrupted"} }
+impl From<Result<Value, Value>> for Served {
+    fn from(result: Result<Value, Value>) -> Self { match result { Ok(value) => Served::Success(value), Err(error) => Served::Failure(error) } }
+}
+${
+  prepared.runtimeFunctions.length
+    ? `/// A runtime function's outcome; \`Invalid\` means its input failed the generated decoder.
+#[allow(dead_code)]
+enum RuntimeCall { Invalid(String), Success(Value), Failure(Value), Interrupted }
+`
+    : ""
+}${prepared.runtimeFunctions
+          .map((f) => {
+            const call = `reffect_generated::r_runtime_${f.name}`;
+            const failure = f.fails ? "RuntimeCall::Failure(error)" : "match error {}";
+            return `async fn runtime_${f.name}(context: &RequestContext<'_>, cancellation: &tokio::sync::watch::Receiver<bool>, input: &Value) -> RuntimeCall {
+    let arg = match ${decodeCall(f.kind)} { Ok(arg) => arg, Err(message) => return RuntimeCall::Invalid(message) };
+${
+  f.asynchronous
+    ? `    let mut execution = execution_context(cancellation.clone(), context);
+    match ${call}(&mut execution, arg).await {
+        Ok(value) => RuntimeCall::Success(value),
+        Err(reffect_generated::AsyncError::Fail(error)) => ${failure},
+        Err(reffect_generated::AsyncError::Interrupted) => RuntimeCall::Interrupted,
+    }`
+    : `    let _ = cancellation;
+    match in_context(context, || ${call}(arg)) { Ok(value) => RuntimeCall::Success(value), Err(error) => ${failure} }`
+}
+}
+`;
+          })
+          .join("")}`
       : "";
     const authRuntime = prepared.auth
       ? rpcAuthRuntime
@@ -1519,6 +1611,8 @@ fn interrupted() -> Value { json!({"_tag":"Failure", "cause":[{"_tag":"Interrupt
           : []),
         Rs.verbatimItem(contextRuntime),
         ...(executionRuntime ? [Rs.verbatimItem(executionRuntime)] : []),
+        ...(servedRuntime ? [Rs.verbatimItem(servedRuntime)] : []),
+        ...(usesStore ? [Rs.verbatimItem(runtime!.store!.impl)] : []),
         Rs.verbatimItem(authRuntime),
         ...(runtime?.modules ?? []).map((module) => Rs.verbatimItem(module)),
         Rs.verbatimItem(

@@ -5,6 +5,7 @@ export const asyncRuntime = (
   scopeDepth = 0,
   scopeCapacity = 0,
   launch?: string,
+  store = false,
 ): string => `
 #[derive(Debug)]
 pub enum AsyncError<E> { Fail(E), Interrupted }
@@ -26,13 +27,23 @@ impl ScopeFrame {
 `
     : ""
 }
-pub struct AsyncContext {
+${
+  store
+    ? `/// The Remote store a host serves (RS-003): MemoryStore semantics, one lock per operation.
+pub trait RemoteStore: Send + Sync {
+    fn write(&self, entity: &str, id: &str, values: serde_json::Value);
+    fn remove(&self, entity: &str, id: &str);
+}
+`
+    : ""
+}pub struct AsyncContext {
     cancellation: tokio::sync::watch::Receiver<bool>,
     interruptible: bool,
     ${logging ? "annos: Vec<(&'static str, LogAttr)>, spans: Vec<(&'static str, std::time::Instant)>, request: Option<String>," : ""}
     ${frames ? "frames: Option<Box<FrameTrail>>," : ""}
     ${scopeDepth ? `scopes: [Option<ScopeFrame>; ${scopeDepth}], scope_depth: usize,` : ""}
     ${launch ? "launch: Option<tokio::sync::oneshot::Sender<LaunchValues>>," : ""}
+    ${store ? "store: Option<&'static dyn RemoteStore>," : ""}
 }
 impl AsyncContext {
     pub fn new(cancellation: tokio::sync::watch::Receiver<bool>) -> Self {
@@ -41,12 +52,19 @@ impl AsyncContext {
             ${frames ? "frames: None," : ""}
             ${scopeDepth ? "scopes: std::array::from_fn(|_| None), scope_depth: 0," : ""}
             ${launch ? "launch: None," : ""}
+            ${store ? "store: None," : ""}
         }
     }
     pub fn is_cancelled(&self) -> bool {
         self.interruptible && (*self.cancellation.borrow() || self.cancellation.has_changed().is_err())
     }
     ${logging ? "pub fn set_request(&mut self, request: String) { self.request = Some(request); }" : ""}
+    ${
+      store
+        ? `pub fn set_remote_store(&mut self, store: &'static dyn RemoteStore) { self.store = Some(store); }
+    fn remote_store(&self) -> &'static dyn RemoteStore { self.store.expect("a RemoteStore host sets its store before running") }`
+        : ""
+    }
     ${
       launch
         ? `/// The host receives the launch values once; the hold then waits like Effect.never.

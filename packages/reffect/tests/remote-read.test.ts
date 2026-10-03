@@ -274,11 +274,11 @@ test("the vendored wire fixture derives the same witnesses as the published cont
   }
 });
 
-test("procedures other than Read are refused for now", async () => {
+test("streaming Live is refused until milestones 6–7", async () => {
   const error = await Effect.runPromise(
     NativeRemote.compile(RemoteRpc, { domain, rows }).pipe(Effect.flip),
   );
-  expect(error.message).toContain("FoldkitRemoteRead");
+  expect(error.message).toContain("Streaming Live is deferred");
 });
 
 test(

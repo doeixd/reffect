@@ -1,11 +1,24 @@
-import { Effect, SchemaAST } from "effect";
-import type { Schema } from "effect";
+import { Effect, Schema, SchemaAST } from "effect";
 import type { Rpc, RpcGroup } from "effect/rpc";
 import type { AnyQuery } from "foldkit-entity";
+import { EffectFn, EffectIR, type Computation } from "./effect-ir.ts";
+import { mapError } from "./error-recovery.ts";
 import { Foldkit } from "./foldkit.ts";
-import { CompileError, fail } from "./kernel.ts";
-import { compileServer } from "./native-rpc.ts";
-import type { RpcArtifact } from "./native-rpc.ts";
+import {
+  CompileError,
+  Expr,
+  IRType,
+  NeverType,
+  StringType,
+  UnknownType,
+  fail,
+  structLayout,
+  type Value,
+} from "./kernel.ts";
+import { compileServer, NativeRpc } from "./native-rpc.ts";
+import type { RpcArtifact, WireValue } from "./native-rpc.ts";
+import { ArrayIR, Struct, optionalKey } from "./records.ts";
+import { SchemaIR } from "./schema-json.ts";
 import { remoteEngineRuntime } from "./remote-engine.ts";
 import { Rs } from "./rust-emit.ts";
 
@@ -28,6 +41,8 @@ export interface RemoteDomain {
 export interface NativeRemoteOptions {
   readonly domain: RemoteDomain;
   readonly rows: MemoryRows;
+  /** Mutation sources, as `RemoteServer.memory`'s `mutations` gives them (RM-001). */
+  readonly mutations?: ReadonlyArray<NativeRemoteMutation>;
   /**
    * Request hardening (docs/native-divergences.md). Remote batches whole screens into one Read,
    * so the body limit defaults to 4 MiB rather than NativeRpc's 64 KiB.
@@ -39,6 +54,133 @@ const unsupported = (path: string, message: string) =>
   fail("REMOTE_UNSUPPORTED", "remote", path, message);
 const READ = "FoldkitRemoteRead";
 const QUERY = "FoldkitRemoteQuery";
+const MUTATE = "FoldkitRemoteMutate";
+
+/** A patch in wire shape, `{ entity, id, values }`, as `Remote.patch` builds it. */
+export const RemotePatch = Struct({ entity: StringType, id: StringType, values: UnknownType });
+/** A deleted entity's reference. */
+export const RemoteRef = Struct({ entity: StringType, id: StringType });
+/** `RemoteServerError`'s data: a mutation fails with its message (RM-001). */
+export const RemoteServerError = Struct({ message: StringType });
+const outcomeOf = <O>(output: IRType<O>) =>
+  Struct({
+    output,
+    entities: optionalKey(ArrayIR(RemotePatch)),
+    deleted: optionalKey(ArrayIR(RemoteRef)),
+  });
+/**
+ * A mutation's `MutationOutcome`: its typed `output`, optional entity patches and deletions.
+ * Connection changes wait for connection identities (RM-005).
+ */
+export type RemoteOutcome<O> = Value<ReturnType<typeof outcomeOf<O>>>;
+/** The part of a `Mutation.make` descriptor a mutation source reads. */
+export interface MutationLike {
+  readonly name: string;
+  readonly Input: Schema.Top;
+  readonly Output: Schema.Top;
+}
+export interface NativeRemoteMutation {
+  readonly name: string;
+  readonly input: Schema.Top;
+  readonly fn: EffectFn<readonly IRType<unknown>[], unknown, unknown>;
+}
+// The reference decodes inputs with `Schema.decodeUnknown` and encodes outputs with
+// `Schema.encodeUnknown`; native code uses the JSON codecs. They agree on finite numbers and
+// required or `optionalKey` fields, so schemas outside that subset are refused. An output number
+// could be non-finite at run time, which upstream refuses and JSON cannot carry, so outputs hold
+// none yet.
+const portable = (ast: SchemaAST.AST, path: string, output = false): void => {
+  if (SchemaAST.isNumber(ast)) {
+    if (output) throw unsupported(path, "Mutation outputs hold no numbers in this profile");
+    const admits = Schema.is(Schema.make<Schema.Top>(ast));
+    if (admits(NaN) || admits(Infinity) || admits(-Infinity))
+      throw unsupported(path, "Mutation numbers must be finite (Schema.Finite or Schema.Int)");
+    return;
+  }
+  if (SchemaAST.isUndefined(ast))
+    throw unsupported(path, "Mutation schemas must not hold undefined; use Schema.optionalKey");
+  if (SchemaAST.isUnion(ast)) {
+    ast.types.forEach((member, i) => portable(member, `${path}[${i}]`, output));
+    return;
+  }
+  if (SchemaAST.isArrays(ast)) {
+    ast.elements.forEach((element, i) => portable(element, `${path}[${i}]`, output));
+    ast.rest.forEach((rest) => portable(rest, `${path}[]`, output));
+    return;
+  }
+  if (SchemaAST.isObjects(ast)) {
+    ast.propertySignatures.forEach((property) =>
+      portable(property.type, `${path}.${String(property.name)}`, output),
+    );
+    ast.indexSignatures.forEach((index) => portable(index.type, `${path}{}`, output));
+  }
+};
+/** The outcome witness of a mutation, to build what its source returns. */
+const outcome = <M extends MutationLike>(definition: M) =>
+  outcomeOf(NativeRpc.witness<M["Output"]>(definition.Output, { position: "result" }));
+const encode = <A>(witness: IRType<A>) => SchemaIR.encodeSync(SchemaIR.toCodecJson(witness));
+/**
+ * `RemoteServer.mutation(Mutation, run)`: `build` receives the decoded input and returns the
+ * outcome, or fails with `RemoteServerError`. It may write the store with `R.RemoteStore`.
+ */
+const mutation = <M extends MutationLike>(
+  definition: M,
+  build: (
+    input: Expr<WireValue<M["Input"]>>,
+  ) => Computation<RemoteOutcome<WireValue<M["Output"]>>, Value<typeof RemoteServerError>>,
+): NativeRemoteMutation => {
+  portable(definition.Input.ast, `mutations.${definition.name}.Input`);
+  portable(definition.Output.ast, `mutations.${definition.name}.Output`, true);
+  const input = NativeRpc.witness<M["Input"]>(definition.Input);
+  const result = outcome(definition);
+  const fn = EffectFn.make<readonly [IRType<WireValue<M["Input"]>>], unknown, unknown>(
+    [input],
+    UnknownType,
+    UnknownType,
+    (value) => {
+      const succeeded = EffectIR.map(build(value), encode(result));
+      // A source that cannot fail has nothing to encode on its error channel.
+      return IRType.same(succeeded.error, NeverType)
+        ? succeeded
+        : mapError(succeeded, encode(RemoteServerError));
+    },
+  );
+  return Object.freeze({ name: definition.name, input: definition.Input, fn });
+};
+/**
+ * `Remote.patch(Entity, id, values)`: `values` is a Struct of some of the entity's fields in their
+ * wire shape, encoded as the wire carries them (RM-001 refined).
+ */
+const patch = <A>(
+  entity: {
+    readonly name: string;
+    readonly fields?: object | undefined;
+    readonly relations?: object | undefined;
+  },
+  id: Expr<string>,
+  values: Expr<A>,
+): Expr<Value<typeof RemotePatch>> => {
+  const layout = structLayout(values.type);
+  if (!layout || layout.tag !== undefined)
+    throw unsupported(`patch.${entity.name}`, "Patch values are a plain Struct");
+  for (const field of layout.fields)
+    if (
+      entity.fields &&
+      !Object.hasOwn(entity.fields, field.name) &&
+      !(entity.relations && Object.hasOwn(entity.relations, field.name))
+    )
+      throw unsupported(
+        `patch.${entity.name}.${field.name}`,
+        `${entity.name} declares no field ${field.name}`,
+      );
+  if (!IRType.same(id.type, StringType))
+    throw unsupported(`patch.${entity.name}`, "Entity IDs are Strings");
+  return RemotePatch.make({
+    entity: Expr.literal(StringType, entity.name),
+    id,
+    values: encode(values.type)(values),
+  });
+};
 
 // Rows must be JSON data, and relation lists string refs: the profile the port reproduces (NR-011).
 const tables = (rows: MemoryRows): [string, [string, Record<string, unknown>][]][] =>
@@ -134,13 +276,20 @@ const compile = <Rpcs extends Rpc.Any>(
     const prepared = yield* Effect.try({
       try: () => {
         for (const tag of group.requests.keys())
-          if (tag !== READ && tag !== QUERY)
+          if (tag !== READ && tag !== QUERY && tag !== MUTATE)
             throw unsupported(
               `rpc.${tag}`,
               tag === "FoldkitRemoteLive"
                 ? "Streaming Live is deferred to milestones 6–7 (NR-006)"
-                : "Only FoldkitRemoteRead and FoldkitRemoteQuery are served natively so far",
+                : "Only Read, Query and Mutate are served natively so far",
             );
+        const mutations = options.mutations ?? [];
+        const sourced = new Set<string>();
+        for (const source of mutations) {
+          if (sourced.has(source.name))
+            throw unsupported(`mutations.${source.name}`, "Each mutation has one source");
+          sourced.add(source.name);
+        }
         const entities = Array.from(options.domain.registry.entities.keys());
         const rowTables = tables(options.rows);
         const queries = Array.from(options.domain.registry.queries.values());
@@ -180,6 +329,7 @@ const compile = <Rpcs extends Rpc.Any>(
           rows: JSON.stringify(Object.fromEntries(rowTables)),
           evaluator: embedded.rust,
           definitions,
+          mutations,
         };
       },
       catch: (cause) =>
@@ -197,7 +347,29 @@ static REMOTE_QUERIES: [remote_engine::QueryDef; ${prepared.definitions.length}]
 mod foldkit_eval {
 ${prepared.evaluator || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, PartialEq)]\npub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }"}
 }`;
+    // Upstream order: unknown mutation, then input decoding, then the run (RM-001).
+    const arms = prepared.mutations
+      .map(
+        (source, i) =>
+          `        ${Rs.stringLiteral(source.name).text} => runtime_mutation_${i}(context, cancellation, input).await,\n`,
+      )
+      .join("");
+    const mutate = `async fn remote_mutate(context: &RequestContext<'_>, cancellation: &tokio::sync::watch::Receiver<bool>, payload: &serde_json::Value) -> Served {
+    let name = payload.get("mutation").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let input = payload.get("input").unwrap_or(&serde_json::Value::Null);
+    let call = match name {
+${arms}        _ => return Served::Failure(remote_engine::mutation_error(format!("Unknown mutation: {}", name))),
+    };
+    match call {
+        RuntimeCall::Invalid(_) => Served::Failure(remote_engine::mutation_error("Invalid mutation input".to_string())),
+        RuntimeCall::Success(outcome) => Served::Success(remote_engine::mutation_result(outcome)),
+        RuntimeCall::Failure(error) => Served::Failure(remote_engine::mutation_error(error.get("message").and_then(serde_json::Value::as_str).unwrap_or_default().to_string())),
+        RuntimeCall::Interrupted => Served::Interrupted,
+    }
+}`;
     const procedures: Record<string, { readonly call: string }> = {};
+    if (group.requests.has(MUTATE))
+      procedures[MUTATE] = { call: "remote_mutate(context, cancellation, payload).await" };
     if (group.requests.has(READ))
       procedures[READ] = { call: "remote_engine::read(remote_memory(), payload)" };
     if (group.requests.has(QUERY))
@@ -210,11 +382,35 @@ ${prepared.evaluator || "pub use std::cmp::Ordering;\n#[derive(Clone, Debug, Par
       { limits: { bodyBytes: 4 * 1024 * 1024, ...options.limits } },
       {
         procedures,
-        modules: [remoteEngineRuntime, server],
+        modules: [remoteEngineRuntime, server, ...(group.requests.has(MUTATE) ? [mutate] : [])],
+        functions: Object.fromEntries(
+          prepared.mutations.map((source, i) => [
+            `mutation_${i}`,
+            { fn: source.fn, input: source.input },
+          ]),
+        ),
+        store: {
+          expr: "remote_memory()",
+          impl: `impl reffect_generated::RemoteStore for remote_engine::Memory {
+    fn write(&self, entity: &str, id: &str, values: serde_json::Value) {
+        let serde_json::Value::Object(values) = values else { return };
+        remote_engine::Memory::write(self, entity, id, values.into_iter().collect());
+    }
+    fn remove(&self, entity: &str, id: &str) { remote_engine::Memory::remove(self, entity, id) }
+}`,
+        },
         dependencies: ['ryu-js = { version = "=1.0.3", default-features = false }\n'],
         crates: ["ryu-js@1.0.3"],
       },
     );
   });
 
-export const NativeRemote = Object.freeze({ compile });
+export const NativeRemote = Object.freeze({
+  compile,
+  mutation,
+  outcome,
+  patch,
+  ServerError: RemoteServerError,
+  Patch: RemotePatch,
+  Ref: RemoteRef,
+});

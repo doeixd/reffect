@@ -75,12 +75,40 @@ Checked against `foldkit-remote` 0.10.0 `index.d.mts`: `Remote.patch(entity, id,
 - **RS-001 refined — typed store writes.** `write(entity, id, values)` takes any Struct witness and stores its JSON encoding, so a row keeps the entity's wire shape. That is narrower than upstream's untyped `Record<string, unknown>` (spreading a non-object is not admitted) and settles the NR-017 question for written rows: the values are the entity's own encoded field types. `remove(entity, id)` is unchanged. `get` returns raw `Unknown` rows and waits for typed decoding (`Schema.decodeUnknown`, fallible) with the first mutation that needs it.
 - **RM-001 refined — patches and outcomes.** `NativeRemote.patch(Entity, id, values)` builds `{ entity, id, values: encode(values) }`, checking at authoring time that `values` is a Struct whose fields are declared entity fields with the witnesses of their encoded schemas. All patches share one Struct type, so `entities` stays an ordered Array as upstream returns it. `connections` waits for RM-005.
 
+## Mutations as implemented (2026-10-03)
+
+- **Authoring.** `NativeRemote.mutation(Mutation, input => Computation<Outcome, ServerError>)` mirrors `RemoteServer.mutation(Mutation, run)`. Other helpers:
+  - `NativeRemote.outcome(Mutation)` is the outcome witness: `output`, `entities?`, `deleted?`.
+  - `NativeRemote.patch(Entity, id, values)` mirrors `Remote.patch`. It checks that each value key is a declared field or relation.
+  - `NativeRemote.ServerError` is `RemoteServerError`'s data, `{ message }`.
+  - `R.RemoteStore.write(entity, id, values)` and `remove(entity, id)` are effect nodes (`reffect/effect/remote-store@1`). `values` is a Struct, encoded with RM-006.
+- **Reference.** Store nodes reach `RemoteStoreHost`; the test gives it upstream `RemoteServer.memory(...)`'s own store. Reads and queries in the oracle read the same store live (`storeTables`), so they observe upstream's write semantics directly.
+- **Native.**
+  - `AsyncContext` gains `remote_store()` when a store node is reachable.
+  - NativeRpc sets it from the host's store on every execution context, and refuses store nodes without a host.
+  - `NativeRemote` implements the generated `RemoteStore` trait on its `Memory`.
+- **Running sources.** NativeRpc gained runtime functions: R effect functions whose input is decoded by the generated decoder, run with an execution context, and reported as `RuntimeCall`. Each mutation's function encodes its outcome and error to `Unknown`.
+- **Upstream order and shape.**
+  - The dispatcher checks the mutation name, then decodes the input ("Invalid mutation input"), then runs the source; its failure becomes `RemoteMutationError(message)`.
+  - Interruption becomes the interrupt exit.
+  - The result is `{ output, entities, connections: [], deleted }`, with absent lists empty.
+- **Narrower boundary.** The reference decodes inputs with `decodeUnknown` and encodes outputs with `encodeUnknown`, while native code uses the JSON codecs. These agree only on finite numbers and required or `optionalKey` fields, so:
+  - `Schema.Number` (which admits non-finite values) and `Schema.optional` are refused in mutation schemas.
+  - Outputs hold no numbers for now, because an R number could be non-finite at run time.
+  - Non-finite numbers _written_ or _patched_ remain a registered divergence ([native divergences](../native-divergences.md)).
+- **Validation.** [remote-mutate.test.ts](../../packages/reffect/tests/remote-mutate.test.ts) runs 23 stateful steps against the published `handlers.FoldkitRemoteMutate` over upstream's `MemoryStore`, comparing parsed JSON and raw key order. Both servers see the same sequence. It covers:
+  - rename (and its refusal), create, overwrite (existing key positions kept), archive, archiving an absent row, and re-creating a row (it goes last);
+  - query order after each change, which exercises version-keyed cells;
+  - unknown mutations and invalid inputs (wrong kind, missing key, null, `"NaN"` for a finite number).
+
+  Explicit assertions confirm each path is reached, not only that failures agree.
+
 ## Order of work
 
 1. RM-002 store with read/query sharing it (no behaviour change). **Done (phase A).**
 2. RM-006 typed → `Unknown` encoding, tested over NativeRpc against the official server. **Done** (see below).
-3. `RemoteStore` write/remove nodes (RS-001), tested through mutations.
-4. RM-001 mutations, with Rename-style and create/delete scenarios ported from the memory and server tests, compared over the wire and through `Data.mutate` acceptance.
+3. `RemoteStore` write/remove nodes (RS-001), tested through mutations. **Done.**
+4. RM-001 mutations (**done**, see below), with Rename-style and create/delete scenarios ported from the memory and server tests, compared over the wire and through `Data.mutate` acceptance.
 5. RM-004 authorization, with nested-authorization scenarios from `nested.test.ts` (authorized levels, a relation the principal may not read).
 
 ## Open questions

@@ -271,6 +271,11 @@ export const analyzeScopes = (
           return 0;
         },
         Sleep: () => 0,
+        RemoteStore: (n) => {
+          expression(n.id, "id");
+          if (n.values) expression(n.values, "values");
+          return 0;
+        },
         Launch: (n) => {
           if (cleanup) diagnostic("LAUNCH_CLEANUP", at, "Cleanup cannot launch a server lifetime");
           n.values.forEach((value, index) => expression(value, `values.${index}`));

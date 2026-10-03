@@ -613,6 +613,22 @@ mod remote_engine {
         }
     }
     fn query_error(message: String) -> Value { json!({ "_tag": "RemoteQueryError", "message": message }) }
+
+    // ---- Mutations (RM-001): the compiled source runs; the handler shapes its outcome.
+    pub fn mutation_error(message: String) -> Value { json!({ "_tag": "RemoteMutationError", "message": message }) }
+    /// ` +
+  "`handlers.FoldkitRemoteMutate`" +
+  String.raw`'s result from the encoded ` +
+  "`MutationOutcome`" +
+  String.raw`: absent lists
+    /// default to empty, and connection changes wait for RM-005.
+    pub fn mutation_result(mut outcome: Value) -> Value {
+        let mut take = |key: &str| outcome.as_object_mut().and_then(|object| object.remove(key));
+        let output = take("output").unwrap_or(Value::Null);
+        let entities = take("entities").unwrap_or_else(|| json!([]));
+        let deleted = take("deleted").unwrap_or_else(|| json!([]));
+        json!({ "output": output, "entities": entities, "connections": [], "deleted": deleted })
+    }
     fn boundary(boundary: &Boundary) -> Value {
         match boundary {
             Boundary::Terminal => json!({ "_tag": "Terminal" }),

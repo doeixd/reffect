@@ -152,7 +152,15 @@ export type { OriginRecord, OccurrenceRecord, ProvenanceSnapshot } from "./prove
 export { NativeRpc } from "./native-rpc.ts";
 export type { RpcBinding, RpcArtifact, WireValue } from "./native-rpc.ts";
 export { NativeRemote } from "./native-remote.ts";
-export type { MemoryRows, NativeRemoteOptions } from "./native-remote.ts";
+export type {
+  MemoryRows,
+  MutationLike,
+  NativeRemoteMutation,
+  NativeRemoteOptions,
+  RemoteOutcome,
+} from "./native-remote.ts";
+export { RemoteStoreHost } from "./remote-store-host.ts";
+export type { RemoteStoreApi } from "./remote-store-host.ts";
 export { RpcCodecs } from "./rpc-codecs.ts";
 
 export { RpcBearer } from "./rpc-auth.ts";

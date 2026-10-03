@@ -1,4 +1,5 @@
 import { SchemaIR } from "./schema-json.ts";
+import { RemoteStoreIR } from "./remote-store.ts";
 import { Source } from "./source.ts";
 import { flow } from "./flow.ts";
 import {
@@ -117,6 +118,7 @@ export const R = Object.freeze({
   Number: NumberType,
   Unknown: UnknownType,
   Schema: SchemaIR,
+  RemoteStore: RemoteStoreIR,
   Struct,
   TaggedUnion,
   UndefinedOr,

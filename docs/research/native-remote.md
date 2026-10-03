@@ -157,6 +157,9 @@ Read from `foldkit-remote-server` 0.10.0 (`handlers.FoldkitRemoteQuery`, `memory
    - `FoldkitRemoteQuery` is served from the domain's `Query.define` bodies through `Foldkit.embed` (the milestone-1 evaluator plus an order-only twin for `locate`), with ported `pageOf` and `select` through the read engine.
    - [remote-query.test.ts](../../packages/reffect/tests/remote-query.test.ts) compares 22 scenarios with the published handlers and memory query sources. They cover pages both ways, cursors that stopped matching or are gone, window conflicts, containment, descending order, input validation, unknown queries, and `select` including the page limit. Responses are equal, raw key order included.
    - NR-017 is asserted explicitly. A mutation that makes `locate` exact fails the test.
-4. Compiled Sources, authorization and mutations (NR-005).
+4. Compiled Sources, authorization and mutations (NR-005). **Mutations done 2026-10-03** ([remote-mutations.md](remote-mutations.md#mutations-as-implemented-2026-10-03)):
+   - R mutation sources run over a writable memory store, with typed patches and outputs.
+   - `FoldkitRemoteMutate` matches the published handler over upstream's own `MemoryStore` in a 23-step stateful corpus.
+   - Authorization (RM-004) and connection changes (RM-005) remain.
 
 **Acceptance (2026-10-03):** for Read and Query, a stock `Remote.clientLayer` over an Effect RPC HTTP client reads and queries through the native server, and its projections equal upstream `RemoteServer.memory(...).layer` ([remote-acceptance.test.ts](../../packages/reffect/tests/remote-acceptance.test.ts)). Mutations and Live remain.

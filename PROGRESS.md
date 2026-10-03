@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-10-03 — Native Remote mutations over a writable store
+
+- **Store effects (RS-001):** `R.RemoteStore.write(entity, id, values)` and `remove(entity, id)` are effect nodes.
+  - The reference reaches `RemoteStoreHost`, which tests give upstream's own `MemoryStore`.
+  - Natively, `AsyncContext.remote_store()` is set by the host on every execution context.
+  - Store nodes without a `NativeRemote` host are refused.
+- **Runtime functions:** NativeRpc runtimes can call compiled R effect functions with a decoded input and get back a `RuntimeCall`. Runtime-served arms now answer through `Served`, which includes interruption.
+- **Mutations (RM-001):** `NativeRemote.mutation`, `outcome`, `patch` and `ServerError` mirror `RemoteServer.mutation`, `MutationOutcome`, `Remote.patch` and `RemoteServerError`. The dispatcher keeps upstream's order and messages.
+  - Mutation schemas are limited to the subset where `decodeUnknown`/`encodeUnknown` and the JSON codecs agree: finite numbers, no `optional`, and no numbers in outputs yet.
+  - Non-finite numbers written or patched are registered as a divergence.
+- **Validation:**
+  - [remote-mutate.test.ts](packages/reffect/tests/remote-mutate.test.ts) passes 2/2. It runs a 23-step stateful corpus against the published handler over `MemoryStore`, compares raw key order, and asserts that each path is reached.
+  - Regression suites pass: remote-read, remote-query, remote-acceptance, async-rpc, server-layer and async-effect (13 tests). One stale refusal assertion in remote-read was updated, because Mutate is now served.
+- **Remaining for milestone 4:** authorization as compiled R functions (RM-004), connection changes (RM-005), and `Data.mutate` acceptance through the stock client.
+
 ## 2026-10-03 — Linux measurements and the writable store
 
 - **Linux benchmark** ([remote-bench.md](docs/research/remote-bench.md#linux-with-a-native-load-generator-bench-003), oha 1.16.0 as the client, glibc):

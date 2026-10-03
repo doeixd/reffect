@@ -247,6 +247,13 @@ type HelperBody =
       readonly values: readonly RustBlock[];
       readonly types: readonly IRType<unknown>[];
     }
+  | {
+      readonly _tag: "RemoteStore";
+      readonly op: "Write" | "Remove";
+      readonly entity: string;
+      readonly id: RustBlock;
+      readonly values: RustBlock | undefined;
+    }
   | { readonly _tag: "Ensuring"; readonly body: number; readonly finalizer: number }
   | { readonly _tag: "Pure"; readonly block: RustBlock }
   | { readonly _tag: "Succeed"; readonly block: RustBlock }
@@ -537,6 +544,10 @@ export function lowerFunctions(
               Log: (n) => n.attributes.forEach(([, value]) => expression(value)),
               Sleep: () => {},
               Launch: (n) => n.values.forEach(expression),
+              RemoteStore: (n) => {
+                expression(n.id);
+                if (n.values) expression(n.values);
+              },
             }),
           );
         };
@@ -925,6 +936,13 @@ export function lowerFunctions(
               ),
               types: Object.freeze(n.values.map((value) => value.type)),
             }),
+            RemoteStore: (n): HelperBody => ({
+              _tag: "RemoteStore",
+              op: n.op,
+              entity: n.entity,
+              id: block(n.id, scope, `${path}.id`),
+              values: n.values && block(n.values, scope, `${path}.values`),
+            }),
             Repeat: (n): HelperBody => ({
               _tag: "Repeat",
               body: effectHelper(n.body, scope, error, `${path}.body`),
@@ -1056,6 +1074,7 @@ export function lowerFunctions(
                 Log: () => false,
                 Sleep: () => true,
                 Launch: () => true,
+                RemoteStore: () => true,
                 Repeat: () => true,
                 Retry: () => true,
                 FileScope: () => true,
@@ -1409,6 +1428,7 @@ export const emitFunctions = (
             Log: () => 0,
             Sleep: () => 0,
             Launch: () => 0,
+            RemoteStore: () => 0,
           }),
         );
         memo.set(index, result);
@@ -1462,8 +1482,25 @@ export const emitFunctions = (
   const launchTuple = launchTypes
     ? `(${launchTypes.map((type) => `${rsTypeOf(type).text}, `).join("")})`
     : undefined;
+  const usesStore = module.functions.some((f) =>
+    f.helpers.some((helper) =>
+      Match.value(helper.body).pipe(
+        Match.tag("RemoteStore", () => true),
+        Match.orElse(() => false),
+      ),
+    ),
+  );
   if (hasAsync)
-    write(asyncRuntime(hasLogScopes, captureFrames, scopeDepth, maxScopeFinalizers, launchTuple));
+    write(
+      asyncRuntime(
+        hasLogScopes,
+        captureFrames,
+        scopeDepth,
+        maxScopeFinalizers,
+        launchTuple,
+        usesStore,
+      ),
+    );
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
     const record = (helper: Helper): string => {
@@ -2050,6 +2087,15 @@ export const emitFunctions = (
                 ? `Err((error, FrameTrail::new(${frameOf(helper, "launch").text})))`
                 : "Err(error)",
               " }",
+            ]),
+          // Synchronous store operations: no suspension point, so they cannot be interrupted.
+          RemoteStore: (n) =>
+            joinFragments([
+              `{ ctx.remote_store().${n.op === "Write" ? "write" : "remove"}(${Rs.stringLiteral(n.entity).text}, &(`,
+              renderBlock(n.id),
+              ")",
+              ...(n.values ? [", ", renderBlock(n.values)] : []),
+              "); Ok(()) }",
             ]),
           Repeat: (n) =>
             joinFragments([
@@ -2725,6 +2771,7 @@ const writeCompositeTypes = (
           Log: (body) => body.attributes.map((attribute) => attribute.block),
           Annotate: (body) => [body.value],
           Launch: (body) => body.values,
+          RemoteStore: (body) => (body.values ? [body.id, body.values] : [body.id]),
         }),
         Match.orElse(() => []),
       );

@@ -12,6 +12,8 @@ import {
   Expr,
   IRType,
   NeverType,
+  StringType,
+  UnknownType,
   U64Type,
   UnitType,
   SemanticRef,
@@ -26,6 +28,7 @@ import type { Diagnostic, Inputs, MatchCase, Symbols } from "./kernel.ts";
 import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
 import { LaunchHost } from "./launch-host.ts";
+import { RemoteStoreHost } from "./remote-store-host.ts";
 import { analyzeScopes } from "./scope-analysis.ts";
 export { maxScopeFinalizers } from "./scope-analysis.ts";
 
@@ -55,6 +58,7 @@ export const AsyncEffects = Object.freeze({
   Retry: SemanticRef.effect("reffect/effect/retry-scheduled@1"),
   Sleep: SemanticRef.effect("reffect/effect/sleep@1"),
   Launch: SemanticRef.effect("reffect/effect/launch@1"),
+  RemoteStore: SemanticRef.effect("reffect/effect/remote-store@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
   AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
   FileScope: SemanticRef.effect("reffect/effect/scoped-file@1"),
@@ -156,6 +160,14 @@ export type ComputationNode =
     }
   | { readonly _tag: "Sleep"; readonly milliseconds: number }
   | { readonly _tag: "Launch"; readonly values: readonly Expr<unknown>[] }
+  /** A Remote memory store write or removal (RS-001); `values` is the encoded row patch. */
+  | {
+      readonly _tag: "RemoteStore";
+      readonly op: "Write" | "Remove";
+      readonly entity: string;
+      readonly id: Expr<unknown>;
+      readonly values: Expr<unknown> | undefined;
+    }
   | {
       readonly _tag: "Ensuring";
       readonly body: Computation<unknown, unknown>;
@@ -292,6 +304,11 @@ export const substituteComputation = (
           return values.every((value, index) => value === n.values[index])
             ? self
             : rebuild({ _tag: "Launch", values });
+        },
+        RemoteStore: (n) => {
+          const id = substituting(n.id);
+          const values = n.values && substituting(n.values);
+          return id === n.id && values === n.values ? self : rebuild({ ...n, id, values });
         },
         RefMake: (n) => {
           const initial = substituting(n.initial);
@@ -440,6 +457,33 @@ const scalarLaunch = (type: IRType<unknown>): boolean =>
  */
 export const launch = (values: readonly Expr<unknown>[]): Computation<never, never> =>
   Computation.make(NeverType, NeverType, { _tag: "Launch", values: Object.freeze([...values]) });
+export const remoteStore = (
+  op: "Write" | "Remove",
+  entity: string,
+  id: Expr<string>,
+  values: Expr<unknown> | undefined,
+): Computation<void, never> =>
+  Computation.make(UnitType, NeverType, { _tag: "RemoteStore", op, entity, id, values });
+const remoteStoreReference = (
+  op: "Write" | "Remove",
+  entity: string,
+  id: unknown,
+  values: unknown,
+): Effect.Effect<void> =>
+  Effect.serviceOption(RemoteStoreHost).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.die(new Error("RemoteStore requires a RemoteStoreHost in the reference")),
+        onSome: (store) =>
+          Effect.sync(() =>
+            op === "Write"
+              ? store.write(entity, String(id), values as Readonly<Record<string, unknown>>)
+              : store.remove(entity, String(id)),
+          ),
+      }),
+    ),
+  );
 const launchReference = (values: readonly unknown[]): Effect.Effect<never> =>
   Effect.serviceOption(LaunchHost).pipe(
     Effect.flatMap(
@@ -573,6 +617,7 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         FileSize: () => true,
         Sleep: () => true,
         Launch: () => true,
+        RemoteStore: () => true,
         Repeat: () => true,
         Retry: () => true,
         Ensuring: () => true,
@@ -893,6 +938,19 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
             expression(value, `values.${index}`);
           });
         },
+        RemoteStore: (n) => {
+          if (!IRType.same(c.output, UnitType) || !IRType.same(c.error, NeverType))
+            add(at, "RemoteStore operations require Unit/Never channels");
+          if (n.entity.length === 0) add(at, "RemoteStore entity names are nonempty");
+          if (!IRType.same(n.id.type, StringType)) add(`${at}.id`, "Row IDs are Strings");
+          if (
+            (n.op === "Write") !==
+            (n.values !== undefined && IRType.same(n.values.type, UnknownType))
+          )
+            add(`${at}.values`, "Only writes carry encoded values");
+          expression(n.id, "id");
+          if (n.values) expression(n.values, "values");
+        },
         Repeat: (n) => {
           if (
             !validSchedulePlan(n.schedule) ||
@@ -1212,6 +1270,10 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
             ),
           Sleep: (n) => Effect.sleep(n.milliseconds),
           Launch: (n) => Effect.forEach(n.values, expression).pipe(Effect.flatMap(launchReference)),
+          RemoteStore: (n) =>
+            Effect.all([expression(n.id), n.values ? expression(n.values) : Effect.void]).pipe(
+              Effect.flatMap(([id, values]) => remoteStoreReference(n.op, n.entity, id, values)),
+            ),
           Repeat: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),
@@ -1414,6 +1476,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
         },
         Sleep: () => {},
         Launch: () => {},
+        RemoteStore: () => {},
         Repeat: (n) => adaptNode(n.body, `${path}.body`),
         Retry: (n) => adaptNode(n.body, `${path}.body`),
         Ensuring: (n) => {
@@ -1619,6 +1682,18 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   : (cause as FramedFailure),
               ),
               Effect.flatMap(launchReference),
+            ),
+          RemoteStore: (n) =>
+            Effect.all([
+              expression(n.id, `${path}.id`),
+              n.values ? expression(n.values, `${path}.values`) : Effect.void,
+            ]).pipe(
+              Effect.mapError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap(([id, values]) => remoteStoreReference(n.op, n.entity, id, values)),
             ),
           Repeat: (n) =>
             evaluate(n.body, bindings).pipe(

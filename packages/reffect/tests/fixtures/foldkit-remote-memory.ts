@@ -110,6 +110,19 @@ const valueFor = (value: unknown, window: Window | undefined): unknown => {
   };
 };
 
+/** Tables by entity: rows keyed by ID in insertion order. */
+export interface MemoryTables {
+  readonly get: (
+    entity: string,
+  ) => ReadonlyMap<string, Readonly<Record<string, unknown>>> | undefined;
+}
+/** A live view of upstream `MemoryStore` rows, so reads see its writes (RS-002). */
+export const storeTables = (store: {
+  readonly rows: (entity: string) => ReadonlyArray<Readonly<Record<string, unknown>>>;
+}): MemoryTables => ({
+  get: (entity) => new Map(store.rows(entity).map((row) => [String(row.id), row])),
+});
+
 /** The memory backend's tables: keyed by `String(row.id)`, rows copied, in insertion order. */
 export const memoryTables = (
   rows: Readonly<Record<string, ReadonlyArray<Readonly<Record<string, unknown>>>>>,
@@ -125,7 +138,7 @@ export const memoryTables = (
 
 /** One entity's memory source `read`, as `memory` builds it for `RemoteServer.entity`. */
 export const memoryRead =
-  (tables: ReturnType<typeof memoryTables>, name: string) =>
+  (tables: MemoryTables, name: string) =>
   ({
     ids,
     fields,
@@ -154,7 +167,7 @@ export const memoryRead =
  */
 export const memoryQueryRun =
   (
-    tables: ReturnType<typeof memoryTables>,
+    tables: MemoryTables,
     query: { readonly Input: Schema.Codec<unknown>; readonly body?: AnyQuery | undefined },
   ) =>
   ({ input, window }: { readonly input: unknown; readonly window: Window }) =>

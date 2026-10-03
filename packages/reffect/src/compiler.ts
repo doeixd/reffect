@@ -470,6 +470,11 @@ const derive = Effect.fn("Compile.derive")(function* (
           effectRefs.add(AsyncEffects.Launch);
           n.values.forEach(walk);
         },
+        RemoteStore: (n) => {
+          effectRefs.add(AsyncEffects.RemoteStore);
+          walk(n.id);
+          if (n.values) walk(n.values);
+        },
         Repeat: (n) => {
           effectRefs.add(AsyncEffects.Repeat);
           walkComputation(n.body);

@@ -103,6 +103,8 @@ const children = (value: Authored): readonly (readonly [string, Authored])[] => 
       FileSize: () => [],
       Sleep: () => [],
       Launch: (n) => n.values.map((value, index) => edge(`values.${index}`, value)),
+      RemoteStore: (n) =>
+        n.values ? [edge("id", n.id), edge("values", n.values)] : [edge("id", n.id)],
       Repeat: (n) => [edge("body", n.body)],
       Retry: (n) => [edge("body", n.body)],
       Ensuring: (n) => [edge("body", n.body), edge("finalizer", n.finalizer)],
