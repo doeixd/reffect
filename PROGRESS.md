@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-03 — Milestone 6 step 2: NDJSON serialization
+
+- `NativeRpc.compile` takes `serialization: "json" | "ndjson"`, chosen as `RpcSerialization` is (STREAM-001). NDJSON reproduces the official server's line handling and quirks byte for byte.
+- **Validation:**
+  - `vp test tests/rpc-ndjson.test.ts`: 2 passed, synchronous and asynchronous;
+  - `native-rpc`, `rpc`, `async-rpc`, `records-rpc`, `remote-wire-rpc` and `rpc-auth` pass unchanged.
+- **Next:** streaming procedures (step 3), designed in [streaming-rpc.md](docs/research/streaming-rpc.md#order-of-work-and-acceptance).
+
 ## 2026-10-03 — Milestone 6 step 1: finite Stream pipelines
 
 - **`R.Stream`** mirrors Effect v4: `make`, `fromIterable`, `range`, `empty`, `fail`, `map`, `filter`, `take`, `rechunk`, `concat`, `chunks` and `runCollect`.

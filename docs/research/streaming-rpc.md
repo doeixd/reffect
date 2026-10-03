@@ -93,8 +93,26 @@ A stream's successful `Exit` carries `"value":null`.
 
    Original step: **Stream IR and native pull lowering** for the STREAM-005 subset. Done when it agrees with official `Stream.runCollect` and with `Stream.chunks` boundaries for every constructor and operator, including failures part-way.
 
-2. **NDJSON serialization** for NativeRpc (STREAM-001), unary first. Done when native answers equal an official `layerNdjson` server's, byte for byte, across the existing unary corpora.
-3. **Streaming procedures** (STREAM-006). Done when native responses equal the official server's byte for byte for the probe's table, under NDJSON and JSON, and a stock `RpcClient` over `layerNdjson` consumes a native stream incrementally (the first chunk arrives before the stream ends).
+2. **Done (2026-10-03).** `NativeRpc.compile(…, { serialization: "ndjson" })` reads one message per complete line and writes one response per line, on both runtimes.
+   - It reproduces the official server's quirks:
+     - unparsable and blank lines are skipped;
+     - text after the last newline is ignored;
+     - a body without messages answers an empty 500;
+     - a line that is not a request object answers the plain-string defect `"Unknown request tag: undefined"`.
+   - Body reading and writing are shared helpers, so JSON mode is unchanged.
+   - **Validation:** [rpc-ndjson.test.ts](../../packages/reffect/tests/rpc-ndjson.test.ts) compares ten bodies byte for byte with an official `layerNdjson` server, synchronous and asynchronous, plus a stock client. The JSON-mode suites still pass.
+
+   Original step: **NDJSON serialization** for NativeRpc (STREAM-001), unary first. Done when native answers equal an official `layerNdjson` server's, byte for byte, across the existing unary corpora.
+
+3. **Next.** The plan:
+   - **Authoring and binding:** a stream function (`R.Stream.fn(inputs, error, build)`), bound as `NativeRpc.bindStream`.
+   - **Native consumer:** a `StreamEmit` node. It encodes each chunk with the verified JSON encoders and awaits sending it to the request's sink, a bounded channel of 16 messages.
+   - **Runtime:** wraps chunks as `Chunk` messages and ends with `Exit`. NDJSON streams them through the response body; JSON buffers them.
+   - **Disconnect:** dropping the body cancels the producer through the existing cancellation path.
+   - **Reference:** builds the official `Stream` directly.
+
+   Original step: **Streaming procedures** (STREAM-006). Done when native responses equal the official server's byte for byte for the probe's table, under NDJSON and JSON, and a stock `RpcClient` over `layerNdjson` consumes a native stream incrementally (the first chunk arrives before the stream ends).
+
 4. **Interruption** (STREAM-003). Done when a client that aborts mid-stream makes the native handler run its finalizers exactly once, observed as the official probe observed `Stream.ensuring`, and the server keeps serving. A full buffer must suspend the producer (STREAM-002).
 5. **Live skeleton.** `FoldkitRemoteLive` served as a stream, lifting NR-006's refusal, as the bridge to milestone 7.
 
