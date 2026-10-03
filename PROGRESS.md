@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-10-03 — Milestone 6 research and design
+
+- [streaming-rpc.md](docs/research/streaming-rpc.md) records the Effect 4.0.0 HTTP stream protocol, read from the installed `effect/rpc` sources and captured from the official server:
+  - over HTTP the client sends only requests, with no acks or interrupts;
+  - an interrupt is the connection closing;
+  - only framed NDJSON streams; JSON buffers the whole response;
+  - the server buffers 16 messages and interrupts handlers when a client disconnects;
+  - chunk boundaries follow the stream's internal chunks and are visible on the wire.
+- **Decisions STREAM-001..006:**
+  - an explicit `serialization` option, as `RpcSerialization` is chosen;
+  - a bounded 16-message buffer and no acks;
+  - interruption by disconnect, with awaited finalizers;
+  - Effect's chunk boundaries reproduced;
+  - a first finite Stream subset lowered as pull state;
+  - streaming procedures.
+- Order of work: Stream IR, NDJSON, streaming procedures, interruption, then a `FoldkitRemoteLive` skeleton.
+
 ## 2026-10-03 — Mutations read stored rows (RS-007)
 
 - **New operations:**

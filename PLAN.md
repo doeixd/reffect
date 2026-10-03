@@ -80,7 +80,7 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Milestone 5 (SQLx) is implemented on SQLite and Postgres. foldkit-plus 0.14.0 is adopted ([resolution](docs/research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03)) and mutations read stored rows (RS-007). Next: [milestone 6](docs/implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption) (streaming RPC and real interruption).**
+**Milestone 5 (SQLx) is implemented on SQLite and Postgres. foldkit-plus 0.14.0 is adopted ([resolution](docs/research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03)) and mutations read stored rows (RS-007). Next: [milestone 6](docs/implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption) (streaming RPC and real interruption), designed in [streaming-rpc.md](docs/research/streaming-rpc.md).**
 
 Milestone 4 on the memory backend: the full `RemoteRpc` contract compiles with official-server codec parity (the wire features are recorded in the [native RemoteServer design](docs/research/native-remote.md)). Read, Query (paging, keyset cursors, `select`) and Mutate match `foldkit-remote-server` over the wire. A stock `Remote.clientLayer` reads, queries and mutates through the native server with upstream's results ([remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts)). Mutations are R sources over a writable store, with typed values encoded as `Schema.toCodecJson` does ([remote-mutations.md](docs/research/remote-mutations.md)). Measured costs are in [remote-bench.md](docs/research/remote-bench.md).
 

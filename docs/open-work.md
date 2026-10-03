@@ -9,7 +9,7 @@ Everything still to be done, collected from the design and research records on 2
 ## Frontier
 
 - `examples/todo-remote` on SQLite/Postgres (it toggles through `get` since RS-007) ([remote-mutations](research/remote-mutations.md#rs-007-reading-stored-rows-2026-10-03))
-- Milestone 6 research and design: streaming RPC and real interruption ([milestones §23](implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption))
+- Milestone 6, designed in [streaming-rpc](research/streaming-rpc.md#order-of-work-and-acceptance): Stream IR and pull lowering, NDJSON serialization, streaming procedures, interruption by disconnect, then a `FoldkitRemoteLive` skeleton
 
 ## Future milestones 6–15
 
