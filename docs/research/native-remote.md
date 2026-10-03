@@ -110,6 +110,27 @@ Read from the `foldkit-plus` source at `main` (`7e3ffdd0`):
   - `RemoteServer.memory` exposes only its store and an in-process client layer, not its `ServerDefinition`. Until it does, the harness builds the memory sources with `RemoteServer.entity` and a read ported from `memory` (MIT, recorded as vendored).
   - An upstream export of the memory backend's server definition would remove that duplication.
 
+## Query design (step 3, accepted 2026-10-02)
+
+Read from `foldkit-remote-server` 0.10.0 (`handlers.FoldkitRemoteQuery`, `memory`'s query sources) and `foldkit-entity` 0.6.0 (`evaluate`, `ordered`):
+
+- **NR-014 — the domain drives Query.**
+  - `NativeRemote.compile(group, { domain, rows })` takes the same `Remote.define`/`Remote.make` descriptor as `RemoteServer.memory`. Entity sources come from `registry.entities`, and query sources from `registry.queries`.
+  - A query without a `Query.define` body is refused while compiling, as `memory` refuses it when made.
+- **NR-015 — bodies reuse the milestone-1 evaluator.**
+  - Each body, plus an order-only twin (`where: []`) for keyset `locate`, is compiled by the [Query adapter](foldkit-query.md) into `r_<name>(input, rows)`. Rows are encoded per slot; an absent field is `null`, as `isNull` treats `undefined`.
+  - Memory rows are checked against each query's field kinds while compiling.
+  - Inputs are validated with `Schema.decodeUnknown` semantics, not the JSON codec. That means a Struct of primitive fields (string, number, boolean, null, literals, and their unions) with required keys, ignoring excess keys; other `Input` schemas are refused. Encoding such an input is the identity.
+- **NR-016 — handler and paging, ported exactly.** The handler steps:
+  - unknown query → `Unknown query: <name>`;
+  - invalid input → `Invalid query input`;
+  - the select page limit → `Too many pages of "<entity>.<field>" in one query select`;
+  - the source run, then `pageOf` with `locate`. Window conflicts, missing cursors and `Cursor "<c>" names a row that no longer exists` all become `RemoteQueryError` with the reference text;
+  - edges `{ entity, id, key }`, then `select` through the read engine. Read errors become `RemoteQueryError` with the same message.
+- **NR-017 — recorded divergence: evaluation refusal text.**
+  - The milestone-1 runtime refuses exactly when upstream `evaluate` throws, in this profile: ordering when two or more matched rows have a null or mixed-kind key. Its message differs, because upstream names the first pair its sort happened to compare. The error class and the absence of results are identical.
+  - Non-ASCII containment, which upstream evaluates with `toLowerCase`, is refused natively (milestone-1 three-interpreter profile).
+
 ## Order of work
 
 1. Wire features (NR-002), each as a small NativeRpc codec slice, ending with the full `RemoteRpc` Read/Query payloads compiling with parity. **Done 2026-10-02.** The slices were:
@@ -132,5 +153,8 @@ Read from the `foldkit-plus` source at `main` (`7e3ffdd0`):
    - Recorded divergences:
      - Field names that are `Object.prototype` members (`constructor`, `toString`): the reference's `in`/`renames[...]` lookups see prototype values; native sees own keys only.
      - Memory rows must keep relation lists as string refs (checked while compiling).
-3. Query with the Query evaluator, then query `select`.
+3. Query with the Query evaluator, then query `select`. **Done 2026-10-02:**
+   - `FoldkitRemoteQuery` is served from the domain's `Query.define` bodies through `Foldkit.embed` (the milestone-1 evaluator plus an order-only twin for `locate`), with ported `pageOf` and `select` through the read engine.
+   - [remote-query.test.ts](../../packages/reffect/tests/remote-query.test.ts) compares 22 scenarios with the published handlers and memory query sources. They cover pages both ways, cursors that stopped matching or are gone, window conflicts, containment, descending order, input validation, unknown queries, and `select` including the page limit. Responses are equal, raw key order included.
+   - NR-017 is asserted explicitly. A mutation that makes `locate` exact fails the test.
 4. Compiled Sources, authorization and mutations (NR-005).

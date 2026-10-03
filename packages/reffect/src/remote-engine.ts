@@ -355,22 +355,28 @@ mod remote_engine {
   String.raw`; ` +
   "`Err`" +
   String.raw` where the reference throws.
-    fn page_of(items: &[String], window: &Window, id_of: &dyn Fn(&str) -> String) -> Result<(Vec<String>, Boundary, Boundary), ()> {
-        if (window.after.is_some() && window.before.is_some()) || (window.first.is_some() && window.last.is_some()) { return Err(()); }
-        let position = |cursor: &str| -> Result<usize, ()> { items.iter().position(|item| id_of(item) == cursor).ok_or(()) };
+    pub struct Position { index: usize, exact: bool }
+    fn page_of<T: Clone>(items: &[T], window: &Window, id_of: &dyn Fn(&T) -> String, locate: Option<&dyn Fn(&str) -> Result<Position, String>>) -> Result<(Vec<T>, Boundary, Boundary), String> {
+        if (window.after.is_some() && window.before.is_some()) || (window.first.is_some() && window.last.is_some()) {
+            return Err("A query window cannot combine after with before, or first with last".to_string());
+        }
+        let position = |cursor: &str| -> Result<Position, String> {
+            if let Some(index) = items.iter().position(|item| id_of(item) == cursor) { return Ok(Position { index, exact: true }); }
+            match locate { Some(locate) => locate(cursor), None => Err(format!("Cursor \"{}\" names nothing in these results", cursor)) }
+        };
         let cursor = |id: String| Boundary::Cursor(id);
         let length = items.len();
         if window.last.is_some() || window.before.is_some() {
-            let to = match &window.before { None => length, Some(before) => position(before)? };
+            let to = match &window.before { None => length, Some(before) => position(before)?.index.min(length) };
             let from = match window.last { None => 0, Some(last) => { let start = to as f64 - last; if start > 0.0 { start as usize } else { 0 } } };
-            let page: Vec<String> = items[from.min(to)..to].to_vec();
+            let page: Vec<T> = items[from.min(to)..to].to_vec();
             let start = if from == 0 { Boundary::Terminal } else if let Some(first) = page.first() { cursor(id_of(first)) } else if let Some(before) = &window.before { cursor(before.clone()) } else { Boundary::Unknown };
             let end = match &window.before { None => Boundary::Terminal, Some(before) => cursor(before.clone()) };
             return Ok((page, start, end));
         }
-        let from = match &window.after { None => 0, Some(after) => position(after)? + 1 };
+        let from = match &window.after { None => 0, Some(after) => { let at = position(after)?; (if at.exact { at.index + 1 } else { at.index }).min(length) } };
         let to = match window.first { None => length, Some(first) => { let limit = from as f64 + first; if limit < length as f64 { limit as usize } else { length } } };
-        let page: Vec<String> = items[from.min(to)..to].to_vec();
+        let page: Vec<T> = items[from.min(to)..to].to_vec();
         let end = if to >= length { Boundary::Terminal } else if let Some(last) = page.last() { cursor(id_of(last)) } else if let Some(after) = &window.after { cursor(after.clone()) } else { Boundary::Unknown };
         let start = match &window.after { None => Boundary::Terminal, Some(after) => cursor(after.clone()) };
         Ok((page, start, end))
@@ -388,8 +394,9 @@ mod remote_engine {
         let id_of = |reference: &str| -> String { match reference.find(':') { Some(at) => reference[at + 1..].to_string(), None => reference.to_string() } };
         let named = |cursor: &Option<String>| cursor.as_ref().map(|cursor| if cursor.contains(':') { id_of(cursor) } else { cursor.clone() });
         let window = Window { first: window.first, last: window.last, after: named(&window.after), before: named(&window.before) };
-        match page_of(&refs, &window, &id_of) {
-            Err(()) => empty,
+        let id_of_ref = |reference: &String| id_of(reference);
+        match page_of(&refs, &window, &id_of_ref, None) {
+            Err(_) => empty,
             Ok((page, start, end)) => json!({
                 "refs": page,
                 "hasNext": matches!(end, Boundary::Cursor(_)),
@@ -508,6 +515,91 @@ mod remote_engine {
         }
         let requests: Vec<Requirement> = payload.get("requests").and_then(Value::as_array).map(|items| items.iter().map(requirement).collect()).unwrap_or_default();
         read_helper(server, requests)
+    }
+    // ---- Query (NR-014..017): a domain query's body, run by the milestone-1 evaluator.
+    use super::foldkit_eval::Value as Cell;
+    /// One registered query: its entity, its input check, its slots and its evaluators.
+    pub struct QueryDef {
+        pub name: &'static str,
+        pub entity: &'static str,
+        pub valid: fn(&Value) -> bool,
+        pub fields: &'static [&'static str],
+        pub inputs: &'static [&'static str],
+        pub run: fn(&[Cell], &[Vec<Cell>]) -> Result<Vec<usize>, &'static str>,
+        pub order: fn(&[Cell], &[Vec<Cell>]) -> Result<Vec<usize>, &'static str>,
+        /// The order-only twin's own slots: without the predicates it reads fewer of them.
+        pub order_fields: &'static [&'static str],
+        pub order_inputs: &'static [&'static str],
+    }
+    /// A row or input value as the evaluator sees it; an absent field is null (` +
+  "`isNull`" +
+  String.raw`).
+    fn cell(value: Option<&Value>) -> Cell {
+        match value {
+            Some(Value::String(text)) => Cell::Text(text.encode_utf16().collect()),
+            Some(Value::Number(number)) => Cell::Number(number.as_f64().unwrap_or(f64::NAN)),
+            Some(Value::Bool(flag)) => Cell::Bool(*flag),
+            _ => Cell::Null,
+        }
+    }
+    fn query_error(message: String) -> Value { json!({ "_tag": "RemoteQueryError", "message": message }) }
+    fn boundary(boundary: &Boundary) -> Value {
+        match boundary {
+            Boundary::Terminal => json!({ "_tag": "Terminal" }),
+            Boundary::Unknown => json!({ "_tag": "Unknown" }),
+            Boundary::Cursor(cursor) => json!({ "_tag": "Cursor", "cursor": cursor }),
+        }
+    }
+    /// ` +
+  "`handlers.FoldkitRemoteQuery`" +
+  String.raw` with the memory backend's query sources.
+    pub fn query(server: &Memory, queries: &[QueryDef], payload: &Value) -> Result<Value, Value> {
+        let name = payload.get("query").and_then(Value::as_str).unwrap_or_default();
+        let Some(def) = queries.iter().find(|def| def.name == name) else { return Err(query_error(format!("Unknown query: {}", name))) };
+        let input = payload.get("input").unwrap_or(&Value::Null);
+        if !(def.valid)(input) { return Err(query_error("Invalid query input".to_string())); }
+        let select = payload.get("select").filter(|value| !value.is_null()).map(relation);
+        if let Some(select) = &select {
+            if let Some(paged) = check_pages_per_relation(std::slice::from_ref(select)) {
+                return Err(query_error(format!("Too many pages of \"{}\" in one query select", paged)));
+            }
+        }
+        let window = window(payload.get("window").unwrap_or(&Value::Null));
+        let empty = Ordered::new();
+        let table = server.tables.get(def.entity).unwrap_or(&empty);
+        let rows: Vec<(&String, &Map<String, Value>)> = table.iter().collect();
+        let encoded: Vec<Cell> = def.inputs.iter().map(|key| cell(input.get(*key))).collect();
+        let cells: Vec<Vec<Cell>> = rows.iter().map(|(_, row)| def.fields.iter().map(|field| cell(row.get(*field))).collect()).collect();
+        let matched = (def.run)(&encoded, &cells).map_err(|error| query_error(error.to_string()))?;
+        // A cursor row that no longer matches still has a place in the order, as a keyset has it.
+        let locate = |cursor: &str| -> Result<Position, String> {
+            let Some(found) = rows.iter().position(|(id, _)| id.as_str() == cursor) else {
+                return Err(format!("Cursor \"{}\" names a row that no longer exists", cursor));
+            };
+            let twin = |index: &usize| -> Vec<Cell> { def.order_fields.iter().map(|field| cell(rows[*index].1.get(*field))).collect() };
+            let mut subset: Vec<Vec<Cell>> = matched.iter().map(twin).collect();
+            subset.push(twin(&found));
+            let order_input: Vec<Cell> = def.order_inputs.iter().map(|key| cell(input.get(*key))).collect();
+            let placed = (def.order)(&order_input, &subset).map_err(|error| error.to_string())?;
+            let index = placed.iter().position(|index| *index == subset.len() - 1).unwrap_or(subset.len() - 1);
+            Ok(Position { index, exact: false })
+        };
+        let id_of = |index: &usize| rows[*index].0.clone();
+        let (page, start, end) = page_of(&matched, &window, &id_of, Some(&locate)).map_err(query_error)?;
+        let edges: Vec<Value> = page.iter().map(|index| {
+            let id = rows[*index].0;
+            json!({ "entity": def.entity, "id": id, "key": format!("{}:{}", def.entity, id) })
+        }).collect();
+        let Some(select) = select else { return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end) })) };
+        let requirements: Vec<Requirement> = page.iter().filter(|_| select.entity == def.entity).map(|index| Requirement {
+            entity: select.entity.clone(), id: rows[*index].0.clone(), fields: select.fields.clone(),
+            windows: select.windows.clone(), relations: select.relations.clone(), renames: None,
+        }).collect();
+        if requirements.is_empty() {
+            return Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": [], "settled": [] }));
+        }
+        let read = read_helper(server, requirements).map_err(|error| query_error(error.get("message").and_then(Value::as_str).unwrap_or_default().to_string()))?;
+        Ok(json!({ "edges": edges, "start": boundary(&start), "end": boundary(&end), "entities": read["entities"], "settled": read["settled"] }))
     }
 }
 `;

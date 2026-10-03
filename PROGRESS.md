@@ -1,5 +1,18 @@
 # Progress
 
+## 2026-10-02 — Native Remote Query
+
+- Recorded the [Query design](docs/research/native-remote.md#query-design-step-3-accepted-2026-10-02) (NR-014–017). `NativeRemote.compile(group, { domain, rows })` now takes the same `Remote.define`/`Remote.make` descriptor as `RemoteServer.memory`, and refuses body-less queries as `memory` does.
+- How queries are compiled:
+  - `Foldkit.embed` compiles each `Query.define` body, plus an order-only twin for keyset `locate`, with the milestone-1 adapter into the generated crate.
+  - The Remote engine encodes rows and inputs per slot, ports `pageOf` with `locate` and the reference messages, and answers `select` through the read engine.
+  - Inputs are validated with `decodeUnknown` semantics (primitive Structs; excess keys ignored), and rows are checked against the queries' field kinds while compiling.
+- Validation (focused):
+  - `remote-query.test.ts` 2/2: 22 wire scenarios equal the published `RemoteServer.handlers` with memory query sources (vendored run closure; real `evaluate`), raw key order included.
+  - The null-ordering refusal (NR-017: same error class, different text) is asserted.
+  - Making `locate` exact fails the test.
+  - Read, Foldkit conformance and NativeRpc suites pass (17 tests), as does `vp check`.
+
 ## 2026-10-03 — Prioritized Effect module expansion
 
 - At the user’s request, six agents implemented or inventoried missing Effect v4 modules in parallel while leaving the core PLAN.md untouched. [Preparation decisions](docs/research/module-expansion.md) establish isolated file ownership, checked specialization and bounded admission. [Coverage](docs/effect-module-coverage.md) accounts for 138 root namespaces and 213 grouped exports with six dependency-ordered waves; it verifies actual pinned package paths rather than the stale historical API reference. Initial research used rc.118; synchronized remote through 46a0cfc, including the coordinated Effect 4.0.0 stable migration and native Remote wire contract.

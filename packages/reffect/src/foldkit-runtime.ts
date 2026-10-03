@@ -1,7 +1,7 @@
 /** Dependency-free evaluator bridge. Text is UTF-16, not a Rust UTF-8 string. */
 export const foldkitRuntime = `use std::cmp::Ordering;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }
 
 pub fn eq(a: &Value, b: &Value) -> Value {

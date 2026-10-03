@@ -12,7 +12,10 @@
  * copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
  * WARRANTY OF ANY KIND.
  */
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { evaluate } from "foldkit-entity";
+import type { AnyQuery, Row } from "foldkit-entity";
+import { RemoteServerError } from "foldkit-remote-server";
 
 type Boundary =
   | { readonly _tag: "Terminal" }
@@ -144,3 +147,41 @@ export const memoryRead =
         return [{ id, values }];
       }),
     );
+
+/**
+ * One query's memory source `run`, as `memory` builds it for `RemoteServer.query`: the body runs
+ * through the reference `evaluate`, and a cursor row that stopped matching is placed by `locate`.
+ */
+export const memoryQueryRun =
+  (
+    tables: ReturnType<typeof memoryTables>,
+    query: { readonly Input: Schema.Codec<unknown>; readonly body?: AnyQuery | undefined },
+  ) =>
+  ({ input, window }: { readonly input: unknown; readonly window: Window }) =>
+    Effect.try({
+      try: () => {
+        const body = query.body!;
+        const encoded = Schema.encodeSync(query.Input)(input) as Readonly<Record<string, unknown>>;
+        const entity = body.entity.name;
+        const rows = [...(tables.get(entity)?.values() ?? [])] as ReadonlyArray<Row>;
+        const matched = evaluate(body, encoded, rows);
+        const locate = (cursor: string) => {
+          const row = rows.find((candidate) => String(candidate.id) === cursor);
+          if (row === undefined)
+            throw new Error(`Cursor "${cursor}" names a row that no longer exists`);
+          const placed = evaluate({ ...body, where: [] }, encoded, [...matched, row]);
+          return { index: placed.indexOf(row), exact: false };
+        };
+        const page = pageOf(matched, window, (row) => String(row.id), locate);
+        return {
+          edges: page.items.map((row) => {
+            const id = String(row.id);
+            return { entity, id, key: `${entity}:${id}` };
+          }),
+          start: page.start,
+          end: page.end,
+        };
+      },
+      catch: (error) =>
+        new RemoteServerError({ message: error instanceof Error ? error.message : String(error) }),
+    });

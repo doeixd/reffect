@@ -694,8 +694,23 @@ const run = Effect.fn("Foldkit.run")(function* <A extends Row>(
 });
 
 /** A compiler consumer of the published Foldkit IR; inputs and rows are already encoded. */
+/**
+ * Checked evaluator functions for another generated crate to embed (NR-015): the runtime and one
+ * `r_<name>(input, rows)` per query, plus each query's field and input slots.
+ */
+const embed = (
+  queries: Readonly<Record<string, AnyQuery>>,
+): { readonly analyses: readonly QueryAnalysis[]; readonly rust: string } => {
+  const all = Object.entries(queries).map(([name, body]) => checked(name, body));
+  return {
+    analyses: all.map((q) => q.analysis),
+    rust: foldkitRuntime + all.map(emitQuery).join("\n"),
+  };
+};
+
 export const Foldkit = Object.freeze({
   compile,
+  embed,
   run,
   supported,
   build: Effect.fn("Foldkit.build")(function* (

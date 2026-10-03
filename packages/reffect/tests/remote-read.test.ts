@@ -3,7 +3,8 @@ import { FetchHttpClient, HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
-import { RemoteRpc } from "foldkit-remote";
+import { Entity } from "foldkit-entity";
+import { Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, NativeRemote, NativeRpc } from "../src/index.ts";
@@ -17,6 +18,10 @@ const ReadGroup = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteQuery", "F
 
 // A domain shaped after foldkit-remote-server's memory, nested, nestedShared and alias tests.
 const entities = ["User", "Project", "Post", "Comment", "Team"];
+// The registry the memory backend serves; fields are read at the wire level, so ids suffice.
+const domain = Remote.define({
+  entities: entities.map((name) => Entity.define(name, Schema.Struct({ id: Schema.String }))),
+});
 const crowd = Array.from({ length: 1001 }, (_, i) => ({ id: `m${i}`, name: `Member ${i}` }));
 const rows = {
   User: [
@@ -263,7 +268,7 @@ test("the vendored wire fixture derives the same witnesses as the published cont
 
 test("procedures other than Read are refused for now", async () => {
   const error = await Effect.runPromise(
-    NativeRemote.compile(RemoteRpc, { entities, rows }).pipe(Effect.flip),
+    NativeRemote.compile(RemoteRpc, { domain, rows }).pipe(Effect.flip),
   );
   expect(error.message).toContain("FoldkitRemoteRead");
 });
@@ -284,7 +289,7 @@ test(
             });
           const fs = yield* FileSystem.FileSystem;
           const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-remote-read-" });
-          const artifact = yield* NativeRemote.compile(ReadGroup, { entities, rows });
+          const artifact = yield* NativeRemote.compile(ReadGroup, { domain, rows });
           expect(artifact.runtime.crates).toContain("ryu-js@1.0.3");
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.fetch(directory);
