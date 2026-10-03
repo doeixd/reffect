@@ -1,6 +1,6 @@
 # Native types: JS-type crates, sized numbers, tuples and fixed arrays
 
-Status: **proposed (2026-10-02)**, not implemented. It answers a design question about JS-type Rust crates and native sized/tuple types. The user recalled an N-named JS-types project in the docs. No such reference exists in this repository's docs or history (searched 2026-10-02). The closest match is Nova, an engine, assessed below. It extends [architecture §9–10](../architecture.md#9-native-representation-does-not-mean-fixed-payload-size), which already lists `U8`/`I64`/`F32`, `Array<T,N>`, `Tuple`, `Option`, `Result` and maps as target representations. Checked against installed Effect **4.0.0-rc.118** (`Schema.d.ts`) and crates.io on 2026-10-02.
+Status: **supporting research; direction updated 2026-10-03.** This note records the crate/representation research behind sized integers, tuples, fixed arrays, bytes and JS-adjacent types. [R language direction](../r-language.md) now promotes a deliberate native-type batch, named calls and structured control flow into the planned language foundation. The semantic cautions and representation findings below remain applicable. The original research was checked against Effect **4.0.0-rc.118** and crates.io on 2026-10-02; current implementation work uses the project's Effect 4.0.0 stable oracle.
 
 ## Prior work
 
