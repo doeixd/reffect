@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-03 — Native Remote todo example
+
+- Added [`examples/todo-remote`](examples/todo-remote/README.md): a Foldkit domain, R mutation sources (add with an `append` connection change, toggle, delete with `remove`, a refused empty title), and a stock-client session.
+  - The session runs against the native server and against upstream's memory backend running the same R sources. The example fails unless the screens are equal; run on 2026-10-03, they were.
+- Findings from the workload:
+  - Connection changes were required for an added todo to appear without a refetch (done, RM-005).
+  - `RemoteStore.get` was not needed, because the client sends the new `done` value.
+  - Appending into a title-ordered list puts the item last until a reload, which is upstream's semantics too.
+
 ## 2026-10-03 — Connection changes (RM-005) and String.concat
 
 - `R.String.concat` mirrors Effect's `String.concat`. [string-profile.test.ts](packages/reffect/tests/string-profile.test.ts) passes 3/3, with native output equal to the reference in debug and release under both frame policies.
