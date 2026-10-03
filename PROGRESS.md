@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-03 — Milestone 8A design: native Foldkit SSR
+
+- [native-ssr.md](docs/research/native-ssr.md) records upstream foldkit 0.165.0 SSR from the installed sources:
+  - `renderToString`: its overloads, errors, the Flags round trip and the dropped init commands;
+  - the hydration markers and the UTF-16 FNV fingerprint;
+  - the serializer: attribute ordering, escape sets, element kinds and the parse5 post-checks;
+  - template injection and `handleRequest`;
+  - the stock client's tolerant hydration, which makes byte equality the acceptance bar.
+- **Proposed decisions SSR-001..008:**
+  - `R.Html` views mirroring Foldkit's `h`, whose reference builds real Foldkit VNodes for the browser and the oracle;
+  - a bounded profile that refuses parse5-dependent constructs;
+  - a ported serializer subset registered as `foldkit/ssr-serialize@1`;
+  - init and Flags in R;
+  - build and runtime ids as compile options;
+  - page serving after rendering;
+  - JS number text before numeric views.
+- **Open:** a headless DOM dev dependency for hydration tests; the `R.Html` builder shape and Message typing.
+
 ## 2026-10-03 — The browser "regression" diagnosis retracted
 
 - **Finding.** An in-page trace shows the read entry's `QueryStarted` and `ConnectionMerged` reaching `update`. A Node emulation of Foldkit's subscription loop reaches a `Ready` list for both the original and the live app.
