@@ -137,6 +137,24 @@ Hydration is therefore tolerant. **Byte equality with upstream is the right acce
    - Lower R views to a Rust writer with folded static fragments.
    - A corpus of views and models must produce byte-equal `RenderedApplication` values, natively and through upstream `renderToString`, hydratable and static, with and without Flags and keys.
    - Refusals are tested.
+     **Delivered 2026-10-03.**
+   - **Measured upstream behaviour**, by probing `renderToString` for every admitted pair:
+     - `DataAttribute` lands in `attrs` and is written first, then the class object, then props in authored order.
+     - Props survive only where the element reflects them: `Id`/`Title` everywhere; `Href` on `a`; `Type` on `a`, `button`, `li`, `ol`, `ul`, `input`; `Name` on `a`, `button`, `form`, `input`; `Placeholder` on `input`; `For` on `label`; `Value` on `button`/`input`; `Checked` on `input`; `Disabled` on `button`/`input`.
+     - Booleans become `""` or are absent.
+     - Classes split on JS `\s+` and follow object-key order (index keys first, `__proto__` dropped).
+     - `Href` goes through `sanitizeUrl`: a `javascript:`/`vbscript:` scheme becomes `""` after stripping C0/C1 control characters, with JS whitespace around it.
+     - Foldkit's builder rejects most `Value`s on `li`, so the profile admits `Value` only on `button`/`input`.
+   - **Implementation.**
+     - [html-native.ts](../../packages/reffect/src/html-native.ts) ports these rules to `crate::foldkit_html`. An `Html` is a serialized fragment that keeps the end of its start tag's own attributes, for root stamping, and the first serialization failure in document order.
+     - [html-ir.ts](../../packages/reffect/src/html-ir.ts) holds the witness and operations, without importing NativeRpc, so the planner selects `foldkit/ssr-serialize@1` for them.
+     - `R.Html.renderToString` is composed in R from root-kind, render-failure and render primitives whose reference is upstream `renderToString`. It yields `Result<{ html, title }, InvalidHydrationRoot | SerializationError>`.
+   - **Evidence.** [html-native.test.ts](../../packages/reffect/tests/html-native.test.ts) serves 8 views from a NativeRpc server and from the official RpcServer running the reference; all 12 responses are byte-equal. The corpus covers keyed lists, every element with every attribute, 12 hrefs, 8 class strings, NUL in text and attributes, and text and empty bodies.
+   - **Limits.**
+     - Only hydratable renders.
+     - No lang, dir or canonical.
+     - An editor TypeScript flags weak inference in `R.Result(...)`'s value type, which `tsc` accepts (open work).
+
 4. **Hydration with the stock client.**
    - A browser (or a DOM library) loads native HTML, and the stock `Runtime.hydrate`, using the same R view through the reference, adopts it.
    - Evidence that no subtree was rebuilt: element identity preserved across hydrate.

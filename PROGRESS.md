@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-03 — Milestone 8A step 3: native rendering, byte-equal to `renderToString`
+
+- **Change.** R views lower to a Rust serializer, ported from Foldkit's handling of the admitted attributes as measured against `renderToString`. `R.Html.renderToString` returns a typed `Result`, with upstream `renderToString` as its reference.
+- **Validation.**
+  - `vp test tests/html-native.test.ts` passed: 12 RPC responses are byte-equal to the official server.
+  - `html`, `ssr-serialize`, `number-text` and `numbers` pass.
+  - `vp check` is clean.
+- **Next:** hydration with the stock client under `happy-dom` (step 4), then page serving.
+
 ## 2026-10-03 — Milestone 8A step 2: `R.Html` and the reference view
 
 - **Change.** `R.Html` builders mirror Foldkit's `h` (SSR-009), and event attributes construct the app's own Messages per variant (SSR-010). `toFoldkitView` hands an R view to Foldkit.
