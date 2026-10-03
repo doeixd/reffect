@@ -100,10 +100,18 @@ export const PortedRuntimes = Object.freeze({
 /** Whether the build checked its ports' pins against the installed packages. */
 export type UpstreamCheck = "verified" | "unchecked";
 
+/**
+ * Where the search starts: the compiler's own module when it is loaded from a file, else the
+ * working directory (a DOM test environment serves modules from other URLs).
+ */
+const searchStart = (): string => {
+  const here = new URL(".", import.meta.url);
+  return here.protocol === "file:" ? fileURLToPath(here) : process.cwd();
+};
 /** The version of `name` as Node finds it from the compiler's own module: up the node_modules chain. */
 const installedVersion = (fs: FileSystem.FileSystem, name: string) =>
   Effect.gen(function* () {
-    let directory = fileURLToPath(new URL(".", import.meta.url)).replaceAll("\\", "/");
+    let directory = searchStart().replaceAll("\\", "/");
     for (;;) {
       const manifest = `${directory.replace(/\/$/, "")}/node_modules/${name}/package.json`;
       if (yield* fs.exists(manifest)) {
