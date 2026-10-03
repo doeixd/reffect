@@ -10,7 +10,7 @@ import * as Subscription from "foldkit/subscription";
 import type * as Update from "foldkit/update";
 import { Entity } from "foldkit-entity";
 import { Remote, type RemoteClient } from "foldkit-remote";
-import { Surface } from "foldkit-surface";
+import { Projection, Surface } from "foldkit-surface";
 import { AddTodo, DeleteTodo, Todo, Todos, ToggleTodo } from "../domain.ts";
 
 export const Flags = Schema.Struct({ session: Schema.String });
@@ -52,6 +52,26 @@ const list = Data.query(
 );
 // The list is on screen whenever the app runs, so its read is always active.
 const todos = Data.active("Todos", () => Option.some(list));
+// Every todo on screen also follows changes made elsewhere. Foldkit subscribes live only for
+// `Data.live` reads, so there is one per item; their patches update the entity store the list
+// reads, so the list re-renders.
+const followed = Entity.select(Todo, { title: true, done: true });
+const liveTodos = Data.active("LiveTodos", (model: Model) =>
+  Match.value(list.read(model)).pipe(
+    Match.tag("Ready", ({ value }) =>
+      value.items.length === 0
+        ? Option.none()
+        : Option.some(
+            Projection.struct(
+              Object.fromEntries(
+                value.items.map((todo) => [todo.id, Data.live(followed, todo.id)]),
+              ),
+            ),
+          ),
+    ),
+    Match.orElse(() => Option.none()),
+  ),
+);
 
 export const init = (flags: Flags): Update.Return<Model, Message, RemoteClient> => ({
   model: { remote: Remote.initial, draft: "", session: flags.session, created: 0 },
@@ -85,7 +105,7 @@ export const update = (
   });
 
 export const subscriptions = Subscription.make<Model, Message, RemoteClient>()(() =>
-  foldData.subscriptions({ todos }),
+  foldData.subscriptions({ todos, liveTodos }),
 );
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Document => {
