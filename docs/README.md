@@ -16,7 +16,7 @@ The module records cover [Option](research/option-module.md), [Result](research/
 
 [Qwik optimizer closure-conversion research](research/qwik-closure-conversion.md) studies Qwik v2's Oxc/SWC capture analysis as prior art for milestone 8B. It recommends boundary-driven free-variable analysis and explicit reffect CapturePlans while normally erasing, rather than serializing, runtime closures.
 
-[**R language direction**](r-language.md) is the current design for evolving R into a small directly-authored typed language as well as the migration target: richer native types, named monomorphic calls, proper tail recursion, structured control flow, opaque native extensions and ownership inferred by the compiler.
+[**R language direction**](r-language.md) defines the tiny semantic core: TypeScript is the macro/metaprogramming language; R keeps Match as its branch primitive, ordinary callable functions as statically resolved calls, compiler-discovered recursion/proper-tail lowering, and Effect semantics. Loop/use/let/if-like ergonomics stay in user land; richer native types and extensions remain orthogonal.
 
 ## Revised design and implementation references
 
