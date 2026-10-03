@@ -125,6 +125,25 @@ Normalization and optimization are identity stages for this subset. Ownership us
 
 ## Run
 
+### Exit and typed failure causes
+
+```ts
+const outcome = R.Effect.exit(R.Effect.fail(R.String.literal("unavailable")));
+const cause = R.Cause.fromReasons(
+  R.Array.make(
+    R.Cause.makeFailReason(R.String.literal("first")),
+    R.Cause.makeFailReason(R.String.literal("second")),
+  ),
+);
+const mapped = cause.pipe(R.Cause.map((error) => R.String.concat(error, R.String.literal("!"))));
+```
+
+`R.Cause(E)` and `R.Exit(A, E)` are checked plain-value witnesses. Causes contain an ordered `reasons` array of typed `Fail` reasons, including empty arrays and duplicates. Exit uses `Success.value` or `Failure.cause`. Constructors require witnesses for absent channels, as with Result: `Exit.succeed(value, errorWitness)`, `Exit.fail(error, successWitness)` and `Exit.failCause(cause, successWitness)`.
+
+Cause supports `empty`, `fail`, `makeFailReason`, `fromReasons`, `map`, first-error Result/Option observers and reason predicates. Exit supports constructors, pure `match`, `map`, `mapError`, `mapBoth`, `asVoid`, predicates and Option observers. `Cause.map` preserves all reasons; `Exit.mapError` and `mapBoth` rebuild a singleton from the first error, matching Effect v4. An empty failure remains a failure.
+
+`Effect.exit` captures checked synchronous success/typed failure. Async operations, cleanup/Scope and Clock/Random reads inside capture are refused; an async parent can sequence synchronous capture. Defects, Interrupt reasons, annotations, equality and upstream instance/effect branding remain outside this profile. These values do not change runtime task failure propagation. Explicit nonempty Cause arrays allocate; scalar, empty-cause and success paths retain their existing layouts and costs. See [decisions and measurements](../../docs/research/exit-cause.md).
+
 ### Bounded structured tasks
 
 ```ts

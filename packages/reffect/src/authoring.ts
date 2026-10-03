@@ -37,6 +37,9 @@ import { ScheduleIR } from "./schedule.ts";
 import { ScopedIR } from "./scoped-sequence.ts";
 import { OptionIR } from "./option.ts";
 import { ResultIR, effectResult } from "./result.ts";
+import { CauseIR } from "./cause.ts";
+import { ExitIR } from "./exit.ts";
+import { effectExit } from "./effect-exit.ts";
 import { DurationIR } from "./duration.ts";
 import { EffectCombinators } from "./effect-combinators.ts";
 import { RefIR } from "./ref.ts";
@@ -132,6 +135,8 @@ export const R = Object.freeze({
   Record: RecordModule,
   Option: OptionIR,
   Result: ResultIR,
+  Cause: CauseIR,
+  Exit: ExitIR,
   Duration: DurationIR,
   Ref: RefIR,
   Clock: ClockIR,
@@ -154,6 +159,7 @@ export const R = Object.freeze({
     forEach,
     ...EffectCombinators,
     result: effectResult,
+    exit: effectExit,
   }),
   Schedule: ScheduleIR,
   Log: LogIR,

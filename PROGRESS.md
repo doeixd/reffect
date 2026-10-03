@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-03 — Bounded Exit/Cause values
+
+- Recorded stable Effect 4.0.0 source checks, independent mixed-Cause probes and representation decisions in [exit-cause.md](docs/research/exit-cause.md), before implementation. The first slice uses explicit Fail-only Cause data and Exit values over existing checked records/unions/arrays; synchronous Effect.exit refuses async and Clock/Random work inside capture. Runtime mixed causes, defects and child handles remain separate gates. Cause arrays allocate only when represented data is requested; scalar values and execution context gain no fields.
+- Delivered constructors, pure maps/matches, predicates and first-error/Option observers, including arbitrary Fail-only arrays and duplicate/empty reasons. Cause.map preserves every reason; Exit.mapError/mapBoth rebuild from the first error. Native debug/release cover non-Copy strings, synchronous capture inside an async parent and both failure-frame policies. Three agents supplied source/design/conformance findings before their implementation turns hit a usage limit; root implemented and self-reviewed the resulting slice. Core PLAN.md remains owned by the other instance.
+- A separate std-only allocator probe measures zero allocations for scalar/empty/success paths, one per materialized failure in release, and one additional existing diagnostic allocation for bounded failure capture. Debug retains intermediate composite clones; each 100-call workload returns to its starting live allocation count. Concrete u64/Cause/Exit layouts are 8/24/24 bytes on this Rust 1.98.1 Linux build. The research record describes measurement limits and EXIT-001–006 decisions. Affected integration passes 27/27 in seven files (187.81s total), strict TypeScript and workspace builds.
+
 ## 2026-10-03 — Milestone 6 step 2: NDJSON serialization
 
 - `NativeRpc.compile` takes `serialization: "json" | "ndjson"`, chosen as `RpcSerialization` is (STREAM-001). NDJSON reproduces the official server's line handling and quirks byte for byte.

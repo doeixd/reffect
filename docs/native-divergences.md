@@ -56,4 +56,6 @@ The injected millis driver also admits only signed safe-integer readings, while 
 - Mutation `Input`/`Output` schemas outside the subset where `decodeUnknown`/`encodeUnknown` and the JSON codec agree: non-finite-capable numbers (`Schema.Number`), `undefined` (`Schema.optional`), and any number in an `Output` (RM-001).
 - `R.Schema.encodeSync(R.Schema.toCodecJson(...))` outside a NativeRpc host (no `JsonEncoders` capability), and `R.RemoteStore` outside a `NativeRemote` server.
 
-- Task groups outside the [bounded Unit/Never profile](research/structured-concurrency.md): collected/fallible children, dynamic topology, nested groups, groups in cleanup, captured parent Ref/file, mutable injected drivers and RemoteStore/Launch child work. General Fiber/Exit/Cause are not admitted.
+- Task groups outside the [bounded Unit/Never profile](research/structured-concurrency.md): collected/fallible children, dynamic topology, nested groups, groups in cleanup, captured parent Ref/file, mutable injected drivers and RemoteStore/Launch child work. General Fiber and runtime mixed Cause are not admitted; the separate [Fail-only Exit/Cause value profile](research/exit-cause.md) does not widen task admission.
+
+- Exit/Cause outside the [Fail-only value profile](research/exit-cause.md): Die/Interrupt reasons, annotations, equality/combination and upstream branding. Effect.exit refuses captured async work (including cleanup/Scope) and Clock/Random reads. Async work outside synchronous capture remains allowed.
