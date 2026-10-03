@@ -114,6 +114,11 @@ Hydration is therefore tolerant. **Byte equality with upstream is the right acce
 1. **Escaping and markers.**
    - Port `escapeText`, `escapeAttributeValue` and the fingerprint.
    - Run a differential corpus against the pinned upstream functions: ASCII, astral, combining, CR, NUL refusal, numeric and string keys.
+     **Delivered 2026-10-03.**
+   - [ssr-serialize.ts](../../packages/reffect/src/ssr-serialize.ts) ports `escapeText`, `escapeAttributeValue` (with upstream's NUL message) and the fingerprint. It is registered as `foldkit/ssr-serialize@1` with the pin foldkit 0.165.0.
+   - [ssr-serialize.test.ts](../../packages/reffect/tests/ssr-serialize.test.ts) compares a Rust harness with `renderToString`, rendering each value as a span's text, `title` and key. The corpus covers all escapes, CR, astral and combining text, a long value and NUL refusal.
+   - Injecting `>` escaping into attributes makes the test fail.
+   - Number keys wait for SSR-008.
 2. **`R.Html` and the reference view.**
    - Add element and attribute builders and `R.Html.document`.
    - The reference produces a Foldkit `view`, whose `renderToString` output is the oracle.

@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-03 — Milestone 8A step 1: SSR escaping and key markers
+
+- **Change.** The native ports of Foldkit's `escapeText`/`escapeAttributeValue` (with NUL refusal) and the hydration key fingerprint (FNV-1a over UTF-16) are registered as `foldkit/ssr-serialize@1` (foldkit 0.165.0).
+- **Validation.**
+  - `vp test tests/ssr-serialize.test.ts tests/ported-runtime.test.ts` passed. The native results equal upstream `renderToString` on a 12-value corpus.
+  - A fault injected into the attribute escaper fails the test.
+  - `vp check` is clean.
+- **Next:** `R.Html` builders and the reference view (step 2).
+
 ## 2026-10-03 — Milestone 8A design: native Foldkit SSR
 
 - [native-ssr.md](docs/research/native-ssr.md) records upstream foldkit 0.165.0 SSR from the installed sources:
