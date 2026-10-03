@@ -139,7 +139,75 @@ Status: **accepted (2026-10-03)**, not implemented. Scope: [implementation miles
      Each server mutates its own copy of the seed. Path assertions confirm every outcome.
 
    - **Stock-client acceptance (2026-10-03):** a stock `Remote.clientLayer` session runs over the native SQL server and over the official server. Each server has its own seeded SQLite file, and upstream's `RemoteServer.handlers` serves as the client transport, so no HTTP is involved on the official side. The session prefetches a page, applies `mutateInto` for rename, create and archive, sends a refused mutation, then reloads. Every model read matches the official one with `toStrictEqual`. Assertions on the official run confirm that each step observes its effect, so the comparison cannot pass vacuously.
-5. Postgres as a second dialect, executed.
+5. Postgres as a second dialect, executed. Design below ([step 5](#step-5-postgres-as-a-second-dialect)).
+
+## Step 5: Postgres as a second dialect
+
+### Sources (checked 2026-10-03)
+
+- **PostgreSQL 18** [locale docs](https://www.postgresql.org/docs/18/locale.html): the `builtin` provider supports `C`, `C.UTF-8` and `PG_UNICODE_FAST`. `PG_UNICODE_FAST` collates by code point and uses full Unicode case mapping, and it is fixed by the server build rather than libc or ICU, so it is deterministic across hosts.
+- **Docker image** `postgres:18.6-alpine` (Docker Hub tags listed 2026-10-03; Docker 29.1.3 locally).
+- **SQLx 0.9.0** `postgres` feature. TLS is a separate feature (`tls-rustls-ring-webpki`, `tls-native-tls`, …).
+  - The Postgres driver sends typed binary parameters and decodes by type: `String` from TEXT/VARCHAR/BPCHAR/NAME, `i16`/`i32`/`i64` from INT2/INT4/INT8, `f64` from FLOAT8, `bool` from BOOL.
+  - A NULL bound as `Option<String>` is typed TEXT, which Postgres refuses to assign to an integer column.
+- **`pg` (node-postgres) 8.23.1** is the JS driver for the official server, through `drizzle-orm/node-postgres` (1.0.0-rc.4).
+  - It sends parameters as untyped text, and Postgres infers each type from its context.
+  - Its default parsers read int2/int4 with `parseInt` and float8 with `parseFloat`. Postgres 12+ prints float8 as the shortest round-trip text, so JS gets the same f64 the native decoder does.
+  - Drizzle's `nodePgCodecs` changes only date/time, bigint (mode `bigint`), json, geometry and array types, none of which are admitted.
+- **Upstream** `foldkit-remote-drizzle` 0.9.0 emits dialect-neutral SQL through Drizzle, and its keyset predicate is written for Postgres NULL placement.
+
+### Decisions
+
+- **SQLX-009 — one planner, an explicit dialect.**
+  - `planQuery(…, "postgres")` differs from SQLite in only three ways:
+    - placeholders are `$N`;
+    - an input-folded predicate is `CASE WHEN $n THEN (P) WHEN NOT $n THEN (NOT P) END`, because Postgres has no boolean = integer, and a null input stays unknown as before;
+    - every parameter carries the kind its context gives it (the compared column, boolean for a fold, text for a pattern).
+  - The runtime is emitted for one dialect. Only that dialect's SQLx feature is a dependency (`postgres`, or `sqlite-bundled` with the pinned `libsqlite3-sys`).
+- **SQLX-010 — a per-dialect column allowlist, by Drizzle `columnType`.**
+  - SQLite: `SQLiteText`, `SQLiteInteger`, `SQLiteReal`, `SQLiteBoolean`.
+  - Postgres: `PgText`, `PgVarchar`, `PgSmallInt`, `PgInteger`, `PgSerial`, `PgSmallSerial`, `PgBigInt53`, `PgBigSerial53`, `PgDoublePrecision`, `PgBoolean`.
+  - Refused:
+    - `real`: SQLx widens float4 to f64 while node-postgres parses its text, so `0.1` would differ;
+    - `char`: blank-padded;
+    - Postgres enums: a custom type SQLx will not decode as `String`;
+    - `numeric`/`bigint` strings, dates, json and arrays.
+
+    The first word of `dataType` still gives the kind.
+  - This also tightens SQLite, which previously admitted any `string …`/`number …` data type.
+- **SQLX-011 — typed binding.**
+  - A parameter binds as its context's kind, and a null binds as a typed null of that kind.
+  - A number binds as `i64` when it is a safe integer, otherwise as `f64`. Postgres compares int4/int8/float8 across types.
+  - Writes bind each value by its column's kind. A ref's foreign key is text.
+  - Cursor values are re-bound as decoded. Postgres decodes by wire type (TEXT, INT2/4/8, FLOAT8, BOOL), and other types fail as `Database query failed`.
+- **SQLX-012 — transactions.**
+  - Each mutation runs in `BEGIN ISOLATION LEVEL SERIALIZABLE` and commits or rolls back as on SQLite.
+  - A serialization failure (SQLSTATE 40001) answers `Database query failed`, without a retry. Upstream offers none, a mutation source may be expensive, and the client can retry.
+- **SQLX-013 — collation and case are the database's.**
+  - Both servers run the same SQL on the same database, so order and `contains` folding come from its collation and agree by construction.
+  - The tests create the database with `--locale-provider=builtin --builtin-locale=PG_UNICODE_FAST`, so order is by code point (as on SQLite) and `lower()` folds all of Unicode (unlike SQLite). Divergences from the JS evaluator are registered per database.
+- **SQLX-014 — nullable sort columns stay refused on both dialects.** Upstream's keyset predicate is correct on Postgres, so admitting them there is a later widening with its own tests.
+- **SQLX-015 — no TLS yet.**
+  - Without a TLS feature, SQLx connects in plain text, and a URL with `sslmode=require` fails at connect.
+  - A deployed showcase needs `tls-rustls-ring-webpki`. It will be added with the deployment, recorded as a reachable-capability dependency.
+- **SQLX-016 — the reference store may be asynchronous.** `RemoteStoreApi` operations may return an `Effect`, so the Postgres oracle writes through `pg` inside its own serializable transaction. A failed write dies, matching the native abort.
+- **SQLX-017 — validation by execution.**
+  - Each Postgres test starts a throwaway `postgres:18.6-alpine` container on a loopback port, with a random password, and removes it afterwards.
+  - It is skipped, with a printed reason, when Docker is unavailable.
+  - The suites are the SQLite ones run against Postgres:
+    - the planner against upstream's query source over `drizzle-orm/node-postgres`;
+    - Read/Query wire steps;
+    - mutation steps, including rollbacks;
+    - the stock-client session.
+
+### Known edges (not tested)
+
+- A non-integral number compared with an integer column: node-postgres sends untyped text, so Postgres infers integer and refuses `2.5` (Database query failed), while SQLx sends float8 and compares numerically (no match). Inputs are schema-checked, so this needs a query whose input schema admits fractions against an integer column.
+- Text containing NUL is refused by Postgres on both sides.
+
+### Acceptance (step 5)
+
+The SQLite acceptance, repeated over Postgres 18.6: planned SQL agrees with upstream's query source for the shared conformance cases and the tie-heavy set; Read/Query/Mutate match the official server over the wire; a stock client session matches; rollbacks leave no rows.
 
 ## Acceptance
 
