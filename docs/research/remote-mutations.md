@@ -75,6 +75,43 @@ Checked against `foldkit-remote` 0.10.0 `index.d.mts`: `Remote.patch(entity, id,
 - **RS-001 refined — typed store writes.** `write(entity, id, values)` takes any Struct witness and stores its JSON encoding, so a row keeps the entity's wire shape. That is narrower than upstream's untyped `Record<string, unknown>` (spreading a non-object is not admitted) and settles the NR-017 question for written rows: the values are the entity's own encoded field types. `remove(entity, id)` is unchanged. `get` returns raw `Unknown` rows and waits for typed decoding (`Schema.decodeUnknown`, fallible) with the first mutation that needs it.
 - **RM-001 refined — patches and outcomes.** `NativeRemote.patch(Entity, id, values)` builds `{ entity, id, values: encode(values) }`, checking at authoring time that `values` is a Struct whose fields are declared entity fields with the witnesses of their encoded schemas. All patches share one Struct type, so `entities` stays an ordered Array as upstream returns it. `connections` waits for RM-005.
 
+## RS-007: reading stored rows (2026-10-03)
+
+The first workloads that need it are read-modify-write mutations: toggling a todo without the client sending the new value, and incrementing a stored rank. RS-001 had deferred `get` until typed decoding was needed.
+
+- **Sources.**
+  - Upstream `MemoryStore` (foldkit-remote-server 0.11.0) has `rows`, `write` and `remove`, but no `get`. `memory` itself finds a row by `String(row.id)` in `rows(entity)`.
+  - Effect 4.0.0 has `Schema.decodeUnknownOption(schema)(input): Option<Type>`.
+- **Decision.** The read is two pieces, each mirroring an existing API:
+  - `R.RemoteStore.get(entity, id): Computation<Option<Unknown>, never>` is the stored, wire-shaped row.
+  - `R.Schema.decodeUnknownOption(R.Schema.toCodecJson(W))(u): Option<W>` is the decode half of RM-006's `encodeSync`.
+
+  A source composes them with `Option.flatMap` and then matches effectfully on the `Option` (tagged-union `match` with Computation handlers).
+
+- **Alternatives rejected.**
+  - A typed `get(entity, id, W)` would hide the decode, which upstream code does separately.
+  - `decodeUnknownEffect`, failing with a `SchemaError`, needs a SchemaError representation that does not exist yet. With `Option`, a malformed row and an absent row both read as `None`. The workloads refuse both with the same typed error.
+- **Representation.**
+  - The store node yields `UndefinedOr<Unknown>`, which is natively `Option<serde_json::Value>`, and the decode operation yields `UndefinedOr<W>`. The authoring layer turns both into R `Option` with `Option.fromUndefinedOr`, so lowering never builds union variants by hand.
+  - The reference provides `get` through `memoryStoreApi(store)`, the same lookup `memory` uses. A store operation may still return an Effect (SQLX-016).
+- **Native.**
+  - The generated `RemoteStore` session trait gains `get`. Memory returns the shared row in its JS key order.
+  - SQL runs `SELECT` over every column and foreign key, inside the mutation's transaction. The row is built as the read path builds it: columns by kind, foreign keys as `Target:id` refs.
+  - Decoding reuses the server's verified decoders. The library's `reffect_json` module now carries them and their argument helpers, shared with the server through `decodeArgs`. A decoder is `decode_W(value, None).ok()`.
+- **Evidence.**
+  - [remote-mutate.test.ts](../../packages/reffect/tests/remote-mutate.test.ts): `Bump` reads, decodes and increments a rank, twice, each read seeing the previous write. A null rank (decode → `None`) and an absent row are refused. Every step matches the published handler over `MemoryStore`.
+  - [remote-sql-mutate.test.ts](../../packages/reffect/tests/remote-sql-mutate.test.ts) runs the same steps on SQLite and Postgres. Two overlapping `SlowBump`s (read, a 400 ms pause, write) lose no update:
+    - on Postgres, `SERIALIZABLE` refuses one with `Database query failed`, natively and on the official server;
+    - on SQLite, `BEGIN IMMEDIATE` runs them one after the other.
+
+    Under `READ COMMITTED` both would succeed and the rank would rise once, which the test refuses.
+
+  - [examples/todo-remote](../../examples/todo-remote/README.md) toggles by reading the stored todo; the client sends only its id.
+- **Open.**
+  - A `SchemaError` representation, so decode failures can be told apart from absence.
+  - Serialization failures are not retried (SQLX-012).
+  - `examples/todo-remote` has no SQL mode yet.
+
 ## Mutations as implemented (2026-10-03)
 
 - **Authoring.** `NativeRemote.mutation(Mutation, input => Computation<Outcome, ServerError>)` mirrors `RemoteServer.mutation(Mutation, run)`. Other helpers:

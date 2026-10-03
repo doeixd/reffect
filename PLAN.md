@@ -80,7 +80,7 @@ Each gate can ship bounded subprofiles without claiming the whole milestone. Ens
 
 ## Current frontier
 
-**Milestone 5 (SQLx) is implemented on SQLite and Postgres. foldkit-plus 0.14.0 is adopted ([resolution](docs/research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03)). Next: `RemoteStore.get` (item 3), then [milestone 6](docs/implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption) (streaming RPC and real interruption).**
+**Milestone 5 (SQLx) is implemented on SQLite and Postgres. foldkit-plus 0.14.0 is adopted ([resolution](docs/research/foldkit-plus-issues.md#resolution-all-fixed-in-foldkit-plus-0140-checked-2026-10-03)) and mutations read stored rows (RS-007). Next: [milestone 6](docs/implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption) (streaming RPC and real interruption).**
 
 Milestone 4 on the memory backend: the full `RemoteRpc` contract compiles with official-server codec parity (the wire features are recorded in the [native RemoteServer design](docs/research/native-remote.md)). Read, Query (paging, keyset cursors, `select`) and Mutate match `foldkit-remote-server` over the wire. A stock `Remote.clientLayer` reads, queries and mutates through the native server with upstream's results ([remote-acceptance.test.ts](packages/reffect/tests/remote-acceptance.test.ts)). Mutations are R sources over a writable store, with typed values encoded as `Schema.toCodecJson` does ([remote-mutations.md](docs/research/remote-mutations.md)). Measured costs are in [remote-bench.md](docs/research/remote-bench.md).
 
@@ -88,7 +88,7 @@ Remaining, in order, driven by `examples/todo-remote` (native Remote server plus
 
 1. Done: [`examples/todo-remote`](examples/todo-remote/README.md). A `Todo` entity, a list query and add/toggle/delete mutations run through the stock client, with screens equal to upstream. Toggling sends the new `done` value, so `get` is not needed yet.
 2. Done: connection changes in mutation outcomes (RM-005), so created rows join the lists that show them.
-3. `RemoteStore.get` with typed decoding, so mutations can read the rows they change.
+3. Done: `RemoteStore.get` with `Schema.decodeUnknownOption`, so mutations read the rows they change ([RS-007](docs/research/remote-mutations.md#rs-007-reading-stored-rows-2026-10-03)); overlapping read-modify-writes lose no update on SQLite or Postgres.
 4. Done: authentication by the bearer adapter, field authorization as compiled R functions, and the principal in mutation sources (RM-004).
 5. Done: milestone 4 is accepted within the memory profile, including a stock Foldkit app in Chrome ([status](docs/research/native-remote.md#milestone-4-status-2026-10-03)).
 6. Done: milestone 5 ([sqlx-remote.md](docs/research/sqlx-remote.md)). Remote Read, Query and Mutate over SQLite and Postgres 18 through SQLx 0.9.0 match the Drizzle-backed official server, with one transaction per mutation (`BEGIN IMMEDIATE` / `SERIALIZABLE`), and a stock client session matches on both dialects. Not yet native: `many`/`manyToMany`/computed relations, `visible` rules, numeric ids, nullable sort columns, and TLS to the database (SQLX-015).

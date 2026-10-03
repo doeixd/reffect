@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-03 — Mutations read stored rows (RS-007)
+
+- **New operations:**
+  - `R.RemoteStore.get(entity, id)` yields the stored, wire-shaped row as `Option<Unknown>`, read where the mutation runs: the memory store, or a `SELECT` in the mutation's SQLite/Postgres transaction.
+  - `R.Schema.decodeUnknownOption(R.Schema.toCodecJson(W))` mirrors Effect's and yields `Option<W>`. Natively it uses the server's verified decoders, which the library's `reffect_json` module now carries (shared through `decodeArgs`).
+- **Reference.** The reference reads upstream's `MemoryStore` through `memoryStoreApi`, as `memory` looks rows up.
+- **Workloads:**
+  - `Bump` reads, decodes and increments a rank, refusing a null rank or an absent row. It matches upstream over memory and runs on SQLite and Postgres.
+  - Overlapping read-modify-writes lose no update. On Postgres, `SERIALIZABLE` refuses one, natively and on the official server. On SQLite they serialize.
+  - `examples/todo-remote` toggles by reading the stored todo; the client sends only its id.
+- **Filed** foldkit-plus [#145](https://github.com/doeixd/foldkit-plus/issues/145) (Postgres `contains` folding), [#146](https://github.com/doeixd/foldkit-plus/issues/146) (NUL search defect) and [#147](https://github.com/doeixd/foldkit-plus/issues/147) (`memory` without `authorize`).
+- **Validation:**
+  - `remote-mutate` (3) and `remote-sql-mutate` (6, both dialects);
+  - `schema-json-rpc`, `remote-acceptance`, `remote-auth`, `unknown`/`records`/`numbers` RPC, `remote-sql`;
+  - `async-effect` (2; it times out only when run alongside seven crate builds);
+  - `examples/todo-remote` equals upstream.
+- **Design:** [RS-007](docs/research/remote-mutations.md#rs-007-reading-stored-rows-2026-10-03).
+
 ## 2026-10-03 — foldkit-plus 0.14.0 adopted
 
 - **Upgrade.** reffect pins `foldkit-entity` 0.7.0, `foldkit-remote`/`-server` 0.11.0 and `foldkit-remote-drizzle` 0.9.1. These fix every issue reffect filed (#135–#143).

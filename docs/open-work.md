@@ -8,8 +8,7 @@ Everything still to be done, collected from the design and research records on 2
 
 ## Frontier
 
-- `RemoteStore.get` with typed decoding, so mutations can read what they change; test a read-modify-write conflict under Postgres `SERIALIZABLE` ([PLAN item 3](../PLAN.md#current-frontier), [remote-mutations](research/remote-mutations.md#typed-values-refined-2026-10-03))
-- `examples/todo-remote` on SQLite/Postgres, toggling through `get` ([sqlx-remote](research/sqlx-remote.md#order-of-work))
+- `examples/todo-remote` on SQLite/Postgres (it toggles through `get` since RS-007) ([remote-mutations](research/remote-mutations.md#rs-007-reading-stored-rows-2026-10-03))
 - Milestone 6 research and design: streaming RPC and real interruption ([milestones §23](implementation-milestones.md#23-milestone-6--streaming-rpc--real-interruption))
 
 ## Future milestones 6–15
@@ -93,6 +92,7 @@ These block many items below.
 - Concurrency policy for non-SQL async sources (RS-004) ([remote-mutations](research/remote-mutations.md#open-questions))
 - `Schema.Number` and `Schema.optional` in mutation schemas; numbers in outputs (RM-001) ([remote-mutations](research/remote-mutations.md#mutations-as-implemented-2026-10-03))
 - Store writes take Struct values only (RS-001) ([remote-mutations](research/remote-mutations.md#typed-values-refined-2026-10-03))
+- A `SchemaError` representation, so `decodeUnknownOption`'s `None` can be told apart from an absent row, and `decodeUnknownEffect` admitted (RS-007) ([remote-mutations](research/remote-mutations.md#rs-007-reading-stored-rows-2026-10-03))
 - Exercise native number formatting in connection identities over the wire; non-portable connection inputs (RM-005) ([remote-mutations](research/remote-mutations.md#connection-changes-as-implemented-rm-005-2026-10-03))
 
 ### SQL
@@ -135,6 +135,7 @@ Per-module scope and refusals are in the [module decision index](effect-modules.
 - **Scalars:** Boolean/Number/BigInt/String beyond partial witnesses; BigDecimal precision profile ([coverage](effect-module-coverage.md#complete-core-namespace-inventory))
 - **Traits and hashed collections:** Order/Equivalence/Equal/Hash/Combiner/Reducer as checked traits; HashMap/HashSet/Trie/Graph (no Rust hash order); JsonPatch/JsonPointer/Optic/RegExp/Symbol ([coverage](effect-module-coverage.md#complete-core-namespace-inventory))
 - **Brand/Data/Redacted:** missing; redaction before observability expands ([coverage](effect-module-coverage.md#complete-core-namespace-inventory))
+- **TypeScript DX:** `R.Struct.get(R.Struct.get(x, "a"), "b")` passed straight to a typed parameter (e.g. `R.Boolean.not`) infers `never`, because the contextual return type flows into the inner `dual` call; binding the inner value to a `const` works. Reordering the overloads does not help ([sources.ts](../examples/todo-remote/sources.ts))
 - **Function/flow:** `R.flow` over `Expr`/`Computation`, requirement unions, per-component frames, CSE/folding, composition size measurement ([flow-composition](research/flow-composition.md#open-questions))
 - **Ref family:** owned composite snapshots, escaping/service/cross-request refs, effectful updates, atomic cross-task updates, capture by finalizers/children, `Rc<RefCell>`/Arc/atomic profiles, layout measurement; MutableRef, SynchronizedRef, SubscriptionRef (REF-001..006) ([ref-module](research/ref-module.md#accepted-bounded-decisions))
 - **Clock/Random:** nanosecond accessors (blocked on checked signed bigint), range helpers with exact rounding (RANDOM-004), live Random backend, `withSeed` ISAAC port and pre-gates (RANDOM-002/003), virtual-time Sleep and observer-clock parity (CLOCK-004), cross-task driver sharing, defect-finalizer parity, cost measurement, separate Crypto randomness ([clock-random-modules](research/clock-random-modules.md#decisions-recorded-before-implementation))
