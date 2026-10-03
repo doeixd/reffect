@@ -7,6 +7,7 @@
   - Memory sessions apply at once, as upstream's memory backend does. SQL sessions are `BEGIN IMMEDIATE` transactions doing update-then-insert of the given columns.
 - Found while testing: an upsert cannot partially update a row with NOT NULL columns in SQLite (NOT NULL is checked before `ON CONFLICT`). SQLX-006 is revised to update-then-insert.
 - [remote-sql-mutate.test.ts](packages/reffect/tests/remote-sql-mutate.test.ts) passes: 17 stateful steps against the reference running the same R sources in a SQLite transaction, including both kinds of rollback. Details are in [sqlx-remote.md](docs/research/sqlx-remote.md#order-of-work).
+- The stock Remote client gets the same results over SQL. A `Remote.clientLayer` session runs prefetch, `mutateInto` rename/create/archive, a refusal and a reload. Every model read matches between the native SQL server and upstream's handlers over Drizzle, with each run on its own SQLite file. Validation: `vp test tests/remote-sql-mutate.test.ts` (2 passed).
 
 ## 2026-10-03 — Milestone 5 step 3: Remote Read and Query over SQLite with SQLx
 
