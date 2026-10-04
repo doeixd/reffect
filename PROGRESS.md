@@ -50,6 +50,16 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — #37 slices 1–2: RPC runtime without string patches, static Rust in the crate
+
+- **Slice 1** (`095c3bd`): the layered cancellation type, the shutdown forwarder, the pages fallback and the tokio features were spliced in by matching text. They are template parameters now; `validate_batch` replaces the duplicated batch check (#38).
+- **Slice 2** (`04fa21b`): the argument decoders, wire helpers, streaming forwarder with `PendingResponse`, and the accept loop live in `runtime/src/rpc_{args,wire,stream,serve}.rs`.
+  - Generated `main.rs` inlines them at its root, so call sites are unchanged.
+  - The check crate includes them in a host module with the same imports. `runtime:check` rustfmts them explicitly and runs 16 Rust tests, three of them new for the RPC wire.
+- **Validation.** These suites pass, run one at a time: `runtime-sources`, `schema-rpc`, `rpc-auth`, `stream-rpc`, `stream-interrupt`, `server-layer`, `html-page`, `remote-live`, `rpc-serving` and `remote-mutate`.
+  - `module-composition` fails the same way without these changes: the coordination work's refusal, "Cancellation-retained failures and fallible task groups require a verified compound RPC Cause wire adapter".
+- **Next.** The page host (`ssr-page.ts`), then the SQL runtime.
+
 ## 2026-10-04 — #19: bounded Live queues and subscription caps
 
 - **Change.** Each Live subscriber's queue is bounded (default 1024). When it overflows, an event is dropped after its cursor is numbered, so the client sees a gap and resyncs (LIVE-007). Subscriptions are capped in total (10000) and per authenticated principal (64); anonymous clients are not pooled. `NativeRemote({ liveLimits })` sets the bounds, a recorded hardening divergence (LR-8 closed).
