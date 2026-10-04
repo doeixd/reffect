@@ -34,6 +34,7 @@ Everything still to be done, collected from the design and research records on 2
 
 ## Cross-cutting gates
 
+- Typed Deferred cancellation can retain errors across a Never recovery channel: prove carrier reachability and task-wrapper outcome bounds beyond declared child E before admission ([TURN-012](research/deferred-turns.md)).
 - Compound fallible All/Race RPC wire causes, interruptor identities/reason annotations, and retained earlier-channel errors: NativeRpc refuses this new profile pending stock-client conformance ([fallible concurrency](research/fallible-concurrency.md#host-integration-decision)).
 - Lexical Deferred/Semaphore ownership, statically bounded waiter storage, independent waiter cancellation, and registration-ordered semantic continuation turns (including reentrant completion), wake/cleanup routing and a verified automatic-yield profile before coordination admission ([lexical coordination](research/lexical-coordination.md)).
 
