@@ -5,7 +5,7 @@
 
 use crate::foldkit_html::{element, empty, render, text, Prop};
 use crate::foldkit_json::{json_text, round_trip};
-use crate::remote_engine::{Hub, Memory, Subscription};
+use crate::remote_engine::{read, Hub, JsObject, Memory, Subscription};
 use serde_json::json;
 
 #[test]
@@ -216,4 +216,48 @@ fn snapshot_tells_a_fresh_subscription_the_current_rows() {
     let mut resumed = live(hub, 5.0, selecting, Some(1));
     runtime.block_on(hub.snapshot(&resumed, &memory, authorize));
     assert!(drain(&mut resumed).is_empty());
+}
+
+#[test]
+fn js_object_keeps_javascript_key_order() {
+    let mut object: JsObject<u8> = JsObject::new();
+    for (key, value) in [("b", 1), ("10", 2), ("a", 3), ("2", 4), ("b", 5)] {
+        object.set(key.to_string(), value);
+    }
+    let keys = |object: &JsObject<u8>| {
+        object
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+    };
+    // Index keys first, ascending; then insertion order; a reassigned key keeps its place.
+    assert_eq!(keys(&object), ["2=4", "10=2", "b=5", "a=3"]);
+    // `delete` then assignment moves a named key to the end, as in JS.
+    assert_eq!(object.take("b"), Some(5));
+    object.set("b".to_string(), 6);
+    assert_eq!(keys(&object), ["2=4", "10=2", "a=3", "b=6"]);
+    assert!(object.has("10") && !object.has("c"));
+}
+
+#[test]
+fn a_huge_client_windows_map_reads_in_linear_time() {
+    // #17: a single Read whose windows map has 200k keys used to cost ~10^10 comparisons.
+    let rows = json!({ "Todo": [["t1", { "id": "t1", "title": "Write" }]] });
+    let memory = Memory::new(vec!["Todo".to_string()], &rows, &[]);
+    let windows: serde_json::Map<String, serde_json::Value> =
+        (0..200_000).map(|i| (format!("k{i}"), json!({}))).collect();
+    let payload = json!({ "version": 4, "requests": [{ "entity": "Todo", "id": "t1", "fields": ["title"], "windows": windows }] });
+    let permit_all = |_: &str, fields: &[String]| fields.to_vec();
+    let started = std::time::Instant::now();
+    let answer = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(read(&memory, &permit_all, &payload))
+        .unwrap();
+    assert_eq!(answer["entities"][0]["values"], json!({ "title": "Write" }));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
 }

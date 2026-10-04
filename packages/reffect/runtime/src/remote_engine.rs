@@ -20,61 +20,104 @@ fn array_index(key: &str) -> Option<u32> {
 }
 
 /// A plain JS object: index keys first, ascending, then insertion order; a reassigned key
-/// keeps its position (NR-009).
-#[derive(Clone, Debug, Default)]
+/// keeps its position (NR-009). Lookups are hashed, so client-sized maps stay linear (#17):
+/// index keys live in a sorted map, other keys in insertion slots, and a removed key leaves a
+/// hole so that setting it again appends it, as `delete` then assignment does in JS.
+#[derive(Clone, Debug)]
 pub struct JsObject<T> {
-    entries: Vec<(String, T)>,
+    indexed: std::collections::BTreeMap<u32, (String, T)>,
+    named: Vec<Option<(String, T)>>,
+    slots: HashMap<String, usize>,
+}
+impl<T> Default for JsObject<T> {
+    fn default() -> Self {
+        JsObject {
+            indexed: std::collections::BTreeMap::new(),
+            named: Vec::new(),
+            slots: HashMap::new(),
+        }
+    }
 }
 impl<T: Clone> JsObject<T> {
     pub fn new() -> Self {
-        JsObject {
-            entries: Vec::new(),
-        }
+        Self::default()
     }
     pub fn get(&self, key: &str) -> Option<&T> {
-        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+        match array_index(key) {
+            Some(index) => self.indexed.get(&index).map(|(_, value)| value),
+            None => self
+                .slots
+                .get(key)
+                .and_then(|slot| self.named[*slot].as_ref())
+                .map(|(_, value)| value),
+        }
     }
     pub fn get_mut(&mut self, key: &str) -> Option<&mut T> {
-        self.entries
-            .iter_mut()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v)
+        match array_index(key) {
+            Some(index) => self.indexed.get_mut(&index).map(|(_, value)| value),
+            None => match self.slots.get(key) {
+                Some(slot) => self.named[*slot].as_mut().map(|(_, value)| value),
+                None => None,
+            },
+        }
     }
     /// Moves a value out, leaving the key absent.
     pub fn take(&mut self, key: &str) -> Option<T> {
-        let at = self.entries.iter().position(|(k, _)| k == key)?;
-        Some(self.entries.remove(at).1)
+        let taken = match array_index(key) {
+            Some(index) => self.indexed.remove(&index).map(|(_, value)| value),
+            None => {
+                let slot = self.slots.remove(key)?;
+                self.named[slot].take().map(|(_, value)| value)
+            }
+        };
+        // Holes are reclaimed once they outnumber the live keys.
+        if self.named.len() > 2 * self.slots.len() + 8 {
+            self.named.retain(Option::is_some);
+            for (slot, entry) in self.named.iter().enumerate() {
+                if let Some((key, _)) = entry {
+                    self.slots.insert(key.clone(), slot);
+                }
+            }
+        }
+        taken
     }
     pub fn has(&self, key: &str) -> bool {
-        self.entries.iter().any(|(k, _)| k == key)
+        self.get(key).is_some()
     }
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.indexed.len() + self.slots.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.len() == 0
     }
     pub fn iter(&self) -> impl Iterator<Item = &(String, T)> {
-        self.entries.iter()
+        self.indexed.values().chain(self.named.iter().flatten())
+    }
+    /// The entries in JS key order, by value.
+    pub fn into_entries(self) -> impl Iterator<Item = (String, T)> {
+        self.indexed
+            .into_values()
+            .chain(self.named.into_iter().flatten())
     }
     pub fn set(&mut self, key: String, value: T) {
-        if let Some(entry) = self.entries.iter_mut().find(|(k, _)| *k == key) {
-            entry.1 = value;
-            return;
-        }
         match array_index(&key) {
-            Some(index) => {
-                let at = self
-                    .entries
-                    .iter()
-                    .position(|(k, _)| match array_index(k) {
-                        Some(other) => other > index,
-                        None => true,
-                    })
-                    .unwrap_or(self.entries.len());
-                self.entries.insert(at, (key, value));
-            }
-            None => self.entries.push((key, value)),
+            Some(index) => match self.indexed.get_mut(&index) {
+                Some(entry) => entry.1 = value,
+                None => {
+                    self.indexed.insert(index, (key, value));
+                }
+            },
+            None => match self.slots.get(&key) {
+                Some(slot) => {
+                    if let Some(entry) = self.named[*slot].as_mut() {
+                        entry.1 = value;
+                    }
+                }
+                None => {
+                    self.slots.insert(key.clone(), self.named.len());
+                    self.named.push(Some((key, value)));
+                }
+            },
         }
     }
     /// `{ ...self, ...other }`.
@@ -152,10 +195,38 @@ pub struct Window {
     pub after: Option<String>,
     pub before: Option<String>,
 }
+/// A relation's fields in first-seen order, with a set so merging many requests stays linear
+/// (#17); it reads as a slice of names.
+#[derive(Clone, Debug, Default)]
+pub struct FieldList {
+    names: Vec<String>,
+    seen: HashSet<String>,
+}
+impl FieldList {
+    fn add(&mut self, field: &str) {
+        if self.seen.insert(field.to_string()) {
+            self.names.push(field.to_string());
+        }
+    }
+}
+/// A request's own list is kept as given, duplicates included, as upstream keeps it; only a
+/// merge skips names already present.
+impl From<Vec<String>> for FieldList {
+    fn from(names: Vec<String>) -> Self {
+        let seen = names.iter().cloned().collect();
+        FieldList { names, seen }
+    }
+}
+impl std::ops::Deref for FieldList {
+    type Target = [String];
+    fn deref(&self) -> &[String] {
+        &self.names
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Relation {
     entity: String,
-    fields: Vec<String>,
+    fields: FieldList,
     windows: Option<JsObject<Window>>,
     relations: Option<JsObject<Relation>>,
 }
@@ -247,7 +318,7 @@ fn relation(value: &Value) -> Relation {
     let object = value.as_object().unwrap_or(&empty);
     Relation {
         entity: text(object, "entity"),
-        fields: texts(object.get("fields")),
+        fields: texts(object.get("fields")).into(),
         windows: record(present(object, "windows"), window),
         relations: record(present(object, "relations"), relation),
     }
@@ -259,7 +330,7 @@ fn requirement(value: &Value) -> Requirement {
     Requirement {
         entity: relation.entity,
         id: text(object, "id"),
-        fields: relation.fields,
+        fields: relation.fields.names,
         windows: relation.windows,
         relations: relation.relations,
         renames: None,
@@ -359,9 +430,7 @@ fn merge_into(
     relations: &Option<JsObject<Relation>>,
 ) {
     for field in fields {
-        if !target.fields.contains(field) {
-            target.fields.push(field.clone());
-        }
+        target.fields.add(field);
     }
     if let Some(windows) = windows {
         let own = target.windows.get_or_insert_with(JsObject::new);
@@ -522,7 +591,7 @@ fn group_by_entity(requests: &[Requirement]) -> Vec<EntityGroup> {
                 ids.set(request.id.clone(), asked);
                 let mut slice = Relation {
                     entity: request.entity.clone(),
-                    fields: Vec::new(),
+                    fields: FieldList::default(),
                     windows: None,
                     relations: None,
                 };
@@ -584,7 +653,7 @@ fn windows_of(windows: &Option<JsObject<Window>>, fields: &[String]) -> Option<J
 fn check_pages_per_relation(requirements: &[Relation]) -> Option<String> {
     for requirement in requirements {
         let mut pages: HashMap<&str, usize> = HashMap::new();
-        for name in &requirement.fields {
+        for name in requirement.fields.iter() {
             if !name.contains(RELATION_ALIAS) {
                 continue;
             }
@@ -935,7 +1004,7 @@ fn read_error(message: String) -> Value {
 }
 fn into_object(object: JsObject<Value>) -> Value {
     let mut map = Map::new();
-    for (key, value) in object.entries {
+    for (key, value) in object.into_entries() {
         map.insert(key, value);
     }
     Value::Object(map)
@@ -984,7 +1053,7 @@ async fn read_helper<S: Source>(
         .iter()
         .map(|request| Relation {
             entity: request.entity.clone(),
-            fields: request.fields.clone(),
+            fields: request.fields.clone().into(),
             windows: request.windows.clone(),
             relations: request.relations.clone(),
         })
@@ -1302,7 +1371,7 @@ impl Hub {
             .iter()
             .map(|request| Relation {
                 entity: request.entity.clone(),
-                fields: request.fields.clone(),
+                fields: request.fields.clone().into(),
                 windows: request.windows.clone(),
                 relations: request.relations.clone(),
             })
@@ -1745,7 +1814,7 @@ pub async fn query<S: Source>(
         .map(|id| Requirement {
             entity: select.entity.clone(),
             id: id.clone(),
-            fields: select.fields.clone(),
+            fields: select.fields.to_vec(),
             windows: select.windows.clone(),
             relations: select.relations.clone(),
             renames: None,
