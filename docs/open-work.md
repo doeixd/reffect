@@ -301,3 +301,21 @@ All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reff
 - Unverified ecosystem claims in [effect-ecosystem](effect-ecosystem.md), [effect-adjacent-projects](effect-adjacent-projects.md) and [effect-schema](effect-schema.md#not-found--unverified)
 - Nested data-first `R.Struct.get(R.Struct.get(x, a), b)` can infer `never` inside an `R.fn` callback; the pipe form works ([finding](research/ssr-data.md#m9-3-step-2-design-2026-10-03))
 - A browser-safe `R.Html` entry, so an app's view is written once in R and used in the browser through `toFoldkitView` (todo-remote mirrors its view; [M9-4](research/ssr-data.md#plan))
+
+## M9 review issues (2026-10-03)
+
+The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHub. Recommended order: security first (#3, #5), then #6, #12 with #9, #10 and #7, then #13, then #4 before any authenticated showcase, then M9-5 and #14.
+
+- [#3](https://github.com/doeixd/reffect/issues/3): data pages need `Cache-Control: private, no-store` (shared-cache leak)
+- [#4](https://github.com/doeixd/reffect/issues/4): a cookie session adapter, so authenticated pages work in browsers
+- [#5](https://github.com/doeixd/reffect/issues/5): refuse or cap unwindowed page views
+- [#6](https://github.com/doeixd/reffect/issues/6): derive view item witnesses from the selection schema
+- [#7](https://github.com/doeixd/reffect/issues/7): record Ready-only views as a divergence
+- [#8](https://github.com/doeixd/reffect/issues/8): snapshot and `changed` interleaving (documented race)
+- [#9](https://github.com/doeixd/reffect/issues/9): parse planned requests once; assemble views with a map
+- [#10](https://github.com/doeixd/reffect/issues/10): batch snapshot reads
+- [#11](https://github.com/doeixd/reffect/issues/11): mutation latency includes after-commit re-reads
+- [#12](https://github.com/doeixd/reffect/issues/12): move the page data step into the runtime crate
+- [#13](https://github.com/doeixd/reffect/issues/13): one page plan object and one `PageRequest` input
+- [#14](https://github.com/doeixd/reffect/issues/14): a browser-safe `R.Html` entry, to write views once
+- [#15](https://github.com/doeixd/reffect/issues/15): resume size, nested `Struct.get` inference, `R.Remote.Page` DX
