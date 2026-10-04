@@ -30,6 +30,19 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — #16 step 1: read timeouts and a connection cap
+
+- **Change.** Generated servers serve through one accept loop instead of `axum::serve`, which set no hyper timer. The loop has:
+  - a header-read timeout;
+  - a body-read timeout: axum's own `Bytes` extractor runs under `tokio::time::timeout`, so a stalled body gets 408 and an oversized one keeps its 413;
+  - a semaphore connection cap, beyond which accepting waits;
+  - hyper-util graceful shutdown.
+- **Settings.** The defaults (30 s, 30 s, 1024) are set through `limits`. hyper, hyper-util and tower are pinned to the versions axum already resolves ([design](docs/research/rpc-serving.md)).
+- **Validation.**
+  - New `rpc-serving` test: partial headers are closed after the timeout, a stalled body gets 408, and a third request waits while two connections fill the cap.
+  - Run one at a time (a parallel run was stopped for low memory): `server-layer`, `rpc-auth`, `html-page`, `remote-live`, `remote-acceptance`, `stream-rpc` and `stream-interrupt` pass.
+- **Open.** Step 2, threading and concurrent batches (#16, #25).
+
 ## 2026-10-04 — Review fixes: step 1 completed (#3, #5, #17, #18, #20)
 
 - **#18.** Scope analysis refuses Remote store calls and live signals in cleanup (`STORE_CLEANUP`). Before, a failed call there panicked the masked finalizer path.

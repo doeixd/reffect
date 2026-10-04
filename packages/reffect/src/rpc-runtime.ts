@@ -198,7 +198,14 @@ ${
               "    // The official server buffers 16 messages between its handlers and the body (STREAM-002).",
           )
       : asyncHttpRuntime
-    : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> Response {
+    : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, incoming: axum::extract::Request) -> Response {
+    // The body is read by axum's own extractor (so an oversized body keeps its 413) within a
+    // time limit: a stalled body is answered 408 rather than held forever (#16).
+    let body = match tokio::time::timeout(std::time::Duration::from_millis(BODY_TIMEOUT_MS), <Bytes as axum::extract::FromRequest<()>>::from_request(incoming, &())).await {
+        Ok(Ok(body)) => body,
+        Ok(Err(rejection)) => return rejection.into_response(),
+        Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
+    };
     let (batch, batched) = match read_body(&body) { Ok(messages) => messages, Err(response) => return response };
     if batched {
         if batch.len() > MAX_BATCH { return write_body(StatusCode::PAYLOAD_TOO_LARGE, vec![invalid("Batch limit exceeded")]); }
@@ -217,12 +224,57 @@ ${
 }
 `
 }
+${serveRuntime}
 ${withPages(layered ? layeredMain : plainMain, pages)}`;
 
 /** Pages take every path and method the RPC routes do not (SSR-007). */
 const ROUTES = 'if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }';
 const withPages = (main: string, pages: boolean): string =>
   pages ? main.replace(ROUTES, `${ROUTES}\n    let app = app.fallback(ssr_page);`) : main;
+
+/**
+ * The accept loop both mains use (#16, docs/research/rpc-serving.md): axum::serve sets no hyper
+ * timer, so headers were never timed out and connections were unbounded. Graceful shutdown
+ * stops accepting, then lets each connection finish its in-flight responses.
+ */
+const serveRuntime = String.raw`async fn serve(listener: tokio::net::TcpListener, app: Router, shutdown: impl std::future::Future<Output = ()>) -> std::io::Result<()> {
+    let connections = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let graceful = hyper_util::server::graceful::GracefulShutdown::new();
+    let mut shutdown = std::pin::pin!(shutdown);
+    loop {
+        // At the cap, accepting waits: further clients queue in the OS backlog.
+        let permit = tokio::select! {
+            permit = connections.clone().acquire_owned() => permit.expect("the connection semaphore is never closed"),
+            _ = &mut shutdown => break,
+        };
+        let stream = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => stream,
+                // A resource error (too many open files) would otherwise spin.
+                Err(_) => { tokio::time::sleep(std::time::Duration::from_millis(50)).await; continue; }
+            },
+            _ = &mut shutdown => break,
+        };
+        // Like Node's HTTP server, disable Nagle: delayed ACKs otherwise stall multi-segment responses.
+        let _ = stream.set_nodelay(true);
+        let app = app.clone();
+        let service = hyper::service::service_fn(move |request: axum::http::Request<hyper::body::Incoming>| {
+            tower::ServiceExt::oneshot(app.clone(), request.map(axum::body::Body::new))
+        });
+        let connection = hyper::server::conn::http1::Builder::new()
+            .timer(hyper_util::rt::TokioTimer::new())
+            .header_read_timeout(std::time::Duration::from_millis(HEADER_TIMEOUT_MS))
+            .serve_connection(hyper_util::rt::TokioIo::new(stream), service);
+        let connection = graceful.watch(connection);
+        tokio::spawn(async move {
+            let _ = connection.await;
+            drop(permit);
+        });
+    }
+    graceful.shutdown().await;
+    Ok(())
+}
+`;
 
 const plainMain = String.raw`#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -243,9 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
-    // Like Node's HTTP server, disable Nagle: delayed ACKs otherwise stall multi-segment responses.
-    let listener = axum::serve::ListenerExt::tap_io(listener, |stream: &mut tokio::net::TcpStream| { let _ = stream.set_nodelay(true); });
-    axum::serve(listener, app).await?;
+    serve(listener, app, std::future::pending()).await?;
     Ok(())
 }
 `;
@@ -321,8 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = stdin_eof => {} }
         let _ = shutdown.send(true);
     };
-    let listener = axum::serve::ListenerExt::tap_io(listener, |stream: &mut tokio::net::TcpStream| { let _ = stream.set_nodelay(true); });
-    axum::serve(listener, app).with_graceful_shutdown(signal).await?;
+    serve(listener, app, signal).await?;
     let _ = stop_launch.send(true);
     let _ = launch.await;
     Ok(())
@@ -370,7 +419,14 @@ impl Drop for PendingResponse {
         if let Some(cancellation) = self.cancellation.take() { let _ = cancellation.send(true); }
     }
 }
-async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, body: Bytes) -> Response {
+async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, incoming: axum::extract::Request) -> Response {
+    // The body is read by axum's own extractor (so an oversized body keeps its 413) within a
+    // time limit: a stalled body is answered 408 rather than held forever (#16).
+    let body = match tokio::time::timeout(std::time::Duration::from_millis(BODY_TIMEOUT_MS), <Bytes as axum::extract::FromRequest<()>>::from_request(incoming, &())).await {
+        Ok(Ok(body)) => body,
+        Ok(Err(rejection)) => return rejection.into_response(),
+        Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
+    };
     let (batch, batched) = match read_body(&body) { Ok(messages) => messages, Err(response) => return response };
     if batched {
         if batch.len() > MAX_BATCH { return write_body(StatusCode::PAYLOAD_TOO_LARGE, vec![invalid("Batch limit exceeded")]); }

@@ -953,7 +953,15 @@ export type CompileOptions = {
    * Request hardening the official server does not apply (see docs/native-divergences.md).
    * Defaults: 64 KiB bodies and 64-request batches.
    */
-  readonly limits?: { readonly bodyBytes?: number; readonly batch?: number };
+  readonly limits?: {
+    readonly bodyBytes?: number;
+    readonly batch?: number;
+    /** Time to receive a request's headers, then its body, before the server gives up (#16). */
+    readonly headerTimeoutMs?: number;
+    readonly bodyTimeoutMs?: number;
+    /** Connections served at once; beyond it, accepting waits (#16). */
+    readonly connections?: number;
+  };
   /**
    * The wire serialization, chosen as `RpcSerialization.layerJson`/`layerNdjson` is (STREAM-001):
    * one JSON value per body, or one message per line. Defaults to JSON.
@@ -1140,6 +1148,9 @@ export const compileServer = (
         const limits = {
           body: limitOf(options.limits?.bodyBytes, 65536, "bodyBytes"),
           batch: limitOf(options.limits?.batch, 64, "batch"),
+          headerTimeoutMs: limitOf(options.limits?.headerTimeoutMs, 30000, "headerTimeoutMs"),
+          bodyTimeoutMs: limitOf(options.limits?.bodyTimeoutMs, 30000, "bodyTimeoutMs"),
+          connections: limitOf(options.limits?.connections, 1024, "connections"),
         };
         if (!/^\/(?:[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)?$/.test(path))
           throw unsupported(
@@ -1945,6 +1956,21 @@ ${
         Rs.constItem(Rs.ident("RPC_PATH"), Rs.strRefType(), Rs.stringLiteral(prepared.path)),
         Rs.constItem(Rs.ident("MAX_BODY"), Rs.usizeType(), Rs.litInt(prepared.limits.body)),
         Rs.constItem(Rs.ident("MAX_BATCH"), Rs.usizeType(), Rs.litInt(prepared.limits.batch)),
+        Rs.constItem(
+          Rs.ident("HEADER_TIMEOUT_MS"),
+          Rs.u64Type(),
+          Rs.litInt(prepared.limits.headerTimeoutMs),
+        ),
+        Rs.constItem(
+          Rs.ident("BODY_TIMEOUT_MS"),
+          Rs.u64Type(),
+          Rs.litInt(prepared.limits.bodyTimeoutMs),
+        ),
+        Rs.constItem(
+          Rs.ident("MAX_CONNECTIONS"),
+          Rs.usizeType(),
+          Rs.litInt(prepared.limits.connections),
+        ),
         ...(prepared.auth
           ? [
               Rs.constItem(
@@ -2035,8 +2061,10 @@ ${
               ? '["macros", "rt", "net", "time", "sync", "signal"]'
               : prepared.asynchronous
                 ? '["macros", "rt", "net", "time", "sync"]'
-                : '["macros", "rt", "net"]',
+                : '["macros", "rt", "net", "time", "sync"]',
           ) +
+          // The accept loop (#16): hyper's own connection builder, with a timer.
+          'hyper = { version = "=1.11.1", features = ["server", "http1"] }\nhyper-util = { version = "=0.1.21", features = ["tokio", "server-graceful"] }\ntower = { version = "=0.5.3", default-features = false, features = ["util"] }\n' +
           (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
           (prepared.pages ? 'url = "=2.5.8"\n' : "") +
@@ -2050,7 +2078,14 @@ ${
       runtime: Object.freeze({
         id: "rust/axum-unary-json@1",
         crates: Object.freeze(
-          ["axum@0.8.9", "tokio@1.53.1", "serde_json@1.0.151"].concat(
+          [
+            "axum@0.8.9",
+            "hyper@1.11.1",
+            "hyper-util@0.1.21",
+            "tower@0.5.3",
+            "tokio@1.53.1",
+            "serde_json@1.0.151",
+          ].concat(
             prepared.auth ? ["subtle@2.6.1"] : [],
             prepared.pages ? ["url@2.5.8"] : [],
             prepared.asynchronous ? ["http-body@1.0.1"] : [],
