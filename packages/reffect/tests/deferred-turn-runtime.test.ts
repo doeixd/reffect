@@ -75,7 +75,7 @@ async fn cancellation(masked:bool){
   let won=a.complete(&bank,4).await;
   if masked||!*rx.borrow(){log(&trace,&format!("producer:{won}"))}
   semantic(&bank,4,rx.changed()).await.unwrap();
-  
+
   semantic(&bank,4,tokio::time::sleep(std::time::Duration::from_millis(1))).await;
   log(&trace,"producer:cleanup");
  });
