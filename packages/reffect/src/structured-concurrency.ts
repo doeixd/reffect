@@ -1,5 +1,6 @@
 import { Match } from "effect";
 import { streamFinalizers } from "./stream-ir.ts";
+import { isAsyncComputation } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
 import { BoolType, U64Type, UnitType, IRType, NeverType } from "./kernel.ts";
 import type { Diagnostic } from "./kernel.ts";
@@ -113,6 +114,11 @@ export const analyzeTaskGroups = (
           body(n.body, "body");
         },
         CatchAll: (n) => {
+          if (child && !IRType.same(n.source.error, NeverType) && isAsyncComputation(n.source))
+            issue(
+              "TASK_GROUP_RETAINED_FAILURE",
+              "Async typed recovery in a child task needs a carrier for failures retained when cancellation skips recovery",
+            );
           recoveries.push({ computation: c, source: n.source, path: at });
           body(n.source, "source");
           body(n.body, "body");

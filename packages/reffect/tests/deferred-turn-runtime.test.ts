@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { nativeTestBudget } from "./native-test-budget.ts";
+import { deferredStateRuntime } from "../src/deferred-state-runtime.ts";
 import { deferredTurnRuntime } from "../src/deferred-turn-runtime.ts";
 import { deferredTurnOracle, deferredTurnExpected } from "./fixtures/deferred-turn-oracle.ts";
 
@@ -13,18 +14,16 @@ const execute = promisify(execFile);
 // Kernel fixture only: this does not enable Deferred authoring or select this runtime.
 const harness = String.raw`use std::{sync::Mutex, future::Future, pin::Pin, task::{Context,Poll}};
 const N:usize=6;
-#[derive(Clone,Copy)]struct Entry{task:usize,next:Option<usize>,released:bool}
-struct State{out:Option<u64>,slots:[Option<Entry>;N],head:Option<usize>,tail:Option<usize>}
-struct Deferred(Mutex<State>);
-impl Deferred{fn new()->Self{Self(Mutex::new(State{out:None,slots:[None;N],head:None,tail:None}))}fn wait<'a>(&'a self,bank:&'a DeferredTurns<N>,task:usize)->Wait<'a>{Wait{d:self,bank,task,slot:None}}fn complete<'a>(&'a self,bank:&'a DeferredTurns<N>,task:usize)->Complete<'a>{Complete{d:self,bank,task,cohort:[None;N],len:0,index:0,started:false,armed:false,won:false}}}
-struct Wait<'a>{d:&'a Deferred,bank:&'a DeferredTurns<N>,task:usize,slot:Option<usize>}
-impl Future for Wait<'_>{type Output=u64;fn poll(mut self:Pin<&mut Self>,_:&mut Context<'_>)->Poll<u64>{let d=self.d;let mut s=d.0.lock().unwrap();if let Some(i)=self.slot{if s.slots[i].unwrap().released{let out=s.out.unwrap();s.slots[i]=None;self.slot=None;return Poll::Ready(out)}}else if let Some(out)=s.out{return Poll::Ready(out)}else{let i=s.slots.iter().position(Option::is_none).unwrap();s.slots[i]=Some(Entry{task:self.task,next:None,released:false});if let Some(t)=s.tail{s.slots[t].as_mut().unwrap().next=Some(i)}else{s.head=Some(i)}s.tail=Some(i);self.slot=Some(i)}self.bank.suspended(self.task);Poll::Pending}}
-impl Drop for Wait<'_>{fn drop(&mut self){if let Some(i)=self.slot{let mut s=self.d.0.lock().unwrap();let mut at=s.head;let mut prev:Option<usize>=None;while let Some(j)=at{let next=s.slots[j].unwrap().next;if j==i{if let Some(p)=prev{s.slots[p].as_mut().unwrap().next=next}else{s.head=next}if s.tail==Some(i){s.tail=prev}break}prev=at;at=next}s.slots[i]=None;}}}
-struct Complete<'a>{d:&'a Deferred,bank:&'a DeferredTurns<N>,task:usize,cohort:[Option<usize>;N],len:usize,index:usize,started:bool,armed:bool,won:bool}
-impl Future for Complete<'_>{type Output=bool;fn poll(mut self:Pin<&mut Self>,cx:&mut Context<'_>)->Poll<bool>{if !self.started{self.started=true;let d=self.d;let mut s=d.0.lock().unwrap();if s.out.is_some(){return Poll::Ready(false)}s.out=Some(7);self.won=true;let mut at=s.head.take();s.tail=None;while let Some(i)=at{let j=self.len;self.cohort[j]=Some(i);self.len+=1;at=s.slots[i].unwrap().next;}}
- if self.armed{if !self.bank.finish_request(self.task){return Poll::Pending}self.armed=false;self.index+=1;}
- while self.index<self.len{let i=self.cohort[self.index].unwrap();let task={let mut s=self.d.0.lock().unwrap();if let Some(e)=s.slots[i].as_mut(){e.released=true;Some(e.task)}else{None}};if let Some(task)=task{self.bank.request(self.task,task,cx.waker());self.armed=true;return Poll::Pending}else{self.index+=1}}
- Poll::Ready(self.won)}}
+struct Deferred(DeferredState<u64, (), N>);
+impl Deferred {
+ fn new()->Self { Self(DeferredState::new()) }
+ async fn wait(&self,bank:&DeferredTurns<N>,task:usize)->u64 {
+  self.0.wait(bank,task).await.expect("Success-only trace fixture")
+ }
+ fn complete<'a>(&'a self,bank:&'a DeferredTurns<N>,task:usize)->DeferredComplete<'a,u64,(),N,N> {
+  self.0.complete(bank,task,Ok(7))
+ }
+}
 
 async fn semantic<F:Future>(bank:&DeferredTurns<N>,task:usize,future:F)->F::Output{
  tokio::pin!(future);
@@ -124,6 +123,29 @@ unsafe impl std::alloc::GlobalAlloc for Count{
  unsafe fn dealloc(&self,pointer:*mut u8,layout:std::alloc::Layout){unsafe{std::alloc::System.dealloc(pointer,layout)}}
 }
 #[global_allocator]static ALLOCATOR:Count=Count;
+fn acknowledgement_isolation(){
+ let bank=DeferredTurns::<N>::new();let waker=std::task::Waker::noop();
+ bank.request(4,1,waker);
+ bank.before_poll(1);bank.after_poll(1,false,waker);
+ assert_eq!(bank.priority(),Some(1));assert!(!bank.finish_request(4));
+ bank.request(1,2,waker);
+ bank.before_poll(2);bank.suspended(2);bank.after_poll(2,false,waker);
+ assert_eq!(bank.priority(),Some(1));assert!(!bank.finish_request(4));
+ assert!(bank.finish_request(1));assert_eq!(bank.priority(),Some(1));
+ // The inner task's semantic flag cannot acknowledge its outer caller.
+ bank.after_poll(1,false,waker);assert!(!bank.finish_request(4));
+ // The same resumed caller can complete another owner without retaining a lease.
+ bank.request(1,3,waker);bank.before_poll(3);bank.after_poll(3,true,waker);
+ assert!(bank.finish_request(1));assert_eq!(bank.priority(),Some(1));
+ bank.suspended(1);bank.after_poll(1,false,waker);
+ assert_eq!(bank.priority(),Some(4));assert!(bank.finish_request(4));
+ assert!(bank.priority().is_none());
+ // A previous semantic Pending must be cleared before a reused task is polled.
+ bank.request(4,1,waker);bank.before_poll(1);bank.after_poll(1,false,waker);
+ assert_eq!(bank.priority(),Some(1));assert!(!bank.finish_request(4));
+ bank.after_poll(1,true,waker);assert!(bank.finish_request(4));
+ assert!(bank.state.lock().unwrap().stack.iter().all(Option::is_none));
+}
 fn costs(){
  let waker=std::task::Waker::noop();
  let before=ALLOCATIONS.load(std::sync::atomic::Ordering::SeqCst);
@@ -134,7 +156,7 @@ fn costs(){
 #[tokio::main(flavor="current_thread")]
 async fn main(){
  tokio::time::timeout(std::time::Duration::from_secs(2),async{
- scenario(false,false).await;scenario(true,false).await;scenario(false,true).await;nested_driver().await;costs();
+ scenario(false,false).await;scenario(true,false).await;scenario(false,true).await;nested_driver().await;acknowledgement_isolation();costs();
  cancellation(false).await;cancellation(true).await;
  simple("reversed-registration").await;simple("waiter-yields").await;simple("interrupt-next-waiter").await;
  let bank=DeferredTurns::<N>::new();let waker=std::task::Waker::noop();
@@ -143,7 +165,7 @@ async fn main(){
  bank.before_poll(2);bank.suspended(2);bank.after_poll(2,false,waker);assert_eq!(bank.priority(),Some(4));assert!(bank.finish_request(4));assert!(bank.take_changed());assert!(!bank.take_changed());assert!(bank.state.lock().unwrap().stack.iter().all(Option::is_none));assert_eq!(bank.state.lock().unwrap().depth,0);}
  let state=Deferred::new();
  for _ in 0..100{let mut future=std::pin::pin!(state.wait(&bank,1));let mut cx=Context::from_waker(waker);assert!(future.as_mut().poll(&mut cx).is_pending());}
- assert!(state.0.lock().unwrap().slots.iter().all(Option::is_none));
+ assert!(state.0.state.lock().unwrap().slots.iter().all(Option::is_none));
  println!("kernel passed");
  }).await.expect("Real executor wake progress");
 }
@@ -157,6 +179,7 @@ test(
       await writeFile(
         join(directory, "main.rs"),
         `${deferredTurnRuntime()}
+${deferredStateRuntime()}
 ${harness}`,
       );
       await writeFile(
