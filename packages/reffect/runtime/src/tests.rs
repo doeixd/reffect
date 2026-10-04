@@ -5,7 +5,7 @@
 
 use crate::foldkit_html::{element, empty, render, text, Prop};
 use crate::foldkit_json::{json_text, round_trip};
-use crate::remote_engine::{read, Hub, JsObject, Memory, Subscription};
+use crate::remote_engine::{read, Hub, JsObject, LiveLimits, Memory, Subscription};
 use serde_json::json;
 
 #[test]
@@ -260,4 +260,61 @@ fn a_huge_client_windows_map_reads_in_linear_time() {
         "took {:?}",
         started.elapsed()
     );
+}
+
+#[test]
+fn a_stalled_subscriber_loses_events_as_a_gap_not_memory() {
+    // #19: a full queue drops events but still numbers them, so the next one shows the gap.
+    let hub: &'static Hub = Box::leak(Box::new(Hub::with_limits(LiveLimits {
+        queue: 2,
+        ..LiveLimits::default()
+    })));
+    let todo = json!([{ "entity": "Todo", "id": "t1", "fields": ["title"] }]);
+    let mut stalled = live(hub, 0.0, todo, None);
+    for _ in 0..3 {
+        hub.deleted("Todo", "t1");
+    }
+    let cursors = |events: Vec<serde_json::Value>| {
+        events
+            .iter()
+            .map(|event| event["cursor"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(cursors(drain(&mut stalled)), [json!(1), json!(2)]);
+    hub.deleted("Todo", "t1");
+    assert_eq!(cursors(drain(&mut stalled)), [json!(4)]);
+}
+
+#[test]
+fn subscriptions_are_capped_in_total_and_per_principal() {
+    let hub: &'static Hub = Box::leak(Box::new(Hub::with_limits(LiveLimits {
+        queue: 8,
+        subscriptions: 3,
+        per_principal: 1,
+    })));
+    let todo = json!([{ "entity": "Todo", "id": "t1", "fields": ["title"] }]);
+    let subscribe = |principal: Option<u64>| {
+        hub.subscribe(
+            &json!({ "version": 4, "requirements": todo, "after": 0 }),
+            principal,
+        )
+    };
+    let first = subscribe(Some(1)).unwrap();
+    // The same principal again is over its own cap; another principal and anonymous are not.
+    let refused = subscribe(Some(1)).err().unwrap();
+    assert_eq!(
+        refused["message"],
+        json!("Too many live subscriptions for this principal")
+    );
+    let other = subscribe(Some(2)).unwrap();
+    let anonymous = subscribe(None).unwrap();
+    // Three subscriptions fill the server's cap.
+    assert_eq!(
+        subscribe(None).err().unwrap()["message"],
+        json!("Too many live subscriptions")
+    );
+    // Ending one frees its place.
+    drop(first);
+    assert!(subscribe(Some(1)).is_ok());
+    drop((other, anonymous));
 }

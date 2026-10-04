@@ -95,7 +95,7 @@ These block many items below.
 - Live design debts ([review](research/remote-live.md#review-2026-10-03)):
   - LR-5: a separate `LiveHub` node or requirement;
   - LR-6: check signal entity and field names against the domain;
-  - LR-8: a subscriber cap;
+  - LR-8 (done, #19): a subscriber cap;
   - LR-9: `ryu-js` cursor text;
   - LR-10: timing-robust tests;
   - LR-11: lower literal field lists directly;
@@ -322,7 +322,6 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 
 Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the key claims re-verified. Recommended order: #16, #17, #18 (anyone can stall or crash the server), then #21, #22, #23, #24 (SSR security and parity), #19, #20, then correctness, performance and design. The native-only snapshot race is a comment on [#8](https://github.com/doeixd/reffect/issues/8).
 
-- [#19](https://github.com/doeixd/reffect/issues/19): bounded Live queues and a subscription cap (LR-8)
 - [#23](https://github.com/doeixd/reffect/issues/23): SSR: refuse nestings upstream refuses
 - [#26](https://github.com/doeixd/reffect/issues/26): Remote/SQL data correctness gaps
 - [#27](https://github.com/doeixd/reffect/issues/27): RPC JSON mode: invalid UTF-8 and BOM bodies

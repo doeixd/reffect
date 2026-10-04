@@ -1289,18 +1289,37 @@ struct Subscriber {
     id: u64,
     selected: Ordered<Selected>,
     principal: Option<u64>,
-    queue: tokio::sync::mpsc::UnboundedSender<Value>,
+    queue: tokio::sync::mpsc::Sender<Value>,
     cursor: Mutex<f64>,
+}
+/// Bounds on the hub (#19; upstream's liveHub has none). A subscriber that stops reading loses
+/// events past `queue`; their cursors are still numbered, so its next event shows a gap and the
+/// client resyncs (LIVE-007). `per_principal` bounds each authenticated principal only.
+#[derive(Clone, Copy, Debug)]
+pub struct LiveLimits {
+    pub queue: usize,
+    pub subscriptions: usize,
+    pub per_principal: usize,
+}
+impl Default for LiveLimits {
+    fn default() -> Self {
+        LiveLimits {
+            queue: 1024,
+            subscriptions: 10_000,
+            per_principal: 64,
+        }
+    }
 }
 /// The hub's subscribers; `changed` and `deleted` are signalled by mutations (LIVE-001).
 #[derive(Default)]
 pub struct Hub {
     next: std::sync::atomic::AtomicU64,
     subscribers: Mutex<Vec<Arc<Subscriber>>>,
+    limits: LiveLimits,
 }
 /// One live stream: its events, and a guard that unsubscribes when dropped (`Stream.ensuring`).
 pub struct Subscription {
-    pub events: tokio::sync::mpsc::UnboundedReceiver<Value>,
+    pub events: tokio::sync::mpsc::Receiver<Value>,
     pub guard: Unsubscribe,
 }
 pub struct Unsubscribe {
@@ -1312,19 +1331,22 @@ impl Drop for Unsubscribe {
         if let Some(hub) = self.hub {
             let mut subscribers = hub.lock();
             subscribers.retain(|subscriber| subscriber.id != self.id);
-            trace("unsubscribed", subscribers.len());
+            trace("unsubscribed", Some(subscribers.len()));
         }
     }
 }
 /// With REFFECT_LIVE_TRACE set, each subscribe and unsubscribe writes a stderr record with
 /// the hub's subscriber count, so tests and operators can see subscriptions end (LR-2).
-fn trace(event: &str, subscribers: usize) {
+fn trace(event: &str, subscribers: Option<usize>) {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ENABLED.get_or_init(|| std::env::var_os("REFFECT_LIVE_TRACE").is_some()) {
-        eprintln!(
-            "{}",
-            json!({ "schema": "reffect.live@1", "event": event, "subscribers": subscribers })
-        );
+        let record = match subscribers {
+            Some(subscribers) => {
+                json!({ "schema": "reffect.live@1", "event": event, "subscribers": subscribers })
+            }
+            None => json!({ "schema": "reffect.live@1", "event": event }),
+        };
+        eprintln!("{}", record);
     }
 }
 fn live_error(message: String) -> Value {
@@ -1335,13 +1357,19 @@ pub fn no_live(payload: &Value) -> Result<Subscription, Value> {
     if let Some(mismatch) = protocol_mismatch(payload) {
         return Err(mismatch);
     }
-    let (_, events) = tokio::sync::mpsc::unbounded_channel();
+    let (_, events) = tokio::sync::mpsc::channel(1);
     Ok(Subscription {
         events,
         guard: Unsubscribe { hub: None, id: 0 },
     })
 }
 impl Hub {
+    pub fn with_limits(limits: LiveLimits) -> Hub {
+        Hub {
+            limits,
+            ..Hub::default()
+        }
+    }
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Subscriber>>> {
         self.subscribers
             .lock()
@@ -1405,9 +1433,23 @@ impl Hub {
             }
         }
         let after = payload.get("after").map(number).unwrap_or(f64::NAN);
-        let (queue, events) = tokio::sync::mpsc::unbounded_channel();
+        let (queue, events) = tokio::sync::mpsc::channel(self.limits.queue.max(1));
         let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut subscribers = self.lock();
+        if subscribers.len() >= self.limits.subscriptions {
+            return Err(live_error("Too many live subscriptions".to_string()));
+        }
+        if principal.is_some()
+            && subscribers
+                .iter()
+                .filter(|subscriber| subscriber.principal == principal)
+                .count()
+                >= self.limits.per_principal
+        {
+            return Err(live_error(
+                "Too many live subscriptions for this principal".to_string(),
+            ));
+        }
         subscribers.push(Arc::new(Subscriber {
             id,
             selected,
@@ -1415,7 +1457,7 @@ impl Hub {
             queue,
             cursor: Mutex::new(after),
         }));
-        trace("subscribed", subscribers.len());
+        trace("subscribed", Some(subscribers.len()));
         drop(subscribers);
         Ok(Subscription {
             events,
@@ -1455,7 +1497,13 @@ impl Hub {
             change.insert("values".to_string(), values);
             change.insert("changed".to_string(), json!(changed));
         }
-        let _ = subscriber.queue.send(Value::Object(change));
+        // A full queue drops the event after its cursor was numbered: the client's next event
+        // shows the gap (#19). A closed one belongs to a stream that already ended.
+        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+            subscriber.queue.try_send(Value::Object(change))
+        {
+            trace("overflow", None);
+        }
     }
     /// `hub.changed(ref, fields)`: each subscriber selecting the row gets the fields it
     /// selected, re-read once per principal and window group, authorized under that principal.

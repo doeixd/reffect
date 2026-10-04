@@ -131,7 +131,7 @@ impl ChunkSource for tokio::sync::mpsc::Receiver<Vec<Value>> {
 /// Queued events, one wait then everything queued, as ` +
       "`Stream.fromQueue`" +
       String.raw`'s takeAll.
-impl ChunkSource for tokio::sync::mpsc::UnboundedReceiver<Value> {
+impl ChunkSource for tokio::sync::mpsc::Receiver<Value> {
     async fn next_chunk(&mut self) -> Option<Vec<Value>> {
         let mut values = vec![self.recv().await?];
         while let Ok(next) = self.try_recv() { values.push(next); }

@@ -95,6 +95,16 @@ export interface NativeRemoteOptions {
    * `live`; off by default, where the hub matches `RemoteServer.liveHub`.
    */
   readonly liveSnapshot?: boolean;
+  /**
+   * Bounds on the live hub (#19; upstream's has none): events each subscriber may have queued
+   * (beyond it they are dropped as a cursor gap the client resyncs from), subscriptions in all,
+   * and subscriptions per authenticated principal. Defaults: 1024, 10000, 64.
+   */
+  readonly liveLimits?: {
+    readonly queue?: number;
+    readonly subscriptions?: number;
+    readonly perPrincipal?: number;
+  };
   /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
   readonly serialization?: "json" | "ndjson";
   /**
@@ -529,6 +539,13 @@ const selectedFields = (request: unknown): ReadonlyArray<string> | undefined => 
     ? fields
     : undefined;
 };
+/** A positive live hub bound, as a Rust integer literal. */
+const liveLimit = (value: number | undefined, fallback: number, path: string): string => {
+  const limit = value ?? fallback;
+  if (!Number.isSafeInteger(limit) || limit < 1)
+    throw unsupported(`liveLimits.${path}`, "Live limits are positive safe integers");
+  return String(limit);
+};
 /** Whether a selection asks for related entities, which a first-pass plan cannot follow. */
 const hasRelations = (selection: unknown): boolean =>
   typeof selection === "object" &&
@@ -676,6 +693,13 @@ const compile = <Rpcs extends Rpc.Any>(
           throw unsupported("live", 'A live hub needs serialization: "ndjson"');
         if (options.liveSnapshot && !options.live)
           throw unsupported("liveSnapshot", "A snapshot needs the live hub (live: true)");
+        if (options.liveLimits !== undefined) {
+          if (!options.live)
+            throw unsupported("liveLimits", "Live limits need the live hub (live: true)");
+          liveLimit(options.liveLimits.queue, 1024, "queue");
+          liveLimit(options.liveLimits.subscriptions, 10000, "subscriptions");
+          liveLimit(options.liveLimits.perPrincipal, 64, "perPrincipal");
+        }
         const authorize = Object.entries(options.authorize ?? {});
         if (authorize.length && !options.auth)
           throw unsupported("authorize", "authorize needs an authenticated principal (auth)");
@@ -974,7 +998,9 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
           ...(options.live
             ? [
                 `static REMOTE_HUB: std::sync::OnceLock<remote_engine::Hub> = std::sync::OnceLock::new();
-fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }${
+fn remote_hub() -> &'static remote_engine::Hub {
+    REMOTE_HUB.get_or_init(|| remote_engine::Hub::with_limits(remote_engine::LiveLimits { queue: ${liveLimit(options.liveLimits?.queue, 1024, "queue")}, subscriptions: ${liveLimit(options.liveLimits?.subscriptions, 10000, "subscriptions")}, per_principal: ${liveLimit(options.liveLimits?.perPrincipal, 64, "perPrincipal")} }))
+}${
                   options.liveSnapshot
                     ? `
 /// LIVE-015: subscribe, then tell a fresh stream the rows it selects as they are now.
