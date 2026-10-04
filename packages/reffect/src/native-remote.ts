@@ -19,7 +19,7 @@ import {
 } from "./kernel.ts";
 import { compileServer, NativeRpc } from "./native-rpc.ts";
 import { RpcBearer } from "./rpc-auth.ts";
-import type { RpcArtifact, WireValue } from "./native-rpc.ts";
+import type { CompileOptions, RpcArtifact, WireValue } from "./native-rpc.ts";
 import { ArrayIR, Literals, Struct, TaggedUnion, optionalKey } from "./records.ts";
 import { SchemaIR, StableStringify } from "./schema-json.ts";
 import { planQuery, storageOf } from "./sql-plan.ts";
@@ -90,6 +90,16 @@ export interface NativeRemoteOptions {
   readonly live?: boolean;
   /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
   readonly serialization?: "json" | "ndjson";
+  /**
+   * Server-rendered pages (8A) whose first screen holds Remote data (M9-3 step 2a). `reads` are the
+   * requests `planReads` derives from the page's `Data.satisfy`. Each request runs against this
+   * server's engine under the page request's principal. The render takes the URL and
+   * `{ now, exchanges }` (`RemoteResume`'s encoding), which it carries in its Flags for the
+   * browser's `replay`.
+   */
+  readonly pages?: NonNullable<CompileOptions["pages"]> & {
+    readonly reads?: ReadonlyArray<{ readonly _tag: "Query" | "Read"; readonly request: unknown }>;
+  };
 }
 
 const unsupported = (path: string, message: string) =>
@@ -477,6 +487,81 @@ pub use std::cmp::Ordering;
 pub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }
 }`;
 };
+/** NativeRpc's page options: the reads are NativeRemote's to run. */
+const withoutReads = (
+  pages: NonNullable<NativeRemoteOptions["pages"]>,
+): NonNullable<CompileOptions["pages"]> => ({
+  template: pages.template,
+  render: pages.render,
+  ...(pages.containerId === undefined ? {} : { containerId: pages.containerId }),
+  ...(pages.origin === undefined ? {} : { origin: pages.origin }),
+});
+/** Whether a selection asks for related entities, which a first-pass plan cannot follow. */
+const hasRelations = (selection: unknown): boolean =>
+  typeof selection === "object" &&
+  selection !== null &&
+  "relations" in selection &&
+  typeof selection.relations === "object" &&
+  selection.relations !== null &&
+  Object.keys(selection.relations).length > 0;
+/**
+ * The page's data step (M9-3 step 2a): each planned request run against the engine as the RPC
+ * handlers run it, recorded with its answer. A server whose sources authorize needs the page's
+ * principal, so a page request without one is refused (401) rather than read unauthorized.
+ */
+const pageReads = (
+  reads: ReadonlyArray<{ readonly _tag: "Query" | "Read"; readonly request: unknown }>,
+  domain: RemoteDomain,
+  source: string,
+  authenticates: boolean,
+): string => {
+  const planned = reads.map((read, i) => {
+    const path = `pages.reads[${i}]`;
+    const request = read.request;
+    if (typeof request !== "object" || request === null)
+      throw unsupported(path, "A planned read carries its wire request");
+    if (read._tag === "Query") {
+      const query = "query" in request ? request.query : undefined;
+      if (typeof query !== "string" || !domain.registry.queries.has(query))
+        throw unsupported(path, "The query is one of the domain's");
+      if ("select" in request && hasRelations(request.select))
+        throw unsupported(path, "Page reads select no relations yet (M9-3)");
+    } else {
+      const requests = "requests" in request ? request.requests : undefined;
+      if (!Array.isArray(requests)) throw unsupported(path, "A planned read is a ReadBatch");
+      for (const requirement of requests) {
+        const entity =
+          typeof requirement === "object" && requirement !== null && "entity" in requirement
+            ? requirement.entity
+            : undefined;
+        if (typeof entity !== "string" || !domain.registry.entities.has(entity))
+          throw unsupported(path, "The read's entities are the domain's");
+        if (hasRelations(requirement))
+          throw unsupported(path, "Page reads select no relations yet (M9-3)");
+      }
+    }
+    return `(${Rs.stringLiteral(read._tag).text}, ${Rs.stringLiteral(JSON.stringify(request)).text})`;
+  });
+  return `async {
+        static REMOTE_PAGE_READS: &[(&str, &str)] = &[${planned.join(", ")}];
+        ${authenticates ? "if principal.is_none() { return Err(StatusCode::UNAUTHORIZED); }" : ""}
+        let authorize = remote_authorize(principal);
+        let mut exchanges = Vec::with_capacity(REMOTE_PAGE_READS.len());
+        for (tag, request) in REMOTE_PAGE_READS {
+            let request: Value = serde_json::from_str(request).expect("planned while compiling");
+            let answer = if *tag == "Query" { remote_engine::query(${source}, &authorize, &request).await } else { remote_engine::read(${source}, &authorize, &request).await };
+            match answer {
+                Ok(answer) => exchanges.push(json!({ "_tag": tag, "request": request, "answer": answer })),
+                Err(error) => {
+                    eprintln!("{}", json!({ "schema": "reffect.ssr.page@1", "outcome": "read-failure", "error": error }));
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            }
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0);
+        Ok::<Value, StatusCode>(json!({ "now": now, "exchanges": exchanges }))
+    }.await`;
+};
 /** The Rust expression of the hub service each session gets (LIVE-008). */
 const REMOTE_LIVE = "std::sync::Arc::new(RemoteLive)";
 const compile = <Rpcs extends Rpc.Any>(
@@ -743,10 +828,24 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
       procedures[QUERY] = {
         call: `remote_engine::query(${prepared.source}, &remote_authorize(context.principal), payload).await`,
       };
+    const pageData = yield* Effect.try({
+      try: () =>
+        options.pages?.reads === undefined
+          ? undefined
+          : pageReads(
+              options.pages.reads,
+              options.domain,
+              prepared.source,
+              prepared.authorize.length > 0,
+            ),
+      catch: (cause) =>
+        cause instanceof CompileError ? cause : unsupported("pages.reads", String(cause)),
+    });
     return yield* compileServer(
       group,
       {},
       {
+        ...(options.pages ? { pages: withoutReads(options.pages) } : {}),
         limits: { bodyBytes: 4 * 1024 * 1024, ...options.limits },
         ...(options.auth ? { auth: options.auth } : {}),
         ...(options.serialization ? { serialization: options.serialization } : {}),
@@ -798,6 +897,7 @@ impl reffect_generated::LiveHub for RemoteLive {
           ]),
         ),
         store: prepared.store,
+        ...(pageData ? { pageData } : {}),
         dependencies: [
           'ryu-js = { version = "=1.0.3", default-features = false }\n',
           ...(prepared.backend !== "sql"

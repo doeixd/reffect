@@ -107,3 +107,52 @@ export const replay = (exchanges: ReadonlyArray<RemoteExchange>): Layer.Layer<Re
     live: () => Stream.fail(new RemoteLiveError({ message: "Remote resume: replay is not live" })),
   });
 };
+
+/** A request a page's reads make, planned while compiling (M9-3 step 2a), as wire JSON. */
+export const PlannedRead = Schema.Union([
+  Schema.TaggedStruct("Query", { request: QueryRequest }),
+  Schema.TaggedStruct("Read", { request: ReadBatch }),
+]);
+export type PlannedRead = typeof PlannedRead.Type;
+
+/**
+ * The requests `effect` (a page's `Data.satisfy`) makes, in order, planned without data: every
+ * query answers an empty page and every read nothing, which upstream settles as missing. This is
+ * the first pass only. A read that appears only once another has answered (a relation, or a
+ * Surface waiting on another's data) is not planned, so declared reads must not depend on data;
+ * the browser's replay then fails with its typed error rather than fetching.
+ */
+export const planReads = <A, E>(
+  effect: Effect.Effect<A, E, RemoteClient>,
+): ReadonlyArray<PlannedRead> => {
+  const planned: Array<PlannedRead> = [];
+  Effect.runSync(
+    Effect.exit(
+      effect.pipe(
+        Effect.provide(
+          Layer.succeed(RemoteClient, {
+            query: (request) =>
+              Effect.sync(() => {
+                planned.push({ _tag: "Query", request });
+                return {
+                  edges: [],
+                  start: { _tag: "Terminal" as const },
+                  end: { _tag: "Terminal" as const },
+                  entities: [],
+                };
+              }),
+            read: (request) =>
+              Effect.sync(() => {
+                planned.push({ _tag: "Read", request });
+                return { entities: [], settled: [] };
+              }),
+            mutate: () =>
+              Effect.fail(new RemoteMutationError({ message: "Planning reads does not mutate" })),
+            live: () => Stream.fail(new RemoteLiveError({ message: "Planning reads is not live" })),
+          }),
+        ),
+      ),
+    ),
+  );
+  return planned;
+};

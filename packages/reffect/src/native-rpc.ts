@@ -928,6 +928,12 @@ export interface RpcRuntime {
      */
     readonly live?: string;
   };
+  /**
+   * What a page reads before it renders (M9-3 step 2a): an async Rust expression over
+   * `principal: Option<u64>`, of type `Result<Value, StatusCode>`, given to a page whose
+   * render takes the URL and an Unknown.
+   */
+  readonly pageData?: string;
   /** The ported engines these procedures run, listed in the artifact and version-checked. */
   readonly ported?: readonly PortedRuntime[];
   /** Pure R functions compiled into the program, callable as `reffect_generated::r_<name>`. */
@@ -937,7 +943,7 @@ export interface RpcRuntime {
   readonly dependencies: readonly string[];
   readonly crates: readonly string[];
 }
-type CompileOptions = {
+export type CompileOptions = {
   readonly path?: string;
   readonly auth?: RpcBearer;
   readonly failureFrames?: FailureFramePolicy;
@@ -960,8 +966,14 @@ type CompileOptions = {
    */
   readonly pages?: {
     readonly template: string;
-    /** No input, or the request URL: its target resolved against `origin` as WHATWG resolves it. */
-    readonly render: Fn<readonly [], unknown> | Fn<readonly [IRType<string>], unknown>;
+    /**
+     * No input, or the request URL: its target resolved against `origin` as WHATWG resolves it.
+     * A host that reads data for pages (NativeRemote) also passes that data as an Unknown.
+     */
+    readonly render:
+      | Fn<readonly [], unknown>
+      | Fn<readonly [IRType<string>], unknown>
+      | Fn<readonly [IRType<string>, IRType<unknown>], unknown>;
     readonly containerId?: string;
     /** The origin page URLs are resolved against; never the untrusted Host header. */
     readonly origin?: string;
@@ -1624,19 +1636,27 @@ export const compileServer = (
               readonly kind: Codec;
               readonly parts: ReadonlyArray<TemplatePart>;
               readonly takesUrl: boolean;
+              readonly takesData: boolean;
               readonly origin: string;
             }
           | undefined;
         if (options.pages) {
           const { render, template, containerId, origin = "http://localhost" } = options.pages;
+          const takesData = runtime?.pageData !== undefined;
           if (
             !(render instanceof Fn) ||
-            render.input.length > 1 ||
-            (render.input.length === 1 && !IRType.same(render.input[0]!, StringType))
+            (takesData
+              ? render.input.length !== 2 ||
+                !IRType.same(render.input[0]!, StringType) ||
+                !IRType.same(render.input[1]!, UnknownType)
+              : render.input.length > 1 ||
+                (render.input.length === 1 && !IRType.same(render.input[0]!, StringType)))
           )
             throw unsupported(
               "pages.render",
-              "The page is a pure R function of nothing or of the request URL (String)",
+              takesData
+                ? "The page is a pure R function of the request URL (String) and its data (Unknown)"
+                : "The page is a pure R function of nothing or of the request URL (String)",
             );
           let base: URL;
           try {
@@ -1658,7 +1678,8 @@ export const compileServer = (
           pages = {
             kind,
             parts: splitTemplate(template, containerId),
-            takesUrl: render.input.length === 1,
+            takesUrl: render.input.length >= 1,
+            takesData,
             origin: base.href,
           };
         }
@@ -1906,7 +1927,7 @@ ${
       : "";
     const authRuntime = prepared.auth
       ? rpcAuthRuntime
-      : "#[derive(Clone)] struct RuntimeState; fn load_state() -> Result<RuntimeState, &'static str> { Ok(RuntimeState) }";
+      : "#[derive(Clone)] struct RuntimeState; fn load_state() -> Result<RuntimeState, &'static str> { Ok(RuntimeState) }\n#[allow(dead_code)]\nfn page_principal(_: &HeaderMap, _: &RuntimeState) -> Option<u64> { None }";
     const main = Rs.itemsText(
       [
         Rs.constItem(Rs.ident("RPC_PATH"), Rs.strRefType(), Rs.stringLiteral(prepared.path)),
@@ -1942,9 +1963,14 @@ ${
                     Rs.pathCall(
                       [Rs.ident("reffect_generated")],
                       Rs.ident("r_ssr_page"),
-                      prepared.pages.takesUrl ? [Rs.verbatimExpr("href.clone()")] : [],
+                      prepared.pages.takesData
+                        ? [Rs.verbatimExpr("href.clone()"), Rs.verbatimExpr("data")]
+                        : prepared.pages.takesUrl
+                          ? [Rs.verbatimExpr("href.clone()")]
+                          : [],
                     ),
                   ).text,
+                  prepared.pages.takesData ? runtime!.pageData : undefined,
                 ),
               ),
             ]

@@ -88,11 +88,16 @@ export const splitTemplate = (
   return Object.freeze(parts);
 };
 
-/** The Rust host: `handleRequest` around `render`, an expression evaluating to the encoded page. */
+/**
+ * The Rust host: `handleRequest` around `render`, an expression evaluating to the encoded page.
+ * `data`, when given, is an async expression over the request's `principal` yielding the page's
+ * data, `Result<Value, StatusCode>`; `render` reads it as `data`.
+ */
 export const pageRuntime = (
   parts: ReadonlyArray<TemplatePart>,
   origin: string,
   render: string,
+  data?: string,
 ): string => {
   const splice = parts
     .map((part) =>
@@ -235,7 +240,7 @@ mod ssr_host {
     String.raw` with ` +
     "`toResponse`" +
     String.raw`: the page, an asset 404, a negotiated 404 or a refusal.
-async fn ssr_page(method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap) -> Response {
+async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap) -> Response {
     use axum::http::header;
     let empty = |status: StatusCode, extra: &[(&'static str, String)]| {
         let mut response = Response::new(axum::body::Body::empty());
@@ -265,6 +270,14 @@ async fn ssr_page(method: axum::http::Method, uri: axum::http::Uri, headers: Hea
     // The request URL as upstream's Request has it: the target resolved against the origin.
     #[allow(unused_variables)]
     let href: String = url::Url::parse(${JSON.stringify(origin)}).and_then(|base| base.join(target)).map(|url| url.to_string()).unwrap_or_default();
+    ${
+      data === undefined
+        ? "let _ = &state;"
+        : `// The page's data, read as the request's principal may read it (M9-3 step 2a).
+    let principal = page_principal(&headers, &state);
+    #[allow(unused_variables)]
+    let data: Value = match ${data} { Ok(data) => data, Err(status) => return empty(status, &[]) };`
+    }
     // The page's own render failure, or a title the template cannot hold, is a server error.
     let page: Value = ${render};
     let (Some(html), Some(raw_title)) = (page["success"]["html"].as_str(), page["success"]["title"].as_str()) else {

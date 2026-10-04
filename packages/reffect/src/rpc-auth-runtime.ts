@@ -48,4 +48,9 @@ fn authenticate(headers: &HeaderMap, message: &Value, state: &RuntimeState) -> O
     }
     principal
 }
+/// A page request's principal: its own Authorization header only, as a page has no envelope.
+#[allow(dead_code)]
+fn page_principal(headers: &HeaderMap, state: &RuntimeState) -> Option<u64> {
+    authenticate(headers, &json!({ "headers": [] }), state)
+}
 `;

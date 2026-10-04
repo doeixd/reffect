@@ -8,7 +8,9 @@ import { Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, CompileError, NativeRemote, NativeRpc, R, Reference } from "../src/index.ts";
+import type { Expr } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
+import { BUILD_ID, Page, todoDocument } from "./fixtures/ssr-todos.ts";
 import { successValue } from "./raw-json.ts";
 import { memoryQueryRun, memoryRead, memoryTables } from "./fixtures/foldkit-remote-memory.ts";
 
@@ -267,6 +269,28 @@ test("authorize needs auth, matching functions and protected reads", async () =>
   expect(claim.principal).toBe(true);
 });
 
+// M9-3 step 2a: a page's reads run under the page request's own principal.
+const pageRead = {
+  version: 4,
+  requests: [{ entity: "Project", id: "p1", fields: ["name", "budget"] }],
+};
+const PageTodo = R.Struct({ id: R.String, title: R.String, done: R.Bool });
+const page = R.fn([R.String, R.Unknown], Page, (url: Expr<string>, remote: Expr<unknown>) =>
+  R.Html.renderToString(
+    {
+      init: () =>
+        R.Struct({ heading: R.String, todos: R.Array(PageTodo) }).make({
+          heading: url,
+          todos: R.Array.empty(PageTodo),
+        }),
+      view: todoDocument,
+    },
+    { buildId: BUILD_ID, flags: R.Struct({ remote: R.Unknown }).make({ remote }) },
+  ),
+);
+const pageTemplate =
+  '<!doctype html><html><head><title>t</title></head><body><div id="root"></div></body></html>';
+
 test(
   "native field authorization matches RemoteServer.handlers bound to each principal",
   async () => {
@@ -289,6 +313,11 @@ test(
             auth,
             authorize: { User: authorizeUser, Project: authorizeProject },
             mutations: [claim],
+            pages: {
+              template: pageTemplate,
+              render: page,
+              reads: [{ _tag: "Read", request: pageRead }],
+            },
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.fetch(directory);
@@ -339,6 +368,31 @@ test(
           expect(answer("member-token: claim")).toContain('"admin":false');
           expect(answer("guest-token: claim")).toContain("Guests cannot claim");
           expect(answer("missing token, claim")).toContain("Unauthorized");
+
+          // Pages: no bearer, no read; with one, the read RPC's own answer for that principal.
+          const getPage = (token?: string) =>
+            Effect.promise(async () => {
+              const response = await fetch(`http://${address}/`, {
+                headers: token ? { authorization: `Bearer ${token}` } : {},
+              });
+              return { status: response.status, body: await response.text() };
+            });
+          expect((yield* getPage()).status).toBe(401);
+          expect((yield* getPage("not-a-token")).status).toBe(401);
+          const pageAnswers: Array<string> = [];
+          for (const token of ["admin-token", "member-token"]) {
+            const rendered = yield* getPage(token);
+            expect(rendered.status, token).toBe(200);
+            const payload = /data-foldkit-flags="app">(.*?)<\/script>/s.exec(rendered.body);
+            const recorded = JSON.parse(payload?.[1] ?? "null").remote.exchanges[0];
+            expect(recorded.request, token).toStrictEqual(pageRead);
+            const rpc = yield* post(read(token, "Project", "p1", ["name", "budget"]));
+            expect(recorded.answer, token).toStrictEqual(JSON.parse(rpc.body)[0].exit.value);
+            pageAnswers.push(JSON.stringify(recorded.answer));
+          }
+          // The member's page is denied the budget the admin's shows.
+          expect(pageAnswers[0]).toContain('"budget":"10"');
+          expect(pageAnswers[1]).not.toContain('"budget":"10"');
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );
