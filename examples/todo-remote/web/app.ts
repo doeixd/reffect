@@ -1,9 +1,11 @@
 /**
  * The todo list as an ordinary Foldkit application: Remote in the Model, a list read made active
- * while the app runs, and the three mutations started from `update`. Nothing in it knows that the
- * server is native.
+ * while the app runs, and the three mutations started from `update`. The server renders its first
+ * screen and hands over the Remote exchanges it read, which `init` replays, so the client starts
+ * with the list instead of fetching it. Nothing in it knows that the server is native.
  */
-import { Match, Option, Schema } from "effect";
+import { Effect, Exit, Match, Option, Schema } from "effect";
+import * as Command from "foldkit/command";
 import type { Document, HtmlBuilder } from "foldkit/html";
 import { defineMessageUnion } from "foldkit/message";
 import * as Subscription from "foldkit/subscription";
@@ -11,15 +13,20 @@ import type * as Update from "foldkit/update";
 import { Entity } from "foldkit-entity";
 import { Remote, type RemoteClient } from "foldkit-remote";
 import { Projection, Surface } from "foldkit-surface";
+import { RemoteResume, replay } from "../../../packages/reffect/src/remote-resume.ts";
 import { AddTodo, DeleteTodo, Todo, Todos, ToggleTodo } from "../domain.ts";
 
-export const Flags = Schema.Struct({ session: Schema.String });
+/** The deployment the server's render and this client share. */
+export const BUILD_ID = "todo-remote-1";
+/** What the server's render hands over: the Remote exchanges it read. */
+export const Flags = Schema.Struct({ remote: RemoteResume });
 export type Flags = typeof Flags.Type;
 
 export const Model = Schema.Struct({
   remote: Remote.Model,
   draft: Schema.String,
-  // New ids are `${session}-${created}`: unique per tab without randomness in `update`.
+  // New ids are `${session}-${created}`: unique per tab without randomness in `update`. The
+  // session arrives from a Command after start, so a server render never needs one.
   session: Schema.String,
   created: Schema.Number,
 });
@@ -31,6 +38,7 @@ export const Message = defineMessageUnion({
   SubmittedDraft: {},
   ClickedToggle: { id: Schema.String },
   ClickedDelete: { id: Schema.String },
+  GotSession: { session: Schema.String },
 });
 export type Message = typeof Message.Type;
 
@@ -43,7 +51,7 @@ export const Data = Remote.make({
 });
 const foldData = Remote.fold(Data, (message) => Message.GotRemoteMessage({ message }));
 
-const list = Data.query(
+export const list = Data.query(
   Todos,
   {},
   {
@@ -73,9 +81,27 @@ const liveTodos = Data.active("LiveTodos", (model: Model) =>
   ),
 );
 
-export const init = (flags: Flags): Update.Return<Model, Message, RemoteClient> => ({
-  model: { remote: Remote.initial, draft: "", session: flags.session, created: 0 },
+export const initial: Model = { remote: Remote.initial, draft: "", session: "", created: 0 };
+const MakeSession = Command.define("MakeSession", {
+  messages: [Message.GotSession],
+  execute: Effect.sync(() => Message.GotSession({ session: crypto.randomUUID().slice(0, 8) })),
 });
+/**
+ * Replays the server's exchanges through `Data.satisfy`, as the server's own read did, so the
+ * first render matches the server's. Should a request be missing, the app starts empty and its
+ * read entry fetches as usual.
+ */
+export const init = (flags: Flags): Update.Return<Model, Message, RemoteClient> => {
+  const resumed = Effect.runSyncExit(
+    Data.satisfy(initial, { todos }, { now: () => flags.remote.now }).pipe(
+      Effect.provide(replay(flags.remote.exchanges)),
+    ),
+  );
+  return {
+    model: Exit.isSuccess(resumed) ? resumed.value : initial,
+    commands: [MakeSession()],
+  };
+};
 
 export const update = (
   model: Model,
@@ -84,9 +110,10 @@ export const update = (
   Message.match(message, {
     GotRemoteMessage: ({ message }) => foldData(model, message),
     ChangedDraft: ({ value }) => ({ model: { ...model, draft: value } }),
+    GotSession: ({ session }) => ({ model: { ...model, session } }),
     SubmittedDraft: () => {
       const title = model.draft.trim();
-      if (title === "") return { model };
+      if (title === "" || model.session === "") return { model };
       const id = `${model.session}-${model.created + 1}`;
       const started = foldData.mutate(model, AddTodo, { id, title });
       return {

@@ -1,13 +1,14 @@
 /**
- * Boots the app with a stock Effect RPC client for the published Remote contract. `/rpc` is the
- * same origin: the Vite dev server proxies it to the native server.
+ * Hydrates the native server's render with a stock Effect RPC client for the published Remote
+ * contract. `/rpc` and the page are the same origin: the Vite dev server proxies both to the
+ * native server.
  */
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { Runtime } from "foldkit";
 import { Remote, RemoteRpc } from "foldkit-remote";
-import { Flags, Message, Model, init, subscriptions, update, view } from "./app.ts";
+import { BUILD_ID, Flags, Message, Model, init, subscriptions, update, view } from "./app.ts";
 
 // Remote.clientLayer takes the stock client; a transport failure becomes a Remote error.
 const RemoteLive = Layer.unwrap(
@@ -35,6 +36,5 @@ const application = Runtime.makeApplication({
   devTools: { Message },
 });
 
-Runtime.run(application, {
-  flags: Effect.sync(() => ({ session: crypto.randomUUID().slice(0, 8) })),
-});
+// The native server rendered the first screen; adopt it and start from its Flags.
+Runtime.hydrate(application, { buildId: BUILD_ID });

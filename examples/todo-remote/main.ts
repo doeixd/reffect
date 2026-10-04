@@ -32,6 +32,7 @@ import {
 import type { NativeRemoteMutation } from "../../packages/reffect/src/index.ts";
 import { AddTodo, Data, DeleteTodo, ToggleTodo, Todo, Todos, initial, rows } from "./domain.ts";
 import { addTodo, deleteTodo, mutations, toggleTodo } from "./sources.ts";
+import { page, reads, views } from "./page.ts";
 
 const list = Data.query(Todos, {}, { select: Entity.select(Todo, { title: true, done: true }) });
 
@@ -170,13 +171,16 @@ const startServer = (port: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-remote-" });
-    // Live streams need NDJSON: a JSON body would wait for a stream that never ends.
+    // Live streams need NDJSON: a JSON body would wait for a stream that never ends. The page is
+    // the browser app's first screen, rendered natively from the list it reads (M9-4).
+    const template = yield* fs.readFileString(`${import.meta.dirname}/web/index.html`);
     const artifact = yield* NativeRemote.compile(RemoteRpc, {
       domain: Data,
       rows,
       mutations,
       live: true,
       serialization: "ndjson",
+      pages: { template, render: page, reads, views },
     });
     const directory = yield* CargoApi.write(artifact, `${parent}/server`);
     yield* CargoApi.fetch(directory);
@@ -216,7 +220,9 @@ await Effect.runPromise(
     ? Effect.scoped(
         Effect.gen(function* () {
           const address = yield* startServer(process.argv[serve + 1] ?? "8787");
-          console.log(`native todo server listening on http://${address}/rpc (Ctrl-C stops it)`);
+          console.log(
+            `native todo server listening on http://${address} (page and /rpc; Ctrl-C stops it)`,
+          );
           return yield* Effect.never;
         }),
       ).pipe(Effect.provide(NodeServices.layer))
