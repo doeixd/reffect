@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-04 — Internal Deferred semantic-turn kernel
+
+- Continuing the recorded Deferred scheduling gate after syncing upstream SSR Remote record/replay through cfbb0b8. [Turn protocol](docs/research/deferred-turns.md) and [kernel preparation](docs/research/deferred-turn-prototype.md) record primary sources, a safe Rust prototype, alternatives and DTP-001–005 before source edits. The proposed internal adapter gates fixed-arity polling through an inline task-slot bank; semantic suspension acknowledges a waiter, while nested completion adapter Pending preserves the outer obligation.
+- Delivered an internal, currently unselected Rust turn-bank emitter and independent protocol fixtures. All seven official Effect callback traces match native debug/release; safely pinned nested routing, actual Tokio wake/watch/timer progress, complete broadcast under producer cancellation, mask experiments and 100-cycle request/registration reuse pass. This proves the internal protocol experiment, not generated Scope or public Deferred authoring.
+- Isolated bank construction/request/acknowledgement/drop uses zero allocations over 100 cycles. Linux Rust 1.98.1 layouts are bank 168 bytes (six slots), state 160 and request 24; measurement excludes executor/watch/trace/owner allocations. Ordinary artifacts do not select this emitter or gain context/payload fields. Root validation passes 5/5 across kernel and existing task admission/host tests (38.25s), strict TypeScript, formatting/lint and workspace builds.
+- TURN-009–011 record audited operation-accounting atoms and public Scheduler instrumentation. Large reference graphs do reach the 2048-operation automatic-yield threshold; full Scope/group/Deferred weights remain unproved. This, generated ownership/slot assignment, actual emitted masking and the authored independent-cancellation path remain public-module gates. The cooperative prototype retains task IDs instead of per-waiter Wakers.
+
 ## 2026-10-03 — Remote sync and Deferred scheduling gate
 
 - Rebased the fallible task kernel onto upstream through bfb07c0, preserving Remote Live, SSR rendering/hydration/page serving and the separately owned core plan. Resolved the lowerer overlap by retaining RemoteStore live/Get branches and the fallible Repeat projection. Independent integration review found no blocker; NativeRpc's explicit fallible-group refusal covers its live/streaming/page consumers. The synced kernel is published as 2679649.
