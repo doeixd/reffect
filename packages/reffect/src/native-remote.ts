@@ -506,8 +506,8 @@ const hasRelations = (selection: unknown): boolean =>
   Object.keys(selection.relations).length > 0;
 /**
  * The page's data step (M9-3 step 2a): each planned request run against the engine as the RPC
- * handlers run it, recorded with its answer. A server whose sources authorize needs the page's
- * principal, so a page request without one is refused (401) rather than read unauthorized.
+ * handlers run it, recorded with its answer. On a server with bearer auth a page needs its
+ * request's principal, so one without is refused (401) rather than read more openly than RPC.
  */
 const pageReads = (
   reads: ReadonlyArray<{ readonly _tag: "Query" | "Read"; readonly request: unknown }>,
@@ -836,7 +836,7 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
               options.pages.reads,
               options.domain,
               prepared.source,
-              prepared.authorize.length > 0,
+              options.auth !== undefined,
             ),
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("pages.reads", String(cause)),
