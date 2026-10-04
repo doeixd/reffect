@@ -319,3 +319,34 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 - [#13](https://github.com/doeixd/reffect/issues/13): one page plan object and one `PageRequest` input
 - [#14](https://github.com/doeixd/reffect/issues/14): a browser-safe `R.Html` entry, to write views once
 - [#15](https://github.com/doeixd/reffect/issues/15): resume size, nested `Struct.get` inference, `R.Remote.Page` DX
+
+## Full-codebase review issues (2026-10-03)
+
+Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the key claims re-verified. Recommended order: #16, #17, #18 (anyone can stall or crash the server), then #21, #22, #23, #24 (SSR security and parity), #19, #20, then correctness, performance and design. The native-only snapshot race is a comment on [#8](https://github.com/doeixd/reffect/issues/8).
+
+- [#16](https://github.com/doeixd/reffect/issues/16): RPC server: multi-thread runtime, read timeouts, connection cap
+- [#17](https://github.com/doeixd/reffect/issues/17): Remote engine: O(n²) client-sized maps (one request stalls the server)
+- [#18](https://github.com/doeixd/reffect/issues/18): store/Live failure in cleanup panics the server
+- [#19](https://github.com/doeixd/reffect/issues/19): bounded Live queues and a subscription cap (LR-8)
+- [#20](https://github.com/doeixd/reffect/issues/20): bearer auth: length-revealing compare, credentials left in the environment
+- [#21](https://github.com/doeixd/reffect/issues/21): SSR: request target can resolve the page URL to another host
+- [#22](https://github.com/doeixd/reffect/issues/22): SSR: refuse reserved `data-foldkit-*` names
+- [#23](https://github.com/doeixd/reffect/issues/23): SSR: refuse nestings upstream refuses
+- [#24](https://github.com/doeixd/reffect/issues/24): SSR: `refusedOn` unused (`li` `value`)
+- [#25](https://github.com/doeixd/reffect/issues/25): RPC: requests in one body run sequentially
+- [#26](https://github.com/doeixd/reffect/issues/26): Remote/SQL data correctness gaps
+- [#27](https://github.com/doeixd/reffect/issues/27): RPC JSON mode: invalid UTF-8 and BOM bodies
+- [#28](https://github.com/doeixd/reffect/issues/28): SSR page host parity gaps
+- [#29](https://github.com/doeixd/reffect/issues/29): compiler stack overflow on deep programs
+- [#30](https://github.com/doeixd/reffect/issues/30): 32-bit hashes in type ids
+- [#31](https://github.com/doeixd/reffect/issues/31): pipeline re-runs check/derive 7–8×
+- [#32](https://github.com/doeixd/reffect/issues/32): source maps cost about 4×
+- [#33](https://github.com/doeixd/reffect/issues/33): quadratic generated string concatenation
+- [#34](https://github.com/doeixd/reffect/issues/34): SSR render copies and quadratic class splitting
+- [#35](https://github.com/doeixd/reffect/issues/35): per-table memory query cache versions
+- [#36](https://github.com/doeixd/reffect/issues/36): one lowering descriptor per Implementation
+- [#37](https://github.com/doeixd/reffect/issues/37): remove string-patching; move the remaining runtimes into the crate
+- [#38](https://github.com/doeixd/reffect/issues/38): deduplicate runtime and compiler logic
+- [#39](https://github.com/doeixd/reffect/issues/39): process-wide registries
+- [#40](https://github.com/doeixd/reffect/issues/40): lone-surrogate literals, `unhex` panic, race masking check
+- [#41](https://github.com/doeixd/reffect/issues/41): reproducible builds: lockfile and `--locked`
