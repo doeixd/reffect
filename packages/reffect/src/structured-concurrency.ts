@@ -72,10 +72,14 @@ export const analyzeTaskGroups = (
           maySuspendAfterFailure(n.release),
         RefScope: (n) => maySuspendAfterFailure(n.body),
         Repeat: (n) => maySuspendAfterFailure(n.body),
-        Retry: (n) => maySuspendAfterFailure(n.body),
+        Retry: (n) =>
+          (scalar(n.body.error) && isAsyncComputation(n.body)) || maySuspendAfterFailure(n.body),
         Map: (n) => maySuspendAfterFailure(n.source),
         FlatMap: (n) => maySuspendAfterFailure(n.source) || maySuspendAfterFailure(n.body),
-        CatchAll: (n) => maySuspendAfterFailure(n.source) || maySuspendAfterFailure(n.body),
+        CatchAll: (n) =>
+          (scalar(n.source.error) && isAsyncComputation(n.source)) ||
+          maySuspendAfterFailure(n.source) ||
+          maySuspendAfterFailure(n.body),
         Match: (n) => maySuspendAfterFailure(n.onTrue) || maySuspendAfterFailure(n.onFalse),
         MatchTags: (n) => n.cases.some((value) => maySuspendAfterFailure(value.body)),
         ForEach: (n) => maySuspendAfterFailure(n.body),

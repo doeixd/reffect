@@ -134,3 +134,17 @@ test("masked acquisition and registered cleanup remain composite retention bound
     );
   }
 });
+
+test("ordinary composite recovery cannot hide an inner conservative scalar carrier", () => {
+  const Payload = R.Struct({ code: R.U64 });
+  const source = R.Effect.sleep(1).pipe(
+    R.Effect.andThen(R.Effect.fail(R.U64.literal(7n))),
+    R.Effect.catchAll((error) => R.Effect.fail(Payload.make({ code: error }))),
+  );
+  const changed = source.pipe(R.Effect.catchAll(() => R.Effect.void));
+  const analysis = analyzeTaskGroups(changed);
+  expect(analysis.requiresRichErrors).toBe(true);
+  expect(analysis.diagnostics).toContainEqual(
+    expect.objectContaining({ code: "TASK_GROUP_RETAINED_FAILURE" }),
+  );
+});
