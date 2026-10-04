@@ -145,6 +145,35 @@ Results:
   - `RemoteResume` needs R witnesses for the domain's answers, derived from the select schemas as the engine's codecs already are.
 - **Page contracts.** Export the page and render-error schemas so contracts stop restating the error union (`FlagsEncodeError` broke two).
 
+## M9-3 step 2 design (2026-10-03)
+
+**Upstream facts** (foldkit-remote 0.11.0 `index.mjs`, checked 2026-10-03):
+
+- **Query requests.** `prefetch` plans with `planAsked(store, askedOf(projection), cacheFirst)`. A query becomes `queryRequestOf(connection)`: `{ query, input, window, select? }`. `input` is parsed from the connection identity, which is `stableStringify` of the encoded input, so its keys are sorted.
+- **Follow-up reads.** After the page is merged, `itemsOf` asks for each edge's selected fields. A flat selection is already answered by the page, so no Read follows; this matches the probe's single exchange.
+- **Gets.** `Data.get(select, id)` plans one Read requirement `{ entity, id, fields }` for the fields the store lacks.
+
+**Increments**
+
+- **2a: declared reads, recorded and resumed.**
+  - **Declaration.** `pages.remote` lists the page's reads as ordinary upstream projections built at compile time (`Data.query(Q, input, { select, first })`, `Data.get(select, id)`).
+  - **Planning.** The compiler runs upstream's planner on `Remote.initial` to get each read's wire request.
+  - **First cut: constant requests.** Inputs and ids are compile-time values, which todo-remote's `Todos` query (input `{}`) needs. Holes filled from the URL come next, with typed sentinels located in the planned request.
+  - **Refused:** relations in a selection, and requests a second pass would add.
+  - **Run time.** The host runs each request against the in-process engine (the same `remote_engine::query`/`read` the RPC handlers call), under the request's principal through the same bearer middleware. It records `{ _tag, request, answer }` exchanges.
+  - **Hand-off.** The exchanges reach the R page as an `Unknown` value it places in its Flags. `Schema.toCodecJson(Schema.Unknown)` passes JSON through, as a probe showed, and the browser decodes that field with `RemoteResume`.
+- **2b: typed view data (option B).**
+  - Each read also reaches the R page as a typed value: a query's items as `R.Array(Struct(selected fields))` in edge order; a get's entity, or none.
+  - Natively, a small assembler builds them from the answers. The reference takes upstream `projection.read(model)` after `replay`.
+
+**Acceptance**
+
+- The native page's HTML equals upstream `handleRequest` around `renderToString`, whose `init` replays the same exchanges through `Data.satisfy` and whose view reads the projections.
+- The exchanges match the requests the client's `satisfy` issues; a miss would fail the replay.
+- An unauthenticated request cannot read what an RPC read would refuse.
+
+**Not yet:** SQL read transactions spanning a page's reads (consistency choice, recorded above), relation assembly, and second-pass reads.
+
 ## Risks and open questions
 
 - **Gap between the first render and Live.** The hub keeps no history ("resuming only renumbers"), so a change committed between the server render and the browser's Live subscription is lost.
