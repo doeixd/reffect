@@ -12,7 +12,7 @@
     "build": "vp pack",
     "test": "vp test",
     "runtime:gen": "node scripts/runtime-sources.ts",
-    "runtime:check": "cargo fmt --manifest-path runtime/Cargo.toml --check && rustfmt --edition 2021 --check runtime/src/rpc_args.rs runtime/src/rpc_wire.rs runtime/src/rpc_stream.rs runtime/src/rpc_serve.rs && cargo clippy --manifest-path runtime/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path runtime/Cargo.toml"
+    "runtime:check": "cargo fmt --manifest-path runtime/Cargo.toml --check && rustfmt --edition 2021 --check runtime/src/rpc_args.rs runtime/src/rpc_wire.rs runtime/src/rpc_stream.rs runtime/src/rpc_serve.rs runtime/src/remote_sql.rs runtime/src/sql_sqlite.rs runtime/src/sql_postgres.rs && cargo clippy --manifest-path runtime/Cargo.toml --all-targets -- -D warnings && cargo test --manifest-path runtime/Cargo.toml"
   },
   "dependencies": {
     "@effect/platform-node": "4.0.0",

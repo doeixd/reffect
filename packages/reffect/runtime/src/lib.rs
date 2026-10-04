@@ -88,5 +88,48 @@ not json
     }
 }
 
+/// The SQL source, compiled under each dialect as generated crates compile it: `remote_sql`
+/// with its `dialect` child module, beside `remote_engine`.
+#[allow(dead_code)]
+pub mod sql_sqlite {
+    use crate::remote_engine;
+    pub mod remote_sql {
+        include!("remote_sql.rs");
+        mod dialect {
+            include!("sql_sqlite.rs");
+        }
+
+        #[cfg(test)]
+        mod tests {
+            // Identifiers are quoted per dialect and placeholders numbered (SQLX-009, SQLX-019).
+            #[test]
+            fn quotes_and_placeholders() {
+                assert_eq!(super::quote("a`b"), "`a``b`");
+                assert_eq!(super::placeholder(2), "?2");
+            }
+        }
+    }
+}
+#[allow(dead_code)]
+pub mod sql_postgres {
+    use crate::remote_engine;
+    pub mod remote_sql {
+        include!("remote_sql.rs");
+        mod dialect {
+            include!("sql_postgres.rs");
+        }
+
+        #[cfg(test)]
+        mod tests {
+            // Identifiers are quoted per dialect and placeholders numbered (SQLX-009, SQLX-019).
+            #[test]
+            fn quotes_and_placeholders() {
+                assert_eq!(super::quote("a\"b"), "\"a\"\"b\"");
+                assert_eq!(super::placeholder(2), "$2");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
