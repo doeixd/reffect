@@ -293,6 +293,13 @@ export const analyzeScopes = (
         },
         Sleep: () => 0,
         RemoteStore: (n) => {
+          // A failed store call or signal in a finalizer has nowhere to go natively (#18).
+          if (cleanup)
+            diagnostic(
+              "STORE_CLEANUP",
+              at,
+              "Cleanup cannot read, write or signal the Remote store: its failure could not be reported",
+            );
           expression(n.id, "id");
           if (n.values) expression(n.values, "values");
           return 0;
