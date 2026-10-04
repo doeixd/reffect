@@ -1,9 +1,11 @@
-//! Pinned regressions for the runtime modules. Expected strings were captured from upstream
-//! (foldkit 0.165.0 `renderToString`, Node's `JSON.stringify`); the differential suites in
-//! `packages/reffect/tests` remain the oracle.
+//! Pinned regressions for the runtime modules, quick to run under `cargo test`. The HTML and
+//! JSON strings were captured from upstream (foldkit 0.165.0 `renderToString`, Node's
+//! `JSON.stringify`); the hub cases pin behavior the differential suites in
+//! `packages/reffect/tests` check against foldkit-remote-server's `liveHub`, which stay the oracle.
 
 use crate::foldkit_html::{element, empty, render, text, Prop};
 use crate::foldkit_json::{json_text, round_trip};
+use crate::remote_engine::{Hub, Memory, Subscription};
 use serde_json::json;
 
 #[test]
@@ -82,4 +84,101 @@ fn round_trip_turns_negative_zero_into_zero_only() {
     assert_eq!(back["z"].as_f64().map(f64::is_sign_negative), Some(false));
     assert_eq!(back["n"], value["n"]);
     assert_eq!(json_text(&back), json_text(&value));
+}
+
+fn hub() -> &'static Hub {
+    Box::leak(Box::default())
+}
+fn live(
+    hub: &'static Hub,
+    after: f64,
+    requirements: serde_json::Value,
+    principal: Option<u64>,
+) -> Subscription {
+    hub.subscribe(
+        &json!({ "version": 4, "requirements": requirements, "after": after }),
+        principal,
+    )
+    .unwrap()
+}
+fn drain(subscription: &mut Subscription) -> Vec<serde_json::Value> {
+    std::iter::from_fn(|| subscription.events.try_recv().ok()).collect()
+}
+
+#[test]
+fn deleted_reaches_selecting_subscribers_on_their_own_cursors() {
+    let hub = hub();
+    let todo = |id: &str| json!({ "entity": "Todo", "id": id, "fields": ["title"] });
+    let mut from_five = live(hub, 5.0, json!([todo("t1")]), None);
+    // A row required twice is selected once, so it is numbered once.
+    let mut both = live(hub, 0.0, json!([todo("t1"), todo("t2"), todo("t1")]), None);
+    let mut other = live(hub, 0.0, json!([todo("t9")]), None);
+    hub.deleted("Todo", "t1");
+    hub.deleted("Todo", "t2");
+    assert_eq!(
+        drain(&mut from_five),
+        [json!({ "_tag": "EntityDeleted", "cursor": 6, "entity": "Todo", "id": "t1" })]
+    );
+    assert_eq!(
+        drain(&mut both),
+        [
+            json!({ "_tag": "EntityDeleted", "cursor": 1, "entity": "Todo", "id": "t1" }),
+            json!({ "_tag": "EntityDeleted", "cursor": 2, "entity": "Todo", "id": "t2" }),
+        ]
+    );
+    assert!(drain(&mut other).is_empty());
+    // An ended stream is unsubscribed; the others keep their cursors.
+    drop(from_five);
+    hub.deleted("Todo", "t1");
+    assert_eq!(drain(&mut both)[0]["cursor"], json!(3));
+}
+
+#[test]
+fn changed_sends_each_subscriber_its_selected_authorized_fields() {
+    let hub = hub();
+    let rows =
+        json!({ "Todo": [["t1", { "id": "t1", "title": "Write", "done": true, "note": "n" }]] });
+    let memory = Memory::new(vec!["Todo".to_string()], &rows, &[]);
+    let selecting =
+        |fields: serde_json::Value| json!([{ "entity": "Todo", "id": "t1", "fields": fields }]);
+    let mut owner = live(hub, 0.0, selecting(json!(["title", "done"])), Some(1));
+    let mut guest = live(hub, 0.0, selecting(json!(["done", "note"])), None);
+    // The guest may not read `done`; the owner reads everything it selected.
+    fn authorize(principal: Option<u64>, _: &str, fields: &[String]) -> Vec<String> {
+        fields
+            .iter()
+            .filter(|field| principal.is_some() || *field != "done")
+            .cloned()
+            .collect()
+    }
+    let changed = ["done".to_string(), "title".to_string(), "note".to_string()];
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(hub.changed(&memory, authorize, "Todo", "t1", &changed));
+    assert_eq!(
+        drain(&mut owner),
+        [
+            json!({ "_tag": "EntityPatched", "cursor": 1, "entity": "Todo", "id": "t1", "values": { "done": true, "title": "Write" }, "changed": ["done", "title"] })
+        ]
+    );
+    assert_eq!(
+        drain(&mut guest),
+        [
+            json!({ "_tag": "EntityPatched", "cursor": 1, "entity": "Todo", "id": "t1", "values": { "note": "n" }, "changed": ["note"] })
+        ]
+    );
+}
+
+#[test]
+fn subscribe_refuses_another_protocol_version() {
+    let error = hub()
+        .subscribe(&json!({ "version": 3, "requirements": [] }), None)
+        .err()
+        .unwrap();
+    assert_eq!(error["_tag"], json!("RemoteProtocolError"));
+    assert_eq!(
+        error["message"],
+        json!("Remote protocol version 3 is not 4")
+    );
 }

@@ -12,5 +12,9 @@ path = "src/lib.rs"
 [dependencies]
 serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
 ryu-js = { version = "=1.0.3", default-features = false }
+tokio = { version = "=1.53.1", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "=1.53.1", features = ["rt", "sync"] }
 
 [workspace]
