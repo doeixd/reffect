@@ -134,6 +134,14 @@ const booleanAttribute =
     value: booleanValue(value, `Html.${name}`),
   });
 const DATA_KEY = /^[a-z][a-z0-9-]*$/;
+/** Upstream's `RESERVED_HANDOFF_ATTRIBUTES` (foldkit 0.165.0): only the server stamps these. */
+const RESERVED_DATA_KEYS: ReadonlySet<string> = new Set([
+  "foldkit-app",
+  "foldkit-build",
+  "foldkit-flags",
+  "foldkit-key",
+  "foldkit-identity",
+]);
 
 /** One child as authored: an Html expression, a String expression, or literal text. */
 export type Child = Expr<HtmlValue> | Expr<string> | string;
@@ -447,6 +455,14 @@ export const HtmlIR = Object.freeze({
         "authoring",
         "Html.DataAttribute",
         "Data keys are lowercase kebab-case",
+      );
+    // An authored marker would precede the server's own, and browsers keep the first (#22).
+    if (RESERVED_DATA_KEYS.has(key))
+      throw fail(
+        "RESERVED_ATTRIBUTE",
+        "authoring",
+        "Html.DataAttribute",
+        `The view authored data-${key}, which is reserved for Foldkit's server-to-client hydration handoff. Application markup cannot own root, build, Flags, key, or identity markers. Remove the attribute.`,
       );
     return { name: "DataAttribute", key, value: stringValue(value, "Html.DataAttribute") };
   },

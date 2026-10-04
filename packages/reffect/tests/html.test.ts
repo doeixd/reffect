@@ -189,3 +189,32 @@ test("R.Html.renderToString answers as upstream renderToString", async () => {
     }),
   ).toThrow(CompileError);
 });
+
+test("reserved hydration marker names are refused, as upstream refuses them (#22)", async () => {
+  for (const key of [
+    "foldkit-app",
+    "foldkit-build",
+    "foldkit-flags",
+    "foldkit-key",
+    "foldkit-identity",
+  ]) {
+    // Upstream fails the render once the view authors the marker.
+    const upstream = await Effect.runPromise(
+      renderToString(
+        {
+          init: () => ({ model: {} }),
+          view: (_model: object, h: HtmlBuilder<never>): Document => ({
+            title: "t",
+            body: h.div([h.DataAttribute(key, "x")], []),
+          }),
+        },
+        { buildId: "b" },
+      ).pipe(Effect.flip),
+    );
+    expect(String(upstream.cause), key).toContain("reserved");
+    expect(() => H.DataAttribute(key, "x"), key).toThrow(CompileError);
+    expect(() => H.DataAttribute(key, "x"), key).toThrow(`data-${key}`);
+  }
+  // Other foldkit-looking keys stay available.
+  expect(H.DataAttribute("foldkit-note", "x").name).toBe("DataAttribute");
+});
