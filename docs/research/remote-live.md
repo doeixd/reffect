@@ -272,7 +272,7 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
       - hub cursors per subscriber, merged duplicate selections, per-principal field authorization, and the protocol check.
     - `vp run runtime:check` is clean. The sync test fails on a stale generated file, which was mutation-checked by appending to a `.rs` file.
     - These suites pass: `ssr-serialize`, `html`, `html-native`, `html-page`, `html-flags`, `remote-acceptance`, `remote-live`, `remote-query`, `remote-read`, `remote-sql-live` and `foldkit`.
-    - `foldkit.test.ts` timed out at its fixed 120 s budget while six other suites built crates, and passed alone. That budget does not scale with load; `nativeTestBudget` would fix it.
+    - `foldkit.test.ts` timed out at its fixed 120 s budget while six other suites built crates, and passed alone. Its budget is now 360 s for its two fresh builds.
   - **Remaining.**
     - The RPC runtimes (`rpc-auth-runtime`, `rpc-runtime`'s `layeredMain`/`asyncHttpRuntime`, `native-rpc`'s `stableStringifyRust`/`decodePrelude`) are crate-root items rather than modules, so they need an item-file form of `runtimeModule`.
     - `sql-runtime` and `ssr-page` interpolate per-build values (dialect, origin, template parts), which first move into generated constants.

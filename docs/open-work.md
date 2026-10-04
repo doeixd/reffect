@@ -92,7 +92,6 @@ These block many items below.
   - LIVE-008: an after-commit session hook and a separate LiveHub node and service;
   - LIVE-011: typed, domain-checked signals;
   - LIVE-012 (rest): the RPC, SQL and page runtimes as `.rs` files; the SSR runtimes, Remote engine and evaluator are done ([progress](research/remote-live.md#improvement-plan-2026-10-03));
-  - `foldkit.test.ts`'s fixed 120 s budget times out under concurrent cargo builds; use `nativeTestBudget`;
   - LIVE-013: randomized hub conformance against upstream `liveHub`;
   - LIVE-014: the written boundary between R policy and ported protocol engines, with the long-term path of the hub in R.
 - Live design debts ([review](research/remote-live.md#review-2026-10-03)):

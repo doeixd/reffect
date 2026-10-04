@@ -81,7 +81,8 @@ test("all published Foldkit cases agree in evaluate, upstream Drizzle/SQLite and
   } finally {
     sqlite.close();
   }
-}, 120000);
+  // Two fresh builds (debug and release), which other suites' builds can slow down.
+}, 360000);
 
 const Item = Entity.define(
   "Item",
