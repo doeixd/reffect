@@ -1,6 +1,6 @@
 # Serving native RPC: connections, timeouts and threading
 
-Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`; test `rpc-serving.test.ts`). Step 2 (threading and concurrent batches) is designed below. The issues are [#16](https://github.com/doeixd/reffect/issues/16) and [#25](https://github.com/doeixd/reffect/issues/25).
+Status: **step 1 (timeouts and connection cap) and step 2 (threading and concurrent batches) delivered 2026-10-04**. Step 1 is `dbfdde1`; step 2 is `e768d2c`, with mutation verification completed by the composite recovery repair below. The issues are [#16](https://github.com/doeixd/reffect/issues/16) and [#25](https://github.com/doeixd/reffect/issues/25).
 
 ## Findings (checked 2026-10-04)
 
@@ -71,4 +71,4 @@ Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`
 - **Test changes.**
   - `stream-rpc` compares multi-request bodies per request. Official ran its non-suspending `Count` stream to completion before the unary request, which is scheduling, not protocol.
   - `remote-live` compares event sequences rather than `Chunk` lines. How many queued events one Chunk carries is timing (LR-10), and that showed as one flaky failure on the multi-thread runtime.
-- **Blocked verification.** `remote-acceptance`, `remote-mutate`, `remote-sql-mutate`, `remote-sql-live` and `todo-remote-page` are refused while compiling by `TASK_GROUP_RETAINED_FAILURE`. That check comes from the concurrent coordination work (most likely `1232a77`) and refuses ordinary mutation sources that fail with `RemoteServerError`. They are to be rerun once it is resolved. `remote-live` and `remote-auth`, which include mutations, pass on the multi-thread runtime.
+- **Mutation verification restored.** The [composite recovery repair](retained-composite-recovery.md) narrows the blanket refusal introduced by `1232a77`, preserving masked cleanup and compound-outcome boundaries. Sequential runs of `remote-acceptance` (2), `remote-mutate` (3), `remote-sql-mutate` (6), `remote-sql-live` (3) and `todo-remote-page` (1) now pass on the multi-thread runtime. Run the todo page suite from `packages/reffect`, since its template path assumes that working directory. This completes the mutation verification left open for #16; `remote-live` and `remote-auth` had already passed.

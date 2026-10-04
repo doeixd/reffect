@@ -8,6 +8,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Serving native RPC](research/rpc-serving.md)** covers connections, read timeouts and threading for generated servers ([#16](https://github.com/doeixd/reffect/issues/16), [#25](https://github.com/doeixd/reffect/issues/25)).
 
+**[Composite recovery refinement](research/retained-composite-recovery.md)** explains ordinary Remote mutation admission versus cancellation-retained failures during masked suspension.
+
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
 **[SSR with Remote data](research/ssr-data.md)** is the milestone 9 plan: upstream prefetch and snapshot resume, native projections in R views, async pages, and the decision to take milestone 9 before 8B.

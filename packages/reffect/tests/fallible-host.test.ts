@@ -68,3 +68,17 @@ test("RPC still admits synchronous source recovery", async () => {
   );
   expect(Exit.isSuccess(exit)).toBe(true);
 });
+
+test("RPC admits ordinary composite recovery after an unmasked asynchronous source", async () => {
+  const Payload = R.Struct({ message: R.String });
+  const handler = R.fn([], R.Unit, R.Never, () =>
+    R.Effect.sleep(1).pipe(
+      R.Effect.andThen(R.Effect.fail(Payload.make({ message: R.String.literal("refused") }))),
+      R.Effect.catchAll(() => R.Effect.void),
+    ),
+  );
+  const exit = await Effect.runPromise(
+    NativeRpc.compile(InfallibleGroup, { Work: NativeRpc.bind(handler) }).pipe(Effect.exit),
+  );
+  expect(Exit.isSuccess(exit)).toBe(true);
+});

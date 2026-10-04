@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-04 — Composite mutation recovery repair
+
+- Synced concurrent RPC batches and the multi-thread runtime through 2c39d21. The reported mutation refusals trace to 1232a77: NativeRemote maps composite RemoteServerError sources to wire errors, and the blanket asynchronous channel-change refusal incorrectly treats suspension before failure as retained-failure suspension.
+- Reviewed the installed and published Effect 4.0.0 failure evaluator, getCont and automatic-yield loop before edits. [Composite recovery refinement](docs/research/retained-composite-recovery.md) records the narrow cooperative scheduling proof and conservative masked/group boundaries. Parallel analysis owns that proof; root adds regression coverage and runs the previously blocked mutation suites sequentially. Existing scalar retained-outcome behavior and compound RPC refusal remain required.
+- Narrowed changed-error composite guards/refusals with an exhaustive, memoized proof of selected-failure suspension. Ordinary timer/store waits before failure no longer block Remote mutations; awaited cleanup, masked acquisition, resources, groups and Deferred stay conservative. Scalar carrier selection and same-channel guards are unchanged. Two new regressions fail before the repair; focused analysis/host/admission tests now pass 15/15.
+- All five formerly blocked suites pass sequentially against the multi-thread runtime: remote-acceptance 2/2, remote-mutate 3/3, remote-sql-mutate 6/6, remote-sql-live 3/3 and todo-remote-page 1/1. The todo test initially failed to locate its template when invoked from repository root; rerunning from its required package directory passes. Updated the serving record to complete #16's pending mutation verification; no GitHub issue state was changed.
+- Full formatting across 409 files, lint/types across 246 TypeScript files, strict package TypeScript and workspace builds pass (reffect rebuilt, 3/4 cache hits). Remaining composite retained-payload representation, compound RPC causes and broader coordination remain explicit open work.
+
 ## 2026-10-04 — Private Deferred IR integration preparation
 
 - [Private core preparation](docs/research/deferred-integration-core.md) records lexical make/flatMap elaboration, opaque handle exclusion, official reference operations and per-await failure frames; make alone and recursive public/payload escape remain refused.

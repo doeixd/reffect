@@ -40,6 +40,65 @@ export const analyzeTaskGroups = (
   }[] = [];
   const scalar = (type: IRType<unknown>): boolean =>
     [BoolType, U64Type, UnitType].some((candidate) => IRType.same(candidate, type));
+  // RCREC-002: preceding unmasked waits do not retain a selected typed failure.
+  const retainedRisk = new Map<Computation<unknown, unknown>, boolean>();
+  const checkingRisk = new Set<Computation<unknown, unknown>>();
+  const maySuspendAfterFailure = (c: Computation<unknown, unknown>): boolean => {
+    const known = retainedRisk.get(c);
+    if (known !== undefined) return known;
+    if (checkingRisk.has(c)) return true;
+    checkingRisk.add(c);
+    const risky = Match.value(c.node).pipe(
+      Match.tagsExhaustive({
+        TaskGroup: () => true,
+        Scope: () => true,
+        AddFinalizer: () => true,
+        AcquireRelease: () => true,
+        RegisteredFile: () => true,
+        FileScope: () => true,
+        DeferredMake: () => true,
+        DeferredScope: () => true,
+        DeferredAwait: () => true,
+        DeferredComplete: () => true,
+        DeferredIsDone: () => true,
+        StreamRunCollect: () => true,
+        StreamEmit: () => true,
+        Ensuring: (n) => isAsyncComputation(n.finalizer) || maySuspendAfterFailure(n.body),
+        AcquireUseRelease: (n) =>
+          isAsyncComputation(n.acquire) ||
+          isAsyncComputation(n.release) ||
+          maySuspendAfterFailure(n.acquire) ||
+          maySuspendAfterFailure(n.use) ||
+          maySuspendAfterFailure(n.release),
+        RefScope: (n) => maySuspendAfterFailure(n.body),
+        Repeat: (n) => maySuspendAfterFailure(n.body),
+        Retry: (n) => maySuspendAfterFailure(n.body),
+        Map: (n) => maySuspendAfterFailure(n.source),
+        FlatMap: (n) => maySuspendAfterFailure(n.source) || maySuspendAfterFailure(n.body),
+        CatchAll: (n) => maySuspendAfterFailure(n.source) || maySuspendAfterFailure(n.body),
+        Match: (n) => maySuspendAfterFailure(n.onTrue) || maySuspendAfterFailure(n.onFalse),
+        MatchTags: (n) => n.cases.some((value) => maySuspendAfterFailure(value.body)),
+        ForEach: (n) => maySuspendAfterFailure(n.body),
+        Annotate: (n) => maySuspendAfterFailure(n.body),
+        Span: (n) => maySuspendAfterFailure(n.body),
+        RefMake: () => false,
+        RefGet: () => false,
+        RefModify: () => false,
+        ClockReadMillis: () => false,
+        RandomDraw: () => false,
+        FileSize: () => false,
+        Succeed: () => false,
+        Fail: () => false,
+        Sleep: () => false,
+        Launch: () => false,
+        RemoteStore: () => false,
+        Log: () => false,
+      }),
+    );
+    checkingRisk.delete(c);
+    retainedRisk.set(c, risky);
+    return risky;
+  };
   const walk = (
     c: Computation<unknown, unknown>,
     at: string,
@@ -180,12 +239,14 @@ export const analyzeTaskGroups = (
   propagate(fallible);
   for (const { computation, source, path: at, cleanup } of recoveries) {
     const asynchronous = isAsyncComputation(source);
-    if (asynchronous && !cleanup) cancellationGuards.add(computation);
-    const compositeGroupRecovery =
-      fallible.has(source) &&
+    const changedComposite =
       !IRType.same(source.error, computation.error) &&
       !IRType.same(source.error, NeverType) &&
       !scalar(source.error);
+    const compositeRetainedRisk = changedComposite && maySuspendAfterFailure(source);
+    if (asynchronous && !cleanup && (!changedComposite || compositeRetainedRisk))
+      cancellationGuards.add(computation);
+    const compositeGroupRecovery = fallible.has(source) && changedComposite;
     if (compositeGroupRecovery)
       diagnostics.push({
         code: "TASK_GROUP_RECOVERY",
@@ -194,13 +255,7 @@ export const analyzeTaskGroups = (
         message:
           "Changing a composite source error after a fallible task group needs storage for interruption-bypassed failures",
       });
-    else if (
-      asynchronous &&
-      !cleanup &&
-      !IRType.same(source.error, computation.error) &&
-      !IRType.same(source.error, NeverType) &&
-      !scalar(source.error)
-    )
+    else if (asynchronous && !cleanup && compositeRetainedRisk)
       diagnostics.push({
         code: "TASK_GROUP_RETAINED_FAILURE",
         stage: "check",

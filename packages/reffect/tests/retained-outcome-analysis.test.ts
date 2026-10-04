@@ -93,3 +93,44 @@ test("synchronous recovery and plain infallible groups preserve ordinary reachab
   expect(analysis.richGroups.size).toBe(0);
   expect(analysis.cancellationGuards.size).toBe(0);
 });
+
+test("composite recovery after unmasked suspension keeps ordinary failure representation", () => {
+  const Payload = R.Struct({ code: R.U64 });
+  const failure = R.Effect.fail(Payload.make({ code: R.U64.literal(7n) })).pipe(R.Effect.asVoid);
+  const source = R.Effect.sleep(1).pipe(R.Effect.andThen(failure));
+  const changed = source.pipe(R.Effect.catchAll(() => R.Effect.void));
+  const analysis = analyzeTaskGroups(changed);
+  expect(
+    checkEffectFunction(
+      R.fn([], R.Unit, R.Never, () => changed),
+      "ordinary",
+    ),
+  ).toEqual([]);
+  expect(analysis.requiresRichErrors).toBe(false);
+  expect(analysis.cancellationGuards.has(changed)).toBe(false);
+  // Synchronous cleanup does not suspend with the selected failure either.
+  const cleaned = source.pipe(
+    R.Effect.ensuring(R.Effect.void),
+    R.Effect.catchAll(() => R.Effect.void),
+  );
+  expect(analyzeTaskGroups(cleaned).diagnostics).toEqual([]);
+});
+
+test("masked acquisition and registered cleanup remain composite retention boundaries", () => {
+  const Payload = R.Struct({ code: R.U64 });
+  const failure = R.Effect.fail(Payload.make({ code: R.U64.literal(7n) })).pipe(R.Effect.asVoid);
+  const scoped = R.Effect.scoped(
+    R.Effect.addFinalizer(() => R.Effect.sleep(1)).pipe(R.Effect.andThen(failure)),
+  );
+  const acquired = R.Effect.acquireUseRelease(
+    R.Effect.sleep(1).pipe(R.Effect.andThen(failure)),
+    () => R.Effect.void,
+    () => R.Effect.void,
+  );
+  for (const source of [scoped, acquired]) {
+    const changed = source.pipe(R.Effect.catchAll(() => R.Effect.void));
+    expect(analyzeTaskGroups(changed).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "TASK_GROUP_RETAINED_FAILURE" }),
+    );
+  }
+});
