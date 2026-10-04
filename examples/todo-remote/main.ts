@@ -166,8 +166,12 @@ const upstreamLayer = Layer.unwrap(
   }),
 );
 
-/** Compiles, builds and starts the native server; its address once it is listening. */
-const startServer = (port: string) =>
+/**
+ * Compiles, builds and starts the native server; its address once it is listening. `snapshot`
+ * turns on LIVE-015 for the browser, so a change made between a page render and its
+ * subscription still arrives. It stays off for the session compared with upstream's hub.
+ */
+const startServer = (port: string, snapshot = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-remote-" });
@@ -179,6 +183,7 @@ const startServer = (port: string) =>
       rows,
       mutations,
       live: true,
+      liveSnapshot: snapshot,
       serialization: "ndjson",
       pages: { template, render: page, reads, views },
     });
@@ -219,7 +224,7 @@ await Effect.runPromise(
   serve >= 0
     ? Effect.scoped(
         Effect.gen(function* () {
-          const address = yield* startServer(process.argv[serve + 1] ?? "8787");
+          const address = yield* startServer(process.argv[serve + 1] ?? "8787", true);
           console.log(
             `native todo server listening on http://${address} (page and /rpc; Ctrl-C stops it)`,
           );

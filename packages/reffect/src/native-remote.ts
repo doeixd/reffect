@@ -88,6 +88,13 @@ export interface NativeRemoteOptions {
    * after the mutation commits and are dropped on rollback (LIVE-003).
    */
   readonly live?: boolean;
+  /**
+   * Not upstream (LIVE-015, a recorded divergence): a fresh live subscription is first told each
+   * selected row's current fields, re-read under its principal after it is registered, so a change
+   * committed between a server render and the browser's subscription still arrives. Requires
+   * `live`; off by default, where the hub matches `RemoteServer.liveHub`.
+   */
+  readonly liveSnapshot?: boolean;
   /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
   readonly serialization?: "json" | "ndjson";
   /**
@@ -648,6 +655,8 @@ const compile = <Rpcs extends Rpc.Any>(
         // A Live stream never ends, so a JSON body would buffer it forever and never answer (LR-4).
         if (options.live && options.serialization !== "ndjson")
           throw unsupported("live", 'A live hub needs serialization: "ndjson"');
+        if (options.liveSnapshot && !options.live)
+          throw unsupported("liveSnapshot", "A snapshot needs the live hub (live: true)");
         const authorize = Object.entries(options.authorize ?? {});
         if (authorize.length && !options.auth)
           throw unsupported("authorize", "authorize needs an authenticated principal (auth)");
@@ -884,9 +893,11 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
     const procedures: Record<string, { readonly call: string; readonly stream?: boolean }> = {};
     if (group.requests.has(LIVE))
       procedures[LIVE] = {
-        call: options.live
-          ? "remote_hub().subscribe(payload, context.principal)"
-          : "remote_engine::no_live(payload)",
+        call: options.liveSnapshot
+          ? "remote_live_subscribe(payload, context.principal).await"
+          : options.live
+            ? "remote_hub().subscribe(payload, context.principal)"
+            : "remote_engine::no_live(payload)",
         stream: true,
       };
     if (group.requests.has(MUTATE))
@@ -944,7 +955,17 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
           ...(options.live
             ? [
                 `static REMOTE_HUB: std::sync::OnceLock<remote_engine::Hub> = std::sync::OnceLock::new();
-fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }
+fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }${
+                  options.liveSnapshot
+                    ? `
+/// LIVE-015: subscribe, then tell a fresh stream the rows it selects as they are now.
+async fn remote_live_subscribe(payload: &Value, principal: Option<u64>) -> Result<remote_engine::Subscription, Value> {
+    let subscription = remote_hub().subscribe(payload, principal)?;
+    remote_hub().snapshot(&subscription, ${prepared.source}, remote_authorize_for).await;
+    Ok(subscription)
+}`
+                    : ""
+                }
 /// The hub as the sessions' LiveHub service (LIVE-008): signals become after-commit actions.
 struct RemoteLive;
 impl reffect_generated::LiveHub for RemoteLive {

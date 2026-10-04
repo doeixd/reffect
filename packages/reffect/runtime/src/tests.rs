@@ -182,3 +182,38 @@ fn subscribe_refuses_another_protocol_version() {
         json!("Remote protocol version 3 is not 4")
     );
 }
+
+#[test]
+fn snapshot_tells_a_fresh_subscription_the_current_rows() {
+    let hub = hub();
+    let rows = json!({ "Todo": [["t1", { "id": "t1", "title": "Write", "done": true }]] });
+    let memory = Memory::new(vec!["Todo".to_string()], &rows, &[]);
+    let selecting = json!([
+        { "entity": "Todo", "id": "t1", "fields": ["title", "done"] },
+        { "entity": "Todo", "id": "t9", "fields": ["title"] },
+    ]);
+    // A guest may not read `done`.
+    fn authorize(principal: Option<u64>, _: &str, fields: &[String]) -> Vec<String> {
+        fields
+            .iter()
+            .filter(|field| principal.is_some() || *field != "done")
+            .cloned()
+            .collect()
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let mut fresh = live(hub, 0.0, selecting.clone(), None);
+    runtime.block_on(hub.snapshot(&fresh, &memory, authorize));
+    assert_eq!(
+        drain(&mut fresh),
+        [
+            json!({ "_tag": "EntityPatched", "cursor": 1, "entity": "Todo", "id": "t1", "values": { "title": "Write" }, "changed": ["title"] }),
+            json!({ "_tag": "EntityDeleted", "cursor": 2, "entity": "Todo", "id": "t9" }),
+        ]
+    );
+    // A resumed stream already holds the rows: no snapshot.
+    let mut resumed = live(hub, 5.0, selecting, Some(1));
+    runtime.block_on(hub.snapshot(&resumed, &memory, authorize));
+    assert!(drain(&mut resumed).is_empty());
+}

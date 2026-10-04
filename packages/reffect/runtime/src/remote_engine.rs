@@ -1545,6 +1545,94 @@ impl Hub {
             }
         }
     }
+    /// Opt-in, not upstream (LIVE-015): a fresh subscription (`after` 0) is told each selected
+    /// row's current plain fields, re-read under its principal after it is registered, or that
+    /// the row is gone. A change committed between a server render and the browser's subscription
+    /// is then delivered; any change after registration arrives as an ordinary event. A failed
+    /// re-read skips a cursor so the client sees a gap (LIVE-007).
+    pub async fn snapshot<S: Source>(
+        &self,
+        subscription: &Subscription,
+        server: &S,
+        authorize: fn(Option<u64>, &str, &[String]) -> Vec<String>,
+    ) {
+        let Some(subscriber) = self
+            .lock()
+            .iter()
+            .find(|subscriber| subscriber.id == subscription.guard.id)
+            .cloned()
+        else {
+            return;
+        };
+        if *subscriber
+            .cursor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            != 0.0
+        {
+            return;
+        }
+        let principal = subscriber.principal;
+        let permit = move |entity: &str, fields: &[String]| authorize(principal, entity, fields);
+        for (key, selected) in subscriber.selected.iter() {
+            // Entity names hold no colon, so the first one ends the entity.
+            let Some((entity, id)) = key.split_once(':') else {
+                continue;
+            };
+            if !server.has_source(entity) {
+                continue;
+            }
+            // Plain fields only: an aliased or windowed field is a relation page, not a value.
+            let plain: Vec<String> = selected
+                .fields
+                .items
+                .iter()
+                .filter(|field| {
+                    aliased_field(field) == field.as_str() && selected.windows.get(field).is_none()
+                })
+                .cloned()
+                .collect();
+            let allowed = allowed_fields(server, &permit, entity, &plain);
+            if allowed.is_empty() {
+                continue;
+            }
+            match server
+                .read(entity, &[id.to_string()], &allowed, &None)
+                .await
+            {
+                Ok(records) => match records.into_iter().find(|record| record.id == id) {
+                    Some(record) => {
+                        let mut values: JsObject<Value> = JsObject::new();
+                        for field in &allowed {
+                            if let Some(value) = record.values.get(field) {
+                                values.set(field.clone(), value.clone());
+                            }
+                        }
+                        if values.is_empty() {
+                            continue;
+                        }
+                        let changed: Vec<String> =
+                            values.iter().map(|(key, _)| key.clone()).collect();
+                        Hub::emit(
+                            &subscriber,
+                            "EntityPatched",
+                            entity,
+                            id,
+                            Some((into_object(values), changed)),
+                        );
+                    }
+                    None => Hub::emit(&subscriber, "EntityDeleted", entity, id, None),
+                },
+                Err(message) => {
+                    eprintln!(
+                        "{}",
+                        json!({ "schema": "reffect.live@1", "event": "snapshot-failed", "entity": entity, "id": id, "message": message })
+                    );
+                    Hub::skip(&subscriber);
+                }
+            }
+        }
+    }
     /// `hub.deleted(ref)`: every subscriber selecting the row, without a re-read.
     pub fn deleted(&self, entity: &str, id: &str) {
         let key = format!("{}:{}", entity, id);

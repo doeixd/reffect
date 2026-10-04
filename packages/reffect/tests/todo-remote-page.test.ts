@@ -59,6 +59,39 @@ const get = (address: string, path: string) =>
     outgoing.end();
   });
 
+/** An NDJSON RPC call: the response lines until `done` has what it needs, then the call ends. */
+const rpc = (address: string, request: object, done: (lines: ReadonlyArray<string>) => boolean) =>
+  new Promise<ReadonlyArray<string>>((resolve, reject) => {
+    const [host, port] = address.split(":");
+    const lines: Array<string> = [];
+    let buffer = "";
+    const outgoing = httpRequest(
+      {
+        host,
+        port: Number(port),
+        method: "POST",
+        path: "/rpc",
+        headers: { "content-type": "application/ndjson" },
+      },
+      (response) => {
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          buffer += chunk;
+          const parts = buffer.split("\n");
+          buffer = parts.pop() ?? "";
+          lines.push(...parts.filter((line) => line !== ""));
+          if (done(lines)) {
+            outgoing.destroy();
+            resolve(lines);
+          }
+        });
+        response.on("end", () => resolve(lines));
+      },
+    );
+    outgoing.on("error", (error) => (done(lines) ? resolve(lines) : reject(error)));
+    outgoing.end(`${JSON.stringify({ _tag: "Request", headers: [], ...request })}\n`);
+  });
+
 /** Upstream: the app's own init and view, with the exchanges upstream's server records. */
 const upstream = async (now: number) => {
   const [, exchanges] = await Effect.runPromise(
@@ -93,7 +126,7 @@ const upstream = async (now: number) => {
 test(
   "todo-remote's first screen renders natively, equals upstream, and hydrates without a fetch",
   async () => {
-    const native = await Effect.runPromise(
+    const { rendered: native, live } = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
@@ -104,6 +137,7 @@ test(
             rows,
             mutations,
             live: true,
+            liveSnapshot: true,
             serialization: "ndjson",
             pages: { template, render: page, origin, reads, views },
           });
@@ -125,11 +159,41 @@ test(
               address: Schema.String,
             }),
           )(JSON.parse(ready.value));
-          return yield* Effect.promise(() => get(address, "/"));
+          const rendered = yield* Effect.promise(() => get(address, "/"));
+          // LIVE-015: t2 changes after the render and before the browser subscribes. The fresh
+          // subscription's snapshot still carries it, where liveHub alone would send nothing.
+          yield* Effect.promise(() =>
+            rpc(
+              address,
+              {
+                id: "1",
+                tag: "FoldkitRemoteMutate",
+                payload: { requestId: "r1", mutation: "ToggleTodo", input: { id: "t2" } },
+              },
+              (lines) => lines.some((line) => line.includes('"Exit"')),
+            ),
+          );
+          const live = yield* Effect.promise(() =>
+            rpc(
+              address,
+              {
+                id: "2",
+                tag: "FoldkitRemoteLive",
+                payload: {
+                  version: 4,
+                  requirements: [{ entity: "Todo", id: "t2", fields: ["done"] }],
+                  after: 0,
+                },
+              },
+              (lines) => lines.some((line) => line.includes("EntityPatched")),
+            ),
+          ).pipe(Effect.timeout("10 seconds"));
+          return { rendered, live };
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );
     expect(native.status).toBe(200);
+    expect(live.join("\n")).toContain('"values":{"done":true}');
     const payload = /data-foldkit-flags="app">(.*?)<\/script>/s.exec(native.body);
     const flags = Schema.decodeUnknownSync(Schema.toCodecJson(Flags))(
       JSON.parse(payload?.[1] ?? ""),
