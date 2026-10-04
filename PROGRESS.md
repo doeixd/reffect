@@ -54,7 +54,7 @@
 
 - **Change.** A body's requests run concurrently in one task (`FuturesUnordered`, first polled in request order) and answer in completion order, as official does. Generated servers run on the multi-thread runtime; RS-004 holds through per-operation store locking ([record](docs/research/rpc-serving.md)).
 - **Validation.** These suites pass, run one at a time: `rpc-serving`, `stream-rpc` (now compared per request), `remote-live` (now compared by events), `server-layer`, `stream-interrupt`, `rpc-auth`, `html-page`, `remote-page`, `html-flags`, `remote-query`, `remote-read` and `remote-auth`.
-- **Blocked.** Five mutation suites are refused while compiling by `TASK_GROUP_RETAINED_FAILURE` from the concurrent coordination work (most likely `1232a77`), independent of this change. #16 stays open until they are rerun.
+- **Mutation suites.** They were refused for a while by `TASK_GROUP_RETAINED_FAILURE` from the coordination work, fixed in `6283f7c`. They now pass on the multi-thread runtime (see the 2026-10-04 composite recovery entry), and #16 is closed.
 
 ## 2026-10-04 — #16 step 1: read timeouts and a connection cap
 
