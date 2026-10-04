@@ -22,6 +22,16 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — Review fixes: SSR security (#21, #22, #24)
+
+- **#22.** `R.Html.DataAttribute` refuses the reserved `data-foldkit-*` markers with upstream's message. Before this, an authored marker preceded the server's, so stored data could set hydration keys.
+- **#24.** `Value` outside `button`/`input` is refused while compiling (`refusedOn` was unused), where it used to be dropped silently.
+- **#21.** Pages resolve the whole request target as upstream's `resolveRequestUrl` does. A target naming another origin, an absolute-form target to another host, or a target with credentials gets 400 before anything else.
+- **Validation.**
+  - `html.test` checks each reserved name against upstream's own refusal, and `li` `value` against upstream.
+  - `html-flags` adds `//evil.example/x`, absolute-form and credential targets, and fails on the old host (200 for `//evil.example/x`).
+  - `ssr-serialize`, `html-page` and `remote-page` pass.
+
 ## 2026-10-03 — LIVE-015: opt-in snapshot for fresh live subscriptions
 
 - **Decision (user).** Close the render-to-live gap with an opt-in native snapshot, a recorded divergence that is off by default ([record](docs/research/ssr-data.md#render-to-live-gap-decision-2026-10-03)).
