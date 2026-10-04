@@ -572,9 +572,13 @@ function lowerFunctionsInternal(
           deferredOwners: scope.deferredOwners,
         };
       };
-      // Only external parameters used by cleanup need to survive until scope close.
-      const delayedScope = (scope: Scope, finalizer: Computation<unknown, unknown>): Scope => {
+      // Select signatures without pruning the bindings used to lower nested bodies.
+      const capturedScope = (
+        scope: Scope,
+        root: Expr<unknown> | Computation<unknown, unknown>,
+      ): Scope => {
         const captures = new Set<Parameter>();
+        const owners = new Set<symbol>();
         const expressions = new Set<Expr<unknown>["node"]>();
         const computations = new Set<Computation<unknown, unknown>["node"]>();
         const expression = (value: Expr<unknown>): void => {
@@ -633,15 +637,18 @@ function lowerFunctionsInternal(
                 if (!deferredProfile) rejectDeferredNative();
                 computation(n.body);
               },
-              DeferredAwait: () => {
+              DeferredAwait: (n) => {
                 if (!deferredProfile) rejectDeferredNative();
+                owners.add(n.binder);
               },
               DeferredComplete: (n) => {
                 if (!deferredProfile) rejectDeferredNative();
+                owners.add(n.binder);
                 expression(n.value);
               },
-              DeferredIsDone: () => {
+              DeferredIsDone: (n) => {
                 if (!deferredProfile) rejectDeferredNative();
+                owners.add(n.binder);
               },
               TaskGroup: (n) => n.children.forEach(computation),
               Scope: (n) => computation(n.body),
@@ -733,15 +740,24 @@ function lowerFunctionsInternal(
             }),
           );
         };
-        computation(finalizer);
+        if (root instanceof Expr) expression(root);
+        else computation(root);
         return {
           bindings: scope.bindings,
           input: Object.freeze(scope.input.filter((parameter) => captures.has(parameter))),
-          deferredOwners: scope.deferredOwners,
-          files: new Map(),
-          fileInputs: [],
+          deferredOwners: scope.deferredOwners
+            ? new Map(Array.from(scope.deferredOwners).filter(([binder]) => owners.has(binder)))
+            : undefined,
+          files: scope.files,
+          fileInputs: scope.fileInputs,
         };
       };
+      // Delayed cleanup cannot borrow local file handles from an enclosing scope.
+      const delayedScope = (scope: Scope, finalizer: Computation<unknown, unknown>): Scope => ({
+        ...capturedScope(scope, finalizer),
+        files: new Map(),
+        fileInputs: [],
+      });
       const pureHelper = (e: Expr<unknown>, scope: Scope, path: string): number => {
         const cached = pureMemo.get(e.node)?.get(scope);
         if (cached !== undefined) return cached;
@@ -755,7 +771,7 @@ function lowerFunctionsInternal(
           Object.freeze({
             index,
             files: [],
-            input: scope.input,
+            input: deferredProfile ? capturedScope(scope, e).input : scope.input,
             output: e.type,
             body,
             origin: provenance?.origin(e),
@@ -1445,13 +1461,18 @@ function lowerFunctionsInternal(
             }),
           }),
         );
+        const captures = deferredProfile ? capturedScope(scope, c) : scope;
         helpers.set(
           index,
           Object.freeze({
             index,
             files: scope.fileInputs,
             ...(deferredProfile
-              ? { deferredOwners: Object.freeze(Array.from(scope.deferredOwners?.values() ?? [])) }
+              ? {
+                  deferredOwners: Object.freeze(
+                    Array.from(captures.deferredOwners?.values() ?? []),
+                  ),
+                }
               : {}),
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
@@ -1500,7 +1521,7 @@ function lowerFunctionsInternal(
             cancellationGuard: outcomes?.cancellationGuards.has(c) ?? false,
             origin: provenance?.origin(c),
             path,
-            input: scope.input,
+            input: captures.input,
             output: c.output,
             error,
             body: Object.freeze(body),

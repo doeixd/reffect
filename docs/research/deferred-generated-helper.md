@@ -15,3 +15,5 @@ Validation requires generated debug/release and frame-policy conformance, borrow
 The private host function is asynchronous even for a sequential owner with only synchronous queries: this keeps one real AsyncContext interruption/error boundary. Pure helpers remain synchronous and receive no turn or owner captures. Ordinary functions do not acquire profile/capture fields or emitted coordinator code.
 
 Initial scoped validation: strict TypeScript passes; ordinary Rust-emission and public Deferred-refusal suites pass (7 tests in 2 files). Full generated conformance is recorded by the integration owner.
+
+[HCAP-001–004](helper-captures.md) refine DHELP-003: each private helper now receives only the scalar bindings and owner borrows used by its reachable subtree, including immediate finalizers. Full lexical lookup scopes and context/turn arguments stay intact. [Capture-growth measurements](helper-capture-costs.md) track native future growth separately from compiler traversal cost.

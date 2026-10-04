@@ -22,6 +22,8 @@ The harness meters allocation calls only while polling the invocation, after wat
 
 On the measured x86-64 Rust 1.98.1 / Tokio 1.53.1 profile, debug and release report identical sizes and allocation-call counts. These are actual generated invocation futures, rather than isolated owner structs.
 
+This table records the initial integration baseline before [helper capture minimization](helper-captures.md). Current depth-growth budgets and measurements are recorded in [helper capture costs](helper-capture-costs.md); neither table defines a portable future ABI.
+
 | Workload                         | Future bytes, None | Future bytes, Bounded | Harnessed allocation calls, None | Harnessed allocation calls, Bounded |
 | -------------------------------- | -----------------: | --------------------: | -------------------------------: | ----------------------------------: |
 | Retained first/losing/late U64   |                856 |                   872 |                                5 |                                   5 |

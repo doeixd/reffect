@@ -230,6 +230,8 @@ Run `vp exec node --experimental-transform-types packages/reffect/scripts/async-
 with Rust on PATH to reproduce. General performance evidence/gates are described
 in [performance requirements](performance.md).
 
+The private generated Deferred profile now [prunes helper captures](research/helper-captures.md) before emission. [Its depth-growth probe](research/helper-capture-costs.md) preserves required scalar/owner/finalizer borrows while rejecting quadratic propagation of unused scalar arguments. On the measured Rust 1.98.1/x86-64 profile, depth-16 futures shrink from 2840 to 1368 bytes with frames disabled and from 3120 to 1648 with bounded frames. All 2800 quiet generated invocations allocate zero times after executor/watch/context construction, including each workload's first execution. These observations do not measure timers, logging, groups or complete requests. Context layout is unchanged; compiler-side subtree capture analysis has a separately recorded quadratic worst case within the private graph bound.
+
 ## Resource, recovery and static service costs
 
 The [parallel module decisions](effect-modules.md) preserve the same native scalar/context representation. Structured brackets use generated control flow and a scalar binder rather than a heap finalizer registry. Static Context/Layer maps and Schema range registration exist during TypeScript authoring/boundary compilation; native programs contain ordinary scalar bindings and range comparisons. Pure providers add no crate or async context.

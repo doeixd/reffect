@@ -14,6 +14,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 Its implementation decisions are recorded separately for [helper borrows](research/deferred-generated-helper.md), [All cancellation](research/deferred-generated-runtime.md) and [independent conformance/costs](research/deferred-generated-conformance.md).
 
+[Helper capture minimization](research/helper-captures.md) records the private calling-convention optimization and its lexical binding and cancellation requirements; [growth measurements](research/helper-capture-costs.md) define depth budgets and allocation attribution.
+
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
 **[SSR with Remote data](research/ssr-data.md)** is the milestone 9 plan: upstream prefetch and snapshot resume, native projections in R views, async pages, and the decision to take milestone 9 before 8B.
