@@ -190,6 +190,17 @@ Results:
     - the admin's page shows the budget and the member's does not.
 - **Limits.** Only constant requests are planned, and only the first pass. A Surface waiting on another's data is not planned, and its replay then fails with `RemoteReadError`.
 
+**2b delivered 2026-10-03.**
+
+- **Planning.** `planPage({ name: Data.prefetch(initial, projection) })` plans each named view as exactly one query; anything else is refused.
+- **Page value.** NativeRemote builds each view as upstream's `Page` of a Ready read:
+  - `items` are the edges' entity values in edge order;
+  - `hasNext`/`hasPrevious` are true when the answer's `end`/`start` is not `Terminal`, which is upstream's rule for one segment cut to its own window.
+- **Typed input.** The render's third input is decoded by its witness's generated decoder. A missing entity or a value that does not decode fails the page (`reffect.ssr.page@1 view-failure`, 500), because native views are Ready-only.
+- **Compile-time checks.** `R.Remote.Page(item)` is the witness. The render's views must be exactly the planned ones, and each item Struct must hold exactly the query's selected fields (names only; field types are checked by the decoder at run time).
+- **Test.** [remote-page.test.ts](../../packages/reffect/tests/remote-page.test.ts) renders the todo list from the engine's answer. The page equals upstream `renderToString` whose `init` is the browser's own: replay the exchanges, then `list.read(model)`.
+- **Authoring finding.** A nested `R.Struct.get(R.Struct.get(read, "todos"), "items")` inside the page's `R.fn` infers `never` for the outer key: the inner call is inferred against the outer call's unresolved parameter. The data-last pipe `read.pipe(R.Struct.get("todos"), R.Struct.get("items"))` and two separate statements both type-check, so the test uses the pipe. Recorded in open work.
+
 **Not yet:** SQL read transactions spanning a page's reads (consistency choice, recorded above), relation assembly, and second-pass reads.
 
 ## Risks and open questions

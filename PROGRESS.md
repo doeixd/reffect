@@ -22,6 +22,13 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-03 — M9-3 step 2b: R page views read Remote query pages
+
+- **Change.** `planPage` maps named views to their planned queries, and NativeRemote builds each as upstream's `Page` of a Ready read for the render's typed third input (`R.Remote.Page`). Views and their item fields are checked against the plan while compiling.
+- **Validation.** `remote-page` passes: the todo list rendered from the engine equals upstream with the browser's replay-then-read `init`, and mismatched and partial views are refused. `remote-auth`, `html-page`, `html-flags` and `remote-resume` pass, and `vp check` is clean.
+- **Review fix.** Item fields are now checked against the selection (`eead254`).
+- **Next.** M9-4: todo-remote's first screen natively; R function calls as needed.
+
 ## 2026-10-03 — M9-3 step 2a: native pages read Remote data for resume
 
 - **Change.** `planReads` plans a page's requests from upstream `Data.satisfy` while compiling. NativeRemote pages run them against the engine under the page request's principal and carry the `{ now, exchanges }` resume in their Flags. Pages on bearer-authenticated servers need a principal (401).
