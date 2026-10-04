@@ -1,6 +1,6 @@
 /**
- * Milestone 9, M9-3 step 2a: a native page reads its Remote data through the server's own engine
- * and carries the exchanges in its Flags. The reference is upstream `handleRequest` around
+ * Milestone 9, M9-3 step 2: a native page reads its Remote data through the server's own engine,
+ * renders its view from it, and carries the exchanges in its Flags. The reference is upstream `handleRequest` around
  * `renderToString` whose Flags hold the exchanges `record` keeps while `Data.satisfy` runs
  * against `RemoteServer.memory`; the browser's `replay` then resumes without a fetch.
  */
@@ -14,8 +14,7 @@ import { RemoteRpc } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, CompileError, NativeRemote, R } from "../src/index.ts";
-import type { Expr } from "../src/index.ts";
-import { RemoteResume, planReads, record, replay } from "../src/remote-resume.ts";
+import { RemoteResume, planPage, record, replay } from "../src/remote-resume.ts";
 import { Data, Todo, Todos, initial, rows } from "../../../examples/todo-remote/domain.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { BUILD_ID, Page, todoDocument, todoView } from "./fixtures/ssr-todos.ts";
@@ -26,29 +25,28 @@ const list = Data.query(
   { select: Entity.select(Todo, { id: true, title: true, done: true }) },
 );
 const active = { todos: Data.active("Todos", () => Option.some(list)) };
-const reads = planReads(Data.satisfy(initial, active));
+const { reads, views } = planPage({ todos: Data.prefetch(initial, list) });
 const origin = "http://reffect.test";
 const template =
   '<!doctype html><html lang="en"><head><title>Placeholder</title></head>' +
   '<body><div id="root"></div></body></html>';
 const group = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteLive");
 
-// The page's view does not read the data yet (step 2b); its Flags carry it for the browser.
+// The page's view renders the todos it read; its Flags carry the exchanges for the browser.
 const Flags = R.Struct({ remote: R.Unknown });
-const init = (url: Expr<string>) =>
-  R.Struct({
-    heading: R.String,
-    todos: R.Array(R.Struct({ id: R.String, title: R.String, done: R.Bool })),
-  }).make({
-    heading: url,
-    todos: R.Array.empty(R.Struct({ id: R.String, title: R.String, done: R.Bool })),
-  });
-const page = R.fn([R.String, R.Unknown], Page, (url, remote) =>
-  R.Html.renderToString(
-    { init: () => init(url), view: todoDocument },
+const TodoItem = R.Struct({ id: R.String, title: R.String, done: R.Bool });
+const Views = R.Struct({ todos: R.Remote.Page(TodoItem) });
+const page = R.fn([R.String, R.Unknown, Views], Page, (url, remote, read) => {
+  const todos = read.pipe(R.Struct.get("todos"), R.Struct.get("items"));
+  return R.Html.renderToString(
+    {
+      init: () =>
+        R.Struct({ heading: R.String, todos: R.Array(TodoItem) }).make({ heading: url, todos }),
+      view: todoDocument,
+    },
     { buildId: BUILD_ID, flags: Flags.make({ remote }) },
-  ),
-);
+  );
+});
 const FlagsSchema = Schema.Struct({ remote: RemoteResume });
 
 /** Upstream: satisfy against the reference server, recorded, in the same Flags. */
@@ -66,7 +64,21 @@ const upstream = async (target: string, now: number) => {
           renderToString(
             {
               Flags: FlagsSchema,
-              init: () => ({ model: { heading: request.url, todos: [] } }),
+              // The browser's own init: replay the exchanges, then read the projection.
+              init: (flags: typeof FlagsSchema.Type) => {
+                const model = Effect.runSync(
+                  Data.satisfy(initial, active, { now: () => flags.remote.now }).pipe(
+                    Effect.provide(replay(flags.remote.exchanges)),
+                  ),
+                );
+                const read = list.read(model);
+                return {
+                  model: {
+                    heading: request.url,
+                    todos: read._tag === "Ready" ? [...read.value.items] : [],
+                  },
+                };
+              },
               view: R.Html.toFoldkitView(todoView),
             },
             { flags: { remote: { now, exchanges } }, buildId: BUILD_ID },
@@ -100,7 +112,7 @@ const flagsOf = (body: string) => {
   return Schema.decodeUnknownSync(Schema.toCodecJson(FlagsSchema))(JSON.parse(payload[1]!));
 };
 
-test("planned page reads are the satisfy's first pass, and relations are refused", async () => {
+test("a page plans one query per view, and unknown queries or mismatched views are refused", async () => {
   expect(reads.map((read) => read._tag)).toEqual(["Query"]);
   const refused = await Effect.runPromise(
     NativeRemote.compile(group, {
@@ -110,11 +122,21 @@ test("planned page reads are the satisfy's first pass, and relations are refused
         template,
         render: page,
         reads: [{ _tag: "Query", request: { query: "Nope", input: {}, window: {} } }],
+        views,
       },
     }).pipe(Effect.flip),
   );
   expect(refused).toBeInstanceOf(CompileError);
   expect(refused.message).toContain("domain's");
+  // The render's views must be exactly the planned ones.
+  const mismatched = await Effect.runPromise(
+    NativeRemote.compile(group, {
+      domain: Data,
+      rows,
+      pages: { template, render: page, reads, views: {} },
+    }).pipe(Effect.flip),
+  );
+  expect(mismatched.message).toContain("Struct of the views");
 });
 
 test(
@@ -128,7 +150,7 @@ test(
           const artifact = yield* NativeRemote.compile(group, {
             domain: Data,
             rows,
-            pages: { template, render: page, origin, reads },
+            pages: { template, render: page, origin, reads, views },
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.fetch(directory);
@@ -154,6 +176,8 @@ test(
           // Upstream with the native render's clock: the same bytes, Flags included.
           const expected = yield* Effect.promise(() => upstream("/todos", flags.remote.now));
           expect(native).toEqual(expected);
+          // The todos rendered natively are the rows', from the engine's answer.
+          expect(native.body).toContain("Compile it natively");
 
           // The browser's init: the replay gives the server's data and plans no fetch.
           const resumed = Effect.runSyncExit(

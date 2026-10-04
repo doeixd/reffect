@@ -91,14 +91,15 @@ export interface NativeRemoteOptions {
   /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
   readonly serialization?: "json" | "ndjson";
   /**
-   * Server-rendered pages (8A) whose first screen holds Remote data (M9-3 step 2a). `reads` are the
-   * requests `planReads` derives from the page's `Data.satisfy`. Each request runs against this
-   * server's engine under the page request's principal. The render takes the URL and
-   * `{ now, exchanges }` (`RemoteResume`'s encoding), which it carries in its Flags for the
-   * browser's `replay`.
+   * Server-rendered pages (8A) whose first screen holds Remote data (M9-3 step 2). `reads` are the
+   * requests `planReads`/`planPage` derive. Each request runs against this server's engine under
+   * the page request's principal. The render takes the URL and `{ now, exchanges }`
+   * (`RemoteResume`'s encoding), which it carries in its Flags for the browser's `replay`, and,
+   * with `views`, a Struct of each view's `R.Remote.Page` built from its query's answer.
    */
   readonly pages?: NonNullable<CompileOptions["pages"]> & {
     readonly reads?: ReadonlyArray<{ readonly _tag: "Query" | "Read"; readonly request: unknown }>;
+    readonly views?: { readonly [name: string]: { readonly _tag: "Query"; readonly read: number } };
   };
 }
 
@@ -511,6 +512,8 @@ const hasRelations = (selection: unknown): boolean =>
  */
 const pageReads = (
   reads: ReadonlyArray<{ readonly _tag: "Query" | "Read"; readonly request: unknown }>,
+  views: { readonly [name: string]: { readonly _tag: "Query"; readonly read: number } },
+  render: NonNullable<CompileOptions["pages"]>["render"],
   domain: RemoteDomain,
   source: string,
   authenticates: boolean,
@@ -542,6 +545,25 @@ const pageReads = (
     }
     return `(${Rs.stringLiteral(read._tag).text}, ${Rs.stringLiteral(JSON.stringify(request)).text})`;
   });
+  // The render's third input is a Struct with exactly one field per view.
+  const names = Object.keys(views);
+  const viewsType = render.input[2];
+  if (names.length > 0 || viewsType !== undefined) {
+    const layout = viewsType?.layout;
+    const fields = layout?._tag === "Struct" ? layout.fields.map((field) => field.name) : undefined;
+    if (
+      fields === undefined ||
+      fields.length !== names.length ||
+      !names.every((name) => fields.includes(name))
+    )
+      throw unsupported("pages.views", "The render's third input is a Struct of the views");
+    for (const [name, view] of Object.entries(views))
+      if (reads[view.read]?._tag !== "Query")
+        throw unsupported(`pages.views.${name}`, "A view reads one of the page's queries");
+  }
+  const viewEntries = Object.entries(views)
+    .map(([name, view]) => `(${Rs.stringLiteral(name).text}, ${view.read})`)
+    .join(", ");
   return `async {
         static REMOTE_PAGE_READS: &[(&str, &str)] = &[${planned.join(", ")}];
         ${authenticates ? "if principal.is_none() { return Err(StatusCode::UNAUTHORIZED); }" : ""}
@@ -558,8 +580,21 @@ const pageReads = (
                 }
             }
         }
+        // Each view is upstream's Page of a Ready read: the edges' entity values in edge order,
+        // and more on a side whose boundary is not Terminal (one segment, cut to its window).
+        static REMOTE_PAGE_VIEWS: &[(&str, usize)] = &[${viewEntries}];
+        let mut views = serde_json::Map::new();
+        for (name, read) in REMOTE_PAGE_VIEWS {
+            let answer = &exchanges[*read]["answer"];
+            let entities = answer["entities"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let items: Vec<Value> = answer["edges"].as_array().map(Vec::as_slice).unwrap_or_default().iter().map(|edge| {
+                entities.iter().find(|entity| entity["entity"] == edge["entity"] && entity["id"] == edge["id"]).map(|entity| entity["values"].clone()).unwrap_or(Value::Null)
+            }).collect();
+            let more = |side: &str| answer[side]["_tag"].as_str() != Some("Terminal");
+            views.insert(name.to_string(), json!({ "items": items, "hasNext": more("end"), "hasPrevious": more("start") }));
+        }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0);
-        Ok::<Value, StatusCode>(json!({ "now": now, "exchanges": exchanges }))
+        Ok::<(Value, Value), StatusCode>((json!({ "now": now, "exchanges": exchanges }), Value::Object(views)))
     }.await`;
 };
 /** The Rust expression of the hub service each session gets (LIVE-008). */
@@ -834,6 +869,8 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
           ? undefined
           : pageReads(
               options.pages.reads,
+              options.pages.views ?? {},
+              options.pages.render,
               options.domain,
               prepared.source,
               options.auth !== undefined,

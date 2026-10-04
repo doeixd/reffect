@@ -98,6 +98,7 @@ export const pageRuntime = (
   origin: string,
   render: string,
   data?: string,
+  views?: string,
 ): string => {
   const splice = parts
     .map((part) =>
@@ -276,7 +277,19 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
         : `// The page's data, read as the request's principal may read it (M9-3 step 2a).
     let principal = page_principal(&headers, &state);
     #[allow(unused_variables)]
-    let data: Value = match ${data} { Ok(data) => data, Err(status) => return empty(status, &[]) };`
+    let (resume, views): (Value, Value) = match ${data} { Ok(data) => data, Err(status) => return empty(status, &[]) };${
+      views === undefined
+        ? ""
+        : `
+    // A view that is not a Ready page of its witness cannot render natively (M9-3 step 2b).
+    let views = match ${views} {
+        Ok(views) => views,
+        Err(message) => {
+            eprintln!("{}", json!({"schema":"reffect.ssr.page@1", "outcome":"view-failure", "message":message}));
+            return empty(StatusCode::INTERNAL_SERVER_ERROR, &[]);
+        }
+    };`
+    }`
     }
     // The page's own render failure, or a title the template cannot hold, is a server error.
     let page: Value = ${render};

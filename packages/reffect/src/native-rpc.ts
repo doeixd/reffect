@@ -929,9 +929,9 @@ export interface RpcRuntime {
     readonly live?: string;
   };
   /**
-   * What a page reads before it renders (M9-3 step 2a): an async Rust expression over
-   * `principal: Option<u64>`, of type `Result<Value, StatusCode>`, given to a page whose
-   * render takes the URL and an Unknown.
+   * What a page reads before it renders (M9-3 step 2): an async Rust expression over
+   * `principal: Option<u64>`, of type `Result<(Value, Value), StatusCode>`: the data the page
+   * carries (an Unknown input after the URL) and the JSON of its views (a third, typed input).
    */
   readonly pageData?: string;
   /** The ported engines these procedures run, listed in the artifact and version-checked. */
@@ -973,7 +973,8 @@ export type CompileOptions = {
     readonly render:
       | Fn<readonly [], unknown>
       | Fn<readonly [IRType<string>], unknown>
-      | Fn<readonly [IRType<string>, IRType<unknown>], unknown>;
+      | Fn<readonly [IRType<string>, IRType<unknown>], unknown>
+      | Fn<readonly [IRType<string>, IRType<unknown>, IRType<unknown>], unknown>;
     readonly containerId?: string;
     /** The origin page URLs are resolved against; never the untrusted Host header. */
     readonly origin?: string;
@@ -1637,6 +1638,7 @@ export const compileServer = (
               readonly parts: ReadonlyArray<TemplatePart>;
               readonly takesUrl: boolean;
               readonly takesData: boolean;
+              readonly views: Codec | undefined;
               readonly origin: string;
             }
           | undefined;
@@ -1646,7 +1648,7 @@ export const compileServer = (
           if (
             !(render instanceof Fn) ||
             (takesData
-              ? render.input.length !== 2 ||
+              ? (render.input.length !== 2 && render.input.length !== 3) ||
                 !IRType.same(render.input[0]!, StringType) ||
                 !IRType.same(render.input[1]!, UnknownType)
               : render.input.length > 1 ||
@@ -1655,7 +1657,7 @@ export const compileServer = (
             throw unsupported(
               "pages.render",
               takesData
-                ? "The page is a pure R function of the request URL (String) and its data (Unknown)"
+                ? "The page is a pure R function of the request URL (String), its data (Unknown) and optionally its views"
                 : "The page is a pure R function of nothing or of the request URL (String)",
             );
           let base: URL;
@@ -1680,6 +1682,16 @@ export const compileServer = (
             parts: splitTemplate(template, containerId),
             takesUrl: render.input.length >= 1,
             takesData,
+            views:
+              render.input.length === 3
+                ? codec(
+                    contractSchemaOf(render.input[2]!, "pages.render.views").ast,
+                    "pages.render.views",
+                    true,
+                    registry,
+                    true,
+                  )
+                : undefined,
             origin: base.href,
           };
         }
@@ -1964,13 +1976,22 @@ ${
                       [Rs.ident("reffect_generated")],
                       Rs.ident("r_ssr_page"),
                       prepared.pages.takesData
-                        ? [Rs.verbatimExpr("href.clone()"), Rs.verbatimExpr("data")]
+                        ? [
+                            Rs.verbatimExpr("href.clone()"),
+                            Rs.verbatimExpr("resume"),
+                            ...(prepared.pages.views ? [Rs.verbatimExpr("views")] : []),
+                          ]
                         : prepared.pages.takesUrl
                           ? [Rs.verbatimExpr("href.clone()")]
                           : [],
                     ),
                   ).text,
                   prepared.pages.takesData ? runtime!.pageData : undefined,
+                  prepared.pages.views === undefined
+                    ? undefined
+                    : isScalar(prepared.pages.views)
+                      ? `${prepared.pages.views}_arg(&views, None)`
+                      : `decode_${prepared.pages.views.name}(&views, None)`,
                 ),
               ),
             ]

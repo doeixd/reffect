@@ -156,3 +156,32 @@ export const planReads = <A, E>(
   );
   return planned;
 };
+
+/** A page view (M9-3 step 2b): the planned Query whose answer becomes the view's `Page`. */
+export interface PlannedView {
+  readonly _tag: "Query";
+  readonly read: number;
+}
+/**
+ * A page's reads and the views its R render reads from them, from each view's
+ * `Data.prefetch(initial, projection)`. A view is a query projection with a flat selection; its
+ * value is upstream's `Page` (`items`, `hasNext`, `hasPrevious`) of a Ready read.
+ */
+export const planPage = (views: {
+  readonly [name: string]: Effect.Effect<unknown, unknown, RemoteClient>;
+}): {
+  readonly reads: ReadonlyArray<PlannedRead>;
+  readonly views: { readonly [name: string]: PlannedView };
+} => {
+  const reads: Array<PlannedRead> = [];
+  const planned: { [name: string]: PlannedView } = {};
+  for (const [name, prefetch] of Object.entries(views)) {
+    const own = planReads(prefetch);
+    const query = own[0];
+    if (own.length !== 1 || query?._tag !== "Query")
+      throw new Error(`Remote page view "${name}" is not a single query projection`);
+    planned[name] = { _tag: "Query", read: reads.length };
+    reads.push(query);
+  }
+  return { reads, views: planned };
+};

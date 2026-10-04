@@ -127,6 +127,17 @@ export const R = Object.freeze({
   Schema: SchemaIR,
   RemoteStore: RemoteStoreIR,
   LiveHub: LiveHubIR,
+  /** Foldkit Remote values an R page reads (M9-3). */
+  Remote: Object.freeze({
+    /** Upstream's `Page<A>`: a query read's items in edge order, and whether more lie either side. */
+    Page: <A>(
+      item: IRType<A>,
+    ): IRType<{
+      readonly items: ReadonlyArray<A>;
+      readonly hasNext: boolean;
+      readonly hasPrevious: boolean;
+    }> => Struct({ items: ArrayModule(item), hasNext: BoolType, hasPrevious: BoolType }),
+  }),
   Html: HtmlIR,
   Struct,
   TaggedUnion,
