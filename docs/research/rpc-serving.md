@@ -1,6 +1,6 @@
 # Serving native RPC: connections, timeouts and threading
 
-Status: **step 1 (timeouts and connection cap) designed 2026-10-04**. The threading and concurrent-batch design (step 2) is open below. The issues are [#16](https://github.com/doeixd/reffect/issues/16) and [#25](https://github.com/doeixd/reffect/issues/25).
+Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`; test `rpc-serving.test.ts`). The threading and concurrent-batch design (step 2) is open below. The issues are [#16](https://github.com/doeixd/reffect/issues/16) and [#25](https://github.com/doeixd/reffect/issues/25).
 
 ## Findings (checked 2026-10-04)
 
