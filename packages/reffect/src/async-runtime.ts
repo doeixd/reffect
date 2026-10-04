@@ -53,10 +53,20 @@ pub trait RemoteStore: Send + Sync {
     fn finish(&self, commit: bool) -> StoreFuture<'_>;
     /// Why an operation failed, if one did; the host answers it instead of an interruption.
     fn failure(&self) -> Option<String>;
-    /// A live hub signal (LIVE-001): changed with the fields, deleted without.
-    fn live<'a>(&'a self, _entity: &'a str, _id: &'a str, _fields: Option<Vec<String>>) -> StoreFuture<'a> {
-        Box::pin(std::future::ready(Err("This server has no live hub".to_string())))
+    /// Runs an effect visible outside the session once the session's writes are visible
+    /// (LIVE-008). A non-transactional store runs it at once; a transactional one after its
+    /// commit, and never after a rollback.
+    fn after_commit(&self, action: AfterCommit) -> StoreFuture<'_> {
+        Box::pin(async move { action().await; Ok(()) })
     }
+}
+/// An effect a session defers until its writes are visible, such as a live hub signal.
+pub type AfterCommit = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+/// The live hub a host serves (LIVE-001, LIVE-008): each signal is an action for the session to
+/// run after its commit, so subscribers re-read committed rows.
+pub trait LiveHub: Send + Sync {
+    fn changed(&self, entity: &str, id: &str, fields: Vec<String>) -> AfterCommit;
+    fn deleted(&self, entity: &str, id: &str) -> AfterCommit;
 }
 `
     : ""
@@ -68,7 +78,7 @@ pub trait RemoteStore: Send + Sync {
     ${frames ? "frames: Option<Box<FrameTrail>>," : ""}
     ${scopeDepth ? `scopes: [Option<ScopeFrame>; ${scopeDepth}], scope_depth: usize,` : ""}
     ${launch ? "launch: Option<tokio::sync::oneshot::Sender<LaunchValues>>," : ""}
-    ${store ? "store: Option<std::sync::Arc<dyn RemoteStore>>," : ""}
+    ${store ? "store: Option<std::sync::Arc<dyn RemoteStore>>, live_hub: Option<std::sync::Arc<dyn LiveHub>>," : ""}
     ${streams ? "stream_sink: Option<tokio::sync::mpsc::Sender<Vec<serde_json::Value>>>," : ""}
 }
 impl AsyncContext {
@@ -79,7 +89,7 @@ impl AsyncContext {
             ${frames ? "frames: None," : ""}
             ${scopeDepth ? "scopes: std::array::from_fn(|_| None), scope_depth: 0," : ""}
             ${launch ? "launch: None," : ""}
-            ${store ? "store: None," : ""}
+            ${store ? "store: None, live_hub: None," : ""}
             ${streams ? "stream_sink: None," : ""}
         }
     }
@@ -90,7 +100,7 @@ impl AsyncContext {
         let mut child = Self::new(cancellation);
         child.interruptible = race || self.interruptible;
         ${logging ? "child.annos = self.annos.clone(); child.spans = self.spans.clone(); child.request = self.request.clone();" : ""}
-        ${store ? "child.store = self.store.clone();" : ""}
+        ${store ? "child.store = self.store.clone(); child.live_hub = self.live_hub.clone();" : ""}
         ${streams ? "child.stream_sink = self.stream_sink.clone();" : ""}
         child
     }`
@@ -120,6 +130,7 @@ impl AsyncContext {
     ${
       store
         ? `pub fn set_remote_store(&mut self, store: std::sync::Arc<dyn RemoteStore>) { self.store = Some(store); }
+    pub fn set_live_hub(&mut self, hub: std::sync::Arc<dyn LiveHub>) { self.live_hub = Some(hub); }
     /// A failed operation aborts like a defect: R cannot catch it, and unwinding runs finalizers.
     /// The session keeps the reason, so the host can answer it.
     async fn remote_store<E>(&mut self, write: Option<serde_json::Value>, entity: &str, id: &str) -> Result<(), AsyncError<E>> {
@@ -127,9 +138,11 @@ impl AsyncContext {
         let done = match write { Some(values) => store.write(entity, id, values).await, None => store.remove(entity, id).await };
         done.map_err(|_| AsyncError::Interrupted)
     }
+    /// A signal is the hub's action, run when the session's writes are visible (LIVE-008).
     async fn remote_live<E>(&mut self, fields: Option<Vec<String>>, entity: &str, id: &str) -> Result<(), AsyncError<E>> {
-        let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };
-        store.live(entity, id, fields).await.map_err(|_| AsyncError::Interrupted)
+        let (Some(store), Some(hub)) = (self.store.clone(), self.live_hub.clone()) else { return Err(AsyncError::Interrupted) };
+        let action = match fields { Some(fields) => hub.changed(entity, id, fields), None => hub.deleted(entity, id) };
+        store.after_commit(action).await.map_err(|_| AsyncError::Interrupted)
     }
     async fn remote_store_get<E>(&mut self, entity: &str, id: &str) -> Result<Option<serde_json::Value>, AsyncError<E>> {
         let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };

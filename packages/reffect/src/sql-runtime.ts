@@ -229,13 +229,15 @@ mod remote_sql {
         entities: &'static [Entity],
         tx: tokio::sync::Mutex<Option<sqlx::Transaction<'static, Db>>>,
         failure: std::sync::Mutex<Option<String>>,
-        /// Live signals held until the transaction commits (LIVE-003): entity, id, changed fields.
-        signals: std::sync::Mutex<Vec<(String, String, Option<Vec<String>>)>>,
+        /// Effects visible outside the transaction, held until it commits (LIVE-003, LIVE-008).
+        deferred: std::sync::Mutex<Vec<Deferred>>,
     }
+    /// An action run once the transaction's writes are visible.
+    pub type Deferred = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
     impl Sql {
         pub async fn begin(&'static self) -> Result<Session, String> {
             let tx = self.pool()?.begin_with("${DIALECT[dialect].begin}").await.map_err(failed)?;
-            Ok(Session { entities: self.entities, tx: tokio::sync::Mutex::new(Some(tx)), failure: std::sync::Mutex::new(None), signals: std::sync::Mutex::new(Vec::new()) })
+            Ok(Session { entities: self.entities, tx: tokio::sync::Mutex::new(Some(tx)), failure: std::sync::Mutex::new(None), deferred: std::sync::Mutex::new(Vec::new()) })
         }
     }
     impl Session {
@@ -345,18 +347,18 @@ mod remote_sql {
             }.await;
             result.map_err(|message| self.fail(message))
         }
-        #[allow(dead_code)]
-        pub fn signal(&self, entity: &str, id: &str, fields: Option<Vec<String>>) {
-            self.signals.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((entity.to_string(), id.to_string(), fields));
+        pub fn defer(&self, action: Deferred) {
+            self.deferred.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(action);
         }
-        /// The signals of a committed session; a rolled-back one drops them.
-        #[allow(dead_code)]
-        pub fn take_signals(&self) -> Vec<(String, String, Option<Vec<String>>)> {
-            std::mem::take(&mut *self.signals.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
-        }
+        /// Commits, then runs the deferred actions in order; a rollback, or a failed commit,
+        /// drops them.
         pub async fn finish(&self, commit: bool) -> Result<(), String> {
             let Some(tx) = self.tx.lock().await.take() else { return Ok(()) };
-            if commit { tx.commit().await.map_err(failed) } else { tx.rollback().await.map_err(failed) }
+            if !commit { return tx.rollback().await.map_err(failed); }
+            tx.commit().await.map_err(failed)?;
+            let deferred = std::mem::take(&mut *self.deferred.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+            for action in deferred { action().await; }
+            Ok(())
         }
     }
 

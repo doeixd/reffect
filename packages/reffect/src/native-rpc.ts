@@ -922,8 +922,11 @@ export interface RpcRuntime {
   readonly store?: {
     readonly begin: string;
     readonly impl: string;
-    /** The session's `live` signals reach a hub (LIVE-001). */
-    readonly live?: boolean;
+    /**
+     * The live hub signals reach (LIVE-001, LIVE-008): a Rust expression of type
+     * `Arc<dyn reffect_generated::LiveHub>`, set on every session's execution context.
+     */
+    readonly live?: string;
   };
   /** The ported engines these procedures run, listed in the artifact and version-checked. */
   readonly ported?: readonly PortedRuntime[];
@@ -1870,7 +1873,12 @@ ${
     ? `    let mut execution = execution_context(cancellation.clone(), context);
     // One store session per run: committed on success, rolled back on failure or interruption.
     let store = match ${runtime!.store!.begin} { Ok(store) => store, Err(message) => return RuntimeCall::StoreFailed(message) };
-    execution.set_remote_store(store.clone());
+    execution.set_remote_store(store.clone());${
+      runtime!.store!.live
+        ? `
+    execution.set_live_hub(${runtime!.store!.live});`
+        : ""
+    }
     let outcome = ${call}(&mut execution, ${args}).await;
     drop(execution);
     match outcome {

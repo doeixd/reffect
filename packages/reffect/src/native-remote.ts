@@ -477,6 +477,8 @@ pub use std::cmp::Ordering;
 pub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }
 }`;
 };
+/** The Rust expression of the hub service each session gets (LIVE-008). */
+const REMOTE_LIVE = "std::sync::Arc::new(RemoteLive)";
 const compile = <Rpcs extends Rpc.Any>(
   group: RpcGroup.RpcGroup<Rpcs>,
   options: NativeRemoteOptions,
@@ -593,33 +595,15 @@ const compile = <Rpcs extends Rpc.Any>(
     fn get<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::RowFuture<'a> { Box::pin(remote_sql::Session::get(self, entity, id)) }
     fn write<'a>(&'a self, entity: &'a str, id: &'a str, values: serde_json::Value) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::write(self, entity, id, values)) }
     fn remove<'a>(&'a self, entity: &'a str, id: &'a str) -> reffect_generated::StoreFuture<'a> { Box::pin(remote_sql::Session::remove(self, entity, id)) }
-    fn failure(&self) -> Option<String> { remote_sql::Session::failure(self) }${
-      options.live
-        ? `
-    // Signals wait for the commit, so subscribers re-read committed rows (LIVE-003).
-    fn live<'a>(&'a self, entity: &'a str, id: &'a str, fields: Option<Vec<String>>) -> reffect_generated::StoreFuture<'a> {
-        remote_sql::Session::signal(self, entity, id, fields);
+    fn failure(&self) -> Option<String> { remote_sql::Session::failure(self) }
+    fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(remote_sql::Session::finish(self, commit)) }
+    // Effects visible outside the transaction wait for its commit (LIVE-003, LIVE-008).
+    fn after_commit(&self, action: reffect_generated::AfterCommit) -> reffect_generated::StoreFuture<'_> {
+        remote_sql::Session::defer(self, action);
         Box::pin(std::future::ready(Ok(())))
     }
-    fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> {
-        Box::pin(async move {
-            remote_sql::Session::finish(self, commit).await?;
-            if commit {
-                for (entity, id, fields) in self.take_signals() {
-                    match fields {
-                        Some(fields) => remote_hub().changed(&REMOTE_SQL, remote_authorize_for, &entity, &id, &fields).await,
-                        None => remote_hub().deleted(&entity, &id),
-                    }
-                }
-            }
-            Ok(())
-        })
-    }`
-        : `
-    fn finish(&self, commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(remote_sql::Session::finish(self, commit)) }`
-    }
 }`,
-              live: options.live === true,
+              live: options.live ? REMOTE_LIVE : undefined,
             },
             mutations,
             authorize,
@@ -688,22 +672,11 @@ impl reffect_generated::RemoteStore for MemorySession {
         Box::pin(std::future::ready(Ok(())))
     }
     fn finish(&self, _commit: bool) -> reffect_generated::StoreFuture<'_> { Box::pin(std::future::ready(Ok(()))) }
-    fn failure(&self) -> Option<String> { None }${
-      options.live
-        ? `
-    // Applied when signalled, as upstream's memory mutations call the hub (LIVE-003).
-    fn live<'a>(&'a self, entity: &'a str, id: &'a str, fields: Option<Vec<String>>) -> reffect_generated::StoreFuture<'a> {
-        Box::pin(async move {
-            match fields {
-                Some(fields) => { remote_hub().changed(self.0, remote_authorize_for, entity, id, &fields).await; Ok(()) }
-                None => { remote_hub().deleted(entity, id); Ok(()) }
-            }
-        })
-    }`
-        : ""
-    }
+    fn failure(&self) -> Option<String> { None }
+    // Not transactional: the default after_commit runs each action at once, as
+    // upstream's memory mutations call the hub (LIVE-003).
 }`,
-            live: options.live === true,
+            live: options.live ? REMOTE_LIVE : undefined,
           },
           mutations,
           authorize,
@@ -799,7 +772,19 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
           ...(options.live
             ? [
                 `static REMOTE_HUB: std::sync::OnceLock<remote_engine::Hub> = std::sync::OnceLock::new();
-fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }`,
+fn remote_hub() -> &'static remote_engine::Hub { REMOTE_HUB.get_or_init(remote_engine::Hub::default) }
+/// The hub as the sessions' LiveHub service (LIVE-008): signals become after-commit actions.
+struct RemoteLive;
+impl reffect_generated::LiveHub for RemoteLive {
+    fn changed(&self, entity: &str, id: &str, fields: Vec<String>) -> reffect_generated::AfterCommit {
+        let (entity, id) = (entity.to_string(), id.to_string());
+        Box::new(move || Box::pin(async move { remote_hub().changed(${prepared.source}, remote_authorize_for, &entity, &id, &fields).await }))
+    }
+    fn deleted(&self, entity: &str, id: &str) -> reffect_generated::AfterCommit {
+        let (entity, id) = (entity.to_string(), id.to_string());
+        Box::new(move || Box::pin(async move { remote_hub().deleted(&entity, &id) }))
+    }
+}`,
               ]
             : []),
           authorizer,
