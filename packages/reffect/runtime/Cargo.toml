@@ -1,0 +1,16 @@
+# Check-only crate for the static Rust runtimes reffect emits (LIVE-012). Generated crates
+# inline these module bodies; this crate lets rustfmt, clippy and unit tests run on them.
+[package]
+name = "reffect-runtime"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
+ryu-js = { version = "=1.0.3", default-features = false }
+
+[workspace]
