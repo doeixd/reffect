@@ -218,3 +218,24 @@ test("reserved hydration marker names are refused, as upstream refuses them (#22
   // Other foldkit-looking keys stay available.
   expect(H.DataAttribute("foldkit-note", "x").name).toBe("DataAttribute");
 });
+
+test("Value outside button and input is refused rather than silently dropped (#24)", async () => {
+  // Upstream writes li's value as a number and refuses a non-numeric one; the profile refuses both.
+  const upstream = await Effect.runPromise(
+    renderToString(
+      {
+        init: () => ({ model: {} }),
+        view: (_model: object, h: HtmlBuilder<never>): Document => ({
+          title: "t",
+          body: h.ul([], [h.li([h.Value("3")], [])]),
+        }),
+      },
+      { buildId: "b" },
+    ),
+  );
+  expect(upstream.html).toContain('<li value="3">');
+  expect(() => H.li([H.Value("3")], [])).toThrow(CompileError);
+  expect(() => H.p([H.Value("x")], [])).toThrow("Value");
+  expect(() => H.input([H.Value("x")])).not.toThrow();
+  expect(() => H.button([H.Value("x")], [])).not.toThrow();
+});

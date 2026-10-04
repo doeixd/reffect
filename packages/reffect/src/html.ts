@@ -21,6 +21,7 @@ import { OptionIR } from "./option.ts";
 import { ResultIR } from "./result.ts";
 import type { ResultValue } from "./result.ts";
 import { Reference } from "./reference.ts";
+import { refusedOn } from "./html-native.ts";
 import { NativeRpc } from "./native-rpc.ts";
 import {
   BOOLEAN_ATTRIBUTES,
@@ -176,6 +177,14 @@ const element =
       if (seen.has(name))
         throw fail("DUPLICATE_ATTRIBUTE", "authoring", at, `${name} is given twice`);
       seen.add(name);
+      // Upstream writes these (li's value as a number) where native would drop them (#24).
+      if (refusedOn(tag, attribute.name))
+        throw fail(
+          "REFUSED_ATTRIBUTE",
+          "authoring",
+          at,
+          `${attribute.name} is admitted on button and input only: Foldkit writes or rejects it elsewhere`,
+        );
     }
     const shape: ElementShape = Object.freeze({
       tag,
