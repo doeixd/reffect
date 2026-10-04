@@ -22,6 +22,18 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — Review fixes: step 1 completed (#3, #5, #17, #18, #20)
+
+- **#18.** Scope analysis refuses Remote store calls and live signals in cleanup (`STORE_CLEANUP`). Before, a failed call there panicked the masked finalizer path.
+- **#17.** `JsObject` uses hashed slots and a sorted index-key map, and relation fields merge through a set. A 200k-key windows map reads in about 2 s in a debug build; the old engine took more than 90 s. A Rust test pins JS key order.
+- **#3.** Data pages send `Cache-Control: private, no-store`, a recorded hardening divergence.
+- **#5.** Page views need a windowed query; todo-remote reads the first 50.
+- **#20.** Bearer tokens are compared zero-padded to 256 bytes together with their length, in constant time, and the credentials variable is removed once loaded.
+- **Validation.**
+  - New tests: `store-cleanup`, two Rust tests, a `remote-page` refusal and a header assertion.
+  - These suites pass: `remote-read`, `remote-acceptance`, `remote-query`, `remote-live`, `remote-auth`, `rpc-auth`, `remote-mutate`, `remote-sql-mutate`, `remote-page`, `todo-remote-page` and `runtime-sources`.
+  - `runtime:check` passes 11 Rust tests.
+
 ## 2026-10-04 — Review fixes: SSR security (#21, #22, #24)
 
 - **#22.** `R.Html.DataAttribute` refuses the reserved `data-foldkit-*` markers with upstream's message. Before this, an authored marker preceded the server's, so stored data could set hydration keys.

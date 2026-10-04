@@ -306,9 +306,7 @@ All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reff
 
 The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHub. Recommended order: security first (#3, #5), then #6, #12 with #9, #10 and #7, then #13, then #4 before any authenticated showcase, then M9-5 and #14.
 
-- [#3](https://github.com/doeixd/reffect/issues/3): data pages need `Cache-Control: private, no-store` (shared-cache leak)
 - [#4](https://github.com/doeixd/reffect/issues/4): a cookie session adapter, so authenticated pages work in browsers
-- [#5](https://github.com/doeixd/reffect/issues/5): refuse or cap unwindowed page views
 - [#6](https://github.com/doeixd/reffect/issues/6): derive view item witnesses from the selection schema
 - [#7](https://github.com/doeixd/reffect/issues/7): record Ready-only views as a divergence
 - [#8](https://github.com/doeixd/reffect/issues/8): snapshot and `changed` interleaving (documented race)
@@ -325,10 +323,7 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the key claims re-verified. Recommended order: #16, #17, #18 (anyone can stall or crash the server), then #21, #22, #23, #24 (SSR security and parity), #19, #20, then correctness, performance and design. The native-only snapshot race is a comment on [#8](https://github.com/doeixd/reffect/issues/8).
 
 - [#16](https://github.com/doeixd/reffect/issues/16): RPC server: multi-thread runtime, read timeouts, connection cap
-- [#17](https://github.com/doeixd/reffect/issues/17): Remote engine: O(n²) client-sized maps (one request stalls the server)
-- [#18](https://github.com/doeixd/reffect/issues/18): store/Live failure in cleanup panics the server
 - [#19](https://github.com/doeixd/reffect/issues/19): bounded Live queues and a subscription cap (LR-8)
-- [#20](https://github.com/doeixd/reffect/issues/20): bearer auth: length-revealing compare, credentials left in the environment
 - [#23](https://github.com/doeixd/reffect/issues/23): SSR: refuse nestings upstream refuses
 - [#25](https://github.com/doeixd/reffect/issues/25): RPC: requests in one body run sequentially
 - [#26](https://github.com/doeixd/reffect/issues/26): Remote/SQL data correctness gaps
