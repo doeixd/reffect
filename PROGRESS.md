@@ -40,6 +40,12 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — #25 and #16 step 2: concurrent batches, multi-thread runtime
+
+- **Change.** A body's requests run concurrently in one task (`FuturesUnordered`, first polled in request order) and answer in completion order, as official does. Generated servers run on the multi-thread runtime; RS-004 holds through per-operation store locking ([record](docs/research/rpc-serving.md)).
+- **Validation.** These suites pass, run one at a time: `rpc-serving`, `stream-rpc` (now compared per request), `remote-live` (now compared by events), `server-layer`, `stream-interrupt`, `rpc-auth`, `html-page`, `remote-page`, `html-flags`, `remote-query`, `remote-read` and `remote-auth`.
+- **Blocked.** Five mutation suites are refused while compiling by `TASK_GROUP_RETAINED_FAILURE` from the concurrent coordination work (most likely `1232a77`), independent of this change. #16 stays open until they are rerun.
+
 ## 2026-10-04 — #16 step 1: read timeouts and a connection cap
 
 - **Change.** Generated servers serve through one accept loop instead of `axum::serve`, which set no hyper timer. The loop has:

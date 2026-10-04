@@ -322,10 +322,9 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 
 Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the key claims re-verified. Recommended order: #16, #17, #18 (anyone can stall or crash the server), then #21, #22, #23, #24 (SSR security and parity), #19, #20, then correctness, performance and design. The native-only snapshot race is a comment on [#8](https://github.com/doeixd/reffect/issues/8).
 
-- [#16](https://github.com/doeixd/reffect/issues/16): RPC server threading (read timeouts and connection cap done; step 2 in [rpc-serving](research/rpc-serving.md#step-2-threading-and-concurrent-batches-open))
+- [#16](https://github.com/doeixd/reffect/issues/16): RPC server: timeouts, cap, concurrent batches and multi-thread runtime done; rerun the mutation suites once `TASK_GROUP_RETAINED_FAILURE` no longer refuses ordinary mutation sources
 - [#19](https://github.com/doeixd/reffect/issues/19): bounded Live queues and a subscription cap (LR-8)
 - [#23](https://github.com/doeixd/reffect/issues/23): SSR: refuse nestings upstream refuses
-- [#25](https://github.com/doeixd/reffect/issues/25): RPC: requests in one body run sequentially
 - [#26](https://github.com/doeixd/reffect/issues/26): Remote/SQL data correctness gaps
 - [#27](https://github.com/doeixd/reffect/issues/27): RPC JSON mode: invalid UTF-8 and BOM bodies
 - [#28](https://github.com/doeixd/reffect/issues/28): SSR page host parity gaps

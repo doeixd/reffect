@@ -43,7 +43,7 @@ Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`
 - With a cap of N, an (N+1)th connection is served only after one closes.
 - The existing RPC, Remote and page suites pass unchanged.
 
-## Step 2: threading and concurrent batches (designed 2026-10-04)
+## Step 2: threading and concurrent batches (delivered 2026-10-04)
 
 **Findings**
 
@@ -53,7 +53,7 @@ Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`
 
 **Design**
 
-- **Concurrent batches (#25).** In async servers, each request in a body runs as its own task in a `JoinSet` (at most `MAX_BATCH`). Each task sends its response to the shared output as it finishes, giving official's completion order in both modes. A stream request no longer blocks the requests after it. Synchronous handlers cannot suspend, so their order is already official's.
+- **Concurrent batches (#25).** In async servers, a body's requests run as futures in one `FuturesUnordered` inside the body's task (at most `MAX_BATCH`), first polled in request order. A first version spawned each request on a `JoinSet`; on the multi-thread runtime, a unary request then answered before an earlier stream's first chunk, unlike official. Each task sends its response to the shared output as it finishes, giving official's completion order in both modes. A stream request no longer blocks the requests after it. Synchronous handlers cannot suspend, so their order is already official's.
 - **Multi-thread runtime (#16).** Generated servers use `#[tokio::main(flavor = "multi_thread")]` (tokio `rt-multi-thread`). A CPU-heavy handler then holds one worker, not the whole server.
 
 **Acceptance**
@@ -63,3 +63,12 @@ Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`
 - The existing RPC, Remote, Live, page and layered-server suites pass.
 
 **Remaining risk.** Event ordering between different connections becomes truly parallel. It was already concurrent, but before it ran on one thread. Tests that compare cross-connection timing must keep waiting for counts rather than order.
+
+**Delivered.**
+
+- **Concurrency.** A body's requests run concurrently in completion order: `rpc-serving` answers four 300 ms requests in under 1 s, and the old sequential loop took 1265 ms.
+- **Runtime.** The multi-thread runtime is on.
+- **Test changes.**
+  - `stream-rpc` compares multi-request bodies per request. Official ran its non-suspending `Count` stream to completion before the unary request, which is scheduling, not protocol.
+  - `remote-live` compares event sequences rather than `Chunk` lines. How many queued events one Chunk carries is timing (LR-10), and that showed as one flaky failure on the multi-thread runtime.
+- **Blocked verification.** `remote-acceptance`, `remote-mutate`, `remote-sql-mutate`, `remote-sql-live` and `todo-remote-page` are refused while compiling by `TASK_GROUP_RETAINED_FAILURE`. That check comes from the concurrent coordination work (most likely `1232a77`) and refuses ordinary mutation sources that fail with `RemoteServerError`. They are to be rerun once it is resolved. `remote-live` and `remote-auth`, which include mutations, pass on the multi-thread runtime.
