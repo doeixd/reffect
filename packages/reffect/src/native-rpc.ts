@@ -2040,7 +2040,7 @@ ${
     const ported = Object.freeze([
       PortedRuntimes.RpcHttp,
       ...(runtime?.ported ?? []),
-      ...(core.explanation.selections.some((s) => s.selected.method === "html")
+      ...(core.explanation.selections.some((s) => s.selected.lowering._tag === "Html")
         ? [PortedRuntimes.SsrSerialize]
         : []),
       ...(prepared.pages ? [PortedRuntimes.SsrHost] : []),

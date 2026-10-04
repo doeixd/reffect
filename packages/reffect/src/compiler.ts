@@ -30,6 +30,7 @@ import { containsRef } from "./ref-model.ts";
 import { containsDeferred, usesDeferredExpression } from "./deferred-model.ts";
 import { hostFunctionOf } from "./schema-json.ts";
 import { HtmlCapability, HtmlType, htmlOperationKind } from "./html-ir.ts";
+import type { HtmlOperationKind } from "./html-ir.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
 import { lowerFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -94,21 +95,29 @@ export interface Implementation {
   readonly capabilities: readonly Capability[];
   readonly crates: readonly string[];
   readonly rationale: string;
-  readonly method:
-    | "wrapping_add"
-    | "wrapping_sub"
-    | "wrapping_mul"
-    | "eq"
-    | "lt"
-    | "not"
-    | "contains"
-    | "replace"
-    | "concat"
-    | "js_string"
-    | "html"
-    | "add"
-    | "json";
+  readonly lowering: Lowering;
 }
+/**
+ * How an implementation lowers to Rust (#36): lowering dispatches on this alone, exhaustively,
+ * so a plan's selection is exactly what is emitted.
+ */
+export type Lowering =
+  /** `(a).name(b, ...)`: a Rust method on the first operand. */
+  | {
+      readonly _tag: "Method";
+      readonly name: "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "contains" | "replace";
+    }
+  /** `(a) op (b)`. */
+  | { readonly _tag: "Infix"; readonly operator: "==" | "<" | "+" }
+  | { readonly _tag: "Not" }
+  /** Two strings joined. */
+  | { readonly _tag: "Concat" }
+  /** A double as ECMAScript's Number#toString writes it (ryu-js). */
+  | { readonly _tag: "NumberText" }
+  /** A NativeRpc host's verified JSON function in `crate::reffect_json` (RM-006). */
+  | { readonly _tag: "HostJson"; readonly function: string }
+  /** The ported Foldkit serializer (SSR-003). */
+  | { readonly _tag: "Html"; readonly kind: HtmlOperationKind };
 export class Target extends Pipeable.Class {
   private constructor(
     readonly ref: SemanticRef<"target">,
@@ -129,10 +138,13 @@ export class Target extends Pipeable.Class {
       new Target(self.ref, Object.freeze(Array.from(capabilities)), self.implementations);
   }
 }
-const implementation = (
-  operation: AnyOperation,
-  method: Implementation["method"],
-): Implementation =>
+const loweringName = (lowering: Lowering): string =>
+  lowering._tag === "Method"
+    ? lowering.name
+    : lowering._tag === "Infix"
+      ? lowering.operator
+      : lowering._tag;
+const implementation = (operation: AnyOperation, lowering: Lowering): Implementation =>
   Object.freeze({
     id: `rust/${operation.id}`,
     operation,
@@ -140,12 +152,12 @@ const implementation = (
     strategy: "generated",
     capabilities: operation.capabilities,
     crates: Object.freeze([]),
-    method,
-    rationale: `Verified primitive Rust ${method} implements ${operation.id} without coercion`,
+    lowering: Object.freeze(lowering),
+    rationale: `Verified primitive Rust ${loweringName(lowering)} implements ${operation.id} without coercion`,
   });
 const hostImplementations = new WeakMap<object, Implementation>();
 /** A host-supplied function (RM-006), selected only for targets with the JsonEncoders capability. */
-const hostImplementation = (operation: AnyOperation): Implementation => {
+const hostImplementation = (operation: AnyOperation, hostFunction: string): Implementation => {
   const known = hostImplementations.get(operation);
   if (known) return known;
   const created: Implementation = Object.freeze({
@@ -155,7 +167,7 @@ const hostImplementation = (operation: AnyOperation): Implementation => {
     strategy: "generated",
     capabilities: operation.capabilities,
     crates: Object.freeze([]),
-    method: "json",
+    lowering: Object.freeze({ _tag: "HostJson", function: hostFunction }),
     rationale:
       "A NativeRpc host function, verified against the reference, implements the operation",
   });
@@ -164,7 +176,7 @@ const hostImplementation = (operation: AnyOperation): Implementation => {
 };
 const htmlImplementations = new WeakMap<object, Implementation>();
 /** The ported Foldkit serializer (SSR-003) implements every Html operation. */
-const htmlImplementation = (operation: AnyOperation): Implementation => {
+const htmlImplementation = (operation: AnyOperation, kind: HtmlOperationKind): Implementation => {
   const known = htmlImplementations.get(operation);
   if (known) return known;
   const created: Implementation = Object.freeze({
@@ -174,33 +186,31 @@ const htmlImplementation = (operation: AnyOperation): Implementation => {
     strategy: "generated",
     capabilities: operation.capabilities,
     crates: Object.freeze(
-      ["JsonText", "JsonRoundTrip"].includes(htmlOperationKind(operation)?._tag ?? "")
-        ? ["ryu-js@1.0.3"]
-        : [],
+      kind._tag === "JsonText" || kind._tag === "JsonRoundTrip" ? ["ryu-js@1.0.3"] : [],
     ),
-    method: "html",
+    lowering: Object.freeze({ _tag: "Html", kind }),
     rationale: "foldkit/ssr-serialize@1 renders the element as renderToString does",
   });
   htmlImplementations.set(operation, created);
   return created;
 };
 const implementations = Object.freeze([
-  implementation(AddU64 as AnyOperation, "wrapping_add"),
-  implementation(SubU64 as AnyOperation, "wrapping_sub"),
-  implementation(MulU64 as AnyOperation, "wrapping_mul"),
-  implementation(EqU64 as AnyOperation, "eq"),
-  implementation(LtU64 as AnyOperation, "lt"),
-  implementation(EqBool as AnyOperation, "eq"),
-  implementation(NotBool as AnyOperation, "not"),
-  implementation(EqString as AnyOperation, "eq"),
-  implementation(IncludesString as AnyOperation, "contains"),
-  implementation(ReplaceAllString as AnyOperation, "replace"),
-  implementation(ConcatString as AnyOperation, "concat"),
-  implementation(AddNumber as AnyOperation, "add"),
-  implementation(EqNumber as AnyOperation, "eq"),
-  implementation(LtNumber as AnyOperation, "lt"),
+  implementation(AddU64 as AnyOperation, { _tag: "Method", name: "wrapping_add" }),
+  implementation(SubU64 as AnyOperation, { _tag: "Method", name: "wrapping_sub" }),
+  implementation(MulU64 as AnyOperation, { _tag: "Method", name: "wrapping_mul" }),
+  implementation(EqU64 as AnyOperation, { _tag: "Infix", operator: "==" }),
+  implementation(LtU64 as AnyOperation, { _tag: "Infix", operator: "<" }),
+  implementation(EqBool as AnyOperation, { _tag: "Infix", operator: "==" }),
+  implementation(NotBool as AnyOperation, { _tag: "Not" }),
+  implementation(EqString as AnyOperation, { _tag: "Infix", operator: "==" }),
+  implementation(IncludesString as AnyOperation, { _tag: "Method", name: "contains" }),
+  implementation(ReplaceAllString as AnyOperation, { _tag: "Method", name: "replace" }),
+  implementation(ConcatString as AnyOperation, { _tag: "Concat" }),
+  implementation(AddNumber as AnyOperation, { _tag: "Infix", operator: "+" }),
+  implementation(EqNumber as AnyOperation, { _tag: "Infix", operator: "==" }),
+  implementation(LtNumber as AnyOperation, { _tag: "Infix", operator: "<" }),
   Object.freeze({
-    ...implementation(NumberToString as AnyOperation, "js_string"),
+    ...implementation(NumberToString as AnyOperation, { _tag: "NumberText" }),
     crates: Object.freeze(["ryu-js@1.0.3"]),
     rationale: "ryu-js writes a double exactly as ECMAScript Number#toString does",
   }),
@@ -926,13 +936,18 @@ const plan = Effect.fn("Compile.plan")(function* (
   for (const op of derived.operations) {
     const rejected: { id: string; reason: string }[] = [];
     let selected: Implementation | undefined;
+    // Host JSON functions and the Html serializer provide their own implementation; every
+    // other operation chooses among the target's registered ones.
     const encoded = hostFunctionOf(op);
-    const html = htmlOperationKind(op) !== undefined;
-    const candidates = encoded
-      ? [hostImplementation(op)]
+    const html = htmlOperationKind(op);
+    const provided = encoded
+      ? hostImplementation(op, encoded)
       : html
-        ? [htmlImplementation(op)]
-        : target.implementations.filter((i) => i.operation.id === op.id);
+        ? htmlImplementation(op, html)
+        : undefined;
+    const candidates = provided
+      ? [provided]
+      : target.implementations.filter((i) => i.operation.id === op.id);
     for (const candidate of candidates) {
       const reason =
         candidate.operation.ref !== op.ref || candidate.operation !== op
@@ -943,7 +958,7 @@ const plan = Effect.fn("Compile.plan")(function* (
                   (c) => !target.capabilities.includes(c) || !candidate.capabilities.includes(c),
                 )
               ? "Missing capability"
-              : !implementations.includes(candidate) && !encoded && !html
+              : candidate !== provided && !target.implementations.includes(candidate)
                 ? "No verified Rust lowering registered for this candidate"
                 : undefined;
       if (reason) rejected.push({ id: candidate.id, reason });

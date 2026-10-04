@@ -35,8 +35,7 @@ import { streamExpressions, streamFinalizers } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
 import { Expr } from "./kernel.ts";
 import type { OperationRef, Program, RecordQuery } from "./kernel.ts";
-import { hostFunctionOf } from "./schema-json.ts";
-import { HtmlType, htmlOperationKind } from "./html-ir.ts";
+import { HtmlType } from "./html-ir.ts";
 import type { HtmlOperationKind } from "./html-ir.ts";
 import { elementCall, htmlRuntime, jsonTextRuntime } from "./html-native.ts";
 import type { SchedulePlan } from "./schedule.ts";
@@ -57,7 +56,7 @@ import {
   streamRunCollect,
 } from "./effect-ir.ts";
 import type { Computation, RemoteOp } from "./effect-ir.ts";
-import type { Implementation } from "./compiler.ts";
+import type { Implementation, Lowering } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
 import { Rs, escapeJsonContent } from "./rust-emit.ts";
 import type { RsExpr, RsStmt, RsType } from "./rust-emit.ts";
@@ -75,12 +74,9 @@ export type RustExpr = (
   | { readonly _tag: "Literal"; readonly value: bigint | boolean | string | number | void }
   | {
       readonly _tag: "Call";
-      readonly method: Implementation["method"];
+      /** The selected implementation's lowering (#36). */
+      readonly lowering: Lowering;
       readonly args: readonly RustExpr[];
-      /** The host's encoder function for a "json" call (RM-006). */
-      readonly encoder?: string;
-      /** What an "html" call builds (SSR-003). */
-      readonly html?: HtmlOperationKind;
     }
   | {
       readonly _tag: "Match";
@@ -167,8 +163,8 @@ export const RustExpr = Object.freeze({
   local: (index: number): RustExpr => Object.freeze({ _tag: "Local", index }),
   literal: (value: bigint | boolean | string | number | void): RustExpr =>
     Object.freeze({ _tag: "Literal", value }),
-  call: (method: Implementation["method"], left: RustExpr, right: RustExpr): RustExpr =>
-    Object.freeze({ _tag: "Call", method, args: Object.freeze([left, right]) }),
+  call: (lowering: Lowering, left: RustExpr, right: RustExpr): RustExpr =>
+    Object.freeze({ _tag: "Call", lowering, args: Object.freeze([left, right]) }),
 });
 export interface RustBinding {
   readonly index: number;
@@ -799,16 +795,12 @@ function lowerFunctionsInternal(
                   : Object.freeze({ _tag: "Defined", value: literal });
               },
               Apply: (n): RustExpr => {
-                const method = selected.get(n.operation.ref)!.method;
-                const host = hostFunctionOf(n.operation);
                 return Object.freeze({
                   _tag: "Call",
-                  method,
+                  lowering: selected.get(n.operation.ref)!.lowering,
                   args: Object.freeze(
                     n.args.map((arg, i) => expression(arg, `${path}.args[${i}]`)),
                   ),
-                  ...(method === "json" && host ? { encoder: host } : {}),
-                  ...(method === "html" ? { html: htmlOperationKind(n.operation)! } : {}),
                 });
               },
               Match: (n): RustExpr =>
@@ -2263,90 +2255,89 @@ export const emitFunctions = (
                   );
                 },
                 Call: (n) => {
-                  if (n.method === "not") return joinFragments(["!(", operand(n.args[0]), ")"]);
-                  if (n.method === "concat")
-                    return joinFragments([
-                      'format!("{}{}", ',
-                      operand(n.args[0]),
-                      ", ",
-                      operand(n.args[1]),
-                      ")",
-                    ]);
-                  if (n.method === "html") {
+                  const arg = (index: number) => operand(n.args[index]);
+                  const html = (kind: HtmlOperationKind) => {
                     usesHtml = true;
-                    const html = n.html!;
-                    const args = n.args.map((arg) => operand(arg));
+                    const args = n.args.map((argument) => operand(argument));
                     const ids = () => [", &(", args[1]!, ")[..], &(", args[2]!, ")[..])"];
-                    if (html._tag === "Element")
-                      return joinFragments([...elementCall(html.shape, args)]);
-                    if (html._tag === "Text")
-                      return joinFragments(["crate::foldkit_html::text(&(", args[0]!, ")[..])"]);
-                    if (html._tag === "Empty") return textFragment("crate::foldkit_html::empty()");
-                    if (html._tag === "JsonText") {
-                      usesJsonText = true;
-                      usesRyu = true;
-                      return joinFragments(["crate::foldkit_json::json_text(&(", args[0]!, "))"]);
-                    }
-                    if (html._tag === "JsonRoundTrip") {
-                      usesJsonText = true;
-                      usesRyu = true;
-                      return joinFragments(["crate::foldkit_json::round_trip(&(", args[0]!, "))"]);
-                    }
-                    if (html._tag === "RootKind")
-                      return joinFragments(["crate::foldkit_html::root_kind(&(", args[0]!, "))"]);
-                    if (html._tag === "RenderFailure")
-                      return joinFragments([
-                        "crate::foldkit_html::failure(&(",
-                        args[0]!,
-                        ")",
-                        ...ids(),
-                      ]);
-                    return joinFragments([
-                      "crate::foldkit_html::render_html(&(",
-                      args[0]!,
-                      ")",
-                      ...ids(),
-                    ]);
-                  }
-                  if (n.method === "js_string") {
-                    usesRyu = true;
-                    return joinFragments([
-                      "ryu_js::Buffer::new().format(",
-                      operand(n.args[0]),
-                      ").to_string()",
-                    ]);
-                  }
-                  if (n.method === "json")
-                    return joinFragments([
-                      `crate::reffect_json::${Rs.ident(n.encoder!).text}(&(`,
-                      operand(n.args[0]),
-                      "))",
-                    ]);
-                  if (n.method === "add")
-                    return joinFragments([
-                      "(",
-                      operand(n.args[0]),
-                      ") + (",
-                      operand(n.args[1]),
-                      ")",
-                    ]);
-                  if (n.method === "eq" || n.method === "lt")
-                    return joinFragments([
-                      "(",
-                      operand(n.args[0]),
-                      n.method === "eq" ? ") == (" : ") < (",
-                      operand(n.args[1]),
-                      ")",
-                    ]);
-                  return joinFragments([
-                    "(",
-                    operand(n.args[0]),
-                    `).${Rs.ident(n.method).text}(`,
-                    ...n.args
-                      .slice(1)
-                      .flatMap((arg, i) => (i ? [", ", operand(arg)] : [operand(arg)])),
-                    ")",
-                  ]);
+                    return Match.value(kind).pipe(
+                      Match.tagsExhaustive({
+                        Element: ({ shape }) => joinFragments([...elementCall(shape, args)]),
+                        Text: () =>
+                          joinFragments(["crate::foldkit_html::text(&(", args[0]!, ")[..])"]),
+                        Empty: () => textFragment("crate::foldkit_html::empty()"),
+                        JsonText: () => {
+                          usesJsonText = true;
+                          usesRyu = true;
+                          return joinFragments([
+                            "crate::foldkit_json::json_text(&(",
+                            args[0]!,
+                            "))",
+                          ]);
+                        },
+                        JsonRoundTrip: () => {
+                          usesJsonText = true;
+                          usesRyu = true;
+                          return joinFragments([
+                            "crate::foldkit_json::round_trip(&(",
+                            args[0]!,
+                            "))",
+                          ]);
+                        },
+                        RootKind: () =>
+                          joinFragments(["crate::foldkit_html::root_kind(&(", args[0]!, "))"]),
+                        RenderFailure: () =>
+                          joinFragments([
+                            "crate::foldkit_html::failure(&(",
+                            args[0]!,
+                            ")",
+                            ...ids(),
+                          ]),
+                        Render: () =>
+                          joinFragments([
+                            "crate::foldkit_html::render_html(&(",
+                            args[0]!,
+                            ")",
+                            ...ids(),
+                          ]),
+                      }),
+                    );
+                  };
+                  return Match.value(n.lowering).pipe(
+                    Match.tagsExhaustive({
+                      Not: () => joinFragments(["!(", arg(0), ")"]),
+                      Concat: () => joinFragments(['format!("{}{}", ', arg(0), ", ", arg(1), ")"]),
+                      Html: ({ kind }) => html(kind),
+                      NumberText: () => {
+                        usesRyu = true;
+                        return joinFragments([
+                          "ryu_js::Buffer::new().format(",
+                          arg(0),
+                          ").to_string()",
+                        ]);
+                      },
+                      HostJson: ({ function: name }) =>
+                        joinFragments([
+                          `crate::reffect_json::${Rs.ident(name).text}(&(`,
+                          arg(0),
+                          "))",
+                        ]),
+                      Infix: ({ operator }) =>
+                        joinFragments(["(", arg(0), `) ${operator} (`, arg(1), ")"]),
+                      Method: ({ name }) =>
+                        joinFragments([
+                          "(",
+                          arg(0),
+                          `).${Rs.ident(name).text}(`,
+                          ...n.args
+                            .slice(1)
+                            .flatMap((argument, i) =>
+                              i ? [", ", operand(argument)] : [operand(argument)],
+                            ),
+                          ")",
+                        ]),
+                    }),
+                  );
                 },
                 Match: (n) =>
                   joinFragments([

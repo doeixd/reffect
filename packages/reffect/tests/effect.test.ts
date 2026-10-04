@@ -329,3 +329,23 @@ test("native runner rejects malformed output and mismatched artifact functions",
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 }, 120_000);
+
+test("a custom target's own implementations can be selected (#36)", async () => {
+  const add = R.fn([R.U64, R.U64], R.U64, (a, b) => R.U64.add(a, b));
+  const stock = Rust.std.implementations.find(
+    (candidate) =>
+      candidate.lowering._tag === "Method" && candidate.lowering.name === "wrapping_add",
+  )!;
+  const custom = Object.freeze({
+    ...stock,
+    id: "test/custom-add",
+    rationale: "A custom registration",
+  });
+  const target = Target.make(Rust.std.ref, [custom]).pipe(
+    Target.withCapabilities([Capabilities.U64]),
+  );
+  const artifact = await Effect.runPromise(Compile.run(R.program({ add }), target));
+  expect(artifact.explanation.selections.map((selection) => selection.selected.id)).toEqual([
+    "test/custom-add",
+  ]);
+});
