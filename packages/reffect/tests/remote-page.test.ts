@@ -89,20 +89,28 @@ const upstream = async (target: string, now: number) => {
   return { status: response.status, body: await response.text() };
 };
 const send = (address: string, target: string) =>
-  new Promise<{ status: number; body: string }>((resolve, reject) => {
-    const [host, port] = address.split(":");
-    const outgoing = httpRequest(
-      { host, port: Number(port), method: "GET", path: target },
-      (response) => {
-        let body = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk: string) => (body += chunk));
-        response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
-      },
-    );
-    outgoing.on("error", reject);
-    outgoing.end();
-  });
+  new Promise<{ status: number; body: string; cacheControl: string | undefined }>(
+    (resolve, reject) => {
+      const [host, port] = address.split(":");
+      const outgoing = httpRequest(
+        { host, port: Number(port), method: "GET", path: target },
+        (response) => {
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk: string) => (body += chunk));
+          response.on("end", () =>
+            resolve({
+              status: response.statusCode ?? 0,
+              body,
+              cacheControl: response.headers["cache-control"],
+            }),
+          );
+        },
+      );
+      outgoing.on("error", reject);
+      outgoing.end();
+    },
+  );
 /** The Flags a page carries, as the hydrating client parses them. */
 const flagsOf = (body: string) => {
   const payload = /<script type="application\/json" data-foldkit-flags="app">(.*?)<\/script>/s.exec(
@@ -197,7 +205,9 @@ test(
             }),
           )(JSON.parse(ready.value));
 
-          const native = yield* Effect.promise(() => send(address, "/todos"));
+          const { cacheControl, ...native } = yield* Effect.promise(() => send(address, "/todos"));
+          // #3: a page carrying read data must not be stored by shared caches.
+          expect(cacheControl).toBe("private, no-store");
           const flags = flagsOf(native.body);
           // Upstream with the native render's clock: the same bytes, Flags included.
           const expected = yield* Effect.promise(() => upstream("/todos", flags.remote.now));

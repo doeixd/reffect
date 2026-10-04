@@ -321,7 +321,14 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     };
     let mut body = String::new();
     ${splice}
-    let mut extra = vec![("content-type", "text/html; charset=utf-8".to_string())];
+    let mut extra = vec![("content-type", "text/html; charset=utf-8".to_string())];${
+      data === undefined
+        ? ""
+        : `
+    // The page carries data read for this request, its principal's when it has one: shared
+    // caches must not store it (#3; upstream's host sets no cache headers).
+    extra.push(("cache-control", "private, no-store".to_string()));`
+    }
     if negotiated { extra.push(("vary", ssr_host::vary_with(Some(&ssr_host::vary_with(None, "Accept")), "Sec-Fetch-Dest"))); }
     let mut response = empty(StatusCode::OK, &extra);
     if method != "HEAD" { *response.body_mut() = axum::body::Body::from(body); }
