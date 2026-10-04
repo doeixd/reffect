@@ -497,6 +497,18 @@ const withoutReads = (
   ...(pages.containerId === undefined ? {} : { containerId: pages.containerId }),
   ...(pages.origin === undefined ? {} : { origin: pages.origin }),
 });
+/** The fields a planned query selects, if it carries a selection. */
+const selectedFields = (request: unknown): ReadonlyArray<string> | undefined => {
+  const select =
+    typeof request === "object" && request !== null && "select" in request
+      ? request.select
+      : undefined;
+  const fields =
+    typeof select === "object" && select !== null && "fields" in select ? select.fields : undefined;
+  return Array.isArray(fields) && fields.every((field) => typeof field === "string")
+    ? fields
+    : undefined;
+};
 /** Whether a selection asks for related entities, which a first-pass plan cannot follow. */
 const hasRelations = (selection: unknown): boolean =>
   typeof selection === "object" &&
@@ -557,9 +569,33 @@ const pageReads = (
       !names.every((name) => fields.includes(name))
     )
       throw unsupported("pages.views", "The render's third input is a Struct of the views");
-    for (const [name, view] of Object.entries(views))
-      if (reads[view.read]?._tag !== "Query")
+    for (const [name, view] of Object.entries(views)) {
+      const read = reads[view.read];
+      if (read?._tag !== "Query")
         throw unsupported(`pages.views.${name}`, "A view reads one of the page's queries");
+      // The view's items hold exactly the selected fields, as upstream's decoded rows do.
+      const selected = selectedFields(read.request);
+      const page =
+        layout?._tag === "Struct"
+          ? layout.fields.find((field) => field.name === name)?.type.layout
+          : undefined;
+      const items =
+        page?._tag === "Struct"
+          ? page.fields.find((field) => field.name === "items")?.type.layout
+          : undefined;
+      const item = items?._tag === "Array" ? items.item.layout : undefined;
+      const names = item?._tag === "Struct" ? item.fields.map((field) => field.name) : undefined;
+      if (
+        selected === undefined ||
+        names === undefined ||
+        names.length !== selected.length ||
+        !selected.every((field) => names.includes(field))
+      )
+        throw unsupported(
+          `pages.views.${name}`,
+          "A view is R.Remote.Page of a Struct of exactly the query's selected fields",
+        );
+    }
   }
   const viewEntries = Object.entries(views)
     .map(([name, view]) => `(${Rs.stringLiteral(name).text}, ${view.read})`)

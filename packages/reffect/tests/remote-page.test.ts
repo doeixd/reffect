@@ -137,6 +137,32 @@ test("a page plans one query per view, and unknown queries or mismatched views a
     }).pipe(Effect.flip),
   );
   expect(mismatched.message).toContain("Struct of the views");
+  // A view's items hold exactly the selected fields.
+  const Partial = R.Struct({ id: R.String, title: R.String });
+  const partialPage = R.fn(
+    [R.String, R.Unknown, R.Struct({ todos: R.Remote.Page(Partial) })],
+    Page,
+    (url, remote) =>
+      R.Html.renderToString(
+        {
+          init: () =>
+            R.Struct({ heading: R.String, todos: R.Array(TodoItem) }).make({
+              heading: url,
+              todos: R.Array.empty(TodoItem),
+            }),
+          view: todoDocument,
+        },
+        { buildId: BUILD_ID, flags: Flags.make({ remote }) },
+      ),
+  );
+  const partial = await Effect.runPromise(
+    NativeRemote.compile(group, {
+      domain: Data,
+      rows,
+      pages: { template, render: partialPage, reads, views },
+    }).pipe(Effect.flip),
+  );
+  expect(partial.message).toContain("exactly the query's selected fields");
 });
 
 test(
