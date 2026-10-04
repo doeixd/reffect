@@ -166,7 +166,7 @@ This reviews commits `900322b`..`9ecd4ad` against this record and the code. Noth
   - This is acceptable while signals occur only inside NativeRemote mutations. Split the node, or at least the requirement, when signals are used elsewhere.
 - **LR-6: signal names are not checked against the domain.** `R.LiveHub.changed({ entity: "Projct", id }, ["nmae"])` compiles and does nothing, as upstream does at run time. NativeRemote has the domain, so it could refuse undeclared entities and statically known undeclared fields. The same check would help the `RemoteStore` ops.
 - **LR-7: backend asymmetry on failed mutations.** On memory, a mutation that signals and then fails still emits, because its write persists, as upstream's does. On SQL, the rollback drops the signal (LIVE-003). This is deliberate, but an application switching backends sees it. Keep it in the user-facing notes.
-- **LR-8: no subscription hardening.** There is no subscriber cap per connection or server, and each subscriber's queue is unbounded, as upstream's are. Every other native request path has hardening limits, so a configurable cap belongs with them.
+- **LR-8: no subscription hardening.** There is no subscriber cap per connection or server, and each subscriber's queue is unbounded, as upstream's are. Every other native request path has hardening limits, so a configurable cap belongs with them. **Delivered 2026-10-04 ([#19](https://github.com/doeixd/reffect/issues/19)):** bounded queues whose overflow becomes a cursor gap, plus total and per-principal caps (`liveLimits`).
 
 ### Minor
 

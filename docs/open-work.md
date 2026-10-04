@@ -95,7 +95,6 @@ These block many items below.
 - Live design debts ([review](research/remote-live.md#review-2026-10-03)):
   - LR-5: a separate `LiveHub` node or requirement;
   - LR-6: check signal entity and field names against the domain;
-  - LR-8 (done, #19): a subscriber cap;
   - LR-9: `ryu-js` cursor text;
   - LR-10: timing-robust tests;
   - LR-11: lower literal field lists directly;
