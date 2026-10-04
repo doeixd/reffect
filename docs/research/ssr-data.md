@@ -112,7 +112,44 @@ Results:
 4. **`todo-remote`'s first screen natively (M9-4).** The 8A step 6 example, now with data.
 5. **Showcase (M9-5).** SQL, Live, SSR with data and resume in one binary.
 
+## M9-3 plan (agreed 2026-10-03)
+
+**Order of work**
+
+1. LIVE-012: move the runtime Rust into `.rs` files. Then LIVE-008: the after-commit hook.
+2. Pages fetch and record.
+3. Build the view's data from the answers.
+4. R function calls, then M9-4.
+5. M9-5, after the render-to-live gap is decided.
+
+**Decisions**
+
+- **Request templates at build time, not a ported planner.**
+  - A static `Data.query(Q, input, { select, first })` or `Data.get(select, id)` has a constant request shape; only `input` or `id` comes from the request.
+  - The compiler runs upstream's planner while compiling, against a symbolic input, and derives templates with holes.
+  - At run time the page fills the holes, calls the in-process engine and records the answers.
+  - **Acceptance:** the client's replayed `satisfy` issues byte-identical requests and plans nothing afterwards.
+- **First profile.**
+  - Admitted: top-level `query`/`get` with flat selections, and inputs that are R expressions (for example from the URL).
+  - Refused at compile time: relations in a selection, and Surfaces whose reads depend on another read's result.
+  - Relations need a port of upstream's `assemble` and follow todo-remote.
+- **Authorization.**
+  - Pages run through the same bearer middleware as RPC procedures, and their reads through the same source authorization with the request's principal.
+  - A page whose sources need a principal it cannot have is refused rather than read as anonymous.
+- **Consistency.** On SQL a page's reads share one read transaction, so the first screen is one snapshot. This is stronger than upstream and recorded as a consistency choice, like LIVE-003.
+- **The view's data (option B).**
+  - R views read only `Ready` data, built from the answers: a query's edges in order, each mapped to the selected fields; a get's entity, or `NotFound`.
+  - **Acceptance:** equal to upstream `projection.read(model)` on the replayed Model.
+- **Flags shape.**
+  - A page with Remote data carries `{ app, remote: RemoteResume }`.
+  - `RemoteResume` needs R witnesses for the domain's answers, derived from the select schemas as the engine's codecs already are.
+- **Page contracts.** Export the page and render-error schemas so contracts stop restating the error union (`FlagsEncodeError` broke two).
+
 ## Risks and open questions
+
+- **Gap between the first render and Live.** The hub keeps no history ("resuming only renumbers"), so a change committed between the server render and the browser's Live subscription is lost.
+  - Upstream's own SSR has the same gap, so it is not a divergence.
+  - Fixes: a bounded replay buffer in the hub, or a re-read when subscribing. Decide before M9-5.
 
 - **RemoteData states after satisfy.** Partial selections or windowed connections may leave non-`Ready` states. Replay reproduces whatever upstream computes, but the M9-2 suite should cover a windowed connection before M9-3.
 - **Upstream churn.** The Model and snapshot shape is versioned and still moving. Every port adds a differential suite to re-run at upgrades; the version guard catches the drift.
