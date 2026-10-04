@@ -18,6 +18,7 @@ export const PageSchema = Schema.Union([
     failure: Schema.Union([
       Schema.TaggedStruct("InvalidHydrationRoot", { rootKind: Schema.String }),
       Schema.TaggedStruct("SerializationError", { message: Schema.String }),
+      Schema.TaggedStruct("FlagsEncodeError", { message: Schema.String }),
     ]),
   }),
 ]);

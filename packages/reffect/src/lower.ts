@@ -2180,6 +2180,11 @@ export const emitFunctions = (
                       usesRyu = true;
                       return joinFragments(["crate::foldkit_json::json_text(&(", args[0]!, "))"]);
                     }
+                    if (html._tag === "JsonRoundTrip") {
+                      usesJsonText = true;
+                      usesRyu = true;
+                      return joinFragments(["crate::foldkit_json::round_trip(&(", args[0]!, "))"]);
+                    }
                     if (html._tag === "RootKind")
                       return joinFragments(["crate::foldkit_html::root_kind(&(", args[0]!, "))"]);
                     if (html._tag === "RenderFailure")

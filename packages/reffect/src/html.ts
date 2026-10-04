@@ -17,6 +17,7 @@ import { ConcatString } from "./kernel.ts";
 import { SchemaIR } from "./schema-json.ts";
 import type { Fn } from "./kernel.ts";
 import { Struct, UndefinedOr } from "./records.ts";
+import { OptionIR } from "./option.ts";
 import { ResultIR } from "./result.ts";
 import type { ResultValue } from "./result.ts";
 import { Reference } from "./reference.ts";
@@ -32,6 +33,7 @@ import {
   RenderFailureOperation,
   RenderOperation,
   RenderedType,
+  JsonRoundTripOperation,
   JsonTextOperation,
   RootKindOperation,
   STRING_ATTRIBUTES,
@@ -246,12 +248,6 @@ const toFoldkitView =
     return { title: document.title, body };
   };
 
-/**
- * `renderToString` of a document, hydratable: `InvalidHydrationRoot` when the body is not an
- * element, then `SerializationError` (a NUL), else the stamped `html` and the `title`. The
- * reference of each step is upstream `renderToString` itself; natively it is the ported
- * serializer (SSR-003).
- */
 /** Whether a witness holds a Number, whose `-0` the Flags JSON round trip would normalize. */
 const holdsNumber = (type: IRType<unknown>): boolean =>
   IRType.same(type, NumberType) ||
@@ -268,15 +264,20 @@ const holdsNumber = (type: IRType<unknown>): boolean =>
 /**
  * Upstream's Flags payload: `<script type="application/json" data-foldkit-flags="…">` holding
  * `JSON.stringify` of the encoded Flags with every `<` escaped. Upstream hands `init` the decoded
- * round trip of that text; without Numbers it is the value itself, so the profile refuses them.
+ * round trip of that text; without Numbers it is the value itself, so the document form, whose
+ * view was built from the original Flags, refuses them.
  */
-const flagsPayload = (flags: Expr<unknown>, runtimeId: string): Expr<string> => {
-  if (holdsNumber(flags.type))
+const flagsPayload = (
+  flags: Expr<unknown>,
+  runtimeId: string,
+  refuseNumbers: boolean,
+): Expr<string> => {
+  if (refuseNumbers && holdsNumber(flags.type))
     throw fail(
       "UNSUPPORTED_FLAGS",
       "authoring",
       "Html.renderToString.flags",
-      "Flags holding Numbers are not admitted: the JSON round trip turns -0 into 0 before init",
+      "Flags holding Numbers need renderToString({ init, view }, { flags }): the JSON round trip init reads turns -0 into 0",
     );
   const text = Expr.apply(
     JsonTextOperation,
@@ -299,20 +300,43 @@ const flagsPayload = (flags: Expr<unknown>, runtimeId: string): Expr<string> => 
     Expr.literal(StringType, "</script>"),
   );
 };
-const renderToString = (
-  document: Expr<{ readonly title: string; readonly body: HtmlValue }>,
+type DocumentValue = { readonly title: string; readonly body: HtmlValue };
+type RenderResult = ResultValue<
+  { readonly html: string; readonly title: string },
+  Schema.Schema.Type<typeof RenderErrorType.schema>
+>;
+/** An application as upstream's `renderToString` takes it: `init` from Flags, then `view`. */
+export interface Program<Flags, Model> {
+  readonly init: (flags: Expr<Flags>) => Expr<Model>;
+  readonly view: (model: Expr<Model>) => Expr<DocumentValue>;
+}
+/**
+ * `renderToString` of a document, or of a program and its Flags. A program's `init` reads what
+ * upstream's reads: the Flags decoded from their JSON round trip (`FlagsEncodeError` if that
+ * fails), so Flags may hold Numbers. A document was built from the original Flags, so its Flags
+ * may not.
+ */
+function renderToString(
+  document: Expr<DocumentValue>,
   options: {
     readonly buildId: string;
     readonly runtimeId?: string;
     /** The Flags `init` was given, carried to the client in the Flags payload (M9-1). */
     readonly flags?: Expr<unknown>;
   },
-): Expr<
-  ResultValue<
-    { readonly html: string; readonly title: string },
-    Schema.Schema.Type<typeof RenderErrorType.schema>
-  >
-> => {
+): Expr<RenderResult>;
+function renderToString<Flags, Model>(
+  program: Program<Flags, Model>,
+  options: { readonly buildId: string; readonly runtimeId?: string; readonly flags: Expr<Flags> },
+): Expr<RenderResult>;
+function renderToString(
+  source: Expr<DocumentValue> | Program<unknown, unknown>,
+  options: {
+    readonly buildId: string;
+    readonly runtimeId?: string;
+    readonly flags?: Expr<unknown>;
+  },
+): Expr<RenderResult> {
   const runtimeId = options.runtimeId ?? "app";
   if (runtimeId === "")
     throw fail("INVALID_RUNTIME_ID", "authoring", "Html.renderToString", "runtimeId is nonempty");
@@ -323,14 +347,51 @@ const renderToString = (
       "Html.renderToString",
       "A hydratable render needs a buildId",
     );
-  const body = Struct.get(document, "body");
-  const ids = [
-    Expr.literal(StringType, runtimeId),
-    Expr.literal(StringType, options.buildId),
-  ] as const;
-  const kind = Expr.apply(RootKindOperation, body);
+  if (!(source instanceof Expr)) {
+    const flags = options.flags;
+    if (flags === undefined)
+      throw fail(
+        "MISSING_FLAGS",
+        "authoring",
+        "Html.renderToString",
+        "A program renders from Flags",
+      );
+    const codec = SchemaIR.toCodecJson(flags.type);
+    const hydrationFlags = SchemaIR.decodeUnknownOption(codec)(
+      Expr.apply(JsonRoundTripOperation, SchemaIR.encodeSync(codec)(flags)),
+    );
+    const flagsScript = flagsPayload(flags, runtimeId, false);
+    return OptionIR.match(hydrationFlags, {
+      onNone: () =>
+        ResultIR.fail(
+          RenderErrorType.cases.FlagsEncodeError.make({
+            message: Expr.literal(StringType, "The Flags do not decode from their JSON round trip"),
+          }),
+          RenderedType,
+        ),
+      onSome: (decoded) =>
+        renderDocument(source.view(source.init(decoded)), runtimeId, options.buildId, flagsScript),
+    });
+  }
   const flagsScript =
-    options.flags === undefined ? undefined : flagsPayload(options.flags, runtimeId);
+    options.flags === undefined ? undefined : flagsPayload(options.flags, runtimeId, true);
+  return renderDocument(source, runtimeId, options.buildId, flagsScript);
+}
+/**
+ * The hydratable render of a document: `InvalidHydrationRoot` when the body is not an
+ * element, then `SerializationError` (a NUL), else the stamped `html` and the `title`. The
+ * reference of each step is upstream `renderToString` itself; natively it is the ported
+ * serializer (SSR-003).
+ */
+const renderDocument = (
+  document: Expr<DocumentValue>,
+  runtimeId: string,
+  buildId: string,
+  flagsScript: Expr<string> | undefined,
+): Expr<RenderResult> => {
+  const body = Struct.get(document, "body");
+  const ids = [Expr.literal(StringType, runtimeId), Expr.literal(StringType, buildId)] as const;
+  const kind = Expr.apply(RootKindOperation, body);
 
   return Expr.match(
     Expr.apply(EqString, kind, Expr.literal(StringType, "Element")),

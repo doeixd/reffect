@@ -17,6 +17,7 @@ const RenderedSchema = Schema.Struct({ html: Schema.String, title: Schema.String
 const RenderErrorSchema = Schema.Union([
   Schema.TaggedStruct("InvalidHydrationRoot", { rootKind: Schema.String }),
   Schema.TaggedStruct("SerializationError", { message: Schema.String }),
+  Schema.TaggedStruct("FlagsEncodeError", { message: Schema.String }),
 ]);
 const PageSchema = Schema.Union([
   Schema.TaggedStruct("Success", { success: RenderedSchema }),

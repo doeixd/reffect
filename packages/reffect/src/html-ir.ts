@@ -215,6 +215,8 @@ export const RenderedType = Struct({ html: StringType, title: StringType });
 export const RenderErrorType = TaggedUnion({
   InvalidHydrationRoot: { rootKind: StringType },
   SerializationError: { message: StringType },
+  /** The Flags did not survive their JSON round trip; upstream carries the cause, R its message. */
+  FlagsEncodeError: { message: StringType },
 });
 
 /** Upstream's hydratable render of `body`, the reference for the render primitives. */
@@ -280,7 +282,8 @@ export type HtmlOperationKind =
   | { readonly _tag: "RootKind" }
   | { readonly _tag: "RenderFailure" }
   | { readonly _tag: "Render" }
-  | { readonly _tag: "JsonText" };
+  | { readonly _tag: "JsonText" }
+  | { readonly _tag: "JsonRoundTrip" };
 export const htmlOperationKind = (operation: AnyOperation): HtmlOperationKind | undefined => {
   const shape = elementShapes.get(operation);
   if (shape) return { _tag: "Element", shape };
@@ -290,6 +293,7 @@ export const htmlOperationKind = (operation: AnyOperation): HtmlOperationKind | 
   if (operation === RenderFailureOperation) return { _tag: "RenderFailure" };
   if (operation === RenderOperation) return { _tag: "Render" };
   if (operation === JsonTextOperation) return { _tag: "JsonText" };
+  if (operation === JsonRoundTripOperation) return { _tag: "JsonRoundTrip" };
   return undefined;
 };
 
@@ -299,4 +303,15 @@ export const JsonTextOperation = Operation.make(
   [UnknownType],
   StringType,
   (value) => JSON.stringify(value),
+).pipe(Operation.withCapabilities([HtmlCapability]));
+
+/**
+ * `JSON.parse(JSON.stringify(value))` of encoded JSON data: what the hydrating client reads back
+ * from the Flags payload. For `Schema.toCodecJson` output it changes only `-0` into `0`.
+ */
+export const JsonRoundTripOperation = Operation.make(
+  SemanticRef.operation("reffect/json.round-trip@1"),
+  [UnknownType],
+  UnknownType,
+  (value) => JSON.parse(JSON.stringify(value)),
 ).pipe(Operation.withCapabilities([HtmlCapability]));

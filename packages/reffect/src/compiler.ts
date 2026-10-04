@@ -173,7 +173,9 @@ const htmlImplementation = (operation: AnyOperation): Implementation => {
     strategy: "generated",
     capabilities: operation.capabilities,
     crates: Object.freeze(
-      htmlOperationKind(operation)?._tag === "JsonText" ? ["ryu-js@1.0.3"] : [],
+      ["JsonText", "JsonRoundTrip"].includes(htmlOperationKind(operation)?._tag ?? "")
+        ? ["ryu-js@1.0.3"]
+        : [],
     ),
     method: "html",
     rationale: "foldkit/ssr-serialize@1 renders the element as renderToString does",

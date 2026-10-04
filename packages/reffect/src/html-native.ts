@@ -253,6 +253,16 @@ pub mod foldkit_html {
 export const jsonTextRuntime = String.raw`
 #[allow(dead_code)]
 pub mod foldkit_json {
+    /// What JSON.parse(JSON.stringify(value)) gives: numbers are written shortest and parsed
+    /// back exactly, so only -0 changes, into 0.
+    pub fn round_trip(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Number(number) if number.as_f64() == Some(0.0) => serde_json::Value::from(0u64),
+            serde_json::Value::Array(items) => serde_json::Value::Array(items.iter().map(round_trip).collect()),
+            serde_json::Value::Object(map) => serde_json::Value::Object(map.iter().map(|(key, item)| (key.clone(), round_trip(item))).collect()),
+            other => other.clone(),
+        }
+    }
     pub fn json_text(value: &serde_json::Value) -> String {
         let mut out = String::new();
         write(value, &mut out);

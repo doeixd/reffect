@@ -12,12 +12,34 @@ import { BUILD_ID, Page, todoDocument, todoView } from "./fixtures/ssr-todos.ts"
 
 // Milestone 9 step 1 (M9-1): a page reads its request URL, derives Flags, and renders with
 // upstream's Flags payload; native answers equal handleRequest around upstream renderToString.
+// The program form hands init the Flags' JSON round trip, so Numbers are admitted: -0 reaches
+// init as 0, and non-finite Numbers travel as the strings Schema's JSON codec writes.
 const origin = "http://reffect.test";
-const FlagsSchema = Schema.Struct({ url: Schema.String, note: Schema.String });
-const Flags = NativeRpc.witness(FlagsSchema);
+const numbers = { zero: -0, big: 1e21, tiny: 5e-324, tenth: 0.1, nan: NaN, low: -Infinity };
+const names = Object.keys(numbers) as ReadonlyArray<keyof typeof numbers>;
+const FlagsSchema = Schema.Struct({
+  url: Schema.String,
+  note: Schema.String,
+  zero: Schema.Number,
+  big: Schema.Number,
+  tiny: Schema.Number,
+  tenth: Schema.Number,
+  nan: Schema.Number,
+  low: Schema.Number,
+});
+const Flags = R.Struct({
+  url: R.String,
+  note: R.String,
+  zero: R.Number,
+  big: R.Number,
+  tiny: R.Number,
+  tenth: R.Number,
+  nan: R.Number,
+  low: R.Number,
+});
 const note = `</script><b class="x">&amp;`;
 const Todo = R.Struct({ id: R.String, title: R.String, done: R.Bool });
-/** init: the heading is the URL the page was asked for. */
+/** init: the heading is the URL the page was asked for, then one todo per Number, as text. */
 const init = (flags: Expr<Value<typeof Flags>>) =>
   R.Struct({ heading: R.String, todos: R.Array(Todo) }).make({
     heading: R.Struct.get(flags, "url"),
@@ -27,15 +49,29 @@ const init = (flags: Expr<Value<typeof Flags>>) =>
         title: R.Struct.get(flags, "note"),
         done: R.Bool.literal(false),
       }),
+      ...names.map((name) =>
+        Todo.make({
+          id: R.String.literal(name),
+          title: R.String.fromNumber(R.Struct.get(flags, name)),
+          done: R.Bool.literal(false),
+        }),
+      ),
     ),
   });
-const page = R.fn([R.String], Page, (url) => {
-  const flags = R.Struct({ url: R.String, note: R.String }).make({
+const flagsOf = (url: Expr<string>) =>
+  Flags.make({
     url,
     note: R.String.literal(note),
+    zero: R.Number.literal(numbers.zero),
+    big: R.Number.literal(numbers.big),
+    tiny: R.Number.literal(numbers.tiny),
+    tenth: R.Number.literal(numbers.tenth),
+    nan: R.Number.literal(numbers.nan),
+    low: R.Number.literal(numbers.low),
   });
-  return R.Html.renderToString(todoDocument(init(flags)), { buildId: BUILD_ID, flags });
-});
+const page = R.fn([R.String], Page, (url) =>
+  R.Html.renderToString({ init, view: todoDocument }, { buildId: BUILD_ID, flags: flagsOf(url) }),
+);
 const template =
   '<!doctype html><html lang="en"><head><title>Placeholder</title></head>' +
   '<body><div id="root"></div></body></html>';
@@ -54,12 +90,15 @@ const upstream = async (method: string, target: string) => {
             init: (flags: typeof FlagsSchema.Type) => ({
               model: {
                 heading: flags.url,
-                todos: [{ id: "t1", title: flags.note, done: false }],
+                todos: [
+                  { id: "t1", title: flags.note, done: false },
+                  ...names.map((name) => ({ id: name, title: String(flags[name]), done: false })),
+                ],
               },
             }),
             view: R.Html.toFoldkitView(todoView),
           },
-          { flags: { url: request.url, note }, buildId: BUILD_ID },
+          { flags: { url: request.url, note, ...numbers }, buildId: BUILD_ID },
         ),
       );
       return Rendered(rendered);
@@ -80,19 +119,11 @@ const send = (address: string, method: string, target: string) =>
     outgoing.end();
   });
 
-test("Flags holding Numbers, and origins with a path, are refused", async () => {
+test("a document's Flags holding Numbers, and origins with a path, are refused", async () => {
+  // The document was built from the original Flags, so init did not read their round trip.
+  const flags = flagsOf(R.String.literal("x"));
   expect(() =>
-    R.Html.renderToString(
-      todoDocument(
-        init(
-          R.Struct({ url: R.String, note: R.String }).make({
-            url: R.String.literal("x"),
-            note: R.String.literal("n"),
-          }),
-        ),
-      ),
-      { buildId: BUILD_ID, flags: R.Number.literal(1) },
-    ),
+    R.Html.renderToString(todoDocument(init(flags)), { buildId: BUILD_ID, flags }),
   ).toThrow(CompileError);
   const pathOrigin = await Effect.runPromise(
     NativeRpc.compile(
