@@ -22,7 +22,7 @@ import { BUILD_ID, Page, todoDocument, todoView } from "./fixtures/ssr-todos.ts"
 const list = Data.query(
   Todos,
   {},
-  { select: Entity.select(Todo, { id: true, title: true, done: true }) },
+  { select: Entity.select(Todo, { id: true, title: true, done: true }), first: 50 },
 );
 const active = { todos: Data.active("Todos", () => Option.some(list)) };
 const { reads, views } = planPage({ todos: Data.prefetch(initial, list) });
@@ -170,7 +170,21 @@ test("a page plans one query per view, and unknown queries or mismatched views a
       pages: { template, render: partialPage, reads, views },
     }).pipe(Effect.flip),
   );
-  expect(partial.message).toContain("exactly the query's selected fields");
+  expect(partial.message).toContain("exactly the query's selected fields"); // #5: a view without a window would read the whole table on every request.
+  const unbounded = Data.query(
+    Todos,
+    {},
+    { select: Entity.select(Todo, { id: true, title: true, done: true }) },
+  );
+  const whole = planPage({ todos: Data.prefetch(initial, unbounded) });
+  const refusedWhole = await Effect.runPromise(
+    NativeRemote.compile(group, {
+      domain: Data,
+      rows,
+      pages: { template, render: page, reads: whole.reads, views: whole.views },
+    }).pipe(Effect.flip),
+  );
+  expect(refusedWhole.message).toContain("window");
 });
 
 test(

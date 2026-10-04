@@ -504,6 +504,19 @@ const withoutReads = (
   ...(pages.containerId === undefined ? {} : { containerId: pages.containerId }),
   ...(pages.origin === undefined ? {} : { origin: pages.origin }),
 });
+/** Whether a planned query asks for a bounded page. */
+const hasWindow = (request: unknown): boolean => {
+  const window =
+    typeof request === "object" && request !== null && "window" in request
+      ? request.window
+      : undefined;
+  return (
+    typeof window === "object" &&
+    window !== null &&
+    (("first" in window && typeof window.first === "number") ||
+      ("last" in window && typeof window.last === "number"))
+  );
+};
 /** The fields a planned query selects, if it carries a selection. */
 const selectedFields = (request: unknown): ReadonlyArray<string> | undefined => {
   const select =
@@ -580,6 +593,12 @@ const pageReads = (
       const read = reads[view.read];
       if (read?._tag !== "Query")
         throw unsupported(`pages.views.${name}`, "A view reads one of the page's queries");
+      // A view without a window would read the whole table on every page request (#5).
+      if (!hasWindow(read.request))
+        throw unsupported(
+          `pages.views.${name}`,
+          "A view's query needs a window (first or last), so a page reads a bounded page",
+        );
       // The view's items hold exactly the selected fields, as upstream's decoded rows do.
       const selected = selectedFields(read.request);
       const page =

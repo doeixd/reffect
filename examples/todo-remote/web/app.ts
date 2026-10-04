@@ -56,6 +56,8 @@ export const list = Data.query(
   {},
   {
     select: Entity.select(Todo, { id: true, title: true, done: true }),
+    // The server renders this list, so it reads a bounded page.
+    first: 50,
   },
 );
 // The list is on screen whenever the app runs, so its read is always active.
