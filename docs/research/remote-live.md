@@ -251,6 +251,18 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
   - Static runtime code (about 1,900 lines across `remote-engine.ts`, `sql-runtime.ts`, `rpc-runtime.ts` and `async-runtime.ts`) moves to `packages/reffect/runtime/*.rs`, loaded as raw text.
   - Generated tables and dispatch arms stay in typed emission ([rust-emission](../rust-emission.md)).
   - `rustfmt`, `clippy` and Rust unit tests (hub grouping, aliases, cursors) can then run on it.
+  - **Design (2026-10-03, taken before M9-3 step 2).**
+    - **Layout.** `packages/reffect/runtime/` is a check-only crate (`publish = false`) whose `src/<module>.rs` files hold module bodies. Its `lib.rs` declares them as siblings, so `super::` paths resolve as they do in generated crates. Its dependencies are pinned like the generated crates'.
+    - **Loading.**
+      - `scripts/runtime-sources.mjs` writes `src/runtime-sources.generated.ts`, one string constant per module, with line endings normalized to LF. The TypeScript emitters wrap each body in its `mod` item.
+      - Rejected: Vite's `?raw`, which plain Node cannot import, and reading the files at module load (`import.meta.url` is not a file URL under happy-dom, which broke the version guard before).
+    - **Checks.**
+      - A vitest test fails when the generated file is stale.
+      - `vp run runtime:check` runs `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test` on the crate; Rust unit tests live only there.
+    - **Scope and order.**
+      - First the SSR runtimes (`foldkit_ssr`, `foldkit_html`, `foldkit_json`), then the Remote engine with the evaluator it uses (`foldkit_eval`) and hub unit tests, then the RPC and SQL runtimes.
+      - The Deferred, Cause, frame and async runtimes belong to the concurrent coordination work and move when that work settles.
+    - **Acceptance.** Native suites that use a migrated module pass unchanged (the emitted Rust may differ by rustfmt layout only), and `runtime:check` is clean.
 - **LIVE-013: randomized hub conformance.**
   - A small stdin/stdout JSON driver exposes the native hub: subscribe, changed, deleted, drain events.
   - fast-check scenarios compare it with upstream's in-process `liveHub` over the same rows and `authorize` rules.
