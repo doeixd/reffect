@@ -2029,7 +2029,6 @@ ${
           rpcRuntime(
             clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined,
             prepared.asynchronous,
-            prepared.ranges,
             prepared.layered,
             options.serialization === "ndjson",
             prepared.pages !== undefined,
@@ -2425,7 +2424,7 @@ fn array_index(key: &str) -> Option<u32> {
     // The library decodes stored JSON (RS-007) with the server's verified decoders and helpers.
     return `use crate as reffect_generated;
 use serde_json::Value;
-${decodeArgs(true)}${decodePrelude}${items.map((item) => item.decode + item.encode).join("")}${encoderFns(encoders)}${decoders
+${decodeArgs()}${decodePrelude}${items.map((item) => item.decode + item.encode).join("")}${encoderFns(encoders)}${decoders
       .map(
         (decoder) =>
           `pub fn ${decoder.name}(value: &Value) -> Option<${rustType(decoder.type)}> { ${decodeField(decoder.codec, "value", "None")}.ok() }

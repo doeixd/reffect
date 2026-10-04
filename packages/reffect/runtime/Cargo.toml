@@ -12,7 +12,13 @@ path = "src/lib.rs"
 [dependencies]
 serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
 ryu-js = { version = "=1.0.3", default-features = false }
-tokio = { version = "=1.53.1", features = ["sync"] }
+tokio = { version = "=1.53.1", features = ["macros", "rt", "rt-multi-thread", "net", "time", "sync"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }
+hyper = { version = "=1.11.1", features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", features = ["tokio", "server-graceful"] }
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
+http-body = "=1.0.1"
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio = { version = "=1.53.1", features = ["rt", "sync"] }
