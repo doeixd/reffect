@@ -60,6 +60,15 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — #36: one lowering descriptor per implementation
+
+- **Change.** Each `Implementation` carries a tagged `Lowering` (`Method`, `Infix`, `Not`, `Concat`, `NumberText`, `HostJson`, `Html`), replacing the `method` string. Host JSON and Html implementations fill theirs in when they are created. `lower` dispatches on the plan's selection exhaustively with `Match` and no longer re-derives host or Html kinds from side tables. Registration is checked against the target's own implementations, so custom `Target.make` registrations can be selected.
+- **Validation.**
+  - Generated files are byte-identical before and after, for an RPC program using every primitive lowering and for the todo-remote server.
+  - A new `effect.test` case selects a custom registration.
+  - `effect`, `html`, `number-text`, `html-native` and `schema-rpc` pass.
+- **Not done.** Cargo dependencies are still tracked both in `Plan.crates` and in lowering's module flags. Those flags also decide which runtime modules are inlined, so they stay for now.
+
 ## 2026-10-04 — #37 completed: every static runtime in checked Rust (#9, #12)
 
 - **Page host** (`e7a4214`). `ssr_host` is in `runtime/src/ssr_host.rs`. A Rust test checks each helper against values captured from foldkit 0.165.0's own `acceptsHtml`, `varyWith`, `resolveRequestUrl`, `resolvesToIndexHtml` and `classifyRequest`.

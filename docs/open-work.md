@@ -329,7 +329,6 @@ Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the 
 - [#33](https://github.com/doeixd/reffect/issues/33): quadratic generated string concatenation
 - [#34](https://github.com/doeixd/reffect/issues/34): SSR render copies and quadratic class splitting
 - [#35](https://github.com/doeixd/reffect/issues/35): per-table memory query cache versions
-- [#36](https://github.com/doeixd/reffect/issues/36): one lowering descriptor per Implementation
 - [#38](https://github.com/doeixd/reffect/issues/38): deduplicate runtime and compiler logic
 - [#39](https://github.com/doeixd/reffect/issues/39): process-wide registries
 - [#40](https://github.com/doeixd/reffect/issues/40): lone-surrogate literals, `unhex` panic, race masking check
