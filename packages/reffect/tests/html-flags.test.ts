@@ -3,7 +3,12 @@ import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import { ChildProcess } from "effect/process";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
-import { Rendered, handleRequest, renderToString } from "foldkit/experimental/server";
+import {
+  Rendered,
+  handleRequest,
+  renderToString,
+  resolveRequestUrl,
+} from "foldkit/experimental/server";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, CompileError, NativeRpc, R } from "../src/index.ts";
 import type { Expr, Value } from "../src/index.ts";
@@ -78,9 +83,14 @@ const template =
 const Group = RpcGroup.make(Rpc.make("Ping", { payload: {}, success: Schema.String }));
 const ping = R.fn([], R.String, () => R.String.literal("pong"));
 
-/** Upstream: the same Flags, init and view through renderToString and handleRequest. */
+/**
+ * Upstream: the same Flags, init and view through renderToString and handleRequest, behind a Node
+ * adapter that resolves the raw target with resolveRequestUrl and refuses an off-origin one (#21).
+ */
 const upstream = async (method: string, target: string) => {
-  const response = await handleRequest(new Request(`${origin}${target}`, { method }), {
+  const url = resolveRequestUrl(target, origin);
+  if (url === undefined) return { status: 400, body: "" };
+  const response = await handleRequest(new Request(url, { method }), {
     template,
     renderPage: async (request) => {
       const rendered = await Effect.runPromise(
@@ -173,6 +183,11 @@ test(
             "/a/../b",
             "/index.html",
             "/%C3%A9?%C3%BC=1",
+            // #21: a network-path or absolute-form target naming another host, or credentials.
+            "//evil.example/x",
+            "http://evil.example/x",
+            "http://reffect.test/absolute?q=1",
+            "http://user:pw@reffect.test/",
           ]) {
             const native = yield* Effect.promise(() => send(address, "GET", target));
             const expected = yield* Effect.promise(() => upstream("GET", target));

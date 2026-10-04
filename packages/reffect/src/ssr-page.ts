@@ -211,6 +211,14 @@ mod ssr_host {
         }
         segments.join("/")
     }
+    /// resolveRequestUrl: the target resolved against the origin, or nothing when it names
+    /// another origin or carries credentials.
+    pub fn resolve_request_url(target: &str, origin: &str) -> Option<url::Url> {
+        let base = url::Url::parse(origin).ok()?;
+        let resolved = base.join(target).ok()?;
+        if !resolved.username().is_empty() || resolved.password().is_some() { return None; }
+        (resolved.origin() == base.origin()).then_some(resolved)
+    }
     pub fn resolves_to_index_html(target: &str) -> bool {
         let Some(path) = pathname(target) else { return false };
         let Some(decoded) = decode_uri_component(&path) else { return false };
@@ -249,11 +257,21 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
         for (name, value) in extra { response.headers_mut().insert(*name, axum::http::HeaderValue::from_str(value).unwrap()); }
         response
     };
+    // The request URL as upstream's Node adapter builds it (resolveRequestUrl): the target
+    // against the configured origin, refused before anything else when it names another origin
+    // or carries credentials (#21). Hyper keeps an absolute-form target's authority outside its path.
+    let raw_target = if uri.scheme().is_some() { uri.to_string() } else { uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| "/".to_string()) };
+    let Some(resolved) = ssr_host::resolve_request_url(&raw_target, ${JSON.stringify(origin)}) else {
+        return empty(StatusCode::BAD_REQUEST, &[]);
+    };
+    #[allow(unused_variables)]
+    let href: String = resolved.to_string();
     let method = method.as_str().to_uppercase();
     if method == "CONNECT" || method == "TRACE" || method == "TRACK" {
         return empty(StatusCode::METHOD_NOT_ALLOWED, &[("allow", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS".to_string())]);
     }
-    let target = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let routed = if uri.scheme().is_some() { format!("{}{}", resolved.path(), resolved.query().map(|query| format!("?{}", query)).unwrap_or_default()) } else { raw_target.clone() };
+    let target = routed.as_str();
     let get_or_head = method == "GET" || method == "HEAD";
     let mut negotiated = false;
     if get_or_head && !ssr_host::resolves_to_index_html(target) {
@@ -268,9 +286,6 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
             return empty(StatusCode::NOT_FOUND, &[("vary", ssr_host::vary_with(Some(&ssr_host::vary_with(None, "Accept")), "Sec-Fetch-Dest"))]);
         }
     }
-    // The request URL as upstream's Request has it: the target resolved against the origin.
-    #[allow(unused_variables)]
-    let href: String = url::Url::parse(${JSON.stringify(origin)}).and_then(|base| base.join(target)).map(|url| url.to_string()).unwrap_or_default();
     ${
       data === undefined
         ? "let _ = &state;"
