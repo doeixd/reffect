@@ -263,6 +263,20 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
       - First the SSR runtimes (`foldkit_ssr`, `foldkit_html`, `foldkit_json`), then the Remote engine with the evaluator it uses (`foldkit_eval`) and hub unit tests, then the RPC and SQL runtimes.
       - The Deferred, Cause, frame and async runtimes belong to the concurrent coordination work and move when that work settles.
     - **Acceptance.** Native suites that use a migrated module pass unchanged (the emitted Rust may differ by rustfmt layout only), and `runtime:check` is clean.
+  - **Delivered 2026-10-03 (first two slices).**
+    - `foldkit_ssr`, `foldkit_html`, `foldkit_json`, `remote_engine` and `foldkit_eval` live in [`packages/reffect/runtime/src`](../../packages/reffect/runtime/src) (about 2,300 lines after rustfmt).
+    - The backtick concatenations in their TypeScript are gone.
+    - clippy's five findings were fixed with type aliases (`Evaluator`, `CellCache`, `Locate`, `PageOf`) and `is_multiple_of`.
+    - [tests.rs](../../packages/reffect/runtime/src/tests.rs) holds eight Rust tests:
+      - HTML rendering, booleans and refusals, and JSON text and round trip, with expected strings captured from upstream;
+      - hub cursors per subscriber, merged duplicate selections, per-principal field authorization, and the protocol check.
+    - `vp run runtime:check` is clean. The sync test fails on a stale generated file, which was mutation-checked by appending to a `.rs` file.
+    - These suites pass: `ssr-serialize`, `html`, `html-native`, `html-page`, `html-flags`, `remote-acceptance`, `remote-live`, `remote-query`, `remote-read`, `remote-sql-live` and `foldkit`.
+    - `foldkit.test.ts` timed out at its fixed 120 s budget while six other suites built crates, and passed alone. That budget does not scale with load; `nativeTestBudget` would fix it.
+  - **Remaining.**
+    - The RPC runtimes (`rpc-auth-runtime`, `rpc-runtime`'s `layeredMain`/`asyncHttpRuntime`, `native-rpc`'s `stableStringifyRust`/`decodePrelude`) are crate-root items rather than modules, so they need an item-file form of `runtimeModule`.
+    - `sql-runtime` and `ssr-page` interpolate per-build values (dialect, origin, template parts), which first move into generated constants.
+    - The coordination runtimes wait for that work to settle.
 - **LIVE-013: randomized hub conformance.**
   - A small stdin/stdout JSON driver exposes the native hub: subscribe, changed, deleted, drain events.
   - fast-check scenarios compare it with upstream's in-process `liveHub` over the same rows and `authorize` rules.

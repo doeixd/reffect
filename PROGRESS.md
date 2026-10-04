@@ -22,6 +22,17 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-03 — LIVE-012: runtime Rust in checked files (first slices)
+
+- **Change.** The SSR runtimes, the Remote engine and the Query evaluator moved from TypeScript strings into the check-only crate `packages/reffect/runtime`.
+  - `scripts/runtime-sources.ts` generates `src/runtime-sources.generated.ts`; `runtime-module.ts` wraps each body in its `mod` item.
+  - `vp run runtime:gen` regenerates; `vp run runtime:check` runs rustfmt, clippy `-D warnings` and `cargo test`.
+- **Validation.**
+  - `runtime:check` is clean: 8 Rust tests, including hub cursor, selection and authorization tests.
+  - The `runtime-sources` sync test passes and was mutation-checked.
+  - These suites pass: `ssr-serialize`, `html`, `html-native`, `html-page`, `html-flags`, `remote-acceptance`, `remote-live`, `remote-query`, `remote-read`, `remote-sql-live` and `foldkit`. `foldkit` passed when run alone; its fixed 120 s budget timed out under concurrent builds.
+- **Remaining.** The RPC, SQL and page runtimes ([LIVE-012](docs/research/remote-live.md#improvement-plan-2026-10-03)). Next is LIVE-008, then M9-3 step 2.
+
 ## 2026-10-03 — M9-1: pages read the request and carry Flags
 
 - **Change.** Native pages may read their request URL, resolved against a configured origin. `R.Html.renderToString` takes Flags and writes upstream's payload with a JS-exact JSON writer. Flags holding Numbers are refused.
