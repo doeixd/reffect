@@ -121,3 +121,80 @@ test(
   },
   nativeTestBudget(0) + 240000,
 );
+
+// #25: the requests of one body run concurrently and answer as they finish, as the official
+// server's fibers do; four 300 ms requests answer in about 300 ms, not 1.2 s.
+const SlowGroup = RpcGroup.make(Rpc.make("Slow", { payload: {}, success: Schema.String }));
+const slow = R.fn([], R.String, R.Never, () =>
+  R.Effect.sleep(300).pipe(R.Effect.andThen(R.Effect.succeed(R.String.literal("done")))),
+);
+const postBody = (host: string, port: number, body: string) =>
+  new Promise<{ ms: number; body: string }>((resolve, reject) => {
+    const started = Date.now();
+    const outgoing = httpRequest(
+      { host, port, method: "POST", path: "/rpc", agent: false },
+      (response) => {
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => (text += chunk));
+        response.on("end", () => resolve({ ms: Date.now() - started, body: text }));
+      },
+    );
+    outgoing.on("error", reject);
+    outgoing.end(body);
+  });
+
+test(
+  "a body's requests run concurrently and answer in completion order",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-rpc-batch-" });
+          const artifact = yield* NativeRpc.compile(SlowGroup, { Slow: NativeRpc.bind(slow) });
+          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+          yield* CargoApi.fetch(directory);
+          yield* CargoApi.build(directory, "debug");
+          const child = yield* ChildProcess.make(
+            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+            ["--port", "0"],
+          );
+          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+          const ready = yield* Stream.runHead(
+            Stream.splitLines(Stream.decodeText(child.stdout)),
+          ).pipe(Effect.timeout("10 seconds"));
+          if (!Option.isSome(ready)) throw new Error("Missing ready record");
+          const { address } = Schema.decodeUnknownSync(
+            Schema.Struct({
+              schema: Schema.Literal("reffect.rpc.ready@1"),
+              address: Schema.String,
+            }),
+          )(JSON.parse(ready.value));
+          const [host, portText] = address.split(":");
+          const batch = ["1", "2", "3", "4"].map((id) => ({
+            _tag: "Request",
+            id,
+            tag: "Slow",
+            payload: {},
+            headers: [],
+          }));
+          const answer = yield* Effect.promise(() =>
+            postBody(host!, Number(portText), JSON.stringify(batch)),
+          );
+          const responses = Schema.decodeUnknownSync(
+            Schema.Array(Schema.Struct({ requestId: Schema.String })),
+          )(JSON.parse(answer.body));
+          expect(responses.map((response) => response.requestId).sort()).toEqual([
+            "1",
+            "2",
+            "3",
+            "4",
+          ]);
+          expect(answer.ms).toBeLessThan(1000);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(0) + 240000,
+);

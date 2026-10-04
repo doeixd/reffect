@@ -276,7 +276,7 @@ const serveRuntime = String.raw`async fn serve(listener: tokio::net::TcpListener
 }
 `;
 
-const plainMain = String.raw`#[tokio::main(flavor = "current_thread")]
+const plainMain = String.raw`#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut address = "127.0.0.1".to_string();
@@ -321,7 +321,7 @@ const shutdownForwarder = String.raw`    let cancellation = std::sync::Arc::new(
  */
 const layeredMain = String.raw`static SERVICES: std::sync::OnceLock<reffect_generated::LaunchValues> = std::sync::OnceLock::new();
 static SHUTDOWN: std::sync::OnceLock<tokio::sync::watch::Receiver<bool>> = std::sync::OnceLock::new();
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut address = "127.0.0.1".to_string();
@@ -444,14 +444,23 @@ async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, incoming: ax
     // The official server buffers 16 messages between its handlers and the body (STREAM-002).
     let (out, lines) = tokio::sync::mpsc::channel::<Outgoing>(16);
     tokio::spawn(async move {
+        // The requests run concurrently and each answers when it finishes, as the official
+        // server's fibers do (#25). They share this task, first polled in request order, so each
+        // runs until it suspends before the next starts, as forked fibers do on one thread; a
+        // stream no longer holds back the requests after it.
+        let mut running = futures_util::stream::FuturesUnordered::new();
         for message in &batch {
             if *receiver.borrow() || receiver.has_changed().is_err() { break; }
-            let response = match unframed(message) {
-                Some(defect) => defect,
-                None => request(message, &headers, &state, &receiver, &out).await,
-            };
-            if out.send(Outgoing::Message(response)).await.is_err() { return; }
+            let (headers, state, receiver, out) = (&headers, &state, &receiver, &out);
+            running.push(async move {
+                let response = match unframed(message) {
+                    Some(defect) => defect,
+                    None => request(message, headers, state, receiver, out).await,
+                };
+                let _ = out.send(Outgoing::Message(response)).await;
+            });
         }
+        while futures_util::StreamExt::next(&mut running).await.is_some() {}
         let _ = out.send(Outgoing::Done).await;
     });
     let mut response = Response::new(axum::body::Body::new(PendingResponse { lines, buffered: Vec::new(), cancellation: Some(cancellation) }));

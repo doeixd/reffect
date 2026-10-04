@@ -2058,14 +2058,16 @@ ${
           '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'.replace(
             '["macros", "rt", "net", "time", "sync"]',
             prepared.layered
-              ? '["macros", "rt", "net", "time", "sync", "signal"]'
+              ? '["macros", "rt", "rt-multi-thread", "net", "time", "sync", "signal"]'
               : prepared.asynchronous
-                ? '["macros", "rt", "net", "time", "sync"]'
-                : '["macros", "rt", "net", "time", "sync"]',
+                ? '["macros", "rt", "rt-multi-thread", "net", "time", "sync"]'
+                : '["macros", "rt", "rt-multi-thread", "net", "time", "sync"]',
           ) +
           // The accept loop (#16): hyper's own connection builder, with a timer.
           'hyper = { version = "=1.11.1", features = ["server", "http1"] }\nhyper-util = { version = "=0.1.21", features = ["tokio", "server-graceful"] }\ntower = { version = "=0.5.3", default-features = false, features = ["util"] }\n' +
-          (prepared.asynchronous ? 'http-body = "=1.0.1"\n' : "") +
+          (prepared.asynchronous
+            ? 'http-body = "=1.0.1"\nfutures-util = { version = "=0.3.34", default-features = false, features = ["std"] }\n'
+            : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
           (prepared.pages ? 'url = "=2.5.8"\n' : "") +
           (runtime?.dependencies ?? []).join("") +

@@ -77,6 +77,22 @@ const corpus: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ],
   ["invalid stream payload", [message("1", "Count", { upTo: "x" })]],
 ];
+/** A body's response messages grouped by request id, each request's in order. */
+const byRequest = (serialization: "json" | "ndjson", text: string) => {
+  const responses: ReadonlyArray<{ readonly requestId?: string }> =
+    serialization === "ndjson"
+      ? text
+          .split("\n")
+          .filter((line) => line !== "")
+          .map((line) => JSON.parse(line))
+      : JSON.parse(text);
+  const grouped = new Map<string, Array<unknown>>();
+  for (const response of responses) {
+    const id = response.requestId ?? "";
+    grouped.set(id, [...(grouped.get(id) ?? []), response]);
+  }
+  return Object.fromEntries([...grouped].sort(([a], [b]) => a.localeCompare(b)));
+};
 const body = (serialization: "json" | "ndjson", messages: ReadonlyArray<string>) =>
   serialization === "ndjson"
     ? messages.map((line) => `${line}\n`).join("")
@@ -126,7 +142,13 @@ for (const serialization of ["ndjson", "json"] as const)
                 ).then((r) => r.text()),
               );
               answers.set(label, expected);
-              if (serialization === "ndjson") expect(native, label).toBe(expected);
+              if (messages.length > 1)
+                // Requests in one body run concurrently (#25); only each request's own order is
+                // the protocol's, so they are compared per request.
+                expect(byRequest(serialization, native), label).toStrictEqual(
+                  byRequest(serialization, expected),
+                );
+              else if (serialization === "ndjson") expect(native, label).toBe(expected);
               else expect(JSON.parse(native), label).toStrictEqual(JSON.parse(expected));
             }
             // The chunks compared are really there.

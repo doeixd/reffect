@@ -30,3 +30,18 @@ export const listen = (post: Post, body: string) => {
     },
   };
 };
+/**
+ * A stream's events in order, whatever Chunk lines carried them. How many queued events one
+ * Chunk takes is timing (`takeAll`), on either server, so comparisons use the events (LR-10).
+ */
+export const events = (lines: ReadonlyArray<string>): ReadonlyArray<unknown> =>
+  lines.flatMap((line) => {
+    const message: {
+      readonly _tag?: string;
+      readonly requestId?: string;
+      readonly values?: ReadonlyArray<unknown>;
+    } = JSON.parse(line);
+    return message._tag === "Chunk"
+      ? (message.values ?? []).map((value) => ({ requestId: message.requestId, value }))
+      : [message];
+  });

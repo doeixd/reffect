@@ -1,6 +1,6 @@
 # Serving native RPC: connections, timeouts and threading
 
-Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`; test `rpc-serving.test.ts`). The threading and concurrent-batch design (step 2) is open below. The issues are [#16](https://github.com/doeixd/reffect/issues/16) and [#25](https://github.com/doeixd/reffect/issues/25).
+Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`; test `rpc-serving.test.ts`). Step 2 (threading and concurrent batches) is designed below. The issues are [#16](https://github.com/doeixd/reffect/issues/16) and [#25](https://github.com/doeixd/reffect/issues/25).
 
 ## Findings (checked 2026-10-04)
 
@@ -43,12 +43,23 @@ Status: **step 1 (timeouts and connection cap) delivered 2026-10-04** (`dbfdde1`
 - With a cap of N, an (N+1)th connection is served only after one closes.
 - The existing RPC, Remote and page suites pass unchanged.
 
-## Step 2: threading and concurrent batches (open)
+## Step 2: threading and concurrent batches (designed 2026-10-04)
 
-Moving to a multi-thread runtime, or running a body's requests concurrently, would let memory-backend mutations interleave. Before that change:
+**Findings**
 
-- decide the memory store's locking unit (per mutation session, or per table);
-- show RS-004 still holds under concurrency;
-- settle response ordering in JSON mode against official `RpcServer`.
+- **Response order.** Official `RpcServer` (effect 4.0.0, `RpcServer.js:690-760`) forks a fiber per request (`concurrency` defaults to `"unbounded"`). Each fiber offers its response to the client queue when it finishes. JSON mode collects the queue and encodes the array at the end of the body; NDJSON streams it. Both are in **completion order**.
+- **RS-004 holds with threads.** It (`remote-mutations.md`) is guaranteed by the memory store taking its lock per operation. A request's operations can interleave with another's only between operations, which is exactly where the reference's fibers interleave (at suspension points). The single thread is not needed for it. A multi-thread runtime keeps per-operation atomicity, and the interleavings it allows are a subset of the reference's.
+- **Thread-local state is safe.** The generated code's thread-locals (sync frame trail, log context) are used only inside synchronous calls with no await between store and take, so a call never changes thread. Async handlers already run in `Send` tasks.
 
-Until then, the single-threaded profile and the sequential batch are recorded in `native-divergences.md`.
+**Design**
+
+- **Concurrent batches (#25).** In async servers, each request in a body runs as its own task in a `JoinSet` (at most `MAX_BATCH`). Each task sends its response to the shared output as it finishes, giving official's completion order in both modes. A stream request no longer blocks the requests after it. Synchronous handlers cannot suspend, so their order is already official's.
+- **Multi-thread runtime (#16).** Generated servers use `#[tokio::main(flavor = "multi_thread")]` (tokio `rt-multi-thread`). A CPU-heavy handler then holds one worker, not the whole server.
+
+**Acceptance**
+
+- Four 300 ms sleeping requests in one body answer in well under 1.2 s, as four responses.
+- A stream request followed by a unary request in one NDJSON body answers the unary request.
+- The existing RPC, Remote, Live, page and layered-server suites pass.
+
+**Remaining risk.** Event ordering between different connections becomes truly parallel. It was already concurrent, but before it ran on one thread. Tests that compare cross-connection timing must keep waiting for counts rather than order.

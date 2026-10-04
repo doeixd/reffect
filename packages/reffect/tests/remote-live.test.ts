@@ -22,7 +22,7 @@ import {
 import type { NativeRemoteMutation } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { memoryRead, memoryTables } from "./fixtures/foldkit-remote-memory.ts";
-import { listen, pause } from "./fixtures/live-stream.ts";
+import { events, listen, pause } from "./fixtures/live-stream.ts";
 import type { Post } from "./fixtures/live-stream.ts";
 
 // LIVE-001..004: R mutations signal upstream's own liveHub in the reference and the native hub
@@ -290,8 +290,8 @@ test(
             ),
           );
 
-          expect(nativeRun.aLines).toEqual(officialRun.aLines);
-          expect(nativeRun.bLines).toEqual(officialRun.bLines);
+          expect(events(nativeRun.aLines)).toEqual(events(officialRun.aLines));
+          expect(events(nativeRun.bLines)).toEqual(events(officialRun.bLines));
           expect(nativeRun.answers).toEqual(officialRun.answers);
           // LR-2: each disconnect unsubscribed natively, as `hub.size` shows officially.
           expect(trace.map((record) => JSON.parse(record))).toEqual([
@@ -517,7 +517,8 @@ test(
             ),
           );
 
-          expect(nativeRun).toEqual(officialRun);
+          expect(nativeRun.answers).toEqual(officialRun.answers);
+          expect(nativeRun.lines.map(events)).toEqual(officialRun.lines.map(events));
           const [admin, adminAgain, member, memberEmail] = officialRun.lines.map((lines) =>
             lines.join("\n"),
           );
