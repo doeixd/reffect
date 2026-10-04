@@ -22,6 +22,15 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-03 — LIVE-015: opt-in snapshot for fresh live subscriptions
+
+- **Decision (user).** Close the render-to-live gap with an opt-in native snapshot, a recorded divergence that is off by default ([record](docs/research/ssr-data.md#render-to-live-gap-decision-2026-10-03)).
+- **Validation.**
+  - `todo-remote-page` shows a change made between render and subscription arriving; it times out without the snapshot.
+  - `runtime:check` passes 9 Rust tests.
+  - `remote-live` and `runtime-sources` pass.
+- **Next.** M9-5, the showcase.
+
 ## 2026-10-03 — M9-4: todo-remote's first screen natively
 
 - **Change.** The example's native server renders the app's first screen from its own engine. The app's `init` replays the handed-over exchanges and `entry.ts` hydrates. The session id comes from a Command; Vite proxies page navigations.

@@ -221,9 +221,37 @@ Results:
 
 ## Risks and open questions
 
-- **Gap between the first render and Live.** The hub keeps no history ("resuming only renumbers"), so a change committed between the server render and the browser's Live subscription is lost.
-  - Upstream's own SSR has the same gap, so it is not a divergence.
-  - Fixes: a bounded replay buffer in the hub, or a re-read when subscribing. Decide before M9-5.
+- **Gap between the first render and Live.** Decided, see [the decision](#render-to-live-gap-decision-2026-10-03).
+
+## Render-to-live gap decision (2026-10-03)
+
+**Finding** (foldkit-remote 0.11.0):
+
+- A fresh client stream subscribes with `after: 0`.
+- `classifyLive` accepts a stream's first event at any cursor (cursor `0` means no baseline), so the client cannot detect events from before its subscription.
+- The hub keeps no history, so a change committed between the server render and the subscription is lost.
+- `Data.refresh` re-reads, but nothing orders it after the subscription starts.
+- Upstream's own SSR has the same gap.
+
+**Options considered:**
+
+1. Accept upstream's gap.
+2. Have the client refresh after hydration. This only narrows the window, and it costs the fetch that resume avoids.
+3. An opt-in native snapshot.
+
+**Decision (user, 2026-10-03): option 3, LIVE-015.**
+
+- **Ordering.** With `NativeRemote({ liveSnapshot: true })`, a fresh subscription is registered first. `Hub::snapshot` then re-reads each selected row's plain fields under its principal and emits `EntityPatched`, or `EntityDeleted` for a missing row, before later changes.
+- **Failures.** A failed re-read skips a cursor (LIVE-007).
+- **Divergence.** Recorded in native divergences. The option is off by default, so the oracle tests against `liveHub` stay exact.
+- **Limits.**
+  - Aliased and windowed fields (relation pages) are not snapshotted.
+  - A concurrent `changed` re-read can still interleave out of read order, as two concurrent `changed` calls can upstream.
+  - Connection changes (a todo added elsewhere) are outside the hub, with or without a snapshot.
+- **Validation.**
+  - [todo-remote-page.test.ts](../../packages/reffect/tests/todo-remote-page.test.ts) toggles t2 after the render and before a fresh subscription, and the stream carries `done: true`. Mutation-checked: without the snapshot it times out.
+  - A Rust unit test covers fields, authorization, a missing row and no snapshot for a resumed stream.
+- **todo-remote.** Its `--serve` mode turns the snapshot on. The session compared with upstream's hub keeps it off.
 
 - **RemoteData states after satisfy.** Partial selections or windowed connections may leave non-`Ready` states. Replay reproduces whatever upstream computes, but the M9-2 suite should cover a windowed connection before M9-3.
 - **Upstream churn.** The Model and snapshot shape is versioned and still moving. Every port adds a differential suite to re-run at upgrades; the version guard catches the drift.
