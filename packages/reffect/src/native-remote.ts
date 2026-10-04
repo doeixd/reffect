@@ -592,7 +592,7 @@ const pageReads = (
           throw unsupported(path, "Page reads select no relations yet (M9-3)");
       }
     }
-    return `(${Rs.stringLiteral(read._tag).text}, ${Rs.stringLiteral(JSON.stringify(request)).text})`;
+    return `remote_engine::PageRead { tag: ${Rs.stringLiteral(read._tag).text}, request: serde_json::from_str(${Rs.stringLiteral(JSON.stringify(request)).text}).expect("planned while compiling") }`;
   });
   // The render's third input is a Struct with exactly one field per view.
   const names = Object.keys(views);
@@ -643,37 +643,18 @@ const pageReads = (
   const viewEntries = Object.entries(views)
     .map(([name, view]) => `(${Rs.stringLiteral(name).text}, ${view.read})`)
     .join(", ");
+  // The work is the engine's page_data (runtime/src/remote_engine.rs, #37); the planned requests
+  // are parsed once per process (#9).
   return `async {
-        static REMOTE_PAGE_READS: &[(&str, &str)] = &[${planned.join(", ")}];
+        static REMOTE_PAGE_READS: std::sync::OnceLock<Vec<remote_engine::PageRead>> = std::sync::OnceLock::new();
+        let reads = REMOTE_PAGE_READS.get_or_init(|| vec![${planned.join(", ")}]);
         ${authenticates ? "if principal.is_none() { return Err(StatusCode::UNAUTHORIZED); }" : ""}
         let authorize = remote_authorize(principal);
-        let mut exchanges = Vec::with_capacity(REMOTE_PAGE_READS.len());
-        for (tag, request) in REMOTE_PAGE_READS {
-            let request: Value = serde_json::from_str(request).expect("planned while compiling");
-            let answer = if *tag == "Query" { remote_engine::query(${source}, &authorize, &request).await } else { remote_engine::read(${source}, &authorize, &request).await };
-            match answer {
-                Ok(answer) => exchanges.push(json!({ "_tag": tag, "request": request, "answer": answer })),
-                Err(error) => {
-                    eprintln!("{}", json!({ "schema": "reffect.ssr.page@1", "outcome": "read-failure", "error": error }));
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-            }
-        }
-        // Each view is upstream's Page of a Ready read: the edges' entity values in edge order,
-        // and more on a side whose boundary is not Terminal (one segment, cut to its window).
-        static REMOTE_PAGE_VIEWS: &[(&str, usize)] = &[${viewEntries}];
-        let mut views = serde_json::Map::new();
-        for (name, read) in REMOTE_PAGE_VIEWS {
-            let answer = &exchanges[*read]["answer"];
-            let entities = answer["entities"].as_array().map(Vec::as_slice).unwrap_or_default();
-            let items: Vec<Value> = answer["edges"].as_array().map(Vec::as_slice).unwrap_or_default().iter().map(|edge| {
-                entities.iter().find(|entity| entity["entity"] == edge["entity"] && entity["id"] == edge["id"]).map(|entity| entity["values"].clone()).unwrap_or(Value::Null)
-            }).collect();
-            let more = |side: &str| answer[side]["_tag"].as_str() != Some("Terminal");
-            views.insert(name.to_string(), json!({ "items": items, "hasNext": more("end"), "hasPrevious": more("start") }));
-        }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0);
-        Ok::<(Value, Value), StatusCode>((json!({ "now": now, "exchanges": exchanges }), Value::Object(views)))
+        remote_engine::page_data(${source}, &authorize, reads, &[${viewEntries}], now).await.map_err(|error| {
+            eprintln!("{}", json!({ "schema": "reffect.ssr.page@1", "outcome": "read-failure", "error": error }));
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
     }.await`;
 };
 /** The Rust expression of the hub service each session gets (LIVE-008). */

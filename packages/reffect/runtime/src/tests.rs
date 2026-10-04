@@ -5,7 +5,9 @@
 
 use crate::foldkit_html::{element, empty, render, text, Prop};
 use crate::foldkit_json::{json_text, round_trip};
-use crate::remote_engine::{read, Hub, JsObject, LiveLimits, Memory, Subscription};
+use crate::remote_engine::{
+    page_data, page_views, read, Hub, JsObject, LiveLimits, Memory, PageRead, Subscription,
+};
 use serde_json::json;
 
 #[test]
@@ -375,4 +377,46 @@ fn page_host_helpers_answer_as_upstream() {
     ));
     assert!(matches!(classify("/page", Some("document")), Class::Page));
     assert!(matches!(classify("/page", None), Class::Page));
+}
+
+#[test]
+fn page_views_are_ready_pages_in_edge_order() {
+    let exchange = json!({ "answer": {
+        "edges": [{ "entity": "Todo", "id": "t2" }, { "entity": "Todo", "id": "t1" }, { "entity": "Todo", "id": "t9" }],
+        "start": { "_tag": "Terminal" },
+        "end": { "_tag": "Cursor", "cursor": "c" },
+        "entities": [
+            { "entity": "Todo", "id": "t1", "values": { "title": "a" } },
+            { "entity": "Todo", "id": "t2", "values": { "title": "b" } },
+        ],
+    } });
+    assert_eq!(
+        page_views(&[exchange], &[("todos", 0)]),
+        // Edge order; a missing entity is null, which typed decoding refuses.
+        json!({ "todos": { "items": [{ "title": "b" }, { "title": "a" }, null], "hasNext": true, "hasPrevious": false } })
+    );
+}
+
+#[test]
+fn page_data_records_each_planned_read_with_its_answer() {
+    let rows = json!({ "Todo": [["t1", { "id": "t1", "title": "Write" }]] });
+    let memory = Memory::new(vec!["Todo".to_string()], &rows, &[]);
+    let request = json!({ "version": 4, "requests": [{ "entity": "Todo", "id": "t1", "fields": ["title"] }] });
+    let reads = [PageRead {
+        tag: "Read",
+        request: request.clone(),
+    }];
+    let permit_all = |_: &str, fields: &[String]| fields.to_vec();
+    let (resume, views) = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(page_data(&memory, &permit_all, &reads, &[], 7))
+        .unwrap();
+    assert_eq!(resume["now"], json!(7));
+    assert_eq!(resume["exchanges"][0]["request"], request);
+    assert_eq!(
+        resume["exchanges"][0]["answer"]["entities"][0]["values"],
+        json!({ "title": "Write" })
+    );
+    assert_eq!(views, json!({}));
 }

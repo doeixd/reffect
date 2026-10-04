@@ -1996,3 +1996,75 @@ impl Source for Memory {
         std::future::ready(result)
     }
 }
+
+// ---- Pages (M9-3 step 2): a server-rendered page's Remote data.
+/// One read a page plans while compiling: `Query` or `Read`, with its wire request.
+pub struct PageRead {
+    pub tag: &'static str,
+    pub request: Value,
+}
+/// Each view as upstream's `Page` of a Ready read: the edges' entity values in edge order, and
+/// more on a side whose boundary is not `Terminal` (one segment, cut to its own window). An edge
+/// whose entity is missing reads as null, which the page's typed decoding then refuses (#9:
+/// entities are indexed once, so assembly is linear).
+pub fn page_views(exchanges: &[Value], views: &[(&str, usize)]) -> Value {
+    let mut out = Map::new();
+    for (name, read) in views {
+        let answer = &exchanges[*read]["answer"];
+        let entities: HashMap<(&str, &str), &Value> = answer["entities"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|entity| {
+                Some((
+                    (entity["entity"].as_str()?, entity["id"].as_str()?),
+                    &entity["values"],
+                ))
+            })
+            .collect();
+        let items: Vec<Value> = answer["edges"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|edge| {
+                edge["entity"]
+                    .as_str()
+                    .zip(edge["id"].as_str())
+                    .and_then(|key| entities.get(&key))
+                    .map(|values| (*values).clone())
+                    .unwrap_or(Value::Null)
+            })
+            .collect();
+        let more = |side: &str| answer[side]["_tag"].as_str() != Some("Terminal");
+        out.insert(
+            name.to_string(),
+            json!({ "items": items, "hasNext": more("end"), "hasPrevious": more("start") }),
+        );
+    }
+    Value::Object(out)
+}
+/// The page's data: each planned request run as the RPC handlers run it, recorded with its
+/// answer as `{ now, exchanges }` for the browser's replay, and the views built from them. A
+/// read the engine refuses is the error.
+pub async fn page_data<S: Source>(
+    server: &S,
+    authorize: Authorize<'_>,
+    reads: &[PageRead],
+    views: &[(&str, usize)],
+    now: u64,
+) -> Result<(Value, Value), Value> {
+    let mut exchanges = Vec::with_capacity(reads.len());
+    for planned in reads {
+        let answer = if planned.tag == "Query" {
+            query(server, authorize, &planned.request).await?
+        } else {
+            read(server, authorize, &planned.request).await?
+        };
+        exchanges
+            .push(json!({ "_tag": planned.tag, "request": planned.request, "answer": answer }));
+    }
+    let views = page_views(&exchanges, views);
+    Ok((json!({ "now": now, "exchanges": exchanges }), views))
+}
