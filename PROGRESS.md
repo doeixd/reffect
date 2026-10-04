@@ -22,6 +22,15 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-03 — M9-3 step 2a: native pages read Remote data for resume
+
+- **Change.** `planReads` plans a page's requests from upstream `Data.satisfy` while compiling. NativeRemote pages run them against the engine under the page request's principal and carry the `{ now, exchanges }` resume in their Flags. Pages on bearer-authenticated servers need a principal (401).
+- **Validation.**
+  - `remote-page` (byte-equal to upstream, browser resume `Ready` with no fetch) and `remote-auth` (401s, per-principal answers equal the RPC answers) pass.
+  - `html-page`, `html-flags` and `remote-resume` pass, and `vp check` is clean on the changed files.
+- **Review fix.** The principal requirement first applied only with `authorize`; it now applies whenever `auth` is configured (`54dc329`).
+- **Next.** Step 2b, typed view data ([design](docs/research/ssr-data.md#m9-3-step-2-design-2026-10-03)).
+
 ## 2026-10-03 — LIVE-008: after-commit hook and LiveHub service
 
 - **Change.** Store sessions take `after_commit(action)`, and signals go through a `LiveHub` service on the execution context. SQL runs the actions after `COMMIT` and drops them on rollback; memory runs them at once.

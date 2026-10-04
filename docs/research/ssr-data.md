@@ -172,6 +172,24 @@ Results:
 - The exchanges match the requests the client's `satisfy` issues; a miss would fail the replay.
 - An unauthenticated request cannot read what an RPC read would refuse.
 
+**2a delivered 2026-10-03.**
+
+- **Planning.** `planReads(Data.satisfy(initial, active))` in `reffect/remote-resume` runs upstream's satisfy against a client that records each request and answers it empty, so it captures the first pass.
+- **Declaration and checks.** `NativeRemote` takes `pages: { template, render, origin?, reads }`. It refuses unknown queries or entities and selections with relations.
+- **Run time.** The page's data step:
+  - runs each request through `remote_engine::query`/`read` with `remote_authorize(principal)`;
+  - records `{ _tag, request, answer }`;
+  - logs a failed read as `reffect.ssr.page@1 read-failure` and answers 500;
+  - passes `{ now, exchanges }` to the R render's second, `Unknown` input.
+- **Principal.** Pages take the principal from their own `Authorization` header (`page_principal`, which shares `authenticate`'s constant-time check). On a server with bearer auth, a page request without a valid one gets 401, so a page never reads more openly than RPC.
+- **Tests.**
+  - [remote-page.test.ts](../../packages/reffect/tests/remote-page.test.ts): the native page, with the recorded exchanges in its Flags, equals upstream `handleRequest` around `renderToString` byte for byte, using the native page's own `now`. The browser's replay is `Ready` and plans no fetch. An unknown query is refused.
+  - [remote-auth.test.ts](../../packages/reffect/tests/remote-auth.test.ts):
+    - a page with no token or an invalid one gets 401;
+    - with a token, the recorded answer equals that principal's own `FoldkitRemoteRead` RPC answer;
+    - the admin's page shows the budget and the member's does not.
+- **Limits.** Only constant requests are planned, and only the first pass. A Surface waiting on another's data is not planned, and its replay then fails with `RemoteReadError`.
+
 **Not yet:** SQL read transactions spanning a page's reads (consistency choice, recorded above), relation assembly, and second-pass reads.
 
 ## Risks and open questions
