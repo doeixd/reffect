@@ -89,7 +89,6 @@ These block many items below.
 - Live review fixes ([review](research/remote-live.md#review-2026-10-03)):
 - Live improvement plan ([plan](research/remote-live.md#improvement-plan-2026-10-03)):
   - LIVE-011: typed, domain-checked signals;
-  - LIVE-012 (rest): the RPC, SQL and page runtimes as `.rs` files; the SSR runtimes, Remote engine and evaluator are done ([progress](research/remote-live.md#improvement-plan-2026-10-03));
   - LIVE-013: randomized hub conformance against upstream `liveHub`;
   - LIVE-014: the written boundary between R policy and ported protocol engines, with the long-term path of the hub in R.
 - Live design debts ([review](research/remote-live.md#review-2026-10-03)):
@@ -309,10 +308,8 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 - [#6](https://github.com/doeixd/reffect/issues/6): derive view item witnesses from the selection schema
 - [#7](https://github.com/doeixd/reffect/issues/7): record Ready-only views as a divergence
 - [#8](https://github.com/doeixd/reffect/issues/8): snapshot and `changed` interleaving (documented race)
-- [#9](https://github.com/doeixd/reffect/issues/9): parse planned requests once; assemble views with a map
 - [#10](https://github.com/doeixd/reffect/issues/10): batch snapshot reads
 - [#11](https://github.com/doeixd/reffect/issues/11): mutation latency includes after-commit re-reads
-- [#12](https://github.com/doeixd/reffect/issues/12): move the page data step into the runtime crate
 - [#13](https://github.com/doeixd/reffect/issues/13): one page plan object and one `PageRequest` input
 - [#14](https://github.com/doeixd/reffect/issues/14): a browser-safe `R.Html` entry, to write views once
 - [#15](https://github.com/doeixd/reffect/issues/15): resume size, nested `Struct.get` inference, `R.Remote.Page` DX
@@ -333,7 +330,6 @@ Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the 
 - [#34](https://github.com/doeixd/reffect/issues/34): SSR render copies and quadratic class splitting
 - [#35](https://github.com/doeixd/reffect/issues/35): per-table memory query cache versions
 - [#36](https://github.com/doeixd/reffect/issues/36): one lowering descriptor per Implementation
-- [#37](https://github.com/doeixd/reffect/issues/37): remove string-patching; move the remaining runtimes into the crate
 - [#38](https://github.com/doeixd/reffect/issues/38): deduplicate runtime and compiler logic
 - [#39](https://github.com/doeixd/reffect/issues/39): process-wide registries
 - [#40](https://github.com/doeixd/reffect/issues/40): lone-surrogate literals, `unhex` panic, race masking check

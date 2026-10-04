@@ -60,6 +60,16 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — #37 completed: every static runtime in checked Rust (#9, #12)
+
+- **Page host** (`e7a4214`). `ssr_host` is in `runtime/src/ssr_host.rs`. A Rust test checks each helper against values captured from foldkit 0.165.0's own `acceptsHtml`, `varyWith`, `resolveRequestUrl`, `resolvesToIndexHtml` and `classifyRequest`.
+- **SQL runtime** (`f2af4ec`). It is `runtime/src/remote_sql.rs`, with `sql_sqlite.rs` or `sql_postgres.rs` as its `dialect` child. The check crate compiles it under both dialects (clippy-clean), and a test per dialect pins quoting and placeholders.
+- **Page data step** (`460141a`, #12, #9). It is `remote_engine::page_data` and `page_views`. Planned requests are parsed once per process and views index entities once.
+- **What stays generated.** The `native-remote.ts` glue (store-session impls, `RemoteLive`, `remote_live_subscribe`, the authorizer) implements traits generated into each crate's library and names the backend's source. It is per-server glue, not static runtime, so it stays generated.
+- **Validation.**
+  - `runtime:check` passes 21 Rust tests, with rustfmt and clippy clean.
+  - These suites pass, run one at a time: `remote-sql`, `remote-sql-mutate`, `remote-sql-live` (SQLite and Postgres), `html-page`, `html-flags`, `remote-page`, `remote-auth`, `todo-remote-page` and `runtime-sources`.
+
 ## 2026-10-04 — #37 slices 1–2: RPC runtime without string patches, static Rust in the crate
 
 - **Slice 1** (`095c3bd`): the layered cancellation type, the shutdown forwarder, the pages fallback and the tokio features were spliced in by matching text. They are template parameters now; `validate_batch` replaces the duplicated batch check (#38).
