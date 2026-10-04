@@ -87,7 +87,6 @@ These block many items below.
 
 - Per-entity live sources ([remote-live](research/remote-live.md#order-of-work-and-acceptance))
 - Live review fixes ([review](research/remote-live.md#review-2026-10-03)):
-  - LR-3 (rest): verify the per-todo `Data.live` rendering in a visible Chrome tab. The earlier `Initial` screen is most likely paused `requestAnimationFrame` in a background automation tab, not a regression ([finding](research/remote-live.md#review-fixes-delivered-2026-10-03)).
 - Live improvement plan ([plan](research/remote-live.md#improvement-plan-2026-10-03)):
   - LIVE-011: typed, domain-checked signals;
   - LIVE-012 (rest): the RPC, SQL and page runtimes as `.rs` files; the SSR runtimes, Remote engine and evaluator are done ([progress](research/remote-live.md#improvement-plan-2026-10-03));
@@ -301,3 +300,4 @@ All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reff
 - Suggestions: `id_effect`/`effectful`/`effect-rs` comparisons (licensing review before reuse), Shuttle concurrency tests at M12, BackON/Moka/deadpool candidates, module tiers ([suggestions.txt](suggestions.txt))
 - Unverified ecosystem claims in [effect-ecosystem](effect-ecosystem.md), [effect-adjacent-projects](effect-adjacent-projects.md) and [effect-schema](effect-schema.md#not-found--unverified)
 - Nested data-first `R.Struct.get(R.Struct.get(x, a), b)` can infer `never` inside an `R.fn` callback; the pipe form works ([finding](research/ssr-data.md#m9-3-step-2-design-2026-10-03))
+- A browser-safe `R.Html` entry, so an app's view is written once in R and used in the browser through `toFoldkitView` (todo-remote mirrors its view; [M9-4](research/ssr-data.md#plan))

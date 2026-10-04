@@ -22,6 +22,15 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-03 — M9-4: todo-remote's first screen natively
+
+- **Change.** The example's native server renders the app's first screen from its own engine. The app's `init` replays the handed-over exchanges and `entry.ts` hydrates. The session id comes from a Command; Vite proxies page navigations.
+- **Validation.**
+  - `todo-remote-page` passes: the page equals upstream with the app's own `init`/`view`, and hydration issues no read or query (mutation-checked).
+  - `examples/todo-remote/main.ts` still equals upstream's memory backend.
+  - Headless Chrome over CDP adopted the page with only the Live subscription on load and toggled a todo. This closes LR-3's pending browser check.
+- **Next.** M9-5 (the showcase), which first needs a decision on the render-to-live gap.
+
 ## 2026-10-03 — M9-3 step 2b: R page views read Remote query pages
 
 - **Change.** `planPage` maps named views to their planned queries, and NativeRemote builds each as upstream's `Page` of a Ready read for the render's typed third input (`R.Remote.Page`). Views and their item fields are checked against the plan while compiling.

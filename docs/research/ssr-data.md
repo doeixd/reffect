@@ -110,6 +110,22 @@ Results:
    - Pages become async R functions with the store service, sharing the mutation session machinery (and LIVE-008's after-commit hook when it lands).
 
 4. **`todo-remote`'s first screen natively (M9-4).** The 8A step 6 example, now with data.
+
+   **Delivered 2026-10-03.**
+   - **Server.** [page.ts](../../examples/todo-remote/page.ts) plans the list with `planPage` and mirrors the app's Ready view in R. The example's server serves it beside RPC, mutations and Live.
+   - **Client.**
+     - The app's Flags are the resume. `init` replays it, falling back to an empty start, and `entry.ts` hydrates.
+     - The session id moved from Flags to a `MakeSession` Command, because the server has no randomness to give.
+     - Vite proxies page navigations and `/rpc`.
+   - **Acceptance.** [todo-remote-page.test.ts](../../packages/reffect/tests/todo-remote-page.test.ts) builds the example's own server, in happy-dom:
+     - The page equals upstream `handleRequest` around `renderToString` with the app's own `init` and `view`.
+     - `Runtime.hydrate` keeps the server's list items and asks a counting `RemoteClient` for no read or query. This was mutation-checked: without the exchanges the client queries `Todos`.
+   - **Real browser.** Headless Chrome over CDP:
+     - adoption, with only `FoldkitRemoteLive` on load;
+     - a working toggle (`ToggleTodo`).
+     - This closes LR-3's pending browser verification.
+   - **Debt.** The view is written twice (Foldkit and R). Single-sourcing it through `toFoldkitView` needs a browser-safe `R.Html` entry.
+
 5. **Showcase (M9-5).** SQL, Live, SSR with data and resume in one binary.
 
 ## M9-3 plan (agreed 2026-10-03)

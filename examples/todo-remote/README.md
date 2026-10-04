@@ -28,14 +28,22 @@ native screens equal upstream's memory backend
 - `foldData.mutate` starts the three mutations from `update`.
 - A stock `RpcClient` reaches `/rpc` on its own origin.
 
-Start the native server, then the Vite dev server, which proxies `/rpc` to it:
+The native server renders the first screen (milestone 9, M9-4), as [page.ts](page.ts) describes. The page reads the list through the server's own engine and renders the app's Ready view in R. It hands over the exchanges it read as the app's Flags. The app's `init` replays them through `Data.satisfy` and `entry.ts` calls `Runtime.hydrate`, so the browser adopts the HTML and starts without fetching the list.
+
+Start the native server, then the Vite dev server. Vite proxies `/rpc` and page navigations to the native server and serves the client modules itself:
 
 ```sh
 vp exec node --experimental-transform-types examples/todo-remote/main.ts --serve 8787
 vp dev examples/todo-remote/web
 ```
 
-Open the printed address. New todos get IDs from a per-tab session prefix passed as Flags, so `update` stays pure.
+Open the printed address. New todos get IDs from a per-tab session prefix that a `MakeSession` Command generates after start, so `update` stays pure and the server needs no randomness.
+
+In headless Chrome, driven through the DevTools protocol on 2026-10-03:
+
+- the runtime adopted the native page and kept its list;
+- the only RPC after load was `FoldkitRemoteLive`, the per-todo live subscription, with no Query or Read;
+- toggling a todo sent `ToggleTodo` and updated the list.
 
 ## The files
 
@@ -44,7 +52,8 @@ Open the printed address. New todos get IDs from a per-tab session prefix passed
   - Adding writes a row, returns its patch, and appends it to the `Todos` connection.
   - Toggling writes `done` and signals `R.LiveHub.changed` for it.
   - Deleting removes the row and its edge, and signals `R.LiveHub.deleted`. An empty title fails with `RemoteServerError`.
-- **[main.ts](main.ts)** compiles the native server and starts it on a loopback port. It then runs one screen session through `Remote.clientLayer` over a stock `RpcClient`:
+- **[page.ts](page.ts)** is the first screen: the reads `planPage` derives from the app's list projection, and the app's Ready view mirrored in R. [todo-remote-page.test.ts](../../packages/reffect/tests/todo-remote-page.test.ts) checks that the native page equals upstream `renderToString` with the app's own `init` and `view`, and that the stock runtime hydrates it without a read or query.
+- **[main.ts](main.ts)** compiles the native server, with that page, and starts it on a loopback port. It then runs one screen session through `Remote.clientLayer` over a stock `RpcClient`:
   1. prefetch the list;
   2. `Remote.mutateInto` add, toggle and delete;
   3. a refused add;
@@ -63,7 +72,8 @@ Open the printed address. New todos get IDs from a per-tab session prefix passed
 
 - The memory backend holds rows in the server's memory, as upstream's does. The SQL backend serves the same sources (milestone 5) and applies live signals after commit.
 - The browser app follows every visible todo with one `Data.live` read, composed with `Projection.struct` into one active entry. Live patches update the entity store the list reads.
-- **Browser verification is pending.** In an automated browser session the list stayed `Initial` on screen, but traces show the data arriving in the Model. Foldkit renders on `requestAnimationFrame`, which browsers pause in background tabs, so the likeliest cause is a tab that was never visible. Re-check in a visible tab; see [remote-live](../../docs/research/remote-live.md#review-fixes-delivered-2026-10-03).
+- **The R view mirrors the app's view.** Its Ready branch is written twice: in Foldkit for the browser and in R for the server. The acceptance test catches drift. Using the R view in the browser through `toFoldkitView` needs a browser-safe `R.Html` entry.
+- **A change committed between the server render and the browser's live subscription is not delivered.** The hub keeps no history; this is an open question for M9-5.
 - Authorization (RM-004) and `Live` (milestones 6–7) are not served yet.
 - Mutation schemas use the portable subset: finite numbers, no `Schema.optional`, and no numbers in outputs.
 - The full profile and divergences are in [the native RemoteServer design](../../docs/research/native-remote.md) and [native divergences](../../docs/native-divergences.md).
