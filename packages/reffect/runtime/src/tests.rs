@@ -318,3 +318,61 @@ fn subscriptions_are_capped_in_total_and_per_principal() {
     assert!(subscribe(Some(1)).is_ok());
     drop((other, anonymous));
 }
+
+#[test]
+fn page_host_helpers_answer_as_upstream() {
+    use crate::ssr_host::{
+        accepts_html, classify, resolve_request_url, resolves_to_index_html, vary_with, Class,
+    };
+    // foldkit 0.165.0 acceptsHtml, varyWith, resolveRequestUrl, resolvesToIndexHtml, classifyRequest.
+    for (accept, expected) in [
+        ("text/html", true),
+        ("text/html;q=0", false),
+        ("*/*", true),
+        ("text/*;q=0.5, text/html;q=0", false),
+        ("application/json", false),
+        (" TEXT/HTML ; q = 1 ", true),
+        ("text/html;q=0x1", true),
+        ("text/html;q=Infinity", true),
+        ("", true),
+    ] {
+        assert_eq!(accepts_html(Some(accept)), expected, "{accept:?}");
+    }
+    assert!(accepts_html(None));
+    assert_eq!(vary_with(None, "Accept"), "Accept");
+    assert_eq!(vary_with(Some("Accept"), "accept"), "Accept");
+    assert_eq!(vary_with(Some("Origin"), "Accept"), "Origin, Accept");
+    assert_eq!(vary_with(Some("*"), "Accept"), "*");
+    let resolve = |target: &str| {
+        resolve_request_url(target, "http://reffect.test").map(|url| url.to_string())
+    };
+    assert_eq!(resolve("/a/../b").as_deref(), Some("http://reffect.test/b"));
+    assert_eq!(resolve("//evil.example/x"), None);
+    assert_eq!(resolve("http://user:pw@reffect.test/"), None);
+    assert_eq!(
+        resolve("http://reffect.test/x?y").as_deref(),
+        Some("http://reffect.test/x?y")
+    );
+    assert_eq!(
+        resolve("/%2e%2e/index.html").as_deref(),
+        Some("http://reffect.test/index.html")
+    );
+    for (path, expected) in [
+        ("/", true),
+        ("/index.html", true),
+        ("/a/index.html", false),
+        ("/a/../index.html", true),
+        ("/x.js", false),
+        ("/page", false),
+        ("/%69ndex.html", true),
+    ] {
+        assert_eq!(resolves_to_index_html(path), expected, "{path:?}");
+    }
+    assert!(matches!(classify("/app.js", None), Class::PathAsset));
+    assert!(matches!(
+        classify("/page", Some("script")),
+        Class::DestinationAsset
+    ));
+    assert!(matches!(classify("/page", Some("document")), Class::Page));
+    assert!(matches!(classify("/page", None), Class::Page));
+}

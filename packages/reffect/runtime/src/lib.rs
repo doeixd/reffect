@@ -11,6 +11,8 @@ pub mod foldkit_json;
 mod foldkit_ssr;
 #[allow(dead_code)]
 mod remote_engine;
+#[allow(dead_code)]
+pub mod ssr_host;
 
 /// The RPC server's static items (#37). Generated `main.rs` files inline these lists at their
 /// root, where the imports below and the constants (generated from the server's options) live;

@@ -25,6 +25,7 @@ hyper = { version = "=1.11.1", features = ["server", "http1"] }
 hyper-util = { version = "=0.1.21", features = ["tokio", "server-graceful"] }
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 http-body = "=1.0.1"
+url = "=2.5.8"
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 
 [dev-dependencies]
