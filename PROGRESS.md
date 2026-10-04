@@ -22,6 +22,11 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-03 — LIVE-008: after-commit hook and LiveHub service
+
+- **Change.** Store sessions take `after_commit(action)`, and signals go through a `LiveHub` service on the execution context. SQL runs the actions after `COMMIT` and drops them on rollback; memory runs them at once.
+- **Validation.** `remote-live`, `remote-sql-live`, `remote-mutate` and `remote-sql-mutate` pass, and `vp check` is clean on the changed files ([record](docs/research/remote-live.md#improvement-plan-2026-10-03)).
+
 ## 2026-10-03 — LIVE-012: runtime Rust in checked files (first slices)
 
 - **Change.** The SSR runtimes, the Remote engine and the Query evaluator moved from TypeScript strings into the check-only crate `packages/reffect/runtime`.

@@ -89,7 +89,6 @@ These block many items below.
 - Live review fixes ([review](research/remote-live.md#review-2026-10-03)):
   - LR-3 (rest): verify the per-todo `Data.live` rendering in a visible Chrome tab. The earlier `Initial` screen is most likely paused `requestAnimationFrame` in a background automation tab, not a regression ([finding](research/remote-live.md#review-fixes-delivered-2026-10-03)).
 - Live improvement plan ([plan](research/remote-live.md#improvement-plan-2026-10-03)):
-  - LIVE-008: an after-commit session hook and a separate LiveHub node and service;
   - LIVE-011: typed, domain-checked signals;
   - LIVE-012 (rest): the RPC, SQL and page runtimes as `.rs` files; the SSR runtimes, Remote engine and evaluator are done ([progress](research/remote-live.md#improvement-plan-2026-10-03));
   - LIVE-013: randomized hub conformance against upstream `liveHub`;

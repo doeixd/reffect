@@ -237,6 +237,14 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
   - The store session's `live()` gives way to `after_commit(action)`, which runs immediately on memory and is queued on SQL (run after `COMMIT`, dropped on `ROLLBACK`).
   - Live signals get their own IR node and `LiveHub` requirement (LR-5). NativeRemote provides the service and schedules signals through the hook.
   - LIVE-003 then reads "effects visible outside the transaction happen after commit". The same rule will serve outbox writes, cache invalidation and PubSub publishing.
+  - **Delivered 2026-10-03.**
+    - **Generated runtime.** It defines `AfterCommit` (a boxed `FnOnce` returning a `Send` future), `RemoteStore::after_commit(action)` and a `LiveHub` trait whose `changed`/`deleted` return actions.
+    - **Backends.** The trait's default runs an action at once, which the non-transactional memory backend keeps. The SQL `Session` queues actions (`defer`) and runs them in order after `COMMIT` inside `finish`; a rollback or failed commit drops them.
+    - **Context.** The execution context holds the hub as its own service (`set_live_hub`). A signal is `store.after_commit(hub.changed(...))`.
+    - **NativeRemote.** It provides `RemoteLive` over its backend's source. NativeRpc's `store.live` is now that service's Rust expression instead of a flag.
+    - **Result.** Neither store implementation contains Live code.
+    - **Validation.** `remote-live`, `remote-sql-live` (including rollback and the cursor gap), `remote-mutate` and `remote-sql-mutate` pass unchanged.
+    - **Not done.** A separate Live IR node: signals already have their own `LiveHub` effect and requirement, and the reference keeps `LiveHubHost`. LR-5's remaining point, typed signals, is LIVE-011.
 - **LIVE-009: one stream forwarder.** One `rpc-runtime` function owns chunking (`takeAll`), the 16-message buffer and disconnect detection (`out.closed()` plus cancellation). Both R stream procedures (the `StreamEmit` sink) and runtime-served streams feed it. The Live dispatch arm becomes one call, and the forwarder emits the "unsubscribed" record that LR-2's test asserts.
 - **LIVE-010: register ported runtimes as semantic runtime implementations.**
   - Each port is an entry with its `id` (e.g. `foldkit-remote-server/liveHub`), the pinned upstream version, the effects/procedures it serves, its conformance tests and its crates.
