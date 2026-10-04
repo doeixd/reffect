@@ -45,6 +45,8 @@ import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
 import { causeRuntime } from "./cause-runtime.ts";
 import { structuredRuntime, fallibleStructuredRuntime } from "./structured-runtime.ts";
+import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
+import { deferredGeneratedRuntime } from "./deferred-generated-runtime.ts";
 import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { frameTrailRuntime, syncFrameStorageRuntime } from "./frame-runtime.ts";
 import {
@@ -222,7 +224,15 @@ const planSuspends = (plan: StreamPlan): boolean =>
     }),
     Match.orElse(() => false),
   );
+interface DeferredCapture {
+  readonly name: string;
+  readonly success: IRType<unknown>;
+}
 type HelperBody =
+  | { readonly _tag: "DeferredScope"; readonly owner: DeferredCapture; readonly body: number }
+  | { readonly _tag: "DeferredAwait"; readonly owner: string }
+  | { readonly _tag: "DeferredComplete"; readonly owner: string; readonly value: RustBlock }
+  | { readonly _tag: "DeferredIsDone"; readonly owner: string }
   | { readonly _tag: "ClockReadMillis" }
   | { readonly _tag: "RandomDraw" }
   | {
@@ -384,6 +394,7 @@ type HelperBody =
       readonly body: number;
     };
 interface Helper {
+  readonly deferredOwners?: readonly DeferredCapture[];
   /** Build-owned outcome flags; never carried by authored values. */
   readonly richOutcome?: boolean;
   readonly cancellationGuard?: boolean;
@@ -398,6 +409,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
+  readonly deferredProfile?: { readonly taskCapacity: number; readonly ownerCount: number };
   readonly richErrors: boolean;
   readonly services: RuntimeServiceUsage;
   readonly asynchronous: boolean;
@@ -431,6 +443,7 @@ export const hasFallibleTaskGroups = (module: LoweredModule): boolean =>
   module.functions.some((f) => f.richErrors);
 
 interface Scope {
+  readonly deferredOwners?: ReadonlyMap<symbol, DeferredCapture>;
   readonly files: ReadonlyMap<symbol, string>;
   readonly fileInputs: readonly string[];
   readonly bindings: ReadonlyMap<symbol, readonly Parameter[]>;
@@ -478,6 +491,37 @@ export function lowerFunctions(
   failureFrames: FailureFramePolicy = FailureFrames.Bounded,
   servicesSelection: RuntimeServicesSelection = {},
 ): LoweredModule {
+  return lowerFunctionsInternal(program, selected, policy, failureFrames, servicesSelection);
+}
+
+export function lowerDeferredFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.Bounded,
+  servicesSelection: RuntimeServicesSelection = {},
+): LoweredModule {
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+  );
+}
+
+function lowerFunctionsInternal(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy,
+  failureFrames: FailureFramePolicy,
+  servicesSelection: RuntimeServicesSelection,
+  deferredProfiles?: ReadonlyMap<
+    EffectFn,
+    { readonly taskCapacity: number; readonly ownerCount: number }
+  >,
+): LoweredModule {
   const runtimeServices = normalizeRuntimeServicesSelection(servicesSelection);
   checkArtifactPolicy(policy);
   checkFailureFramePolicy(failureFrames);
@@ -485,6 +529,7 @@ export function lowerFunctions(
   const functions = Object.freeze(
     Object.entries(program.functions).map(([name, f]): RustFunction => {
       const path = `functions.${name}`;
+      const deferredProfile = f instanceof EffectFn ? deferredProfiles?.get(f) : undefined;
       const outcomes =
         f instanceof EffectFn ? analyzeTaskGroups(f.body, `${path}.body`) : undefined;
       let next = 0;
@@ -515,6 +560,7 @@ export function lowerFunctions(
           input: Object.freeze(scope.input.concat([parameter])),
           files: scope.files,
           fileInputs: scope.fileInputs,
+          deferredOwners: scope.deferredOwners,
         };
       };
       let caseBinders = 0;
@@ -527,6 +573,7 @@ export function lowerFunctions(
           input: Object.freeze(scope.input.concat([parameter])),
           files: scope.files,
           fileInputs: scope.fileInputs,
+          deferredOwners: scope.deferredOwners,
         };
       };
       // Only external parameters used by cleanup need to survive until scope close.
@@ -586,10 +633,20 @@ export function lowerFunctions(
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
               DeferredMake: rejectDeferredNative,
-              DeferredScope: rejectDeferredNative,
-              DeferredAwait: rejectDeferredNative,
-              DeferredComplete: rejectDeferredNative,
-              DeferredIsDone: rejectDeferredNative,
+              DeferredScope: (n) => {
+                if (!deferredProfile) rejectDeferredNative();
+                computation(n.body);
+              },
+              DeferredAwait: () => {
+                if (!deferredProfile) rejectDeferredNative();
+              },
+              DeferredComplete: (n) => {
+                if (!deferredProfile) rejectDeferredNative();
+                expression(n.value);
+              },
+              DeferredIsDone: () => {
+                if (!deferredProfile) rejectDeferredNative();
+              },
               TaskGroup: (n) => n.children.forEach(computation),
               Scope: (n) => computation(n.body),
               AddFinalizer: (n) => computation(n.finalizer),
@@ -684,6 +741,7 @@ export function lowerFunctions(
         return {
           bindings: scope.bindings,
           input: Object.freeze(scope.input.filter((parameter) => captures.has(parameter))),
+          deferredOwners: scope.deferredOwners,
           files: new Map(),
           fileInputs: [],
         };
@@ -1024,10 +1082,38 @@ export function lowerFunctions(
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
             DeferredMake: rejectDeferredNative,
-            DeferredScope: rejectDeferredNative,
-            DeferredAwait: rejectDeferredNative,
-            DeferredComplete: rejectDeferredNative,
-            DeferredIsDone: rejectDeferredNative,
+            DeferredScope: (n): HelperBody => {
+              if (!deferredProfile) return rejectDeferredNative();
+              const owner = Object.freeze({ name: `deferred${index}`, success: n.success });
+              const owners = new Map(scope.deferredOwners);
+              owners.set(n.binder, owner);
+              return {
+                _tag: "DeferredScope",
+                owner,
+                body: effectHelper(
+                  n.body,
+                  { ...scope, deferredOwners: owners },
+                  error,
+                  `${path}.body`,
+                ),
+              };
+            },
+            DeferredAwait: (n): HelperBody => {
+              if (!deferredProfile) return rejectDeferredNative();
+              return { _tag: "DeferredAwait", owner: scope.deferredOwners!.get(n.binder)!.name };
+            },
+            DeferredComplete: (n): HelperBody => {
+              if (!deferredProfile) return rejectDeferredNative();
+              return {
+                _tag: "DeferredComplete",
+                owner: scope.deferredOwners!.get(n.binder)!.name,
+                value: block(n.value, scope, `${path}.value`),
+              };
+            },
+            DeferredIsDone: (n): HelperBody => {
+              if (!deferredProfile) return rejectDeferredNative();
+              return { _tag: "DeferredIsDone", owner: scope.deferredOwners!.get(n.binder)!.name };
+            },
             TaskGroup: (n): HelperBody => ({
               _tag: "TaskGroup",
               mode: n.mode,
@@ -1372,8 +1458,15 @@ export function lowerFunctions(
           Object.freeze({
             index,
             files: scope.fileInputs,
+            ...(deferredProfile
+              ? { deferredOwners: Object.freeze(Array.from(scope.deferredOwners?.values() ?? [])) }
+              : {}),
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
+                DeferredScope: (n) => helpers.get(n.body)?.asynchronous ?? false,
+                DeferredAwait: () => true,
+                DeferredComplete: () => true,
+                DeferredIsDone: () => false,
                 StreamCollect: (n) => n.emit !== undefined || planSuspends(n.plan),
                 TaskGroup: () => true,
                 Scope: () => true,
@@ -1443,15 +1536,18 @@ export function lowerFunctions(
           "Random requires explicit ScriptedRandom implementation selection",
         );
       return Object.freeze({
+        ...(deferredProfile ? { deferredProfile } : {}),
         richErrors: outcomes?.requiresRichErrors ?? false,
         services: Object.freeze({ clock, random }),
         name,
-        asynchronous: Match.value(node).pipe(
-          Match.tagsExhaustive({
-            Pure: () => false,
-            Effect: (n) => helpers.get(n.root)?.asynchronous ?? false,
-          }),
-        ),
+        asynchronous:
+          !!deferredProfile ||
+          Match.value(node).pipe(
+            Match.tagsExhaustive({
+              Pure: () => false,
+              Effect: (n) => helpers.get(n.root)?.asynchronous ?? false,
+            }),
+          ),
         path,
         origin: provenance?.origin(f),
         input: f.input,
@@ -1765,6 +1861,10 @@ export const emitFunctions = (
         const child = (...children: number[]) => Math.max(0, ...children.map(depth));
         const result = Match.value(f.helpers[index].body).pipe(
           Match.tagsExhaustive({
+            DeferredScope: (n) => depth(n.body),
+            DeferredAwait: () => 0,
+            DeferredComplete: () => 0,
+            DeferredIsDone: () => 0,
             StreamCollect: () => 0,
             TaskGroup: (n) => child(...n.children),
             Scope: (n) => 1 + depth(n.body),
@@ -1879,14 +1979,16 @@ export const emitFunctions = (
       helper.body._tag === "TaskGroup" && helper.richOutcome ? [helper.body.children.length] : [],
     ),
   );
-  const infallibleArities = module.functions.flatMap((f) =>
-    f.helpers.flatMap((helper) =>
-      Match.value(helper.body).pipe(
-        Match.tag("TaskGroup", (n) => (!helper.richOutcome ? [n.children.length] : [])),
-        Match.orElse(() => []),
+  const infallibleArities = module.functions
+    .filter((f) => !f.deferredProfile)
+    .flatMap((f) =>
+      f.helpers.flatMap((helper) =>
+        Match.value(helper.body).pipe(
+          Match.tag("TaskGroup", (n) => (!helper.richOutcome ? [n.children.length] : [])),
+          Match.orElse(() => []),
+        ),
       ),
-    ),
-  );
+    );
   const fallibleGroups = hasFallibleTaskGroups(module);
   if (fallibleGroups) write(causeRuntime(captureFrames));
   if (hasAsync)
@@ -1905,6 +2007,21 @@ export const emitFunctions = (
       ),
     );
   if (infallibleArities.length) write(structuredRuntime(infallibleArities));
+  if (module.functions.some((f) => f.deferredProfile))
+    write(
+      deferredGeneratedRuntime(
+        module.functions
+          .filter((f) => f.deferredProfile)
+          .flatMap((f) =>
+            f.helpers.flatMap((helper) =>
+              Match.value(helper.body).pipe(
+                Match.tag("TaskGroup", (n) => [n.children.length]),
+                Match.orElse(() => []),
+              ),
+            ),
+          ),
+      ),
+    );
   if (fallibleGroups) write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
@@ -1926,6 +2043,12 @@ export const emitFunctions = (
         Rs.identExpr(Rs.ident(`h_${f.name}_${helper.index}`)),
         (contextual && helper.error ? [identExpr("ctx")] : []).concat(
           helper.input.map((p) => Rs.verbatimExpr(helperArgument(p))),
+          ...(f.deferredProfile && helper.error
+            ? [
+                identExpr("turn"),
+                ...(helper.deferredOwners ?? []).map((owner) => identExpr(owner.name)),
+              ]
+            : []),
           helper.files.map((name) => Rs.refExpr(identExpr(name))),
         ),
       );
@@ -2299,6 +2422,8 @@ export const emitFunctions = (
     const entryFrameKind = (body: HelperBody): string =>
       Match.value(body).pipe(
         Match.tags({
+          DeferredScope: () => "deferredScope",
+          DeferredAwait: () => "deferredAwait",
           TaskGroup: (n) => (n.mode === "All" ? "all" : "race"),
           FlatMap: () => "flatMap",
           CatchAll: () => "catchAll",
@@ -2346,6 +2471,31 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          DeferredScope: (n) =>
+            joinFragments([
+              `{ let ${n.owner.name}: DeferredState<${typeName(n.owner.success)}, std::convert::Infallible, ${f.deferredProfile!.taskCapacity}> = DeferredState::new(); let ${n.owner.name} = &${n.owner.name}; match `,
+              adaptFrag(n.body, helper.output, use("body")),
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "deferredScope")} } }`,
+            ]),
+          DeferredIsDone: (n) => textFragment(`{ Ok(${n.owner}.is_done()) }`),
+          DeferredAwait: (n) =>
+            joinFragments([
+              `{ match turn.wait(${n.owner}, ctx).await { Ok(value) => Ok(value), `,
+              captureFrames
+                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "deferredAwait").text})))`
+                : "Err(error) => Err(error)",
+              " } }",
+            ]),
+          DeferredComplete: (n) =>
+            joinFragments([
+              `{ let value = `,
+              renderBlock(n.value),
+              `; match turn.complete(${n.owner}, ctx, Ok(value)).await { Ok(value) => Ok(value), `,
+              captureFrames
+                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "deferredComplete").text})))`
+                : "Err(error) => Err(error)",
+              " } }",
+            ]),
           TaskGroup: (n) => {
             const race = Rs.litBool(n.mode === "Race");
             const fallible = helper.richOutcome ?? false;
@@ -2369,32 +2519,50 @@ export const emitFunctions = (
                 Rs.identExpr(Rs.ident(`h_${f.name}_${child.index}`)),
                 [Rs.mutRefExpr(identExpr(`child${i}`))].concat(
                   child.input.map((parameter) => Rs.verbatimExpr(helperArgument(parameter))),
+                  ...(f.deferredProfile
+                    ? [
+                        identExpr(`turn${i}`),
+                        ...(child.deferredOwners ?? []).map((owner) => identExpr(owner.name)),
+                      ]
+                    : []),
                 ),
               );
+              if (f.deferredProfile)
+                parts.push(`let turn${i} = DeferredTurnHandle::new(turn.bank, ${i + 1}); `);
               parts.push(
-                `let future${i} = async { match `,
+                `let future${i} = ${f.deferredProfile ? `turn${i}.task(` : ""}async { match `,
                 mapFragment(
                   child.origin,
                   use(`children[${i}]`),
                   textFragment(child.asynchronous ? Rs.await(call).text : call.text),
                 ),
                 fallible
-                  ? ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => Ok(())"}, ${captureFrames ? "Err((error, frames))" : "Err(error)"} => { let mut cause = RuntimeCause::empty(); match error { AsyncError::Fail(error) => ${IRType.same(child.error!, NeverType) ? "match error {}" : `cause.push(${IRType.same(child.error!, BoolType) ? "RuntimeFailure::Bool(error)" : IRType.same(child.error!, U64Type) ? "RuntimeFailure::U64(error)" : "RuntimeFailure::Unit"}, false)`}, AsyncError::Interrupted => cause.interrupted = true, AsyncError::Combined(other) => cause = other } Err(TaskFailure { cause, ${captureFrames ? "frames: Some(frames)," : ""} }) } } }; `
+                  ? ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => Ok(())"}, ${captureFrames ? "Err((error, frames))" : "Err(error)"} => { let mut cause = RuntimeCause::empty(); match error { AsyncError::Fail(error) => ${IRType.same(child.error!, NeverType) ? "match error {}" : `cause.push(${IRType.same(child.error!, BoolType) ? "RuntimeFailure::Bool(error)" : IRType.same(child.error!, U64Type) ? "RuntimeFailure::U64(error)" : "RuntimeFailure::Unit"}, false)`}, AsyncError::Interrupted => cause.interrupted = true, AsyncError::Combined(other) => cause = other } Err(TaskFailure { cause, ${captureFrames ? "frames: Some(frames)," : ""} }) } } }${f.deferredProfile ? ")" : ""}; `
                   : captureFrames
-                    ? ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => false${fallibleGroups ? ', Err((AsyncError::Combined(_), _frames)) => panic!("Checked infallible child produced combined cause")' : ""} } }; `
-                    : ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible child produced combined cause")' : ""} } }; `,
+                    ? ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => false${fallibleGroups ? ', Err((AsyncError::Combined(_), _frames)) => panic!("Checked infallible child produced combined cause")' : ""} } }${f.deferredProfile ? ")" : ""}; `
+                    : ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible child produced combined cause")' : ""} } }${f.deferredProfile ? ")" : ""}; `,
               );
             });
             const joined = Rs.await(
               Rs.call(
-                identExpr(`${fallible ? "fallible_" : ""}task_group${n.children.length}`),
-                n.children
-                  .flatMap((_, i) => [identExpr(`future${i}`), identExpr(`cancel${i}`)])
-                  .concat([
-                    identExpr("parent_cancellation"),
-                    identExpr("parent_interruptible"),
-                    race,
-                  ]),
+                identExpr(
+                  `${f.deferredProfile ? "coordinated_" : fallible ? "fallible_" : ""}task_group${n.children.length}`,
+                ),
+                (f.deferredProfile
+                  ? [
+                      Rs.verbatimExpr("turn.bank"),
+                      Rs.verbatimExpr(`[${n.children.map((_, i) => i + 1).join(", ")}]`),
+                    ]
+                  : []
+                ).concat(
+                  n.children
+                    .flatMap((_, i) => [identExpr(`future${i}`), identExpr(`cancel${i}`)])
+                    .concat([
+                      identExpr("parent_cancellation"),
+                      identExpr("parent_interruptible"),
+                      ...(f.deferredProfile ? [] : [race]),
+                    ]),
+                ),
               ),
             );
             if (fallible) {
@@ -2620,7 +2788,7 @@ export const emitFunctions = (
           },
           Sleep: (n) =>
             joinFragments([
-              `{ match ctx.sleep(${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
+              `{ match ${f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
               captureFrames
                 ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
                 : "Err(error) => Err(error)",
@@ -3210,6 +3378,15 @@ export const emitFunctions = (
           `(${(contextual && helper.error ? [`ctx: &mut ${contextType}`] : [])
             .concat(
               helper.input.map((p) => `${Rs.ident(p.name).text}: ${helperParameterType(p.type)}`),
+              ...(f.deferredProfile && helper.error
+                ? [
+                    `turn: DeferredTurnHandle<'_, ${f.deferredProfile.taskCapacity}>`,
+                    ...(helper.deferredOwners ?? []).map(
+                      (owner) =>
+                        `${owner.name}: &DeferredState<${typeName(owner.success)}, std::convert::Infallible, ${f.deferredProfile!.taskCapacity}>`,
+                    ),
+                  ]
+                : []),
               helper.files.map(
                 (name) =>
                   `${Rs.ident(name).text}: ${Rs.refType(Rs.pathType(rsSegments("std", "fs", "File"))).text}`,
@@ -3229,6 +3406,9 @@ export const emitFunctions = (
         ]),
       );
     }
+    const deferredEntry = f.deferredProfile
+      ? `let bank = DeferredTurns::<${f.deferredProfile.taskCapacity}>::new(); let turn = DeferredTurnHandle::new(&bank, 0); `
+      : "";
     const entryCancellation = f.asynchronous
       ? `if ctx.is_cancelled() { ${captureFrames ? `ctx.frames = Some(FrameTrail::new(${frameLiteral(f.name, f.path, "function", f.origin).text}));` : ""} return Err(AsyncError::Interrupted); } `
       : "";
@@ -3273,12 +3453,14 @@ export const emitFunctions = (
             Effect: (n) =>
               captureFrames
                 ? joinFragments([
-                    f.asynchronous ? `{ ctx.frames = None; ${entryCancellation}match ` : "{ match ",
+                    f.asynchronous
+                      ? `{ ctx.frames = None; ${entryCancellation}${deferredEntry}match `
+                      : "{ match ",
                     adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
                     ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); ${f.asynchronous ? "ctx.frames = Some(frames)" : "store_frames(frames)"}; Err(error) } } }`,
                   ])
                 : joinFragments([
-                    `{ ${entryCancellation}`,
+                    `{ ${entryCancellation}${deferredEntry}`,
                     adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
                     " }",
                   ]),

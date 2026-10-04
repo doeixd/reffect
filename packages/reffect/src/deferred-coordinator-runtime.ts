@@ -1,5 +1,5 @@
 /** Private context/coordinator experiment. No compiler path selects this emitter. */
-export const deferredCoordinatorRuntime = (): string => `
+export const deferredCoordinatorRuntime = (includeJoins = true): string => `
 #[derive(Clone, Copy)]
 struct DeferredTurnHandle<'a, const N: usize> {
     bank: &'a DeferredTurns<N>,
@@ -60,7 +60,7 @@ impl<'a, const N: usize> DeferredTurnHandle<'a, N> {
         self.semantic(ctx.sleep(milliseconds)).await
     }
 }
-${[2, 3]
+${(includeJoins ? [2, 3] : [])
   .map((arity) => {
     const indices = Array.from({ length: arity }, (_, i) => i);
     const letters = indices.map((i) => String.fromCharCode(65 + i));

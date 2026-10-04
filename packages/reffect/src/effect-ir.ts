@@ -1872,6 +1872,7 @@ export interface LogicalFrame {
     | "fileScope"
     | "deferredScope"
     | "deferredAwait"
+    | "deferredComplete"
     | "refScope"
     | "clockReadMillis"
     | "randomDraw"

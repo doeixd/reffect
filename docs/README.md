@@ -10,6 +10,10 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Composite recovery refinement](research/retained-composite-recovery.md)** explains ordinary Remote mutation admission versus cancellation-retained failures during masked suspension.
 
+**[Generated Deferred lowering](research/deferred-generated-lowering.md)** records the private inline-owner/helper integration profile and its ordering, cancellation and cost gates.
+
+Its implementation decisions are recorded separately for [helper borrows](research/deferred-generated-helper.md), [All cancellation](research/deferred-generated-runtime.md) and [independent conformance/costs](research/deferred-generated-conformance.md).
+
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
 **[SSR with Remote data](research/ssr-data.md)** is the milestone 9 plan: upstream prefetch and snapshot resume, native projections in R views, async pages, and the decision to take milestone 9 before 8B.
