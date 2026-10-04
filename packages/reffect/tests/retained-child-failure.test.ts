@@ -78,26 +78,18 @@ test("a canceled Never child retains the earlier failure and skips typed recover
     reasons: ["Interrupt", "Fail:7"],
   };
   expect(await observe(official)).toEqual(expected);
-  // Reference execution uses the same admission checker. Refusal remains its
-  // contract until native storage can represent the retained outcome.
-  for (const run of [Reference.run(retained, []), Reference.runWithFrames(retained, [])]) {
-    const exit = await Effect.runPromise(run.pipe(Effect.exit));
-    expect(Exit.isFailure(exit)).toBe(true);
-    if (Exit.isFailure(exit))
-      expect(Cause.findErrorOption(exit.cause)).toMatchObject({
-        value: {
-          diagnostics: expect.arrayContaining([
-            expect.objectContaining({ code: "TASK_GROUP_RETAINED_FAILURE" }),
-          ]),
-        },
-      });
-  }
+  expect(await observe(Reference.run(retained, []))).toEqual(expected);
+  expect(
+    await observe(
+      Reference.runWithFrames(retained, []).pipe(Effect.flatMap((result) => result.exit)),
+    ),
+  ).toEqual(expected);
 });
 
 const compile = <A, E>(name: string, fn: EffectFn<readonly [], A, E>) =>
   Compile.make(R.program({ [name]: fn })).pipe(Compile.withTarget(Rust.tokio), Compile.run);
 
-test("native admission refuses async typed child recovery for changed and unchanged errors", async () => {
+test("native admission supports scalar async child recovery for changed and unchanged errors", async () => {
   const sameError = R.fn([], R.Unit, R.U64, () =>
     R.Effect.all(
       [
@@ -108,21 +100,9 @@ test("native admission refuses async typed child recovery for changed and unchan
     ),
   );
   for (const fn of [retained, sameError]) {
-    const exit = await Effect.runPromise(compile("refused", fn).pipe(Effect.exit));
-    expect(Exit.isFailure(exit)).toBe(true);
-    if (Exit.isFailure(exit)) {
-      expect(Cause.findErrorOption(exit.cause)).toMatchObject({
-        value: {
-          diagnostics: expect.arrayContaining([
-            expect.objectContaining({
-              code: "TASK_GROUP_RETAINED_FAILURE",
-              stage: "check",
-              path: "functions.refused.body.children[0]",
-            }),
-          ]),
-        },
-      });
-    }
+    expect(
+      await Effect.runPromise(compile("supported", fn).pipe(Effect.exit)).then(Exit.isSuccess),
+    ).toBe(true);
   }
 });
 

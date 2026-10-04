@@ -8,6 +8,11 @@ import type { Diagnostic } from "./kernel.ts";
 export interface TaskGroupAnalysis {
   readonly diagnostics: readonly Diagnostic[];
   readonly hasFallibleGroups: boolean;
+  readonly hasRetainedFailures: boolean;
+  readonly requiresRichErrors: boolean;
+  readonly richComputations: ReadonlySet<Computation<unknown, unknown>>;
+  readonly richGroups: ReadonlySet<Computation<unknown, unknown>>;
+  readonly cancellationGuards: ReadonlySet<Computation<unknown, unknown>>;
   /** Child-owned reads whose mutable injected driver identity is not yet supported. */
   readonly childClockPaths: readonly string[];
 }
@@ -19,15 +24,22 @@ export const analyzeTaskGroups = (
 ): TaskGroupAnalysis => {
   const diagnostics: Diagnostic[] = [];
   let hasFallibleGroups = false;
+  let hasRetainedFailures = false;
   const childClockPaths: string[] = [];
   const seen = new Map<Computation<unknown, unknown>, Set<number>>();
   const parents = new Map<Computation<unknown, unknown>, Set<Computation<unknown, unknown>>>();
   const fallible = new Set<Computation<unknown, unknown>>();
+  const retained = new Set<Computation<unknown, unknown>>();
+  const groups = new Set<Computation<unknown, unknown>>();
+  const cancellationGuards = new Set<Computation<unknown, unknown>>();
   const recoveries: {
     readonly computation: Computation<unknown, unknown>;
     readonly source: Computation<unknown, unknown>;
     readonly path: string;
+    readonly cleanup: boolean;
   }[] = [];
+  const scalar = (type: IRType<unknown>): boolean =>
+    [BoolType, U64Type, UnitType].some((candidate) => IRType.same(candidate, type));
   const walk = (
     c: Computation<unknown, unknown>,
     at: string,
@@ -54,6 +66,7 @@ export const analyzeTaskGroups = (
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
         TaskGroup: (n) => {
+          groups.add(c);
           if (!IRType.same(c.error, NeverType)) {
             hasFallibleGroups = true;
             fallible.add(c);
@@ -107,19 +120,17 @@ export const analyzeTaskGroups = (
         },
         RefScope: (n) => body(n.body, "body"),
         Repeat: (n) => body(n.body, "body"),
-        Retry: (n) => body(n.body, "body"),
+        Retry: (n) => {
+          recoveries.push({ computation: c, source: n.body, path: at, cleanup });
+          body(n.body, "body");
+        },
         Map: (n) => body(n.source, "source"),
         FlatMap: (n) => {
           body(n.source, "source");
           body(n.body, "body");
         },
         CatchAll: (n) => {
-          if (child && !IRType.same(n.source.error, NeverType) && isAsyncComputation(n.source))
-            issue(
-              "TASK_GROUP_RETAINED_FAILURE",
-              "Async typed recovery in a child task needs a carrier for failures retained when cancellation skips recovery",
-            );
-          recoveries.push({ computation: c, source: n.source, path: at });
+          recoveries.push({ computation: c, source: n.source, path: at, cleanup });
           body(n.source, "source");
           body(n.body, "body");
         },
@@ -152,19 +163,25 @@ export const analyzeTaskGroups = (
   walk(root, path, false, false);
   // Reverse edges include shared nodes even when their context was already visited.
   // Propagation therefore answers source reachability without recursively rechecking graphs.
-  const pending = Array.from(fallible);
-  for (let index = 0; index < pending.length; index++)
-    for (const parent of parents.get(pending[index]) ?? [])
-      if (!fallible.has(parent)) {
-        fallible.add(parent);
-        pending.push(parent);
-      }
-  for (const { computation, source, path: at } of recoveries)
-    if (
+  const propagate = (values: Set<Computation<unknown, unknown>>) => {
+    const pending = Array.from(values);
+    for (let index = 0; index < pending.length; index++)
+      for (const parent of parents.get(pending[index]) ?? [])
+        if (!values.has(parent)) {
+          values.add(parent);
+          pending.push(parent);
+        }
+  };
+  propagate(fallible);
+  for (const { computation, source, path: at, cleanup } of recoveries) {
+    const asynchronous = isAsyncComputation(source);
+    if (asynchronous && !cleanup) cancellationGuards.add(computation);
+    const compositeGroupRecovery =
       fallible.has(source) &&
       !IRType.same(source.error, computation.error) &&
-      ![NeverType, BoolType, U64Type, UnitType].some((type) => IRType.same(type, source.error))
-    )
+      !IRType.same(source.error, NeverType) &&
+      !scalar(source.error);
+    if (compositeGroupRecovery)
       diagnostics.push({
         code: "TASK_GROUP_RECOVERY",
         stage: "check",
@@ -172,9 +189,39 @@ export const analyzeTaskGroups = (
         message:
           "Changing a composite source error after a fallible task group needs storage for interruption-bypassed failures",
       });
+    else if (
+      asynchronous &&
+      !cleanup &&
+      !IRType.same(source.error, computation.error) &&
+      !IRType.same(source.error, NeverType) &&
+      !scalar(source.error)
+    )
+      diagnostics.push({
+        code: "TASK_GROUP_RETAINED_FAILURE",
+        stage: "check",
+        path: at,
+        message:
+          "Changing an asynchronous composite source error needs storage for interruption-bypassed failures",
+      });
+    // Cleanup remains masked throughout the admitted profile. Its typed recovery
+    // cannot retain an earlier failure by skipping a handler on cancellation.
+    if (asynchronous && !cleanup && scalar(source.error)) {
+      hasRetainedFailures = true;
+      retained.add(source);
+      retained.add(computation);
+    }
+  }
+  const richComputations = new Set([...fallible, ...retained]);
+  propagate(richComputations);
+  const richGroups = new Set([...groups].filter((group) => richComputations.has(group)));
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
     hasFallibleGroups,
+    hasRetainedFailures,
+    requiresRichErrors: hasFallibleGroups || hasRetainedFailures,
+    richComputations,
+    richGroups,
+    cancellationGuards,
     childClockPaths: Object.freeze(childClockPaths),
   });
 };

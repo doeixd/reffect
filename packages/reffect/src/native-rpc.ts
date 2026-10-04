@@ -1739,12 +1739,12 @@ export const compileServer = (
     });
     if (
       Object.values(prepared.program.functions).some(
-        (fn) => fn instanceof EffectFn && analyzeTaskGroups(fn.body).hasFallibleGroups,
+        (fn) => fn instanceof EffectFn && analyzeTaskGroups(fn.body).requiresRichErrors,
       )
     )
       return yield* unsupported(
         "handlers",
-        "Fallible task groups require a verified compound RPC Cause wire adapter",
+        "Cancellation-retained failures and fallible task groups require a verified compound RPC Cause wire adapter",
       );
     const core = yield* Compile.run(
       Compile.make(prepared.program).pipe(

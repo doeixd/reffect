@@ -45,6 +45,7 @@ import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
 import { causeRuntime } from "./cause-runtime.ts";
 import { structuredRuntime, fallibleStructuredRuntime } from "./structured-runtime.ts";
+import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { frameTrailRuntime, syncFrameStorageRuntime } from "./frame-runtime.ts";
 import {
   EffectFn,
@@ -383,6 +384,9 @@ type HelperBody =
       readonly body: number;
     };
 interface Helper {
+  /** Build-owned outcome flags; never carried by authored values. */
+  readonly richOutcome?: boolean;
+  readonly cancellationGuard?: boolean;
   readonly files: readonly string[];
   readonly asynchronous?: boolean;
   readonly origin?: string;
@@ -394,6 +398,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
+  readonly richErrors: boolean;
   readonly services: RuntimeServiceUsage;
   readonly asynchronous: boolean;
   readonly origin?: string;
@@ -421,15 +426,9 @@ export interface UnmappedRustModule {
   readonly functions: readonly RustFunction[];
 }
 export type LoweredModule = RustModule | UnmappedRustModule;
-/** Host adapters must handle the finite erased carrier when any reached group is fallible. */
+/** Host adapters must handle the finite erased carrier whenever reachable outcomes need it. */
 export const hasFallibleTaskGroups = (module: LoweredModule): boolean =>
-  module.functions.some((f) =>
-    f.helpers.some(
-      (helper) =>
-        helper.body._tag === "TaskGroup" &&
-        helper.body.children.some((index) => !IRType.same(f.helpers[index].error!, NeverType)),
-    ),
-  );
+  module.functions.some((f) => f.richErrors);
 
 interface Scope {
   readonly files: ReadonlyMap<symbol, string>;
@@ -477,6 +476,8 @@ export function lowerFunctions(
   const functions = Object.freeze(
     Object.entries(program.functions).map(([name, f]): RustFunction => {
       const path = `functions.${name}`;
+      const outcomes =
+        f instanceof EffectFn ? analyzeTaskGroups(f.body, `${path}.body`) : undefined;
       let next = 0;
       const helpers = new Map<number, Helper>();
       const pureMemo = new Map<Expr<unknown>["node"], Map<Scope, number>>();
@@ -1391,6 +1392,8 @@ export function lowerFunctions(
                 Span: (n) => helpers.get(n.body)?.asynchronous ?? false,
               }),
             ),
+            richOutcome: outcomes?.richComputations.has(c) ?? false,
+            cancellationGuard: outcomes?.cancellationGuards.has(c) ?? false,
             origin: provenance?.origin(c),
             path,
             input: scope.input,
@@ -1421,6 +1424,7 @@ export function lowerFunctions(
           "Random requires explicit ScriptedRandom implementation selection",
         );
       return Object.freeze({
+        richErrors: outcomes?.requiresRichErrors ?? false,
         services: Object.freeze({ clock, random }),
         name,
         asynchronous: Match.value(node).pipe(
@@ -1853,25 +1857,18 @@ export const emitFunctions = (
   );
   const fallibleArities = module.functions.flatMap((f) =>
     f.helpers.flatMap((helper) =>
-      helper.body._tag === "TaskGroup" &&
-      helper.body.children.some((index) => !IRType.same(f.helpers[index].error!, NeverType))
-        ? [helper.body.children.length]
-        : [],
+      helper.body._tag === "TaskGroup" && helper.richOutcome ? [helper.body.children.length] : [],
     ),
   );
   const infallibleArities = module.functions.flatMap((f) =>
     f.helpers.flatMap((helper) =>
       Match.value(helper.body).pipe(
-        Match.tag("TaskGroup", (n) =>
-          n.children.every((index) => IRType.same(f.helpers[index].error!, NeverType))
-            ? [n.children.length]
-            : [],
-        ),
+        Match.tag("TaskGroup", (n) => (!helper.richOutcome ? [n.children.length] : [])),
         Match.orElse(() => []),
       ),
     ),
   );
-  const fallibleGroups = fallibleArities.length > 0;
+  const fallibleGroups = hasFallibleTaskGroups(module);
   if (fallibleGroups) write(causeRuntime(captureFrames));
   if (hasAsync)
     write(
@@ -1894,38 +1891,6 @@ export const emitFunctions = (
   for (const f of module.functions) {
     const contextual = f.asynchronous || f.services.clock || f.services.random;
     const contextType = f.asynchronous ? "AsyncContext" : "SyncContext";
-    const fallibleReachability = new Map<number, boolean>();
-    const reachesFallibleGroup = (index: number): boolean => {
-      const cached = fallibleReachability.get(index);
-      if (cached !== undefined) return cached;
-      const any = (...indices: number[]) => indices.some(reachesFallibleGroup);
-      const result = Match.value(f.helpers[index].body).pipe(
-        Match.tags({
-          TaskGroup: (n) => n.children.some((i) => !IRType.same(f.helpers[i].error!, NeverType)),
-          Scope: (n) => any(n.body),
-          RefScope: (n) => any(n.body),
-          AddFinalizer: (n) => any(n.finalizer),
-          AcquireRelease: (n) => any(n.acquire, n.release),
-          RegisteredFile: (n) => any(n.body, n.afterClose),
-          FileScope: (n) => any(n.body, n.afterClose),
-          AcquireUseRelease: (n) => any(n.acquire, n.use, n.release),
-          Ensuring: (n) => any(n.body, n.finalizer),
-          CatchAll: (n) => any(n.source, n.body),
-          FlatMap: (n) => any(n.source, n.body),
-          Map: (n) => any(n.source),
-          Match: (n) => any(n.onTrue, n.onFalse),
-          MatchTags: (n) => any(...n.cases.map((c) => c.helper)),
-          ForEach: (n) => any(n.helper),
-          Annotate: (n) => any(n.body),
-          Span: (n) => any(n.body),
-          Repeat: (n) => any(n.body),
-          Retry: (n) => any(n.body),
-        }),
-        Match.orElse(() => false),
-      );
-      fallibleReachability.set(index, result);
-      return result;
-    };
     const record = (helper: Helper): string => {
       const registration = registrationByHelper.get(helper)!;
       return Rs.pathCall(
@@ -2364,9 +2329,7 @@ export const emitFunctions = (
         Match.tagsExhaustive({
           TaskGroup: (n) => {
             const race = Rs.litBool(n.mode === "Race");
-            const fallible = n.children.some(
-              (index) => !IRType.same(f.helpers[index].error!, NeverType),
-            );
+            const fallible = helper.richOutcome ?? false;
             const parts: (string | MappedFragment)[] = ["{ "];
             n.children.forEach((_, i) => {
               const channel = Rs.pathCall(
@@ -2740,6 +2703,13 @@ export const emitFunctions = (
               captureFrames
                 ? `Err((AsyncError::Interrupted, _frames)) => return Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "retry").text}))), Err((AsyncError::Fail(error), mut frames)) => { `
                 : "Err(AsyncError::Interrupted) => return Err(AsyncError::Interrupted), Err(AsyncError::Fail(error)) => { ",
+              ...(helper.cancellationGuard
+                ? [
+                    captureFrames
+                      ? `if ctx.is_cancelled() { frames.push(${frameOf(helper, "retry").text}); return Err((AsyncError::Fail(error), frames)); } `
+                      : "if ctx.is_cancelled() { return Err(AsyncError::Fail(error)); } ",
+                  ]
+                : []),
               `if !(${scheduleContinue(n.schedule, n.times)}) { `,
               captureFrames
                 ? `frames.push(${frameOf(helper, "retry").text}); break Err((AsyncError::Fail(error), frames)); }`
@@ -2764,7 +2734,10 @@ export const emitFunctions = (
                 ? `Err((${binder}, _handled_frames))`
                 : `Err(${binder})`;
             const retainedFailure =
-              fallibleGroups && f.asynchronous && reachesFallibleGroup(n.source)
+              f.asynchronous &&
+              helper.cancellationGuard &&
+              !IRType.same(source.error!, NeverType) &&
+              (IRType.same(source.error!, helper.error!) || fallibleGroups)
                 ? (() => {
                     const sameError = IRType.same(source.error!, helper.error!);
                     const retained = sameError

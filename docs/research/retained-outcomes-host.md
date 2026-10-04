@@ -1,0 +1,11 @@
+# Retained outcomes at native host boundaries
+
+Prepared 2026-10-04 before host edits. Reviewed DOWN-001–006, the fallible kernel/host refusal, NativeRunner cause parsing and NativeRpc compilation. Checked published [Effect 4.0.0 evaluator](https://unpkg.com/effect@4.0.0/src/internal/effect.ts) online: interruption can bypass typed recovery while an awaited finalizer retains the original failure. Declared E = Never therefore does not prove that a handler can only return interruption. This continues the existing bounded carrier design rather than introducing Deferred authoring.
+
+**RHOST-001 — Refuse RPC from authoritative outcome requirements.** NativeRpc's current wire adapter handles ordinary typed errors and interruption, without a verified erased/compound Cause representation. Replace its syntactically-fallible-group predicate with the shared outcome analysis's rich-carrier requirement. Include apparently infallible All children and root async recovery. Refuse before core emission, preserving the existing diagnostic path and compound-Cause explanation. Keep unrelated scalar synchronous handlers admitted; conservative refusal of some async recovery is preferable to exposing a lossy host adapter.
+
+**RHOST-002 — Preserve the CLI's independent retained-payload parsing.** NativeRunner already parses tagged Bool/U64/Unit reasons independently of the final declared error type. Reuse that contract; don't decode an old U64 failure through a final Never/Bool witness. New differential tests must verify the emitted cause path in debug/release and both diagnostic policies. No transport or scalar metadata field follows from host admission.
+
+Acceptance: old fallible RPC refusal remains, root/child channel-changing and unchanged async recovery is refused by RPC when it requires the richer carrier, and ordinary synchronous recovery remains admitted. Core conformance may admit these programs independently of RPC. General compound RPC wire support and nested four-failure capacity remain separate gates.
+
+Validation: existing fallible-group RPC refusal, declared-Never root/group retained-failure refusal and synchronous recovery admission pass (three host tests). NativeRunner's existing bounded scalar reason decoding remains unchanged; existing fallible CLI conformance still passes. Public compound RPC wire support remains refused.
