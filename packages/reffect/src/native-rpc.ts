@@ -2055,14 +2055,11 @@ ${
       files: Object.freeze({
         "Cargo.toml":
           core.files["Cargo.toml"].split("\n[dependencies]")[0] +
-          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\ntokio = { version = "=1.53.1", features = ["macros", "rt", "net", "time", "sync"] }\nserde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'.replace(
-            '["macros", "rt", "net", "time", "sync"]',
-            prepared.layered
-              ? '["macros", "rt", "rt-multi-thread", "net", "time", "sync", "signal"]'
-              : prepared.asynchronous
-                ? '["macros", "rt", "rt-multi-thread", "net", "time", "sync"]'
-                : '["macros", "rt", "rt-multi-thread", "net", "time", "sync"]',
-          ) +
+          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\n' +
+          // Every server runs the multi-thread accept loop with timers; a layered one also
+          // listens for the shutdown signal.
+          `tokio = { version = "=1.53.1", features = ${JSON.stringify(["macros", "rt", "rt-multi-thread", "net", "time", "sync", ...(prepared.layered ? ["signal"] : [])])} }\n` +
+          'serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n' +
           // The accept loop (#16): hyper's own connection builder, with a timer.
           'hyper = { version = "=1.11.1", features = ["server", "http1"] }\nhyper-util = { version = "=0.1.21", features = ["tokio", "server-graceful"] }\ntower = { version = "=0.5.3", default-features = false, features = ["util"] }\n' +
           (prepared.asynchronous

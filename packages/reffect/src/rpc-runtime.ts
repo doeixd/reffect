@@ -184,20 +184,23 @@ ${asynchronous ? "async " : ""}fn request(message: &Value, headers: &HeaderMap, 
 fn same_id(a: &Value, b: &Value) -> bool {
     match (a.as_f64(), b.as_f64()) { (Some(a), Some(b)) => a == b, _ => a == b }
 }
+/// A batch over the limit, or one that repeats a request id, is refused whole.
+fn validate_batch(batch: &[Value]) -> Option<Response> {
+    if batch.len() > MAX_BATCH { return Some(write_body(StatusCode::PAYLOAD_TOO_LARGE, vec![invalid("Batch limit exceeded")])); }
+    let mut ids: Vec<&Value> = Vec::with_capacity(batch.len());
+    for message in batch {
+        if let Some(id) = message.get("id") {
+            if ids.iter().any(|prior| same_id(prior, id)) {
+                return Some(write_body(StatusCode::OK, vec![invalid("Duplicate request id")]));
+            }
+            ids.push(id);
+        }
+    }
+    None
+}
 ${
   asynchronous
-    ? layered
-      ? asyncHttpRuntime
-          .replace(
-            "cancellation: Option<tokio::sync::watch::Sender<bool>>,",
-            "cancellation: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,",
-          )
-          .replace(
-            "    // The official server buffers 16 messages between its handlers and the body (STREAM-002).",
-            shutdownForwarder +
-              "    // The official server buffers 16 messages between its handlers and the body (STREAM-002).",
-          )
-      : asyncHttpRuntime
+    ? asyncHttpRuntime(layered)
     : String.raw`async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, incoming: axum::extract::Request) -> Response {
     // The body is read by axum's own extractor (so an oversized body keeps its 413) within a
     // time limit: a stalled body is answered 408 rather than held forever (#16).
@@ -207,30 +210,19 @@ ${
         Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
     };
     let (batch, batched) = match read_body(&body) { Ok(messages) => messages, Err(response) => return response };
-    if batched {
-        if batch.len() > MAX_BATCH { return write_body(StatusCode::PAYLOAD_TOO_LARGE, vec![invalid("Batch limit exceeded")]); }
-        let mut ids: Vec<&Value> = Vec::with_capacity(batch.len());
-        for message in &batch {
-            if let Some(id) = message.get("id") {
-                if ids.iter().any(|prior| same_id(prior, id)) {
-                    return write_body(StatusCode::OK, vec![invalid("Duplicate request id")]);
-                }
-                ids.push(id);
-            }
-        }
-    }
+    if batched { if let Some(refused) = validate_batch(&batch) { return refused; } }
     let responses = batch.iter().map(|message| unframed(message).unwrap_or_else(|| request(message, &headers, &state))).collect::<Vec<_>>();
     write_body(StatusCode::OK, responses)
 }
 `
 }
 ${serveRuntime}
-${withPages(layered ? layeredMain : plainMain, pages)}`;
+${layered ? layeredMain(pages) : plainMain(pages)}`;
 
-/** Pages take every path and method the RPC routes do not (SSR-007). */
-const ROUTES = 'if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }';
-const withPages = (main: string, pages: boolean): string =>
-  pages ? main.replace(ROUTES, `${ROUTES}\n    let app = app.fallback(ssr_page);`) : main;
+/** The RPC routes, and pages for every path and method they do not take (SSR-007). */
+const routes = (pages: boolean): string =>
+  `let mut app = Router::new().route(RPC_PATH, post(rpc));
+    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }${pages ? "\n    let app = app.fallback(ssr_page);" : ""}`;
 
 /**
  * The accept loop both mains use (#16, docs/research/rpc-serving.md): axum::serve sets no hyper
@@ -276,7 +268,7 @@ const serveRuntime = String.raw`async fn serve(listener: tokio::net::TcpListener
 }
 `;
 
-const plainMain = String.raw`#[tokio::main(flavor = "multi_thread")]
+const plainMain = (pages: boolean): string => String.raw`#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut address = "127.0.0.1".to_string();
@@ -291,8 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = load_state()?;
     let listener = tokio::net::TcpListener::bind((address.as_str(), port)).await?;
     let address = listener.local_addr()?;
-    let mut app = Router::new().route(RPC_PATH, post(rpc));
-    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }
+    ${routes(pages)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
     serve(listener, app, std::future::pending()).await?;
@@ -301,8 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `;
 
 /** Server shutdown also cancels each in-flight request; the forwarder ends with the request. */
-const shutdownForwarder = String.raw`    let cancellation = std::sync::Arc::new(cancellation);
-    {
+const shutdownForwarder = String.raw`    {
         let forward = cancellation.clone();
         let mut shutdown = SHUTDOWN.get().expect("shutdown is installed before serving").clone();
         tokio::spawn(async move {
@@ -319,7 +309,9 @@ const shutdownForwarder = String.raw`    let cancellation = std::sync::Arc::new(
  * the listener binds. Shutdown interrupts and awaits in-flight requests (axum graceful shutdown
  * waits for their responses), then cancels the launch so its Scope releases in LIFO order.
  */
-const layeredMain = String.raw`static SERVICES: std::sync::OnceLock<reffect_generated::LaunchValues> = std::sync::OnceLock::new();
+const layeredMain = (
+  pages: boolean,
+): string => String.raw`static SERVICES: std::sync::OnceLock<reffect_generated::LaunchValues> = std::sync::OnceLock::new();
 static SHUTDOWN: std::sync::OnceLock<tokio::sync::watch::Receiver<bool>> = std::sync::OnceLock::new();
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -354,8 +346,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = SHUTDOWN.set(shutdown_receiver);
     let listener = tokio::net::TcpListener::bind((address.as_str(), port)).await?;
     let address = listener.local_addr()?;
-    let mut app = Router::new().route(RPC_PATH, post(rpc));
-    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }
+    ${routes(pages)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
     let signal = async move {
@@ -379,14 +370,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `;
 
 /** A pending response owns cancellation; its worker is never aborted on body drop. */
-const asyncHttpRuntime = String.raw`
+const asyncHttpRuntime = (layered: boolean): string => String.raw`
 use std::{pin::Pin, task::{Context, Poll}};
 /// The response body: NDJSON forwards each message as it arrives; JSON writes the array once the
 /// worker is done. Dropping it cancels the worker's requests (STREAM-003).
 struct PendingResponse {
     lines: tokio::sync::mpsc::Receiver<Outgoing>,
     buffered: Vec<Value>,
-    cancellation: Option<tokio::sync::watch::Sender<bool>>,
+    cancellation: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
 }
 impl http_body::Body for PendingResponse {
     type Data = Bytes;
@@ -428,20 +419,10 @@ async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, incoming: ax
         Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
     };
     let (batch, batched) = match read_body(&body) { Ok(messages) => messages, Err(response) => return response };
-    if batched {
-        if batch.len() > MAX_BATCH { return write_body(StatusCode::PAYLOAD_TOO_LARGE, vec![invalid("Batch limit exceeded")]); }
-        let mut ids: Vec<&Value> = Vec::with_capacity(batch.len());
-        for message in &batch {
-            if let Some(id) = message.get("id") {
-                if ids.iter().any(|prior| same_id(prior, id)) {
-                    return write_body(StatusCode::OK, vec![invalid("Duplicate request id")]);
-                }
-                ids.push(id);
-            }
-        }
-    }
+    if batched { if let Some(refused) = validate_batch(&batch) { return refused; } }
     let (cancellation, receiver) = tokio::sync::watch::channel(false);
-    // The official server buffers 16 messages between its handlers and the body (STREAM-002).
+    let cancellation = std::sync::Arc::new(cancellation);
+${layered ? shutdownForwarder : ""}    // The official server buffers 16 messages between its handlers and the body (STREAM-002).
     let (out, lines) = tokio::sync::mpsc::channel::<Outgoing>(16);
     tokio::spawn(async move {
         // The requests run concurrently and each answers when it finishes, as the official
