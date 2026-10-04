@@ -2,7 +2,14 @@
 export const rpcAuthRuntime = String.raw`
 use subtle::ConstantTimeEq;
 use std::sync::Arc;
-struct Credential { token: Vec<u8>, principal: u64 }
+/// A token zero-padded to the longest valid one, with its length: comparing these in constant
+/// time reveals neither the token nor its length (#20).
+struct Credential { token: [u8; 256], length: u16, principal: u64 }
+fn padded(token: &str) -> [u8; 256] {
+    let mut out = [0u8; 256];
+    out[..token.len()].copy_from_slice(token.as_bytes());
+    out
+}
 #[derive(Clone)]
 struct RuntimeState(Arc<Vec<Credential>>);
 fn valid_token(token: &str) -> bool {
@@ -13,6 +20,8 @@ fn valid_token(token: &str) -> bool {
 fn load_state() -> Result<RuntimeState, &'static str> {
     let invalid = "Invalid RPC credential configuration";
     let text = std::env::var(CREDENTIALS_ENV).map_err(|_| invalid)?;
+    // The tokens stay in this process only: child processes and /proc readers no longer see them.
+    std::env::remove_var(CREDENTIALS_ENV);
     if text.len() > 16384 { return Err(invalid) }
     let value: Value = serde_json::from_str(&text).map_err(|_| invalid)?;
     let entries = value.as_array().filter(|a| !a.is_empty() && a.len() <= 32).ok_or(invalid)?;
@@ -21,8 +30,10 @@ fn load_state() -> Result<RuntimeState, &'static str> {
         let object = entry.as_object().filter(|o| o.len() == 2).ok_or(invalid)?;
         let token = object.get("token").and_then(Value::as_str).filter(|t| valid_token(t)).ok_or(invalid)?;
         let principal = u64_arg(object.get("principal").ok_or(invalid)?, None).map_err(|_| invalid)?;
-        if credentials.iter().any(|c| c.token == token.as_bytes()) { return Err(invalid) }
-        credentials.push(Credential { token: token.as_bytes().to_vec(), principal });
+        let token_bytes = padded(token);
+        let length = token.len() as u16;
+        if credentials.iter().any(|c| c.token == token_bytes && c.length == length) { return Err(invalid) }
+        credentials.push(Credential { token: token_bytes, length, principal });
     }
     Ok(RuntimeState(Arc::new(credentials)))
 }
@@ -40,9 +51,11 @@ fn authenticate(headers: &HeaderMap, message: &Value, state: &RuntimeState) -> O
     }
     let (scheme, token) = authorization?.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("Bearer") || !valid_token(token) { return None }
+    let presented = padded(token);
+    let length = token.len() as u16;
     let mut principal = None;
     for credential in state.0.iter() {
-        if bool::from(credential.token.as_slice().ct_eq(token.as_bytes())) {
+        if bool::from(credential.token.as_slice().ct_eq(presented.as_slice()) & credential.length.ct_eq(&length)) {
             principal = Some(credential.principal);
         }
     }
