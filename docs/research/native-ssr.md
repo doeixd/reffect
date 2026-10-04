@@ -148,7 +148,7 @@ Hydration is therefore tolerant. **Byte equality with upstream is the right acce
    - **Implementation.**
      - [html-native.ts](../../packages/reffect/src/html-native.ts) ports these rules to `crate::foldkit_html`. An `Html` is a serialized fragment that keeps the end of its start tag's own attributes, for root stamping, and the first serialization failure in document order.
      - [html-ir.ts](../../packages/reffect/src/html-ir.ts) holds the witness and operations, without importing NativeRpc, so the planner selects `foldkit/ssr-serialize@1` for them.
-     - `R.Html.renderToString` is composed in R from root-kind, render-failure and render primitives whose reference is upstream `renderToString`. It yields `Result<{ html, title }, InvalidHydrationRoot | SerializationError>`.
+     - `R.Html.renderToString` is composed in R from root-kind, render-failure and render primitives whose reference is upstream `renderToString`. It yields `Result<{ html, title }, InvalidHydrationRoot | SerializationError | FlagsEncodeError>`; the last was added with the program form (see [ssr-data](ssr-data.md), M9-3 step 1).
    - **Evidence.** [html-native.test.ts](../../packages/reffect/tests/html-native.test.ts) serves 8 views from a NativeRpc server and from the official RpcServer running the reference; all 12 responses are byte-equal. The corpus covers keyed lists, every element with every attribute, 12 hrefs, 8 class strings, NUL in text and attributes, and text and empty bodies.
    - **Limits.**
      - Only hydratable renders.

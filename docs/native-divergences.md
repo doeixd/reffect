@@ -55,7 +55,7 @@ The injected millis driver also admits only signed safe-integer readings, while 
 - Query inputs must be Structs of plain primitive fields (string, number, boolean, null, literals) with required keys.
 - Unsupported Schema shapes: `optional(Struct({}))`, `optional(Unknown)`, tuples, non-length array checks, non-String record keys, checked outputs, classes in payloads.
 - `live: true` without NDJSON serialization (LR-4): a Live stream never ends, so a JSON body would never answer.
-- Page Flags witnesses holding Numbers (M9-1): upstream's JSON round trip turns `-0` into `0` before `init`.
+- Flags holding Numbers in the document form of `R.Html.renderToString` (M9-1): the view was built from the original Flags, while upstream's `init` reads their JSON round trip, which turns `-0` into `0`. The program form `renderToString({ init, view }, { flags })` admits them (M9-3 step 1).
 - Mutation `Input`/`Output` schemas outside the subset where `decodeUnknown`/`encodeUnknown` and the JSON codec agree: non-finite-capable numbers (`Schema.Number`), `undefined` (`Schema.optional`), and any number in an `Output` (RM-001).
 - `R.Schema.encodeSync(R.Schema.toCodecJson(...))` outside a NativeRpc host (no `JsonEncoders` capability), and `R.RemoteStore` outside a `NativeRemote` server.
 

@@ -89,13 +89,26 @@ Results:
    - [remote-resume.test.ts](../../packages/reffect/tests/remote-resume.test.ts) runs the server satisfy against `RemoteServer.memory(...).layer` and sends the resume through the JSON codec, as Flags would. The client satisfy in `runSyncExit` gives a Model `toStrictEqual` to the server's.
      - It covers an entity read with a relation, a windowed query, a paged to-many relation, and a Surface that reads only on the second pass.
      - Every read is `Ready` and every read entry plans nothing; a dropped exchange fails with `RemoteQueryError`.
-   - **Moved to M9-3.** The exchanges recorded natively: the page satisfies against the native engine, whose answers are already differential-tested against `RemoteServer`. M9-3 also needs Numbers admitted in these Flags.
+   - **Moved to M9-3.** The exchanges recorded natively: the page satisfies against the native engine, whose answers are already differential-tested against `RemoteServer`. M9-3 also needs Numbers admitted in these Flags (step 1, delivered).
 
 3. **Projections in R views, with async pages (M9-3).**
+
+   **Step 1 delivered 2026-10-03: Numbers in Flags.**
+   - **API.** `R.Html.renderToString({ init, view }, { flags, buildId })` mirrors upstream's program form: `init` reads `decode(roundTrip(encode(flags)))`, as `server.js` hands it the `hydrationFlags`.
+   - **New operation.** `JsonRoundTrip` (`reffect/json.round-trip@1`) has reference `JSON.parse(JSON.stringify(v))`. Natively, `foldkit_json::round_trip` rewrites `-0` to `0`.
+   - **Why only `-0` changes.** A probe of `Schema.toCodecJson` output found that `undefined` encodes as `null`, non-finite Numbers as strings, and finite Numbers are written shortest and parsed exactly.
+   - **Decode failure.** It yields upstream's `FlagsEncodeError` tag, a new `RenderError` case carrying a message where upstream carries the cause. Every page contract that restates the error union gains the case.
+   - **Document form.** It still refuses Numbers in its Flags, because its view was built from the original value.
+   - **Test.** [html-flags.test.ts](../../packages/reffect/tests/html-flags.test.ts) now renders a program whose Flags hold `-0`, `1e21`, `5e-324`, `0.1`, `NaN` and `-Infinity`. Payload and body equal upstream for five targets, so the native JSON writer prints `-0` as `0`, as `JSON.stringify` does.
+   - **Limits.**
+     - No R Number operation today distinguishes `-0` from `0` (`add`, `eq`, `lt`, `fromNumber`), so `init` reading the round trip is not yet observable; it guards later operations.
+     - `FlagsEncodeError` is unreachable for R witnesses, which carry no sign-sensitive checks; it exists for faithfulness.
+
    - `R.Remote` projection reads inside `R.Html` views.
    - The reference is upstream `Data.query(...).read(model)`, so the browser view stays Foldkit's own. Natively the read comes from a per-request store the engine fills.
    - A page's projections are operations, so its data requirements are planned at compile time.
    - Pages become async R functions with the store service, sharing the mutation session machinery (and LIVE-008's after-commit hook when it lands).
+
 4. **`todo-remote`'s first screen natively (M9-4).** The 8A step 6 example, now with data.
 5. **Showcase (M9-5).** SQL, Live, SSR with data and resume in one binary.
 
