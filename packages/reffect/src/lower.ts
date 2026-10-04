@@ -437,6 +437,15 @@ interface Scope {
   readonly input: readonly Parameter[];
 }
 
+const rejectDeferredNative = (): never => {
+  throw fail(
+    "DEFERRED_NATIVE_INTEGRATION",
+    "lower",
+    "Deferred",
+    "Deferred native ownership, callback-budget and coordinator integration are not admitted",
+  );
+};
+
 export function lowerFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
@@ -576,6 +585,11 @@ export function lowerFunctions(
           computations.add(value.node);
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
+              DeferredMake: rejectDeferredNative,
+              DeferredScope: rejectDeferredNative,
+              DeferredAwait: rejectDeferredNative,
+              DeferredComplete: rejectDeferredNative,
+              DeferredIsDone: rejectDeferredNative,
               TaskGroup: (n) => n.children.forEach(computation),
               Scope: (n) => computation(n.body),
               AddFinalizer: (n) => computation(n.finalizer),
@@ -1009,6 +1023,11 @@ export function lowerFunctions(
           );
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            DeferredMake: rejectDeferredNative,
+            DeferredScope: rejectDeferredNative,
+            DeferredAwait: rejectDeferredNative,
+            DeferredComplete: rejectDeferredNative,
+            DeferredIsDone: rejectDeferredNative,
             TaskGroup: (n): HelperBody => ({
               _tag: "TaskGroup",
               mode: n.mode,

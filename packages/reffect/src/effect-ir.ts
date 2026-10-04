@@ -1,4 +1,5 @@
 import {
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -62,9 +63,20 @@ export { maxScopeFinalizers } from "./scope-analysis.ts";
 
 import { containsRef, refContent, refScalar, refType } from "./ref-model.ts";
 
+import {
+  containsDeferred,
+  deferredChannels,
+  deferredError,
+  deferredScalar,
+  deferredType,
+  usesDeferredExpression,
+} from "./deferred-model.ts";
+
 export const SyncEffects = Object.freeze({
   ClockReadMillis: SemanticRef.effect("reffect/clock/current-time-millis@1"),
   RandomDraw: SemanticRef.effect("reffect/random/next@1"),
+  DeferredMake: SemanticRef.effect("reffect/deferred/make@1"),
+  DeferredIsDone: SemanticRef.effect("reffect/deferred/is-done@1"),
   RefMake: SemanticRef.effect("reffect/ref/make@1"),
   RefGet: SemanticRef.effect("reffect/ref/get@1"),
   RefModify: SemanticRef.effect("reffect/ref/modify@1"),
@@ -81,6 +93,8 @@ export const SyncEffects = Object.freeze({
   Span: SemanticRef.effect("reffect/effect/span@1"),
 });
 export const AsyncEffects = Object.freeze({
+  DeferredAwait: SemanticRef.effect("reffect/deferred/await@1"),
+  DeferredComplete: SemanticRef.effect("reffect/deferred/complete@1"),
   All: SemanticRef.effect("reffect/effect/all-unbounded-discard@1"),
   Race: SemanticRef.effect("reffect/effect/race-unit@1"),
   Scope: SemanticRef.effect("reffect/effect/scope@1"),
@@ -136,6 +150,38 @@ export type ComputationNode =
     }
   | { readonly _tag: "ClockReadMillis" }
   | { readonly _tag: "RandomDraw" }
+  | {
+      readonly _tag: "DeferredMake";
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+    }
+  | {
+      readonly _tag: "DeferredScope";
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+      readonly binder: symbol;
+      readonly body: Computation<unknown, unknown>;
+    }
+  | {
+      readonly _tag: "DeferredAwait";
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+      readonly binder: symbol;
+    }
+  | {
+      readonly _tag: "DeferredComplete";
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+      readonly binder: symbol;
+      readonly result: "Succeed" | "Fail";
+      readonly value: Expr<unknown>;
+    }
+  | {
+      readonly _tag: "DeferredIsDone";
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+      readonly binder: symbol;
+    }
   | { readonly _tag: "RefMake"; readonly initial: Expr<unknown> }
   | {
       readonly _tag: "RefScope";
@@ -374,6 +420,17 @@ export const substituteComputation = (
           const values = n.values && substituting(n.values);
           return id === n.id && values === n.values ? self : rebuild({ ...n, id, values });
         },
+        DeferredMake: () => self,
+        DeferredScope: (n) => {
+          const body = walk(n.body);
+          return body === n.body ? self : rebuild({ ...n, body });
+        },
+        DeferredAwait: () => self,
+        DeferredComplete: (n) => {
+          const value = substituting(n.value);
+          return value === n.value ? self : rebuild({ ...n, value });
+        },
+        DeferredIsDone: () => self,
         RefMake: (n) => {
           const initial = substituting(n.initial);
           return initial === n.initial ? self : rebuild({ ...n, initial });
@@ -780,6 +837,11 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         AcquireRelease: () => true,
         RegisteredFile: () => true,
         FileScope: () => true,
+        DeferredMake: () => false,
+        DeferredScope: (n) => walk(n.body),
+        DeferredAwait: () => true,
+        DeferredComplete: () => true,
+        DeferredIsDone: () => false,
         RefMake: () => false,
         RefScope: (n) => walk(n.body),
         RefGet: () => false,
@@ -837,6 +899,13 @@ const flatMap: {
     const body = build(Expr.parameter(self.output, binder, 0));
     const error = joinType(self.error, body.error) as IRType<E | E2>;
     const node = Match.value(self.node).pipe(
+      Match.tag("DeferredMake", (allocation): ComputationNode => ({
+        _tag: "DeferredScope",
+        success: allocation.success,
+        error: allocation.error,
+        binder,
+        body,
+      })),
       Match.tag("RefMake", (allocation): ComputationNode => ({
         _tag: "RefScope",
         initial: allocation.initial,
@@ -847,6 +916,7 @@ const flatMap: {
     );
     const computation = Computation.make(body.output, error, node);
     return Match.value(self.node).pipe(
+      Match.tag("DeferredMake", () => computation.withSource(self.source)),
       Match.tag("RefMake", () => computation.withSource(self.source)),
       Match.orElse(() => computation),
     );
@@ -941,19 +1011,52 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
     active.add(c);
     if (
       !Match.value(c.node).pipe(
+        Match.tag("DeferredMake", () => true),
         Match.tag("RefMake", () => true),
         Match.orElse(() => false),
       ) &&
-      (containsRef(c.output) || containsRef(c.error))
+      (containsRef(c.output) ||
+        containsRef(c.error) ||
+        containsDeferred(c.output) ||
+        containsDeferred(c.error))
     )
       issues.push({
         code: "RESOURCE_ESCAPE",
         stage: "check",
         path: at,
-        message: "Ref handles cannot escape as computation values",
+        message: "Lexical handles cannot escape as computation values",
       });
-    const expression = (e: Expr<unknown>, step: string) =>
-      issues.push(...checkExpression(e, bindings, `${at}.${step}`));
+    const expression = (e: Expr<unknown>, step: string, environment: Bindings = bindings) => {
+      if (usesDeferredExpression(e))
+        issues.push({
+          code: "RESOURCE_ESCAPE",
+          stage: "check",
+          path: `${at}.${step}`,
+          message: "Deferred handles cannot be ordinary expression values",
+        });
+      issues.push(...checkExpression(e, environment, `${at}.${step}`));
+    };
+    const coordinator = (n: {
+      readonly binder: symbol;
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+    }) => {
+      const owner = bindings.get(n.binder)?.[0];
+      const channels = owner && deferredChannels(owner);
+      if (
+        !deferredScalar(n.success) ||
+        !deferredError(n.error) ||
+        !channels ||
+        !IRType.same(channels.success, n.success) ||
+        !IRType.same(channels.error, n.error)
+      )
+        issues.push({
+          code: "RESOURCE_ESCAPE",
+          stage: "check",
+          path: at,
+          message: "Deferred access requires a live matching lexical owner",
+        });
+    };
     Match.value(c.node).pipe(
       Match.tagsExhaustive({
         TaskGroup: (n) => {
@@ -1061,6 +1164,47 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           walk(n.body, nested, `${at}.body`);
           walk(n.afterClose, bindings, `${at}.afterClose`);
         },
+        DeferredMake: () => {
+          issues.push({
+            code: "RESOURCE_ESCAPE",
+            stage: "check",
+            path: at,
+            message: "Consume Deferred.make directly through Effect.flatMap",
+          });
+        },
+        DeferredScope: (n) => {
+          if (
+            !deferredScalar(n.success) ||
+            !deferredError(n.error) ||
+            !IRType.same(c.output, n.body.output) ||
+            !IRType.same(c.error, n.body.error)
+          )
+            add(at, "Deferred owner requires scalar channels and preserves body channels");
+          const nested = new Map(bindings);
+          nested.set(n.binder, [deferredType(n.success, n.error)]);
+          walk(n.body, nested, `${at}.body`);
+        },
+        DeferredAwait: (n) => {
+          coordinator(n);
+          if (!IRType.same(c.output, n.success) || !IRType.same(c.error, n.error))
+            add(at, "Deferred.await preserves owner channels");
+        },
+        DeferredComplete: (n) => {
+          coordinator(n);
+          if (
+            !IRType.same(c.output, BoolType) ||
+            !IRType.same(c.error, NeverType) ||
+            !["Succeed", "Fail"].includes(n.result) ||
+            !IRType.same(n.value.type, n.result === "Succeed" ? n.success : n.error)
+          )
+            add(at, "Deferred completion requires matching payload and Bool/Never channels");
+          expression(n.value, "value");
+        },
+        DeferredIsDone: (n) => {
+          coordinator(n);
+          if (!IRType.same(c.output, BoolType) || !IRType.same(c.error, NeverType))
+            add(at, "Deferred.isDone requires Bool/Never channels");
+        },
         RefMake: () => {
           issues.push({
             code: "RESOURCE_ESCAPE",
@@ -1115,10 +1259,8 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
             });
           const nested = new Map(bindings);
           nested.set(n.binder, [n.content]);
-          issues.push(
-            ...checkExpression(n.result, nested, `${at}.result`),
-            ...checkExpression(n.next, nested, `${at}.next`),
-          );
+          expression(n.result, "result", nested);
+          expression(n.next, "next", nested);
         },
         ClockReadMillis: () => {
           if (!IRType.same(c.output, NumberType) || !IRType.same(c.error, NeverType))
@@ -1263,7 +1405,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           for (const { expr, binder, path } of streamExpressions(n.stream)) {
             const nested = new Map(bindings);
             if (binder) nested.set(binder.symbol, [binder.type]);
-            issues.push(...checkExpression(expr, nested, `${at}.${path}`));
+            expression(expr, path, nested);
           }
         },
         StreamEmit: (n) => {
@@ -1277,15 +1419,9 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           for (const { expr, binder, path } of streamExpressions(n.stream)) {
             const nested = new Map(bindings);
             if (binder) nested.set(binder.symbol, [binder.type]);
-            issues.push(...checkExpression(expr, nested, `${at}.${path}`));
+            expression(expr, path, nested);
           }
-          issues.push(
-            ...checkExpression(
-              n.encoded,
-              new Map(bindings).set(n.item, [n.stream.item]),
-              `${at}.encoded`,
-            ),
-          );
+          expression(n.encoded, "encoded", new Map(bindings).set(n.item, [n.stream.item]));
         },
         Succeed: (n) => {
           if (!IRType.same(c.output, n.value.type) || !IRType.same(c.error, NeverType))
@@ -1303,7 +1439,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           walk(n.source, bindings, `${at}.source`);
           const nested = new Map(bindings);
           nested.set(n.binder, [n.source.output]);
-          issues.push(...checkExpression(n.body, nested, `${at}.body`));
+          expression(n.body, "body", nested);
         },
         FlatMap: (n) => {
           if (
@@ -1406,12 +1542,18 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
   };
   if (!agrees(f.body.output, f.output) || !agrees(f.body.error, f.error))
     add(path, "Effect function body differs from declared success/error witnesses");
-  if (f.input.some(containsRef) || containsRef(f.output) || containsRef(f.error))
+  if (
+    f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
+    containsRef(f.output) ||
+    containsRef(f.error) ||
+    containsDeferred(f.output) ||
+    containsDeferred(f.error)
+  )
     issues.push({
       code: "RESOURCE_ESCAPE",
       stage: "check",
       path,
-      message: "Public function channels cannot contain lexical Ref handles",
+      message: "Public function channels cannot contain lexical handles",
     });
   walk(f.body, new Map([[f.binder, f.input]]), `${path}.body`);
   issues.push(...analyzeScopes(f.body, `${path}.body`).diagnostics);
@@ -1496,6 +1638,33 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
                   Effect.orDie,
                 ),
             ),
+          DeferredMake: () => Deferred.make<unknown, unknown>(),
+          DeferredScope: (n) =>
+            Deferred.make<unknown, unknown>().pipe(
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return evaluate(n.body, nested);
+              }),
+            ),
+          DeferredAwait: (n) =>
+            Deferred.await(bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>),
+          DeferredComplete: (n) =>
+            expression(n.value).pipe(
+              Effect.flatMap((value) =>
+                n.result === "Succeed"
+                  ? Deferred.succeed(
+                      bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>,
+                      value,
+                    )
+                  : Deferred.fail(
+                      bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>,
+                      value,
+                    ),
+              ),
+            ),
+          DeferredIsDone: (n) =>
+            Deferred.isDone(bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>),
           RefMake: (n) => expression(n.initial).pipe(Effect.flatMap(Ref.make)),
           RefScope: (n) =>
             expression(n.initial).pipe(
@@ -1701,6 +1870,8 @@ export interface LogicalFrame {
     | "registeredFile"
     | "acquireUseRelease"
     | "fileScope"
+    | "deferredScope"
+    | "deferredAwait"
     | "refScope"
     | "clockReadMillis"
     | "randomDraw"
@@ -1788,6 +1959,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.afterClose, `${path}.afterClose`);
         },
+        DeferredMake: () => {},
+        DeferredScope: (n) => adaptNode(n.body, `${path}.body`),
+        DeferredAwait: () => {},
+        DeferredComplete: () => {},
+        DeferredIsDone: () => {},
         RefMake: () => {},
         RefScope: (n) => adaptNode(n.body, `${path}.body`),
         RefGet: () => {},
@@ -1941,6 +2117,39 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   Effect.orDie,
                 ),
             ).pipe(mapFramedError((failure) => outward(failure, "fileScope"))),
+          DeferredMake: () => Deferred.make<unknown, unknown>(),
+          DeferredScope: (n) =>
+            Deferred.make<unknown, unknown>().pipe(
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return evaluate(n.body, nested);
+              }),
+              mapFramedError((failure) => outward(failure, "deferredScope")),
+            ),
+          DeferredAwait: (n) =>
+            Deferred.await(bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>).pipe(
+              mapFramedError(
+                (payload): FramedFailure =>
+                  new FramedDomain(payload, [frame(path, "deferredAwait")], 0),
+              ),
+            ),
+          DeferredComplete: (n) =>
+            expression(n.value, `${path}.value`).pipe(
+              Effect.flatMap((value) =>
+                n.result === "Succeed"
+                  ? Deferred.succeed(
+                      bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>,
+                      value,
+                    )
+                  : Deferred.fail(
+                      bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>,
+                      value,
+                    ),
+              ),
+            ),
+          DeferredIsDone: (n) =>
+            Deferred.isDone(bindings.get(n.binder)![0] as Deferred.Deferred<unknown, unknown>),
           RefMake: (n) => expression(n.initial, `${path}.initial`).pipe(Effect.flatMap(Ref.make)),
           RefScope: (n) =>
             expression(n.initial, `${path}.initial`).pipe(

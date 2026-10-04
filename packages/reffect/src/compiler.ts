@@ -27,6 +27,7 @@ import type {
 } from "./runtime-service-model.ts";
 import { analyzeTaskGroups } from "./structured-concurrency.ts";
 import { containsRef } from "./ref-model.ts";
+import { containsDeferred, usesDeferredExpression } from "./deferred-model.ts";
 import { hostFunctionOf } from "./schema-json.ts";
 import { HtmlCapability, HtmlType, htmlOperationKind } from "./html-ir.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
@@ -508,15 +509,17 @@ const check = Effect.fn("Compile.check")(function* (program: Program) {
           },
         ]
       : []),
-    ...(f.input.some(containsRef) ||
+    ...(f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
     containsRef(f.output) ||
-    (f instanceof EffectFn && containsRef(f.error))
+    containsDeferred(f.output) ||
+    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
+    (!(f instanceof EffectFn) && usesDeferredExpression(f.body))
       ? [
           {
             code: "RESOURCE_ESCAPE",
             stage: "check",
             path: `functions.${name}`,
-            message: "Public channels cannot contain lexical Ref handles",
+            message: "Public channels cannot contain lexical Ref or Deferred handles",
           },
         ]
       : []),
@@ -653,6 +656,31 @@ const derive = Effect.fn("Compile.derive")(function* (
           effectRefs.add(AsyncEffects.FileScope);
           walkComputation(n.body);
           walkComputation(n.afterClose);
+        },
+        DeferredMake: (n) => {
+          effectRefs.add(SyncEffects.DeferredMake);
+          types.add(n.success);
+          types.add(n.error);
+        },
+        DeferredScope: (n) => {
+          effectRefs.add(SyncEffects.DeferredMake);
+          types.add(n.success);
+          types.add(n.error);
+          walkComputation(n.body);
+        },
+        DeferredAwait: (n) => {
+          effectRefs.add(AsyncEffects.DeferredAwait);
+          types.add(n.success);
+          types.add(n.error);
+        },
+        DeferredComplete: (n) => {
+          effectRefs.add(AsyncEffects.DeferredComplete);
+          types.add(n.success);
+          types.add(n.error);
+          walk(n.value);
+        },
+        DeferredIsDone: () => {
+          effectRefs.add(SyncEffects.DeferredIsDone);
         },
         RefMake: (n) => {
           effectRefs.add(SyncEffects.RefMake);
@@ -846,6 +874,22 @@ const plan = Effect.fn("Compile.plan")(function* (
       "plan",
       target.id,
       "No verified lowering registered for this target",
+    );
+  if (
+    analysis.effects.some((ref) =>
+      [
+        SyncEffects.DeferredMake,
+        SyncEffects.DeferredIsDone,
+        AsyncEffects.DeferredAwait,
+        AsyncEffects.DeferredComplete,
+      ].some((deferred) => deferred === ref),
+    )
+  )
+    return yield* fail(
+      "DEFERRED_NATIVE_INTEGRATION",
+      "plan",
+      "effects",
+      "Deferred native ownership, routing, masking and callback-budget admission remain unverified",
     );
   const selectedServices = yield* Effect.try({
     try: () => normalizeRuntimeServicesSelection(runtimeServices),

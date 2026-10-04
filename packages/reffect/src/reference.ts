@@ -5,6 +5,7 @@ import type { CompileError, IRType, Inputs } from "./kernel.ts";
 import { EffectFn, EffectReference } from "./effect-ir.ts";
 import type { FramedExit } from "./effect-ir.ts";
 import { containsRef } from "./ref-model.ts";
+import { containsDeferred, usesDeferredExpression } from "./deferred-model.ts";
 import { Effect, Exit, Match, Stream } from "effect";
 
 function runUnknown<I extends readonly IRType<unknown>[], A>(
@@ -17,16 +18,18 @@ function runUnknown<I extends readonly IRType<unknown>[], A, E>(
 ): Effect.Effect<A, E | CompileError>;
 function runUnknown(f: Fn | EffectFn, args: readonly unknown[]): Effect.Effect<unknown, unknown> {
   if (
-    f.input.some(containsRef) ||
+    f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
     containsRef(f.output) ||
-    (f instanceof EffectFn && containsRef(f.error))
+    containsDeferred(f.output) ||
+    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
+    (f instanceof Fn && usesDeferredExpression(f.body))
   )
     return Effect.fail(
       fail(
         "RESOURCE_ESCAPE",
         "check",
         "function",
-        "Public channels cannot contain lexical Ref handles",
+        "Public channels cannot contain lexical Ref or Deferred handles",
       ),
     );
   return f instanceof EffectFn
@@ -60,16 +63,18 @@ function runWithFramesUnknown(
   basePath?: string,
 ): Effect.Effect<FramedExit<unknown, unknown>, CompileError> {
   if (
-    f.input.some(containsRef) ||
+    f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
     containsRef(f.output) ||
-    (f instanceof EffectFn && containsRef(f.error))
+    containsDeferred(f.output) ||
+    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
+    (f instanceof Fn && usesDeferredExpression(f.body))
   )
     return Effect.fail(
       fail(
         "RESOURCE_ESCAPE",
         "check",
         "function",
-        "Public channels cannot contain lexical Ref handles",
+        "Public channels cannot contain lexical Ref or Deferred handles",
       ),
     );
   return f instanceof EffectFn

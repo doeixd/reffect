@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-04 — Private Deferred IR integration preparation
+
+- [Private core preparation](docs/research/deferred-integration-core.md) records lexical make/flatMap elaboration, opaque handle exclusion, official reference operations and per-await failure frames; make alone and recursive public/payload escape remain refused.
+- [Native adapter preparation](docs/research/deferred-integration-native.md) and [admission preparation](docs/research/deferred-integration-admission.md) record private fixed-arity routing, real AsyncContext masking/cancellation, genuine suspension and audited budget/topology boundaries before edits.
+- Synced through bedd884, preserving upstream RPC serving limits and installed current dependencies. [Pipeline preparation](docs/research/deferred-integration-pipeline.md) records DPIPE-001–004 before visitor edits. Parallel private authoring/reference, coordinator-runtime and admission work continues the verified owner/turn kernel; public exports and native compilation remain gated until complete ownership/masking/budget/isolation evidence.
+- Delivered private scalar Deferred builders and lexical IR, official plain/framed reference evaluation, per-await error frames, recursive handle exclusion, provenance/resource traversal and explicit plan/direct-lowering refusal. Review closed a pure-function opaque-argument escape. Private budget receipts and topology analysis distinguish owner occurrences, leaf slots and task contexts while preserving existing nested-group refusals.
+- The unselected real-AsyncContext coordinator matches five independently authored official ordering traces across ten fresh-owner repetitions in native debug/release. It preserves producer interruption/masking and typed retained outcomes without changing the 24-byte AsyncContext; its borrowed turn handle measures 16 bytes. A fixture mismatch confirmed that asynchronous waiter cleanup may finish after producer continuation; independent cancellation needs a separate finalization signal.
+- Merged private pipeline/core/admission/budget/coordinator tests pass 23/23 across five files. Existing retained-outcome, fallible-admission and synced RPC serving tests pass 6/6 across three files (105.57s). Generated owner/helper capture and routing, executable default-context budget enforcement, nested Race isolation, compound outcomes and total None/Bounded cost measurements remain admission gates; no public Deferred support is claimed.
+- Root review and final checks pass: 23/23 private tests repeated after pipeline corrections (24.96s), full formatting across 408 files, lint/types across 246 TypeScript files, strict package TypeScript and workspace builds (reffect rebuilt, 3/4 cache hits). Decisions are recorded in the four linked integration records; the separately owned core plan is preserved.
+
 ## 2026-10-04 — Retained-outcome repair
 
 - [Outcome analysis preparation](docs/research/retained-outcomes.md) records RETAIN-001–005: distinguish declared errors from cancellation-retained failures, propagate build-owned rich requirements, guard typed recovery with the active mask and preserve the existing bounded scalar capacity.

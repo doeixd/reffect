@@ -168,6 +168,36 @@ export const analyzeScopes = (
           finalizer(n.afterClose, "afterClose", false);
           return child(n.body, "body");
         },
+        DeferredMake: () => 0,
+        DeferredScope: (n) => child(n.body, "body"),
+        DeferredAwait: () => {
+          if (delayed)
+            diagnostic(
+              "RESOURCE_ESCAPE",
+              at,
+              "Registered cleanup cannot capture lexical Deferred owners",
+            );
+          return 0;
+        },
+        DeferredComplete: (n) => {
+          if (delayed)
+            diagnostic(
+              "RESOURCE_ESCAPE",
+              at,
+              "Registered cleanup cannot capture lexical Deferred owners",
+            );
+          expression(n.value, "value");
+          return 0;
+        },
+        DeferredIsDone: () => {
+          if (delayed)
+            diagnostic(
+              "RESOURCE_ESCAPE",
+              at,
+              "Registered cleanup cannot capture lexical Deferred owners",
+            );
+          return 0;
+        },
         RefMake: (n) => {
           expression(n.initial, "initial");
           return 0;

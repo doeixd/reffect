@@ -118,6 +118,11 @@ export const analyzeTaskGroups = (
           body(n.body, "body");
           finalizer(n.finalizer, "finalizer");
         },
+        DeferredScope: (n) => body(n.body, "body"),
+        DeferredMake: () => {},
+        DeferredAwait: () => {},
+        DeferredComplete: () => {},
+        DeferredIsDone: () => {},
         RefScope: (n) => body(n.body, "body"),
         Repeat: (n) => body(n.body, "body"),
         Retry: (n) => {
@@ -223,5 +228,204 @@ export const analyzeTaskGroups = (
     richGroups,
     cancellationGuards,
     childClockPaths: Object.freeze(childClockPaths),
+  });
+};
+
+/** Private coordinated scheduling facts; these do not admit Deferred or nested groups. */
+export interface DeferredTopologyAnalysis {
+  readonly hasDeferred: boolean;
+  /** Maximum simultaneously live leaves, with the root counted when no group runs. */
+  readonly leafCapacity: number;
+  /** Root plus simultaneously live descendant contexts, including group ancestors. */
+  readonly taskCapacity: number;
+  /** Conservative expanded edge-occurrence count of lexical scopes; sums even alternative branches. */
+  readonly ownerCount: number;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/** See DADM-001/004: callbacks cannot create a new group in this private profile. */
+export const analyzeDeferredTopology = (
+  root: Computation<unknown, unknown>,
+  path = "body",
+): DeferredTopologyAnalysis => {
+  const diagnostics: Diagnostic[] = [...analyzeTaskGroups(root, path).diagnostics];
+  const active = new Set<Computation<unknown, unknown>>();
+  let hasDeferred = false;
+  interface Facts {
+    readonly leaves: number;
+    readonly tasks: number;
+    readonly owners: number;
+    readonly resumes: boolean;
+  }
+  const summaries = new Map<Computation<unknown, unknown>, Map<boolean, Facts>>();
+  const quiet: Facts = { leaves: 1, tasks: 1, owners: 0, resumes: false };
+  const count = (a: number, b: number): number =>
+    a > Number.MAX_SAFE_INTEGER - b ? Infinity : a + b;
+  const maximum = (a: Facts, b: Facts): Facts => ({
+    leaves: Math.max(a.leaves, b.leaves),
+    tasks: Math.max(a.tasks, b.tasks),
+    owners: count(a.owners, b.owners),
+    resumes: a.resumes || b.resumes,
+  });
+  const walk = (c: Computation<unknown, unknown>, at: string, afterResume: boolean): Facts => {
+    const issue = (code: string, message: string) =>
+      diagnostics.push({ code, stage: "check", path: at, message });
+    if (active.has(c)) {
+      issue("DEFERRED_TOPOLOGY_CYCLE", "Cyclic computation has no finite coordinated task bound");
+      return { leaves: Infinity, tasks: Infinity, owners: Infinity, resumes: true };
+    }
+    const cached = summaries.get(c)?.get(afterResume);
+    if (cached) return cached;
+    active.add(c);
+    const child = (value: Computation<unknown, unknown>, edge: string, resumed = afterResume) =>
+      walk(value, `${at}.${edge}`, resumed);
+    const result: Facts = Match.value(c.node).pipe(
+      Match.tagsExhaustive({
+        TaskGroup: (n) => {
+          if (n.mode === "All" ? ![2, 3].includes(n.children.length) : n.children.length !== 2)
+            issue("DEFERRED_TOPOLOGY_ARITY", "Coordinated groups require All2/3 or Race2");
+          if (afterResume)
+            issue(
+              "DEFERRED_CALLBACK_GROUP",
+              "Group startup after a Deferred await/completion needs a verified callback driver",
+            );
+          const children = n.children.map((value, i) => child(value, `children[${i}]`));
+          return {
+            leaves: children.reduce((sum, value) => count(sum, value.leaves), 0),
+            tasks: count(
+              1,
+              children.reduce((sum, value) => count(sum, value.tasks), 0),
+            ),
+            owners: children.reduce((sum, value) => count(sum, value.owners), 0),
+            resumes: children.some((value) => value.resumes),
+          };
+        },
+        DeferredMake: () => {
+          hasDeferred = true;
+          return quiet;
+        },
+        DeferredScope: (n) => {
+          hasDeferred = true;
+          const body = child(n.body, "body");
+          return { ...body, owners: count(body.owners, 1) };
+        },
+        DeferredAwait: () => {
+          hasDeferred = true;
+          return { ...quiet, resumes: true };
+        },
+        DeferredComplete: () => {
+          hasDeferred = true;
+          return { ...quiet, resumes: true };
+        },
+        DeferredIsDone: () => {
+          hasDeferred = true;
+          return quiet;
+        },
+        FlatMap: (n) => {
+          const source = child(n.source, "source");
+          return maximum(source, child(n.body, "body", afterResume || source.resumes));
+        },
+        CatchAll: (n) => {
+          const source = child(n.source, "source");
+          return maximum(source, child(n.body, "body", afterResume || source.resumes));
+        },
+        Ensuring: (n) => {
+          const body = child(n.body, "body");
+          return maximum(body, child(n.finalizer, "finalizer", afterResume || body.resumes));
+        },
+        AcquireUseRelease: (n) => {
+          const acquire = child(n.acquire, "acquire");
+          const use = child(n.use, "use", afterResume || acquire.resumes);
+          return maximum(
+            maximum(acquire, use),
+            child(n.release, "release", afterResume || acquire.resumes || use.resumes),
+          );
+        },
+        AcquireRelease: (n) => {
+          const acquire = child(n.acquire, "acquire");
+          return maximum(acquire, child(n.release, "release", afterResume || acquire.resumes));
+        },
+        RegisteredFile: (n) => {
+          const body = child(n.body, "body");
+          return maximum(body, child(n.afterClose, "afterClose", afterResume || body.resumes));
+        },
+        FileScope: (n) => {
+          const body = child(n.body, "body");
+          return maximum(body, child(n.afterClose, "afterClose", afterResume || body.resumes));
+        },
+        Map: (n) => child(n.source, "source"),
+        Match: (n) => maximum(child(n.onTrue, "onTrue"), child(n.onFalse, "onFalse")),
+        MatchTags: (n) =>
+          n.cases.reduce(
+            (value, selected, i) => maximum(value, child(selected.body, `cases[${i}]`)),
+            quiet,
+          ),
+        Repeat: (n) => {
+          issue(
+            "DEFERRED_TOPOLOGY_LOOP",
+            "Iteration has no audited coordinated registration bound",
+          );
+          return { ...child(n.body, "body"), leaves: Infinity, tasks: Infinity, owners: Infinity };
+        },
+        Retry: (n) => {
+          issue(
+            "DEFERRED_TOPOLOGY_LOOP",
+            "Iteration has no audited coordinated registration bound",
+          );
+          return { ...child(n.body, "body"), leaves: Infinity, tasks: Infinity, owners: Infinity };
+        },
+        ForEach: (n) => {
+          issue(
+            "DEFERRED_TOPOLOGY_LOOP",
+            "Iteration has no audited coordinated registration bound",
+          );
+          return { ...child(n.body, "body"), leaves: Infinity, tasks: Infinity, owners: Infinity };
+        },
+        StreamRunCollect: () => {
+          issue(
+            "DEFERRED_TOPOLOGY_STREAM",
+            "Streams have no audited coordinated registration bound",
+          );
+          return { leaves: Infinity, tasks: Infinity, owners: Infinity, resumes: true };
+        },
+        StreamEmit: () => {
+          issue(
+            "DEFERRED_TOPOLOGY_STREAM",
+            "Streams have no audited coordinated registration bound",
+          );
+          return { leaves: Infinity, tasks: Infinity, owners: Infinity, resumes: true };
+        },
+        Scope: (n) => child(n.body, "body"),
+        RefScope: (n) => child(n.body, "body"),
+        Annotate: (n) => child(n.body, "body"),
+        Span: (n) => child(n.body, "body"),
+        AddFinalizer: (n) => child(n.finalizer, "finalizer", true),
+        Succeed: () => quiet,
+        Fail: () => quiet,
+        RefMake: () => quiet,
+        RefGet: () => quiet,
+        RefModify: () => quiet,
+        FileSize: () => quiet,
+        ClockReadMillis: () => quiet,
+        RandomDraw: () => quiet,
+        Sleep: () => quiet,
+        Launch: () => quiet,
+        RemoteStore: () => quiet,
+        Log: () => quiet,
+      }),
+    );
+    active.delete(c);
+    const contexts = summaries.get(c) ?? new Map<boolean, Facts>();
+    contexts.set(afterResume, result);
+    summaries.set(c, contexts);
+    return result;
+  };
+  const facts = walk(root, path, false);
+  return Object.freeze({
+    hasDeferred,
+    leafCapacity: facts.leaves,
+    taskCapacity: facts.tasks,
+    ownerCount: facts.owners,
+    diagnostics: Object.freeze(diagnostics),
   });
 };

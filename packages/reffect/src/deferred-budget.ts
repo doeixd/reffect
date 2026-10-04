@@ -4,6 +4,21 @@ import type { Diagnostic } from "./kernel.ts";
 
 /** Private, conditional source-expansion analysis; not a compiler admission rule. */
 export const deferredBudgetLimit = 2048;
+export interface DeferredBudgetContext {
+  readonly scheduler: "default" | "custom";
+  readonly clock: "default" | "custom";
+  readonly tracer: "default" | "custom";
+  readonly hooks: "absent" | "custom";
+  readonly outerHostEffects: "bounded-exit-only" | "custom";
+}
+/** Internal declaration of the conditional proof assumptions; never a user override. */
+export const defaultDeferredBudgetContext: DeferredBudgetContext = Object.freeze({
+  scheduler: "default",
+  clock: "default",
+  tracer: "default",
+  hooks: "absent",
+  outerHostEffects: "bounded-exit-only",
+});
 export interface DeferredBudgetAnalysis {
   readonly profile: "effect-4.0.0-default-zero-input";
   /** Saturates at the refusal threshold, rather than claiming an exact count. */
@@ -27,11 +42,16 @@ const maximum = (a: Weight, b: Weight): Weight =>
   weight(Math.max(a.plain, b.plain), Math.max(a.framed, b.framed));
 
 /**
- * Audited receipts: docs/research/deferred-budget.md, DBUD-001..005.
+ * Audited receipts: docs/research/deferred-budget.md, DBUD-001..005, and DADM-002
+ * in docs/research/deferred-integration-admission.md.
  * A finite result requires the documented default host/context assumptions.
- * Public Deferred, Schema inputs and unaccounted operations remain refused.
+ * Public admission, Schema inputs and unaccounted operations remain refused.
  */
-export const analyzeDeferredBudget = (fn: EffectFn, path = "body"): DeferredBudgetAnalysis => {
+export const analyzeDeferredBudget = (
+  fn: EffectFn,
+  path = "body",
+  context: DeferredBudgetContext = defaultDeferredBudgetContext,
+): DeferredBudgetAnalysis => {
   const diagnostics: Diagnostic[] = [];
   const active = new Set<Computation<unknown, unknown>>();
   // Reuse context-independent summaries; each incoming edge still adds its full weight.
@@ -94,6 +114,11 @@ export const analyzeDeferredBudget = (fn: EffectFn, path = "body"): DeferredBudg
                 "Default timer receipt covers only 0..2147483647 milliseconds",
               ),
         Log: (n) => (n.attributes.length === 0 ? weight(9) : unaccounted()),
+        DeferredMake: () => weight(3),
+        DeferredScope: (n) => add(weight(4, 6), child(n.body, "body")),
+        DeferredAwait: () => weight(11, 13),
+        DeferredComplete: () => weight(6, 8),
+        DeferredIsDone: () => weight(3),
         Scope: unaccounted,
         AddFinalizer: unaccounted,
         AcquireRelease: unaccounted,
@@ -122,6 +147,13 @@ export const analyzeDeferredBudget = (fn: EffectFn, path = "body"): DeferredBudg
     summaries.set(c, result);
     return result;
   };
+  for (const key of Object.keys(defaultDeferredBudgetContext) as (keyof DeferredBudgetContext)[])
+    if (context[key] !== defaultDeferredBudgetContext[key])
+      issue(
+        "DEFERRED_BUDGET_CONTEXT",
+        `context.${key}`,
+        `${key} is outside the audited default context`,
+      );
   const total =
     fn.input.length === 0
       ? add(weight(24), walk(fn.body, path))

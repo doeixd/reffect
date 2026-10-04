@@ -12,7 +12,7 @@ Recorded 2026-10-03 against Effect 4.0.0. Read PLAN, PROGRESS, lexical-coordinat
 
 ## Implementation status
 
-Research only. Root sync validation passed; the scheduling gate remains open. No feature source edits were saved: drafts are held outside the repository while completion cohort poll-turn semantics remain unresolved. DEFCORE-004 is a proposal, not proven scheduling compatibility.
+The private authoring/IR and official plain/framed reference slice is now implemented; see [core integration](deferred-integration-core.md). Public R exports remain absent. Compiler planning and direct lowering explicitly refuse Deferred until generated ownership/routing, masking, bounded context and independent cancellation gates pass. The proposed nested profile remains unadmitted; the private topology checker preserves the existing nested-group refusal. Internal real-context coordinator evidence is recorded separately in [native integration](deferred-integration-native.md).
 
 ## Alternatives and acceptance
 
