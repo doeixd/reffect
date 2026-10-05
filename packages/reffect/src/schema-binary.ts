@@ -33,7 +33,7 @@ interface Field {
 
 const FIELD_ID_ANNOTATION = "~effect/encoding/SchemaBinary/fieldId";
 /** FNV-1a 32 of the UTF-8 name: a field's default id (`fnv32`). */
-export const fieldId = (name: string): number => {
+export const defaultFieldId = (name: string): number => {
   let hash = 0x811c9dc5;
   for (const byte of new TextEncoder().encode(name)) hash = Math.imul(hash ^ byte, 0x01000193);
   return hash >>> 0;
@@ -100,7 +100,7 @@ const layoutOf = (ast: SchemaAST.AST, path: string): Layout => {
         throw unsupported(path, "SchemaBinary field names are strings");
       if (property.type.annotations?.[FIELD_ID_ANNOTATION] !== undefined)
         throw unsupported(path, "SchemaBinary.fieldId annotations are not supported yet");
-      const id = fieldId(property.name);
+      const id = defaultFieldId(property.name);
       if (id === 0) throw unsupported(path, `Field ${property.name} hashes to the reserved id 0`);
       return {
         name: property.name,

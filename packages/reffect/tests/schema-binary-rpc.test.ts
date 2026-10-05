@@ -13,7 +13,7 @@ import { Rpc, RpcClient, RpcGroup, RpcSerialization, RpcServer } from "effect/rp
 import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, NativeRpc, R, Reference } from "../src/index.ts";
-import { fieldId } from "../src/schema-binary.ts";
+import { defaultFieldId } from "../src/schema-binary.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 
 const Measure = Schema.Struct({
@@ -166,7 +166,7 @@ const payloadFrame = (fields: string) =>
  */
 const refused: ReadonlyArray<readonly [string, string, Uint8Array, string]> = [
   ["count missing", "Count", payloadFrame(""), "{}"],
-  ["count as f64", "Count", payloadFrame(uvHex(fieldId("n") * 8 + 2) + f64Hex(1.5)), "{}"],
+  ["count as f64", "Count", payloadFrame(uvHex(defaultFieldId("n") * 8 + 2) + f64Hex(1.5)), "{}"],
 ];
 
 test(
@@ -266,7 +266,7 @@ test(
           // A payload frame that does not decode at all, and an unknown procedure.
           const truncated = yield* post(rawRequest("Count", new Uint8Array([0x05, 0x20])));
           expect(defectOf("Count", truncated.body)).toBe("Expected complete value");
-          const twice = payloadFrame(`${uvHex(fieldId("n") * 8 + 1)}04`.repeat(2));
+          const twice = payloadFrame(`${uvHex(defaultFieldId("n") * 8 + 1)}04`.repeat(2));
           const repeated = yield* post(rawRequest("Count", twice));
           expect(defectOf("Count", repeated.body)).toBe("Expected unique field ids");
           const utf8 = yield* post(rawRequest("Check", new Uint8Array([0x02, 0x20, 0xff])));
