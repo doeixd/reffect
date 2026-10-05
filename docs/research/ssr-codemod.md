@@ -75,11 +75,13 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
 ## Step 1d design: Flags from the request (2026-10-05)
 
 **What the entry computes.** `flagsForRequest(cookieHeader)`:
+
 - `initialCount`: `readCountCookie`, which is `Cookies.parseHeader` → `Record.get("foldkit-ssr-count")` → `Option.flatMap(Number.parse)` → `Option.filter(globalThis.Number.isSafeInteger)` → `getOrElse(0)`;
 - `renderedAt`: `new Date().toISOString()`;
 - `renderedOn`: `"Server"`.
 
 **Upstream semantics** (effect 4.0.0 source, checked 2026-10-05):
+
 - **`Cookies.parseHeader`** (`effect/http/Cookies.ts`, from fastify-cookie):
   - It splits on `;` and skips a pair without `=` before its terminator.
   - Keys are `trim`med, and the first occurrence wins.
@@ -93,6 +95,7 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
 - **`isSafeInteger`** is the JS global (Effect's `Number` module has none). **`toISOString`** is `DateTime.formatIso(DateTime.makeUnsafe(ms))` in Effect terms.
 
 **Decisions.**
+
 - **Operations**, each a total pure function, differential against the JS reference on a corpus:
   - `R.Cookies.parseHeader(header): Record<String, String>`;
   - `R.Number.parse(s): Option<Number>`;
@@ -103,8 +106,10 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
   - `now`: the epoch milliseconds the page reads its data at (already its Remote clock).
 
   A page reading `cookie` answers `Vary: Cookie`, as session pages already do.
+
 - **Effects stay explicit.** The clock is the host's, given as data like the Remote `now`. The translator maps `new Date()` in the Flags function to it.
 
 **Acceptance.**
+
 - Each operation agrees with the JS reference natively, on corpora covering `%` decoding failures, quotes, duplicates, `__proto__`, every numeric literal form, Unicode white space, and safe-integer edges.
 - A page's `cookie` never holds the session cookie.
