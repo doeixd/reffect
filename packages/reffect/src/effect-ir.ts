@@ -1565,8 +1565,12 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
   I extends readonly IRType<unknown>[],
   A,
   E,
->(f: EffectFn<I, A, E>, args: readonly unknown[]): Effect.fn.Return<A, E | CompileError> {
-  const issues = checkEffectFunction(f, "function");
+>(
+  f: EffectFn<I, A, E>,
+  args: readonly unknown[],
+  check = checkEffectFunction,
+): Effect.fn.Return<A, E | CompileError> {
+  const issues = check(f, "function");
   if (issues.length)
     return yield* new CompileError({ message: "Invalid effect function", diagnostics: issues });
   if (args.length !== f.input.length)
@@ -1917,8 +1921,9 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
   f: EffectFn<I, A, E>,
   args: readonly unknown[],
   basePath = "functions.body",
+  check = checkEffectFunction,
 ): Effect.fn.Return<FramedExit<A, E>, CompileError> {
-  const issues = checkEffectFunction(f, "function");
+  const issues = check(f, "function");
   if (issues.length)
     return yield* new CompileError({ message: "Invalid effect function", diagnostics: issues });
   if (args.length !== f.input.length)
@@ -2475,16 +2480,25 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
   };
 });
 export const EffectReference = Object.freeze({
-  runUnknown,
+  runUnknown: <I extends readonly IRType<unknown>[], A, E>(
+    f: EffectFn<I, A, E>,
+    args: readonly unknown[],
+  ) => runUnknown(f, args),
   run: <I extends readonly IRType<unknown>[], A, E>(f: EffectFn<I, A, E>, args: Inputs<I>) =>
     runUnknown(f, args),
-  runWithFramesUnknown,
+  runWithFramesUnknown: <I extends readonly IRType<unknown>[], A, E>(
+    f: EffectFn<I, A, E>,
+    args: readonly unknown[],
+    basePath?: string,
+  ) => runWithFramesUnknown(f, args, basePath),
   runWithFrames: <I extends readonly IRType<unknown>[], A, E>(
     f: EffectFn<I, A, E>,
     args: Inputs<I>,
     basePath?: string,
   ) => runWithFramesUnknown(f, args, basePath),
 });
+/** Internal evaluator reuse; package reference exports never expose checker injection. */
+export const PrivateEffectReference = Object.freeze({ runUnknown, runWithFramesUnknown });
 const logAttributes = (attributes: readonly LogAttribute[]): readonly LogAttribute[] => {
   const seen = new Set<string>();
   for (const [key] of attributes) {

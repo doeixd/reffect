@@ -10,6 +10,7 @@ import { analyzeDeferredTopology, analyzeTaskGroups } from "./structured-concurr
 export interface GeneratedDeferredProfile {
   readonly taskCapacity: number;
   readonly ownerCount: number;
+  readonly taskCapacities: ReadonlyMap<Computation<unknown, unknown>, number>;
 }
 
 /** Conditional backend experiment; this never changes public compiler admission. */
@@ -20,9 +21,11 @@ export const analyzeGeneratedDeferredProfile = (
   for (const [name, fn] of Object.entries(program.functions)) {
     if (!(fn instanceof EffectFn)) continue;
     const path = `functions.${name}`;
-    const topology = analyzeDeferredTopology(fn.body, `${path}.body`);
+    const topology = analyzeDeferredTopology(fn.body, `${path}.body`, { nestedGroups: true });
     if (!topology.hasDeferred) continue;
-    const issues = checkEffectFunction(fn, path);
+    const issues = checkEffectFunction(fn, path).filter(
+      (issue) => issue.code !== "NESTED_TASK_GROUP",
+    );
     if (issues.length)
       throw new CompileError({
         message: "Invalid generated Deferred function",
@@ -41,10 +44,10 @@ export const analyzeGeneratedDeferredProfile = (
         message: "Unsupported generated Deferred topology",
         diagnostics: topology.diagnostics,
       });
-    if (topology.taskCapacity > 4 || !Number.isSafeInteger(topology.ownerCount))
+    if (topology.taskCapacity > 6 || !Number.isSafeInteger(topology.ownerCount))
       refuse(
         path,
-        "Private generated Deferred requires at most four live task contexts and finite owners",
+        "Private generated Deferred requires at most six live task contexts and finite owners",
       );
     if (analyzeTaskGroups(fn.body).requiresRichErrors)
       refuse(path, "Private generated Deferred has no compound outcome adapter");
@@ -54,14 +57,21 @@ export const analyzeGeneratedDeferredProfile = (
         message: "Unsupported conditional generated Deferred budget",
         diagnostics: budget.diagnostics,
       });
-    const seen = new Set<Computation<unknown, unknown>>();
-    const walk = (c: Computation<unknown, unknown>, at: string): void => {
-      if (seen.has(c)) return;
-      seen.add(c);
+    const seen = new Map<Computation<unknown, unknown>, Set<string>>();
+    const walk = (
+      c: Computation<unknown, unknown>,
+      at: string,
+      ancestors: readonly ("All" | "Race")[] = [],
+    ): void => {
+      const context = ancestors.join("/");
+      const contexts = seen.get(c) ?? new Set<string>();
+      if (contexts.has(context)) return;
+      contexts.add(context);
+      seen.set(c, contexts);
       if (!IRType.same(c.error, NeverType) || !deferredScalar(c.output))
         refuse(at, "Every generated Deferred computation must have scalar success and Never error");
       const child = (body: Computation<unknown, unknown>, edge: string) =>
-        walk(body, `${at}.${edge}`);
+        walk(body, `${at}.${edge}`, ancestors);
       const unsupported = () =>
         refuse(at, "Operation is outside the private generated Deferred profile");
       Match.value(c.node).pipe(
@@ -78,9 +88,18 @@ export const analyzeGeneratedDeferredProfile = (
           },
           DeferredIsDone: () => {},
           TaskGroup: (n) => {
-            if (n.mode !== "All")
-              refuse(at, "Private generated Deferred supports All2/3, not Race");
-            n.children.forEach((value, i) => child(value, `children[${i}]`));
+            if (
+              ancestors.length === 0
+                ? n.mode !== "All"
+                : ancestors.length !== 1 || ancestors[0] !== "All" || n.mode !== "Race"
+            )
+              refuse(
+                at,
+                "Private generated Deferred permits only outer All2/3 with an initial inner Race2",
+              );
+            n.children.forEach((value, i) =>
+              walk(value, `${at}.children[${i}]`, [...ancestors, n.mode]),
+            );
           },
           Ensuring: (n) => {
             child(n.body, "body");
@@ -129,7 +148,11 @@ export const analyzeGeneratedDeferredProfile = (
     walk(fn.body, `${path}.body`);
     profiles.set(
       fn,
-      Object.freeze({ taskCapacity: topology.taskCapacity, ownerCount: topology.ownerCount }),
+      Object.freeze({
+        taskCapacity: topology.taskCapacity,
+        ownerCount: topology.ownerCount,
+        taskCapacities: topology.taskCapacities,
+      }),
     );
   }
   return profiles;

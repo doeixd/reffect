@@ -16,6 +16,8 @@ Its implementation decisions are recorded separately for [helper borrows](resear
 
 [Helper capture minimization](research/helper-captures.md) records the private calling-convention optimization and its lexical binding and cancellation requirements; [growth measurements](research/helper-capture-costs.md) define depth budgets and allocation attribution.
 
+[Nested Deferred integration](research/deferred-nested-integration.md) records the private initial Race boundary, with separate [topology](research/deferred-nested-topology.md), [lowering](research/deferred-nested-lowering.md), [runtime](research/deferred-nested-runtime.md) and [conformance](research/deferred-nested-conformance.md) decisions.
+
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
 **[SSR with Remote data](research/ssr-data.md)** is the milestone 9 plan: upstream prefetch and snapshot resume, native projections in R views, async pages, and the decision to take milestone 9 before 8B.

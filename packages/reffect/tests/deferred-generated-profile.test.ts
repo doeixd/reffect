@@ -1,4 +1,5 @@
 import { expect, test } from "vite-plus/test";
+import { Match } from "effect";
 import { R, FailureFrames, SourceArtifacts } from "../src/index.ts";
 import { DeferredIR as D } from "../src/deferred.ts";
 import { analyzeGeneratedDeferredProfile } from "../src/deferred-generated-profile.ts";
@@ -26,8 +27,8 @@ const grouped = R.fn([], R.Unit, R.Never, () =>
 
 test("private generated profiles separate owner occurrences from live contexts", () => {
   const profiles = analyzeGeneratedDeferredProfile(R.program({ sequence, grouped }));
-  expect(profiles.get(sequence)).toEqual({ taskCapacity: 1, ownerCount: 1 });
-  expect(profiles.get(grouped)).toEqual({ taskCapacity: 3, ownerCount: 1 });
+  expect(profiles.get(sequence)).toMatchObject({ taskCapacity: 1, ownerCount: 1 });
+  expect(profiles.get(grouped)).toMatchObject({ taskCapacity: 3, ownerCount: 1 });
 });
 
 test("ordinary backend entry cannot bypass public Deferred refusal", () => {
@@ -109,4 +110,48 @@ test("private generated profile preserves the conditional automatic-yield refusa
     D.make(R.Unit).pipe(R.Effect.flatMap(() => work)),
   );
   expect(() => analyzeGeneratedDeferredProfile(R.program({ oversized }))).toThrowError(/budget/);
+});
+
+test("private nested Race reserves disjoint ancestor routes for shared occurrences", () => {
+  const work = R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        const shared = R.Effect.race(unit(), unit());
+        return R.Match.bool(
+          R.Bool.literal(true),
+          R.Effect.all([shared, unit()], options),
+          R.Effect.all([unit(), shared], options),
+        );
+      }),
+    ),
+  );
+  const program = R.program({ work });
+  expect(analyzeGeneratedDeferredProfile(program).get(work)).toMatchObject({ taskCapacity: 5 });
+  const module = lowerDeferredFunctions(program, new Map());
+  const routes = module.functions[0].helpers.flatMap((helper) =>
+    Match.value(helper.body).pipe(
+      Match.tag("TaskGroup", (group) => [group.deferredRoute]),
+      Match.orElse(() => []),
+    ),
+  );
+  expect(routes).toContainEqual({ parent: 1, slots: [2, 3], ends: [3, 4] });
+  expect(routes).toContainEqual({ parent: 2, slots: [3, 4], ends: [4, 5] });
+  expect(routes).toContainEqual({ parent: 0, slots: [1, 4], ends: [4, 5] });
+  expect(routes).toContainEqual({ parent: 0, slots: [1, 2], ends: [2, 5] });
+  expect(module.functions[0].deferredProfile).toEqual({ taskCapacity: 5, ownerCount: 1 });
+});
+
+test("private nested topology refuses deeper and simultaneous multiple races", () => {
+  const race = () => R.Effect.race(unit(), unit());
+  const groups = [
+    R.Effect.all([race(), race()], options),
+    R.Effect.all([R.Effect.race(race(), unit()), unit()], options),
+    R.Effect.ensuring(unit(), R.Effect.all([race(), unit()], options)),
+  ];
+  for (const group of groups) {
+    const work = R.fn([], R.Unit, R.Never, () =>
+      D.make(R.Unit).pipe(R.Effect.flatMap(() => group)),
+    );
+    expect(() => analyzeGeneratedDeferredProfile(R.program({ work }))).toThrow();
+  }
 });

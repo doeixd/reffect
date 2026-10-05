@@ -68,7 +68,10 @@ impl<const N: usize> DeferredTurns<N> {
     fn before_poll(&self, task: usize) {
         self.state.lock().expect("Turn bank lock").semantic[task] = false;
     }
-    // Called only by a pending semantic primitive in this task, never a group ancestor.
+    fn was_suspended(&self, task: usize) -> bool {
+        self.state.lock().expect("Turn bank lock").semantic[task]
+    }
+    // Semantic primitives and checked aggregate drivers propagate authored suspension.
     fn suspended(&self, task: usize) {
         self.state.lock().expect("Turn bank lock").semantic[task] = true;
     }

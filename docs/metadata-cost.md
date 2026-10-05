@@ -234,6 +234,8 @@ The private generated Deferred profile now [prunes helper captures](research/hel
 
 ## Resource, recovery and static service costs
 
+[Private nested Deferred Race](research/deferred-nested-conformance.md) now has generated ordering/cancellation evidence under both frame/build policies. Its logging/timer workloads select the existing 96/104-byte context and measure roughly 33–44KB inline invocation futures; whole-drive allocation observations include channels, logs, timers and executor work. The owner/bank remain inline and scalars stay plain. These results do not widen the quiet zero-allocation claim and leave nested future reduction and growth budgets as public admission gates.
+
 The [parallel module decisions](effect-modules.md) preserve the same native scalar/context representation. Structured brackets use generated control flow and a scalar binder rather than a heap finalizer registry. Static Context/Layer maps and Schema range registration exist during TypeScript authoring/boundary compilation; native programs contain ordinary scalar bindings and range comparisons. Pure providers add no crate or async context.
 
 Shared TypeScript client contracts also construct range schemas and their weak registration entries. Effect's lazy parser accessors are initialized before freezing the schemas, so their parser/cache construction cost occurs at schema definition time. These costs are per schema, not per decoded number; they are outside the native context/future allocation probes and have not been measured separately.

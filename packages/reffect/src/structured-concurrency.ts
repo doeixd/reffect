@@ -290,7 +290,7 @@ export const analyzeTaskGroups = (
   });
 };
 
-/** Private coordinated scheduling facts; these do not admit Deferred or nested groups. */
+/** Private scheduling facts; analysis alone never admits native Deferred. */
 export interface DeferredTopologyAnalysis {
   readonly hasDeferred: boolean;
   /** Maximum simultaneously live leaves, with the root counted when no group runs. */
@@ -299,6 +299,8 @@ export interface DeferredTopologyAnalysis {
   readonly taskCapacity: number;
   /** Conservative expanded edge-occurrence count of lexical scopes; sums even alternative branches. */
   readonly ownerCount: number;
+  /** Relative live-context reservation, reused separately for each IR occurrence. */
+  readonly taskCapacities: ReadonlyMap<Computation<unknown, unknown>, number>;
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -306,8 +308,20 @@ export interface DeferredTopologyAnalysis {
 export const analyzeDeferredTopology = (
   root: Computation<unknown, unknown>,
   path = "body",
+  options: { readonly nestedGroups?: boolean } = {},
 ): DeferredTopologyAnalysis => {
-  const diagnostics: Diagnostic[] = [...analyzeTaskGroups(root, path).diagnostics];
+  const taskGroups = analyzeTaskGroups(root, path);
+  const diagnostics: Diagnostic[] = taskGroups.diagnostics.filter(
+    (diagnostic) => !options.nestedGroups || diagnostic.code !== "NESTED_TASK_GROUP",
+  );
+  if (options.nestedGroups && taskGroups.requiresRichErrors)
+    diagnostics.push({
+      code: "DEFERRED_NESTED_OUTCOME",
+      stage: "check",
+      path,
+      message: "Private nested coordination has no compound outcome adapter",
+    });
+  const taskCapacities = new Map<Computation<unknown, unknown>, number>();
   const active = new Set<Computation<unknown, unknown>>();
   let hasDeferred = false;
   interface Facts {
@@ -474,6 +488,7 @@ export const analyzeDeferredTopology = (
       }),
     );
     active.delete(c);
+    taskCapacities.set(c, result.tasks);
     const contexts = summaries.get(c) ?? new Map<boolean, Facts>();
     contexts.set(afterResume, result);
     summaries.set(c, contexts);
@@ -485,6 +500,7 @@ export const analyzeDeferredTopology = (
     leafCapacity: facts.leaves,
     taskCapacity: facts.tasks,
     ownerCount: facts.owners,
+    taskCapacities,
     diagnostics: Object.freeze(diagnostics),
   });
 };

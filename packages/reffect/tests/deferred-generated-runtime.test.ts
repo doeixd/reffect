@@ -44,7 +44,7 @@ async fn parent_during_broadcast() {
         trace.lock().unwrap().push("producer-cleanup");
         false
     });
-    assert!(!coordinated_task_group3(&bank, [1,2,3], a,cancel0,b,cancel1,c,cancel2,parent,true).await);
+    assert!(!coordinated_task_group3(&bank, [1,2,3], [2,3,4], 0, a,cancel0,b,cancel1,c,cancel2,parent,true,false).await);
     assert!(bank.priority().is_none());
     assert!(owner.state.lock().unwrap().slots.iter().all(Option::is_none));
     assert!(owner.is_done());
@@ -72,7 +72,7 @@ async fn false_child() {
         cleaned.set(true);
         false
     });
-    assert!(!coordinated_task_group2(&bank,[1,2],a,cancel0,b,cancel1,parent,true).await);
+    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,false).await);
     assert!(cleaned.get());
     assert!(owner.state.lock().unwrap().slots.iter().all(Option::is_none));
     assert!(bank.priority().is_none());
@@ -96,7 +96,7 @@ async fn masked_last_child() {
         cleaned.set(true);
         true
     });
-    assert!(!coordinated_task_group2(&bank,[1,2],a,cancel0,b,cancel1,parent,true).await);
+    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,false).await);
     assert!(cleaned.get());
 }
 async fn watch_updates_and_mask() {
@@ -112,21 +112,128 @@ async fn watch_updates_and_mask() {
         parent_cancel.send(update).unwrap();
         let a = first.task(async { first.sleep::<()>(&mut ctx0, 1).await.unwrap(); true });
         let b = second.task(async { second.sleep::<()>(&mut ctx1, 1).await.unwrap(); true });
-        assert!(coordinated_task_group2(&bank,[1,2],a,cancel0,b,cancel1,parent,interruptible).await);
+        assert!(coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,interruptible,false).await);
         assert!(bank.priority().is_none());
     }
+}
+async fn independent_nested_waiter(producer_first: bool) {
+    let bank = DeferredTurns::<6>::new();
+    let owner = DeferredState::<u64, std::convert::Infallible, 6>::new();
+    let finalized = DeferredState::<(), std::convert::Infallible, 6>::new();
+    let trace = std::sync::Mutex::new(Vec::new());
+    let (_parent_cancel, parent) = tokio::sync::watch::channel(false);
+    let (producer_cancel, producer_rx) = tokio::sync::watch::channel(false);
+    let (race_cancel, race_rx) = tokio::sync::watch::channel(false);
+    let (survivor_cancel, survivor_rx) = tokio::sync::watch::channel(false);
+    let (loser_cancel, loser_rx) = tokio::sync::watch::channel(false);
+    let (winner_cancel, winner_rx) = tokio::sync::watch::channel(false);
+    let producer_slot = if producer_first { 1 } else { 5 };
+    let survivor_slot = if producer_first { 5 } else { 1 };
+    let producer = DeferredTurnHandle::new(&bank, producer_slot);
+    let race = DeferredTurnHandle::new(&bank, 2);
+    let loser = DeferredTurnHandle::new(&bank, 3);
+    let winner = DeferredTurnHandle::new(&bank, 4);
+    let survivor = DeferredTurnHandle::new(&bank, survivor_slot);
+    let mut producer_ctx = AsyncContext::new(producer_rx);
+    let mut loser_ctx = AsyncContext::new(loser_rx);
+    let mut winner_ctx = AsyncContext::new(winner_rx);
+    let mut survivor_ctx = AsyncContext::new(survivor_rx);
+    let a = producer.task(async {
+        producer.wait(&finalized, &mut producer_ctx).await.unwrap();
+        trace.lock().unwrap().push("producer-finalization-observed");
+        assert!(producer.complete::<_, _, (), 6>(&owner, &mut producer_ctx, Ok(7)).await.unwrap());
+        trace.lock().unwrap().push("producer-after-complete");
+        true
+    });
+    let b = race.task(async {
+        let l = loser.task(async {
+            trace.lock().unwrap().push("loser-start");
+            assert!(matches!(loser.wait(&owner, &mut loser_ctx).await, Err(AsyncError::Interrupted)));
+            loser_ctx.interruptible = false;
+            loser.sleep::<()>(&mut loser_ctx, 2).await.unwrap();
+            trace.lock().unwrap().push("loser-cleanup");
+            loser.complete::<_, _, (), 6>(&finalized, &mut loser_ctx, Ok(())).await.unwrap();
+            trace.lock().unwrap().push("loser-cleanup-after-signal");
+            false
+        });
+        let w = winner.task(async {
+            winner.sleep::<()>(&mut winner_ctx, 1).await.unwrap();
+            trace.lock().unwrap().push("race-winner");
+            true
+        });
+        assert!(coordinated_task_group2(&bank,[3,4],[4,5],2,l,loser_cancel,w,winner_cancel,race_rx,true,true).await);
+        trace.lock().unwrap().push("race-after-cleanup");
+        true
+    });
+    let c = survivor.task(async {
+        assert_eq!(survivor.wait(&owner, &mut survivor_ctx).await.unwrap(), 7);
+        trace.lock().unwrap().push("survivor-prefix");
+        true
+    });
+    let success = if producer_first {
+        coordinated_task_group3(&bank,[1,2,5],[2,5,6],0,a,producer_cancel,b,race_cancel,c,survivor_cancel,parent,true,false).await
+    } else {
+        coordinated_task_group3(&bank,[1,2,5],[2,5,6],0,c,survivor_cancel,b,race_cancel,a,producer_cancel,parent,true,false).await
+    };
+    assert!(success);
+    assert!(bank.priority().is_none());
+    assert!(owner.state.lock().unwrap().slots.iter().all(Option::is_none));
+    assert!(finalized.state.lock().unwrap().slots.iter().all(Option::is_none));
+    let trace = trace.lock().unwrap();
+    let position = |event| trace.iter().position(|item| *item == event).unwrap();
+    assert!(position("loser-start") < position("race-winner"));
+    assert!(position("loser-cleanup") < position("producer-finalization-observed"));
+    assert!(position("producer-finalization-observed") < position("survivor-prefix"));
+    assert!(position("survivor-prefix") < position("producer-after-complete"));
+    assert!(position("loser-cleanup-after-signal") < position("race-after-cleanup"));
+}
+async fn race_parent_during_loser_cleanup() {
+    let bank = DeferredTurns::<3>::new();
+    let owner = DeferredState::<(), std::convert::Infallible, 3>::new();
+    let (parent_cancel, parent) = tokio::sync::watch::channel(false);
+    let (cancel0, rx0) = tokio::sync::watch::channel(false);
+    let (cancel1, rx1) = tokio::sync::watch::channel(false);
+    let first = DeferredTurnHandle::new(&bank, 1);
+    let second = DeferredTurnHandle::new(&bank, 2);
+    let mut ctx0 = AsyncContext::new(rx0);
+    let mut ctx1 = AsyncContext::new(rx1);
+    let cleaned = std::cell::Cell::new(false);
+    let a = first.task(async { first.sleep::<()>(&mut ctx0, 1).await.unwrap(); true });
+    let b = second.task(async {
+        assert!(matches!(second.wait(&owner, &mut ctx1).await, Err(AsyncError::Interrupted)));
+        ctx1.interruptible = false;
+        parent_cancel.send(true).unwrap();
+        second.sleep::<()>(&mut ctx1, 2).await.unwrap();
+        cleaned.set(true);
+        false
+    });
+    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,true).await);
+    assert!(cleaned.get());
+    assert!(owner.state.lock().unwrap().slots.iter().all(Option::is_none));
+    assert!(bank.priority().is_none());
+}
+async fn immediate_race_winner() {
+    let bank = DeferredTurns::<3>::new();
+    let (_parent_cancel, parent) = tokio::sync::watch::channel(false);
+    let (cancel0, _rx0) = tokio::sync::watch::channel(false);
+    let (cancel1, _rx1) = tokio::sync::watch::channel(false);
+    let first = DeferredTurnHandle::new(&bank, 1);
+    let second = DeferredTurnHandle::new(&bank, 2);
+    let a = first.task(async { true });
+    let b = second.task(async { panic!("Official race never starts a later loser after synchronous success"); });
+    assert!(coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,true).await);
 }
 #[tokio::main(flavor="current_thread")]
 async fn main() {
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        for _ in 0..10 { parent_during_broadcast().await; false_child().await; masked_last_child().await; watch_updates_and_mask().await; }
+        for _ in 0..10 { parent_during_broadcast().await; false_child().await; masked_last_child().await; watch_updates_and_mask().await; independent_nested_waiter(true).await; independent_nested_waiter(false).await; immediate_race_winner().await; race_parent_during_loser_cleanup().await; }
         println!("cleanup-drained");
     }).await.expect("Cancellation and broadcasts progress");
 }
 `;
 
 test(
-  "generated Deferred All drains cleanup under child and parent cancellation",
+  "generated Deferred All and nested Race drain cancellation cleanup and route subtree turns",
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "reffect-deferred-generated-runtime-"));
     try {

@@ -235,6 +235,11 @@ type HelperBody =
       readonly _tag: "TaskGroup";
       readonly mode: "All" | "Race";
       readonly children: readonly number[];
+      readonly deferredRoute?: {
+        readonly parent: number;
+        readonly slots: readonly number[];
+        readonly ends: readonly number[];
+      };
     }
   | {
       readonly _tag: "RefScope";
@@ -439,6 +444,7 @@ export const hasFallibleTaskGroups = (module: LoweredModule): boolean =>
   module.functions.some((f) => f.richErrors);
 
 interface Scope {
+  readonly deferredTask?: number;
   readonly deferredOwners?: ReadonlyMap<symbol, DeferredCapture>;
   readonly files: ReadonlyMap<symbol, string>;
   readonly fileInputs: readonly string[];
@@ -515,7 +521,11 @@ function lowerFunctionsInternal(
   servicesSelection: RuntimeServicesSelection,
   deferredProfiles?: ReadonlyMap<
     EffectFn,
-    { readonly taskCapacity: number; readonly ownerCount: number }
+    {
+      readonly taskCapacity: number;
+      readonly ownerCount: number;
+      readonly taskCapacities: ReadonlyMap<Computation<unknown, unknown>, number>;
+    }
   >,
 ): LoweredModule {
   const runtimeServices = normalizeRuntimeServicesSelection(servicesSelection);
@@ -537,6 +547,7 @@ function lowerFunctionsInternal(
       >();
       const input = Object.freeze(f.input.map((type, i) => Object.freeze({ name: `p${i}`, type })));
       const rootScope: Scope = {
+        ...(deferredProfile ? { deferredTask: 0 } : {}),
         bindings: new Map([[f.binder, input]]),
         input,
         files: new Map(),
@@ -557,6 +568,7 @@ function lowerFunctionsInternal(
           files: scope.files,
           fileInputs: scope.fileInputs,
           deferredOwners: scope.deferredOwners,
+          deferredTask: scope.deferredTask,
         };
       };
       let caseBinders = 0;
@@ -570,6 +582,7 @@ function lowerFunctionsInternal(
           files: scope.files,
           fileInputs: scope.fileInputs,
           deferredOwners: scope.deferredOwners,
+          deferredTask: scope.deferredTask,
         };
       };
       // Select signatures without pruning the bindings used to lower nested bodies.
@@ -744,6 +757,7 @@ function lowerFunctionsInternal(
         else computation(root);
         return {
           bindings: scope.bindings,
+          deferredTask: scope.deferredTask,
           input: Object.freeze(scope.input.filter((parameter) => captures.has(parameter))),
           deferredOwners: scope.deferredOwners
             ? new Map(Array.from(scope.deferredOwners).filter(([binder]) => owners.has(binder)))
@@ -1122,18 +1136,44 @@ function lowerFunctionsInternal(
               if (!deferredProfile) return rejectDeferredNative();
               return { _tag: "DeferredIsDone", owner: scope.deferredOwners!.get(n.binder)!.name };
             },
-            TaskGroup: (n): HelperBody => ({
-              _tag: "TaskGroup",
-              mode: n.mode,
-              children: n.children.map((child, i) =>
-                effectHelper(
+            TaskGroup: (n): HelperBody => {
+              let nextSlot = (scope.deferredTask ?? 0) + 1;
+              const slots: number[] = [];
+              const ends: number[] = [];
+              const children = n.children.map((child, i) => {
+                const childScope = delayedScope(scope, child);
+                if (deferredProfile) {
+                  slots.push(nextSlot);
+                  const capacity = deferredProfile.taskCapacities.get(child);
+                  if (capacity === undefined)
+                    throw new Error("Checked Deferred child has no task capacity");
+                  nextSlot += capacity;
+                  ends.push(nextSlot);
+                }
+                return effectHelper(
                   child,
-                  delayedScope(scope, child),
+                  deferredProfile ? { ...childScope, deferredTask: slots[i] } : childScope,
                   child.error,
                   `${path}.children[${i}]`,
-                ),
-              ),
-            }),
+                );
+              });
+              if (deferredProfile && nextSlot > deferredProfile.taskCapacity)
+                throw new Error("Checked Deferred child routes exceed invocation capacity");
+              return {
+                _tag: "TaskGroup",
+                mode: n.mode,
+                children,
+                ...(deferredProfile
+                  ? {
+                      deferredRoute: Object.freeze({
+                        parent: scope.deferredTask!,
+                        slots: Object.freeze(slots),
+                        ends: Object.freeze(ends),
+                      }),
+                    }
+                  : {}),
+              };
+            },
             Scope: (n): HelperBody => ({
               _tag: "Scope",
               body: effectHelper(n.body, scope, error, `${path}.body`),
@@ -1549,7 +1589,14 @@ function lowerFunctionsInternal(
           "Random requires explicit ScriptedRandom implementation selection",
         );
       return Object.freeze({
-        ...(deferredProfile ? { deferredProfile } : {}),
+        ...(deferredProfile
+          ? {
+              deferredProfile: Object.freeze({
+                taskCapacity: deferredProfile.taskCapacity,
+                ownerCount: deferredProfile.ownerCount,
+              }),
+            }
+          : {}),
         richErrors: outcomes?.requiresRichErrors ?? false,
         services: Object.freeze({ clock, random }),
         name,
@@ -2540,7 +2587,9 @@ export const emitFunctions = (
                 ),
               );
               if (f.deferredProfile)
-                parts.push(`let turn${i} = DeferredTurnHandle::new(turn.bank, ${i + 1}); `);
+                parts.push(
+                  `let turn${i} = DeferredTurnHandle::new(turn.bank, ${n.deferredRoute!.slots[i]}); `,
+                );
               parts.push(
                 `let future${i} = ${f.deferredProfile ? `turn${i}.task(` : ""}async { match `,
                 mapFragment(
@@ -2563,7 +2612,9 @@ export const emitFunctions = (
                 (f.deferredProfile
                   ? [
                       Rs.verbatimExpr("turn.bank"),
-                      Rs.verbatimExpr(`[${n.children.map((_, i) => i + 1).join(", ")}]`),
+                      Rs.verbatimExpr(`[${n.deferredRoute!.slots.join(", ")}]`),
+                      Rs.verbatimExpr(`[${n.deferredRoute!.ends.join(", ")}]`),
+                      Rs.verbatimExpr(`${n.deferredRoute!.parent}`),
                     ]
                   : []
                 ).concat(
@@ -2572,7 +2623,7 @@ export const emitFunctions = (
                     .concat([
                       identExpr("parent_cancellation"),
                       identExpr("parent_interruptible"),
-                      ...(f.deferredProfile ? [] : [race]),
+                      race,
                     ]),
                 ),
               ),

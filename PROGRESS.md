@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-05 — Private nested Deferred Race
+
+- Synced at b1848e2 and installed dependencies. [Integration preparation](docs/research/deferred-nested-integration.md) records DNI-001–004 before integration edits: bounded outer All with initial inner Race, separate static context identities, private checked reference evaluation, awaited loser cleanup and retirement before reuse. Parallel topology, lowering, runtime and independent conformance work records its decisions separately; public Deferred admission remains gated.
+- Delivered occurrence-specific contiguous routing, Never-error nested Race under outer All2/3 (at most six contexts), priority propagation through ancestor drivers and awaited loser finalization. Synchronous winners skip unstarted later children. The private reference entry reuses ordinary evaluation with checked profile admission; public compiler/reference wrappers retain their refusals. Nested All, deeper/multiple Race, callback startup and cleanup-created groups remain refused.
+- Independent official/private plain/private framed/generated traces agree across four workloads and 16 native frame/build cases: producer-first/last isolated cancellation, surviving waiter, retained/losing U64 completion, drained sequential timer-group slot reuse and parent cancellation. The expanded suite passes 4/4 (62.75s); focused runtime debug/release witnesses pass 1/1 (17.02s), and root capture/profile/topology/public checks pass 21/21.
+- Logging/timer nested fixtures measure 32832–43624-byte invocation futures with the unchanged 96/104-byte context. Whole-drive counts include logs, timers, watch channels and executor activity; owner/bank storage remains inline and no scalar gains metadata. Future reduction/growth budgets remain a public performance gate, recorded in the cost and open-work docs. Full checking passes 430 formatted files/256 TypeScript files; strict TypeScript and rebuilt workspace pass.
+- Merged legacy validation passes 34/34 across ten files (136.31s): quiet capture-growth/zero-allocation, prior generated Deferred, runtime/prototype, retained-outcome, public refusal, operation-budget, topology/profile and capture suites. The private reference shim adds no successful-path Effect wrapper or scheduler operation; ordinary/reference admission and unrelated emitted artifacts remain unchanged. Post-commit review and checks follow before publication.
+
 ## 2026-10-04 — Generated helper capture minimization
 
 - Synced upstream SSR host extraction through e7a4214 and installed dependencies; native HTML page/runtime-source validation passes 3/3 across two files (27.11s). Core-plan ownership remains with the other instance.
