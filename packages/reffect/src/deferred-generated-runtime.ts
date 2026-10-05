@@ -16,13 +16,13 @@ export const deferredGeneratedRuntime = (arities: readonly number[] = [2, 3]): s
       return `
 async fn coordinated_task_group${arity}<${indices.map((index) => `F${index}: std::future::Future<Output = bool>`).join(", ")}, const N: usize>(
     bank: &DeferredTurns<N>, slots: [usize; ${arity}], ends: [usize; ${arity}], parent_slot: usize,
-    ${indices.map((index) => `future${index}: F${index}, cancel${index}: tokio::sync::watch::Sender<bool>,`).join("\n    ")}
+    ${indices.map((index) => `mut future${index}: std::pin::Pin<&mut F${index}>, cancel${index}: tokio::sync::watch::Sender<bool>,`).join("\n    ")}
     mut parent: tokio::sync::watch::Receiver<bool>, interruptible: bool, race: bool,
 ) -> bool {
     assert!(N > 0 && N <= 6, "Private bounded coordinator profile");
     assert!(parent_slot < N && slots.iter().zip(ends).all(|(slot, end)| *slot < end && end <= N), "Checked group subtrees");
     ${indices.flatMap((index) => indices.filter((other) => other > index).map((other) => `assert!(ends[${index}] <= slots[${other}] || ends[${other}] <= slots[${index}], "Disjoint child subtrees");`)).join("\n    ")}
-    ${indices.map((index) => `tokio::pin!(future${index}); let mut done${index} = false; let mut started${index} = false;`).join("\n    ")}
+    ${indices.map((index) => `let mut done${index} = false; let mut started${index} = false;`).join("\n    ")}
     let mut interrupted = false;
     let mut winner: Option<usize> = None;
     let mut parent_cancelled = false;

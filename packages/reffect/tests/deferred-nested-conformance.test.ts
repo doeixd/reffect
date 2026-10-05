@@ -384,6 +384,7 @@ fn report<A:std::fmt::Debug>(result:Result<A,r::AsyncError<std::convert::Infalli
 #[tokio::main(flavor="current_thread")]
 async fn main(){
  tokio::time::pause();
+ println!("pointer-size={}",std::mem::size_of::<usize>());
  let scenario=std::env::args().nth(1).unwrap();
  let(sender,receiver)=tokio::sync::watch::channel(false);
  let mut ctx=r::AsyncContext::new(receiver);
@@ -488,7 +489,14 @@ test(
             expect({ events, result: rawResult === "()" ? "undefined" : rawResult }).toEqual(
               expected[scenario],
             );
-            expect(Number(stdout.match(/future-size=(\d+)/)?.[1])).toBeGreaterThan(0);
+            const futureSize = Number(stdout.match(/future-size=(\d+)/)?.[1]);
+            const pointerSize = Number(stdout.match(/pointer-size=(\d+)/)?.[1]);
+            expect(pointerSize).toBeGreaterThan(0);
+            expect(futureSize).toBeGreaterThan(0);
+            // These verified nested fixtures need inline child states, not repeated
+            // owned copies at every group boundary. This is a regression budget,
+            // rather than an ABI or a bound for arbitrary authored graphs.
+            expect(futureSize).toBeLessThanOrEqual(2560 * pointerSize);
             expect(Number(stdout.match(/context-size=(\d+)/)?.[1])).toBeGreaterThan(0);
             const allocations = Number(stdout.match(/invocation-allocations=(\d+)/)?.[1]);
             expect(Number.isSafeInteger(allocations)).toBe(true);

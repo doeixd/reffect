@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-05 — Borrowed nested future storage
+
+- Synced the SSR divergence record through 85ea2c3 and installed dependencies. [NSTORE-001–004](docs/research/nested-future-storage.md) record the design before implementation; independent [NFL-001–003](docs/research/nested-future-layout.md) confirm repeated owned async future storage with standalone Rust debug/release pinning experiments.
+- Private generated groups now own/pin children locally and lend `Pin<&mut F>` to the driver. Existing whole-task acknowledgements, primitive suspension, routing, cancellation, cleanup and public refusal are unchanged. Review verifies the borrowed lifetime ends within the same generated block before any authored continuation; no Box, new context field, scalar metadata or unsafe generated projection is added.
+- Actual nested invocation futures shrink approximately 65–68%: isolation 42856/43624 → 14976/15248 bytes (None/Bounded), sequential reuse 32832/33344 → 10520/10712, parent interruption 36872/37536 → 11912/12128. Context and whole-drive allocation counts are unchanged in debug/release. The fixture regression budget is `2560 * sizeof(usize)`; the prior actual emitter demonstrably fails it (42856 > 20480), and temporary baseline files are removed.
+- Initial semantic/native runtime validation passes 5/5 across two suites (114.66s), including 16 generated build/frame cases and repeated cleanup witnesses. Strict package TypeScript passes. Integrated quiet allocation/capture growth, prior conformance/public refusal, complete checking, build and post-commit review follow before publication. Public Deferred scheduler-context enforcement, richer outcomes/diagnostics and general graph growth remain open.
+
 ## 2026-10-05 — Private nested Deferred Race
 
 - Synced at b1848e2 and installed dependencies. [Integration preparation](docs/research/deferred-nested-integration.md) records DNI-001–004 before integration edits: bounded outer All with initial inner Race, separate static context identities, private checked reference evaluation, awaited loser cleanup and retirement before reuse. Parallel topology, lowering, runtime and independent conformance work records its decisions separately; public Deferred admission remains gated.

@@ -1,0 +1,31 @@
+# Nested generated future storage
+
+Prepared 2026-10-05 before implementation. Reviewed DNI/DNL/DNR/DNC, helper capture growth, actual group emission and the generated coordinator. Synced through 85ea2c3; core-plan and SSR work remain separately owned. The current actual generated nested fixtures measure 32832–43624-byte futures, while scalar values, owner/bank storage and AsyncContext remain unchanged.
+
+Primary sources checked online: [Rust pinning](https://doc.rust-lang.org/std/pin/index.html) and the pinned [Tokio 1.53.1 pin macro](https://raw.githubusercontent.com/tokio-rs/tokio/tokio-1.53.1/tokio/src/macros/pin.rs). Pinning protects a future's address across polling; a borrowed `Pin<&mut F>` can be polled without transferring ownership of F. Tokio's macro moves the local into protected storage and shadows access with its pinned borrow. Future layout is unspecified, so source-level storage reasoning needs actual emitted measurements.
+
+**NSTORE-001 — Investigate repeated ownership first.** The emitter creates child futures locally, then moves each into an async coordinator argument, which moves it again into pinned local storage. Large child states crossing these boundaries may duplicate retained storage. First try pinning each child in its enclosing generated helper and passing only a pinned borrow into the coordinator. Keep the whole-task semantic wrapper and its acknowledgement boundary unchanged initially. Validate measured improvement rather than assuming Rust will remove inactive storage.
+
+**NSTORE-002 — Preserve lifetime and protocol boundaries.** Child futures remain owned by the same generated lexical group. The coordinator awaits every started child and finalizer before returning; borrowed pinned children cannot escape. No Box, heap registry, unsafe generated projection, task spawning, scalar metadata or scheduler change is justified by this optimization. Synchronous unstarted losers remain unpolled. Public admission and topology limits remain unchanged.
+
+**NSTORE-003 — Require semantic and cost evidence.** Compare actual emitted nested fixtures under None/Bounded and debug/release against independent official/reference traces. Retain quiet first-execution allocation and helper-capture growth checks. Introduce a generous pointer-scaled future-size budget only after measurements, and demonstrate that the previous emitter fails it. Report absolute layout observations and allocation attribution separately; a passing bounded fixture budget does not prove arbitrary graph growth.
+
+Alternatives: remove whole-task wrappers by moving acknowledgements into the driver (greater semantic risk; defer unless borrowing is insufficient); explicit pinned wrapper types (additional representation/projection complexity); Box large child futures (reduces inline size by adding heap allocations; conflicts with this slice's objective); compiler-wide async fusion (much larger transformation/provenance work). Independent layout research is recorded separately before choosing further changes.
+
+## Implementation and measurements
+
+[NFL-001–003](nested-future-layout.md) independently confirms the storage hypothesis with standalone Rust debug/release experiments, including Tokio's exact pin macro expansion. The chosen change only borrows caller-pinned children at the private generated group-driver boundary. The whole-task wrapper, primitive suspension handling, priority routing, cancellation and draining logic are unchanged. Children drop at the end of the same generated group block, before any authored continuation; that block only checks cancellation and constructs the group result after the driver returns. No public representation or ordinary coordinator changes.
+
+Actual emitted measurements agree in debug/release on Rust 1.98.1 / Tokio 1.53.1:
+
+| Workload                                        | None before → after | Bounded before → after | Whole-drive allocations None / Bounded |
+| ----------------------------------------------- | ------------------: | ---------------------: | -------------------------------------: |
+| Isolated cancellation, either producer position |       42856 → 14976 |          43624 → 15248 |                                30 / 31 |
+| Sequential nested slot reuse                    |       32832 → 10520 |          33344 → 10712 |                                43 / 45 |
+| Parent interruption and awaited finalizers      |       36872 → 11912 |          37536 → 12128 |                                23 / 28 |
+
+Invocation futures shrink by approximately 65–68%, with unchanged 96/104-byte logging context and unchanged whole-drive allocation counts. Counts include logging/timers/watch/executor work and do not extend the independent quiet zero-allocation guarantee. Native scalars still carry no metadata.
+
+**NSTORE-004 — Bound the verified fixture storage.** The four actual generated workloads must each satisfy `future_bytes <= 2560 * sizeof(usize)` in every frame/build policy. The current x86-64 budget is 20480 bytes, giving approximately 34% slack above the largest optimized future. All previous nested fixtures exceeded it (32832–43624 bytes). This deliberately gates repeated-storage regressions without asserting an exact layout or a universal bound for every admitted graph. General code/future growth, compiler-version drift and public scheduler-context enforcement remain separate admission work.
+
+Initial actual nested and focused runtime validation passes 5/5 across two suites (114.66s), including all 16 native frame/build cases and the repeated cancellation/cleanup witnesses. A temporary copy of the previous actual lowerer/runtime fails the new native None/debug budget with `42856 > 20480`; the temporary modules/test were removed. This is a demonstrated failing witness rather than a threshold inferred only from source. Strict package TypeScript passes. Integrated quiet/capture, prior generated conformance, public refusal and emission checks follow before publication.

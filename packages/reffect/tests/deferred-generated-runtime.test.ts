@@ -44,7 +44,7 @@ async fn parent_during_broadcast() {
         trace.lock().unwrap().push("producer-cleanup");
         false
     });
-    assert!(!coordinated_task_group3(&bank, [1,2,3], [2,3,4], 0, a,cancel0,b,cancel1,c,cancel2,parent,true,false).await);
+    assert!(!coordinated_task_group3(&bank, [1,2,3], [2,3,4], 0, std::pin::pin!(a),cancel0,std::pin::pin!(b),cancel1,std::pin::pin!(c),cancel2,parent,true,false).await);
     assert!(bank.priority().is_none());
     assert!(owner.state.lock().unwrap().slots.iter().all(Option::is_none));
     assert!(owner.is_done());
@@ -72,7 +72,7 @@ async fn false_child() {
         cleaned.set(true);
         false
     });
-    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,false).await);
+    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,std::pin::pin!(a),cancel0,std::pin::pin!(b),cancel1,parent,true,false).await);
     assert!(cleaned.get());
     assert!(owner.state.lock().unwrap().slots.iter().all(Option::is_none));
     assert!(bank.priority().is_none());
@@ -96,7 +96,7 @@ async fn masked_last_child() {
         cleaned.set(true);
         true
     });
-    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,false).await);
+    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,std::pin::pin!(a),cancel0,std::pin::pin!(b),cancel1,parent,true,false).await);
     assert!(cleaned.get());
 }
 async fn watch_updates_and_mask() {
@@ -112,7 +112,7 @@ async fn watch_updates_and_mask() {
         parent_cancel.send(update).unwrap();
         let a = first.task(async { first.sleep::<()>(&mut ctx0, 1).await.unwrap(); true });
         let b = second.task(async { second.sleep::<()>(&mut ctx1, 1).await.unwrap(); true });
-        assert!(coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,interruptible,false).await);
+        assert!(coordinated_task_group2(&bank,[1,2],[2,3],0,std::pin::pin!(a),cancel0,std::pin::pin!(b),cancel1,parent,interruptible,false).await);
         assert!(bank.priority().is_none());
     }
 }
@@ -161,7 +161,7 @@ async fn independent_nested_waiter(producer_first: bool) {
             trace.lock().unwrap().push("race-winner");
             true
         });
-        assert!(coordinated_task_group2(&bank,[3,4],[4,5],2,l,loser_cancel,w,winner_cancel,race_rx,true,true).await);
+        assert!(coordinated_task_group2(&bank,[3,4],[4,5],2,std::pin::pin!(l),loser_cancel,std::pin::pin!(w),winner_cancel,race_rx,true,true).await);
         trace.lock().unwrap().push("race-after-cleanup");
         true
     });
@@ -171,9 +171,9 @@ async fn independent_nested_waiter(producer_first: bool) {
         true
     });
     let success = if producer_first {
-        coordinated_task_group3(&bank,[1,2,5],[2,5,6],0,a,producer_cancel,b,race_cancel,c,survivor_cancel,parent,true,false).await
+        coordinated_task_group3(&bank,[1,2,5],[2,5,6],0,std::pin::pin!(a),producer_cancel,std::pin::pin!(b),race_cancel,std::pin::pin!(c),survivor_cancel,parent,true,false).await
     } else {
-        coordinated_task_group3(&bank,[1,2,5],[2,5,6],0,c,survivor_cancel,b,race_cancel,a,producer_cancel,parent,true,false).await
+        coordinated_task_group3(&bank,[1,2,5],[2,5,6],0,std::pin::pin!(c),survivor_cancel,std::pin::pin!(b),race_cancel,std::pin::pin!(a),producer_cancel,parent,true,false).await
     };
     assert!(success);
     assert!(bank.priority().is_none());
@@ -207,7 +207,7 @@ async fn race_parent_during_loser_cleanup() {
         cleaned.set(true);
         false
     });
-    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,true).await);
+    assert!(!coordinated_task_group2(&bank,[1,2],[2,3],0,std::pin::pin!(a),cancel0,std::pin::pin!(b),cancel1,parent,true,true).await);
     assert!(cleaned.get());
     assert!(owner.state.lock().unwrap().slots.iter().all(Option::is_none));
     assert!(bank.priority().is_none());
@@ -221,7 +221,7 @@ async fn immediate_race_winner() {
     let second = DeferredTurnHandle::new(&bank, 2);
     let a = first.task(async { true });
     let b = second.task(async { panic!("Official race never starts a later loser after synchronous success"); });
-    assert!(coordinated_task_group2(&bank,[1,2],[2,3],0,a,cancel0,b,cancel1,parent,true,true).await);
+    assert!(coordinated_task_group2(&bank,[1,2],[2,3],0,std::pin::pin!(a),cancel0,std::pin::pin!(b),cancel1,parent,true,true).await);
 }
 #[tokio::main(flavor="current_thread")]
 async fn main() {

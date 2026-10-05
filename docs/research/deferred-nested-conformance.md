@@ -22,6 +22,8 @@ Independent official/private plain/framed and ordinary/public refusal checks pas
 
 ## Native validation and costs
 
+The table below records initial delivery costs. [Borrowed child storage](nested-future-storage.md#implementation-and-measurements) subsequently reduces these futures to 10520–15248 bytes without changing the observed traces or allocation counts; the same actual generated fixtures now enforce a pointer-scaled storage regression budget.
+
 The complete suite passes 4/4 (60.59s assertions / 62.75s total): all four actual generated functions agree with the independent official/private plain/framed observations in debug/release and None/Bounded. Both ordinary reference and public native entry points remain refused. Contiguous context reservations measure six contexts for isolation and sequential reuse, five for nested parent cancellation. The emitted primitives and helpers, rather than replacement handwritten owners, perform the observed work.
 
 Command: `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 vp test packages/reffect/tests/deferred-nested-conformance.test.ts --maxWorkers=1 --silent=false --reporter=verbose`.

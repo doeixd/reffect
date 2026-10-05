@@ -2604,6 +2604,8 @@ export const emitFunctions = (
                     : ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible child produced combined cause")' : ""} } }${f.deferredProfile ? ")" : ""}; `,
               );
             });
+            if (f.deferredProfile)
+              parts.push(`tokio::pin!(${n.children.map((_, i) => `future${i}`).join(", ")}); `);
             const joined = Rs.await(
               Rs.call(
                 identExpr(
@@ -2619,7 +2621,12 @@ export const emitFunctions = (
                   : []
                 ).concat(
                   n.children
-                    .flatMap((_, i) => [identExpr(`future${i}`), identExpr(`cancel${i}`)])
+                    .flatMap((_, i) => [
+                      f.deferredProfile
+                        ? Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), [])
+                        : identExpr(`future${i}`),
+                      identExpr(`cancel${i}`),
+                    ])
                     .concat([
                       identExpr("parent_cancellation"),
                       identExpr("parent_interruptible"),
