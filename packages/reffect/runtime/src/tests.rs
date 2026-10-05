@@ -843,3 +843,233 @@ fn a_page_never_reads_the_session_cookie() {
     );
     assert_eq!(page_cookie(&axum::http::HeaderMap::new(), Some("x")), "");
 }
+
+mod schema_binary {
+    //! SchemaBinary against `runtime/fixtures/schema-binary.json`, which
+    //! `tests/schema-binary-fixtures.test.ts` holds to what the installed Effect writes and reads.
+    use crate::schema_binary::*;
+    use serde_json::Value;
+
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!("../fixtures/schema-binary.json")).unwrap()
+    }
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect()
+    }
+    fn f64_of(text: &str) -> f64 {
+        f64::from_le_bytes(unhex(text).try_into().unwrap())
+    }
+    fn envelope_fingerprint() -> [u8; 8] {
+        unhex(fixture()["envelopeFingerprint"].as_str().unwrap())
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    fn numbers_take_effects_form_and_read_back_as_effect_reads_them() {
+        for case in fixture()["numbers"].as_array().unwrap() {
+            let x = f64_of(case["bits"].as_str().unwrap());
+            let frame = unhex(case["frame"].as_str().unwrap());
+            let mut value = Vec::new();
+            put_number(&mut value, x);
+            let mut written = Vec::new();
+            put_frame(&mut written, None, &value);
+            assert_eq!(written, frame, "number {x}");
+
+            let mut field = Vec::new();
+            put_number_field(&mut field, fnv32(b"n"), x);
+            let mut written = Vec::new();
+            put_frame(&mut written, None, &field);
+            assert_eq!(written, unhex(case["field"].as_str().unwrap()), "field {x}");
+
+            let read = Reader::new(one_frame(&frame, None).unwrap())
+                .number()
+                .unwrap();
+            let expected = f64_of(case["decoded"].as_str().unwrap());
+            assert_eq!(read.to_bits(), expected.to_bits(), "decoded {x}");
+        }
+    }
+
+    #[test]
+    fn wide_varints_round_as_number_of_a_bigint() {
+        // 2^53 + 1 (code 2^54 + 2) rounds to 2^53, ties to even; 2^53 + 3 rounds up.
+        let code = |magnitude: u128| {
+            let mut out = Vec::new();
+            let mut n = magnitude * 2;
+            while n > 0x7F {
+                out.push((n as u8 & 0x7F) | 0x80);
+                n >>= 7;
+            }
+            out.push(n as u8);
+            out
+        };
+        let read = |bytes: Vec<u8>| Reader::new(&bytes).sm().unwrap();
+        assert_eq!(read(code((1 << 53) + 1)), 9_007_199_254_740_992.0);
+        assert_eq!(read(code((1 << 53) + 3)), 9_007_199_254_740_996.0);
+        assert_eq!(read(code(u128::MAX >> 2)), (u128::MAX >> 2) as f64);
+        // A varint wider than a double's range is not a number.
+        let mut huge = vec![0xFF; 160];
+        huge.push(0x01);
+        assert_eq!(Reader::new(&huge).sm(), Err(Invalid("safe integer length")));
+    }
+
+    fn request_id(value: &Value) -> RequestId {
+        match (value.get("number"), value.get("string")) {
+            (Some(n), _) => RequestId::Number(n.as_f64().unwrap()),
+            (_, Some(s)) => RequestId::String(s.as_str().unwrap().to_string()),
+            _ => panic!("request id {value}"),
+        }
+    }
+    fn bytes(value: &Value) -> Vec<u8> {
+        unhex(value["bytes"].as_str().unwrap())
+    }
+    /// An optional field: absent, `null` for a present `undefined`, or its value.
+    fn optional<T>(message: &Value, key: &str, read: impl Fn(&Value) -> T) -> Optional<T> {
+        message
+            .get(key)
+            .map(|value| (!value.is_null()).then(|| read(value)))
+    }
+    fn message_of(m: &Value) -> Message {
+        match m["_tag"].as_str().unwrap() {
+            "Pong" => Message::Pong,
+            "Ping" => Message::Ping,
+            "Eof" => Message::Eof,
+            "Ack" => Message::Ack {
+                request_id: request_id(&m["requestId"]),
+            },
+            "Interrupt" => Message::Interrupt {
+                request_id: request_id(&m["requestId"]),
+            },
+            "Exit" => Message::Exit {
+                request_id: request_id(&m["requestId"]),
+                exit: bytes(&m["exit"]),
+            },
+            "Chunk" => Message::Chunk {
+                request_id: request_id(&m["requestId"]),
+                values: bytes(&m["values"]),
+            },
+            "Defect" => Message::Defect {
+                defect: bytes(&m["defect"]),
+            },
+            "Request" => Message::Request(Request {
+                id: request_id(&m["id"]),
+                tag: m["tag"].as_str().unwrap().to_string(),
+                payload: bytes(&m["payload"]),
+                headers: m["headers"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|pair| {
+                        (
+                            pair[0].as_str().unwrap().to_string(),
+                            pair[1].as_str().unwrap().to_string(),
+                        )
+                    })
+                    .collect(),
+                is_notification: optional(m, "isNotification", |v| v.as_bool().unwrap()),
+                trace_id: optional(m, "traceId", |v| v.as_str().unwrap().to_string()),
+                span_id: optional(m, "spanId", |v| v.as_str().unwrap().to_string()),
+                sampled: optional(m, "sampled", |v| v.as_bool().unwrap()),
+            }),
+            tag => panic!("message {tag}"),
+        }
+    }
+
+    #[test]
+    fn envelope_messages_write_and_read_as_effects_rpc_serialization() {
+        let fingerprint = envelope_fingerprint();
+        for case in fixture()["messages"].as_array().unwrap() {
+            let message = message_of(&case["message"]);
+            let frame = unhex(case["frame"].as_str().unwrap());
+            let mut written = Vec::new();
+            put_message(&mut written, &fingerprint, &message);
+            assert_eq!(written, frame, "{message:?}");
+            let value = one_frame(&frame, Some(fingerprint)).unwrap();
+            assert_eq!(read_message(value).unwrap(), message);
+        }
+    }
+
+    #[test]
+    fn the_official_probe_round_trips() {
+        // What the official client and server exchanged for Echo and Fail
+        // (docs/research/schema-binary.md).
+        let fingerprint = envelope_fingerprint();
+        for probe in [
+            "3021cc328ab08f52452507001a19208c87f0bc1380ae8dce1b027431c8d0b6994c055772697465020000044563686f0100",
+            "2921cc328ab08f5245250102000 01b1a20008c87f0bc1380ae8dce1b027431c8d0b6994c055772697465",
+            "1e21cc328ab08f52452507000807208 9c386c37504020002044661696c0100",
+            "1821cc328ab08f5245250102000 20a0920010105006e6f2032",
+        ] {
+            let frame = unhex(&probe.replace(' ', ""));
+            let message = read_message(one_frame(&frame, Some(fingerprint)).unwrap()).unwrap();
+            let mut written = Vec::new();
+            put_message(&mut written, &fingerprint, &message);
+            assert_eq!(written, frame, "{message:?}");
+        }
+    }
+
+    #[test]
+    fn exits_write_and_read_as_effects_exit_schema() {
+        // `Schema.Exit(String, String, Defect())`: strings are raw UTF-8, defects JSON text.
+        let expected_of = |name: &str| -> Result<Vec<u8>, Vec<Reason>> {
+            match name {
+                "success" => Ok(b"ok".to_vec()),
+                "fail" => Err(vec![Reason::Fail(b"e".to_vec())]),
+                "die" => Err(vec![Reason::Die(
+                    br#"{"name":"Error","message":"boom"}"#.to_vec(),
+                )]),
+                "dieString" => Err(vec![Reason::Die(br#""bad""#.to_vec())]),
+                "interrupt" => Err(vec![Reason::Interrupt(None)]),
+                "interruptFiber" => Err(vec![Reason::Interrupt(Some(7.0))]),
+                "parallel" => Err(vec![
+                    Reason::Fail(b"a".to_vec()),
+                    Reason::Die(br#""b""#.to_vec()),
+                ]),
+                name => panic!("exit {name}"),
+            }
+        };
+        for case in fixture()["exits"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let frame = unhex(case["frame"].as_str().unwrap());
+            let expected = expected_of(name);
+            let mut value = Vec::new();
+            match &expected {
+                Ok(success) => put_exit_success(&mut value, success),
+                Err(reasons) => put_exit_failure(&mut value, reasons),
+            }
+            let mut written = Vec::new();
+            put_frame(&mut written, None, &value);
+            assert_eq!(written, frame, "{name}");
+            let read = read_exit(one_frame(&frame, None).unwrap()).unwrap();
+            assert_eq!(read.map(<[u8]>::to_vec), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn bad_bodies_fail_as_effects_rpc_parser_does() {
+        let fingerprint = envelope_fingerprint();
+        for case in fixture()["failures"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let body = unhex(case["bytes"].as_str().unwrap());
+            // The fixture's parser has a 64-byte maxFrameSize.
+            let mut frames = Frames::new(&body, Some(fingerprint), Some(64));
+            let mut before = 0;
+            let mut failure = None;
+            for frame in frames.by_ref() {
+                match frame.and_then(read_message) {
+                    Ok(_) => before += 1,
+                    Err(Invalid(expected)) => {
+                        failure = Some(expected);
+                        break;
+                    }
+                }
+            }
+            assert_eq!(before, case["before"].as_u64().unwrap(), "{name}");
+            assert_eq!(failure, case["expected"].as_str(), "{name}");
+            assert_eq!(frames.unfinished(), failure.is_none(), "{name}");
+        }
+    }
+}

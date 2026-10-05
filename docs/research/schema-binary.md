@@ -144,6 +144,19 @@ Later, recorded in [open work](../open-work.md):
 - WebSocket (milestone 11);
 - Remote over binary.
 
+## Progress
+
+- **Step 1, done (2026-10-05).** The std-only module `runtime/src/schema_binary.rs` holds:
+  - uvarint, sign-magnitude, FNV-1a 32/64, the three number forms with Effect's `decimalScale`;
+  - frames, with `maxFrameSize` and fingerprint checks;
+  - the envelope codec;
+  - Exit and Cause.
+
+  Its reader treats a body that ends inside a frame as Effect's parser does: no failure, only an unfinished frame.
+  - `runtime/fixtures/schema-binary.json` is produced by the installed Effect: numbers, envelope messages through `RpcSerialization.layerSchemaBinary`, Exits, and 18 bad bodies with Effect's failure texts. `tests/schema-binary-fixtures.test.ts` fails if Effect writes or reads any of it differently.
+  - Rust tests (`runtime/src/tests.rs`) hold the module to that fixture, and to the probe's four messages, which re-encode byte-equal.
+  - Wide varints round as `Number(bigint)` does, which settles the earlier `Math.round` question: `js_round` is exact, because `v - floor(v)` is exact.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.
@@ -155,5 +168,5 @@ Later, recorded in [open work](../open-work.md):
 ## Open questions
 
 - **JSON number text.** `JSON.stringify` number text appears inside defects and `Unknown` values. reffect's defects are strings or `{name,message}` objects, and `serde_json` writes strings as JS does (to be checked by test). An `Unknown` holding non-integer numbers needs the UNK-002 normalization to match JS number text. This is unverified.
-- **The `Math.round` port** (format record §3.2): it is believed not to matter, but this is unverified. A property test near the decimal-range boundary decides it.
+- **The `Math.round` port** (format record §3.2): resolved by porting it exactly (`floor`, then a comparison with 0.5, which is exact). Number fixtures include halves, boundaries and non-finite values.
 - **Row-shape evolution hazard** (format record §10): a struct with more than 30 fields read by a peer with 30 or fewer. It does not affect reffect while client and server share one contract.

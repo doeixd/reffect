@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-05 — Milestone 10 step 1: SchemaBinary runtime primitives
+
+- [Design record](docs/research/schema-binary.md#progress). The std-only `runtime/src/schema_binary.rs` holds varints, FNV, number forms, frames, the fingerprint-mode RPC envelope, and Exit/Cause.
+- The fixtures in `runtime/fixtures/schema-binary.json` come from the installed Effect, `layerSchemaBinary` included, and a vitest suite pins them. The Rust tests hold the module to them byte for byte, failure texts included.
+- Validation:
+  - `vp run runtime:check` passes: fmt, clippy, and 40/40 cargo tests, 6 of them new.
+  - `schema-binary-fixtures` 1/1 and `runtime-sources` 1/1 pass.
+  - `vp check` and the strict `tsc` pass.
+
 ## 2026-10-05 — Milestone 10 (SchemaBinary) researched and planned
 
 - [Design record and plan](docs/research/schema-binary.md), and the [wire format](docs/research/schema-binary-format.md) specified from Effect 4.0.0's `SchemaBinary.ts`, the upstream test and an official RPC probe.
