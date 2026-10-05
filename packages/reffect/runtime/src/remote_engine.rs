@@ -731,11 +731,25 @@ pub trait Source: Sync {
 /// A row as the memory backend holds it: a plain object, shared until a write replaces it.
 pub type Row = Arc<JsObject<Value>>;
 struct Tables {
+    /// A counter stamping each write, so a table's stamp changes whenever it does.
     version: u64,
+    /// The stamp of each table's last write: a query's cells are rebuilt only when its own table
+    /// changed, not on a write to any other (#35).
+    versions: HashMap<String, u64>,
     tables: HashMap<String, Ordered<Row>>,
 }
+impl Tables {
+    fn touch(&mut self, entity: &str) {
+        self.version += 1;
+        let version = self.version;
+        self.versions.insert(entity.to_string(), version);
+    }
+    fn version_of(&self, entity: &str) -> u64 {
+        self.versions.get(entity).copied().unwrap_or(0)
+    }
+}
 /// The memory backend's `MemoryStore` (RS-003..006): one server-lifetime store behind a lock,
-/// taken once per operation. Every write bumps the version, which invalidates query caches.
+/// taken once per operation. A write stamps its table, which invalidates that table's query caches.
 pub struct Memory {
     entities: Vec<String>,
     state: RwLock<Tables>,
@@ -765,7 +779,11 @@ impl Memory {
         }
         Memory {
             entities,
-            state: RwLock::new(Tables { version: 0, tables }),
+            state: RwLock::new(Tables {
+                version: 0,
+                versions: HashMap::new(),
+                tables,
+            }),
             queries,
         }
     }
@@ -817,7 +835,7 @@ impl Memory {
     #[allow(dead_code)]
     pub fn write(&self, entity: &str, id: &str, values: Vec<(String, Value)>) {
         let mut state = self.tables_mut();
-        state.version += 1;
+        state.touch(entity);
         let table = state
             .tables
             .entry(entity.to_string())
@@ -836,7 +854,7 @@ impl Memory {
     #[allow(dead_code)]
     pub fn remove(&self, entity: &str, id: &str) {
         let mut state = self.tables_mut();
-        state.version += 1;
+        state.touch(entity);
         if let Some(table) = state.tables.get_mut(entity) {
             table.remove(id);
         }
@@ -1882,7 +1900,7 @@ impl Hub {
 use super::foldkit_eval::Value as Cell;
 /// A compiled query body over input cells and row cells: the matching row indexes, in order.
 pub type Evaluator = fn(&[Cell], &[Vec<Cell>]) -> Result<Vec<usize>, &'static str>;
-/// A table's evaluator cells and the store version they were built at.
+/// A table's evaluator cells and that table's version when they were built.
 pub type CellCache = Mutex<Option<(u64, Arc<Vec<Vec<Cell>>>)>>;
 /// One registered query: its entity, its input check, its slots and its evaluators.
 pub struct QueryDef {
@@ -2012,13 +2030,14 @@ impl Memory {
         let table = state.tables.get(def.entity).unwrap_or(&empty);
         let rows: Vec<(&String, &Row)> = table.iter().collect();
         let encoded: Vec<Cell> = def.inputs.iter().map(|key| cell(input.get(*key))).collect();
+        let version = state.version_of(def.entity);
         let cells = {
             let mut cache = def
                 .cells
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match cache.as_ref() {
-                Some((version, cells)) if *version == state.version => cells.clone(),
+                Some((built, cells)) if *built == version => cells.clone(),
                 _ => {
                     let cells: Arc<Vec<Vec<Cell>>> = Arc::new(
                         rows.iter()
@@ -2030,7 +2049,7 @@ impl Memory {
                             })
                             .collect(),
                     );
-                    *cache = Some((state.version, cells.clone()));
+                    *cache = Some((version, cells.clone()));
                     cells
                 }
             }

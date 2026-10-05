@@ -94,6 +94,14 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Per-table query cell caches (#35)
+
+- **#35.** The memory backend stamps each table with the global write counter, and a query's evaluator cells are rebuilt only when its own table's stamp changes. Before, any write anywhere invalidated every query's cells, re-encoding all their text as UTF-16.
+- **Validation.**
+  - New Rust test: writes and removes on `User` leave the `Todo` query's cells shared, while a `Todo` write rebuilds them, now two rows. The same test fails against the previous engine.
+  - `runtime:check`: 29 tests.
+  - Passing suites: `runtime-sources`, `remote-query`, `remote-mutate`, `remote-read`, `remote-live`, `remote-page`; `vp check` clean.
+
 ## 2026-10-05 — Cheaper mapped emission (#32, part)
 
 - **Measured.** Benchmark: 40 functions of 40 nested `Match.bool` levels, about 38,000 generated ranges, best of three. Full source maps went from 4.6× to about 3.5× the cost of none (553 ms down to about 340 ms; none is 100 ms). The issue's acceptance of 1.5× is **not met**, and #32 stays open.

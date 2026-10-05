@@ -10,6 +10,70 @@ use crate::remote_engine::{
 };
 use serde_json::json;
 
+fn every_row(
+    _: &[crate::foldkit_eval::Value],
+    rows: &[Vec<crate::foldkit_eval::Value>],
+) -> Result<Vec<usize>, &'static str> {
+    Ok((0..rows.len()).collect())
+}
+static ALL_TODOS: [crate::remote_engine::QueryDef; 1] = [crate::remote_engine::QueryDef {
+    name: "AllTodos",
+    entity: "Todo",
+    valid: |_| true,
+    fields: &["title"],
+    inputs: &[],
+    run: every_row,
+    order: every_row,
+    order_fields: &[],
+    order_inputs: &[],
+    cells: std::sync::Mutex::new(None),
+}];
+
+#[test]
+fn a_write_rebuilds_only_its_own_tables_query_cells() {
+    // #35: one global version made a write to any table rebuild every query's cells.
+    let rows = json!({
+        "Todo": [["t1", { "id": "t1", "title": "Write" }]],
+        "User": [["u1", { "id": "u1", "name": "Ada" }]],
+    });
+    let memory = Memory::new(
+        vec!["Todo".to_string(), "User".to_string()],
+        &rows,
+        &ALL_TODOS,
+    );
+    let permit_all = |_: &str, fields: &[String]| fields.to_vec();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let payload = json!({ "version": 4, "query": "AllTodos", "input": {}, "window": {} });
+    let cells = || {
+        ALL_TODOS[0]
+            .cells
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(_, cells)| cells.clone())
+            .unwrap()
+    };
+    runtime
+        .block_on(crate::remote_engine::query(&memory, &permit_all, &payload))
+        .unwrap();
+    let built = cells();
+    memory.write("User", "u1", vec![("name".to_string(), json!("Grace"))]);
+    memory.remove("User", "u9");
+    runtime
+        .block_on(crate::remote_engine::query(&memory, &permit_all, &payload))
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(&built, &cells()));
+    memory.write("Todo", "t2", vec![("title".to_string(), json!("Read"))]);
+    let answer = runtime
+        .block_on(crate::remote_engine::query(&memory, &permit_all, &payload))
+        .unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&built, &cells()));
+    assert_eq!(cells().len(), 2);
+    assert_eq!(answer["edges"].as_array().map(Vec::len), Some(2));
+}
+
 #[test]
 fn deep_views_render_once_in_linear_time() {
     // #34: each element shares its children and the document is written once. Copying each

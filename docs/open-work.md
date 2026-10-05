@@ -318,7 +318,6 @@ Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the 
 
 - [#30](https://github.com/doeixd/reffect/issues/30): 32-bit hashes in type ids
 - [#32](https://github.com/doeixd/reffect/issues/32): source maps still cost about 3.5× (was 4.6×); 1.5× needs a cheaper artifact form, a format decision
-- [#35](https://github.com/doeixd/reffect/issues/35): per-table memory query cache versions
 - [#38](https://github.com/doeixd/reffect/issues/38): deduplicate runtime and compiler logic
 - [#39](https://github.com/doeixd/reffect/issues/39): process-wide registries
 - [#40](https://github.com/doeixd/reffect/issues/40): race children under a masked parent (coordination area); the literal and `unhex` items are done
