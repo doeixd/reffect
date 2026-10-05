@@ -94,6 +94,13 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — 64-bit naming digest (#30)
+
+- **#30.** Composite witness ids (`reffect/struct@1/…`), generated Rust struct and union names, JSON encoder and decoder names, and RPC codec names now come from one shared 64-bit digest, `src/naming.ts` (cyrb64: synchronous, dependency-free, browser-safe). Before, they came from three copies of a 32-bit FNV-1a. At 10k composites that gave about a 1% chance of a spurious `NATIVE_NAME_COLLISION` or schema-json `TYPE_MISMATCH`; now it is about 3e-12. Generated names change once, from 8 to 16 hex digits.
+- **Validation.**
+  - New `naming` test: three published FNV-1a 32-bit collision pairs, confirmed to collide under the old function, are distinct now. A digest value is pinned, and 200k struct-like keys are distinct.
+  - Passing suites: `records`, `records-rpc`, `records-js`, `schema-json-rpc`, `native-rpc`, `compiler`, `optional-fields`, `arrays-rpc`, `html`, `remote-query`, `todo-fullstack`, `foldkit`; `vp check` clean.
+
 ## 2026-10-05 — Per-table query cell caches (#35)
 
 - **#35.** The memory backend stamps each table with the global write counter, and a query's evaluator cells are rebuilt only when its own table's stamp changes. Before, any write anywhere invalidated every query's cells, re-encoding all their text as UTF-16.

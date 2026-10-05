@@ -5,6 +5,7 @@
  * host supplies each encoder from its codecs verified against that same codec, so a target
  * without the `JsonEncoders` capability refuses the operation instead of guessing an encoding.
  */
+import { namingDigest } from "./naming.ts";
 import { Option, Schema } from "effect";
 import { OptionIR } from "./option.ts";
 import type { OptionValue } from "./option.ts";
@@ -124,15 +125,8 @@ export const jsonEncodedWitness = (operation: AnyOperation): IRType<unknown> | u
 export const jsonDecodedWitness = (operation: AnyOperation): IRType<unknown> | undefined =>
   decodedWitnesses.get(operation);
 
-// FNV-1a: encoder names only need to be stable and distinct per witness ID.
-const digest = (text: string): string => {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-};
+// Stable, collision-resistant naming digest (#30).
+const digest = namingDigest;
 /** The Rust function a host defines in `crate::reffect_json` for this witness. */
 export const jsonEncoderName = (witness: IRType<unknown>): string =>
   `json_${digest(witness.id)}_${witness.id.length}`;

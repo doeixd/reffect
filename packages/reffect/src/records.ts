@@ -1,4 +1,5 @@
 import { Match, Schema } from "effect";
+import { namingDigest } from "./naming.ts";
 import { dual } from "effect/Function";
 import {
   BoolType,
@@ -71,15 +72,8 @@ const rustIdent = (text: string): string | undefined => {
     return undefined;
   }
 };
-// FNV-1a: stable, dependency-free naming digest; identity never depends on it.
-const digest = (text: string): string => {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-};
+// Stable, collision-resistant naming digest (#30).
+const digest = namingDigest;
 /** Native field names: the declared name when it is a Rust identifier, else positional. */
 export const rustFieldNames = (layout: StructLayout) => {
   const names = layout.fields.map((field, i) => rustIdent(field.name) ?? `field_${i}`);

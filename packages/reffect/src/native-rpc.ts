@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit, Match, Option, Schema, SchemaAST, SchemaIssue } from "effect";
+import { namingDigest } from "./naming.ts";
 import type { Stream as EffectStream } from "effect";
 import type { StreamFn } from "./stream-ir.ts";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
@@ -115,15 +116,8 @@ interface Composite {
 type Codec = Scalar | Composite;
 type Registry = Map<string, Composite>;
 const codecKey = (codec: Codec): string => (typeof codec === "string" ? codec : codec.name);
-// FNV-1a over the codec signature; names only need to be stable and distinct per build.
-const digest = (text: string): string => {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-};
+// Stable, collision-resistant naming digest (#30).
+const digest = namingDigest;
 const isScalar = (codec: Codec): codec is Scalar => typeof codec === "string";
 const witness = {
   u64: U64Type,
