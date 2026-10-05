@@ -1,5 +1,19 @@
 # Progress
 
+## 2026-10-05 — Milestone 8B delivered for the pinned SSR example
+
+- [Research, design and evidence](docs/research/ssr-codemod.md).
+  - **The translator.** `src/ssr-translate.ts`, over the TypeScript 7 adapter `src/ts-frontend.ts`, turns the vendored, unmodified `foldkit@0.165.0` `examples/ssr` (with `@foldkit/ui` `Button`) into `examples/ssr-8b/page.ts`. It evaluates what is known at build time and writes R builders for what the request and Model decide. Anything outside the profile is refused with its location.
+  - `Literals.text` was added for the interpolated `renderedOn`.
+- Validation:
+  - `vp check` passes.
+  - These suites pass, run one at a time:
+    - `ssr-translate` 2/2: stable, matches the committed module, no casts, refusal located;
+    - `ssr-8b` 1/1: native answers equal the pinned `renderPage` through Vite with the plugin's build id, on eight cookies, `OPTIONS` and `HEAD`;
+    - `ssr-8b-hydrate` 1/1: the pinned client hydrates the native page and a click reaches `update` on the adopted nodes;
+    - `records` 5/5.
+- Disk note: the drive filled up during this work (`ENOSPC`). Leftover test crates older than two hours in the temp folder and this session's scratch crates were removed (about 9 GB). The drive is still nearly full.
+
 ## 2026-10-05 — Milestone 8B step 1: the R surface of the pinned SSR example
 
 - [Research, decisions and per-step evidence](docs/research/ssr-codemod.md). The pinned source is `foldkit@0.165.0` `examples/ssr` plus `@foldkit/ui` `Button`. Each step below was probed against upstream and is differential:

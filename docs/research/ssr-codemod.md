@@ -196,3 +196,19 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
 - `Literals.text` widens the interpolated `renderedOn`.
 - Evidence: `tests/ssr-translate.test.ts` passes 2/2. Two translations are identical and equal the committed, formatted module, which needs no casts and type-checks under `vp check`. A copy with `model.count.toFixed(2)` is refused at `src/main.ts:103`.
 - **Next: step 3**, the generated page served natively against the pinned `renderPage` run through Vite with the plugin's build id, then hydration.
+
+## Step 3: acceptance (2026-10-05)
+
+- **Answers.** `tests/ssr-8b.test.ts` passes 1/1. The generated `page`, served by a NativeRpc host, answers each request as the pinned `entry.server.ts` `renderPage` does, compared in status, body and headers.
+  - The reference is the unmodified entry loaded with Vite `ssrLoadModule` (`tests/fixtures/upstream-ssr-vite.ts`). It maps `@foldkit/ui` to the vendored source and compiles the build id into Foldkit as `@foldkit/vite-plugin` does. The fake clock is set to the instant the native page reports.
+  - Requests: eight cookie headers (plain, invalid, encoded, quoted, unsafe, duplicated, latin1, exponent), `OPTIONS` (204 with `allow`) and `HEAD`.
+  - The bodies carry the stamped build, the cookie's count, the parse-equivalence block and the Flags handoff.
+- **Hydration.** `tests/ssr-8b-hydrate.test.ts` passes 1/1. In happy-dom, the pinned, unmodified client `entry.ts` (vendored, hash recorded) hydrates the native page:
+  - the server's root and `#count` nodes survive adoption;
+  - a click on the server-rendered `+` reaches the pinned `update`, and the same node shows the incremented count.
+- **Stability and refusal.** As step 2: the translation is identical twice, matches the committed module and needs no casts; a mutated construct is refused with its location.
+
+**Milestone 8B is delivered for the pinned example.** Still open:
+- `InnerHTML` with markup (it needs an HTML parser to check parse equivalence natively);
+- non-literal `Tabindex`;
+- widening the translator beyond what the pinned source reaches, workload by workload.
