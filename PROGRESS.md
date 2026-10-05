@@ -94,6 +94,16 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Weak authoring registries (#39)
+
+- **#39, interning.** Structural interning holds witnesses weakly. A path steps through child witnesses by `WeakMap` and ends in a `WeakRef`, and a `FinalizationRegistry` clears dead leaves. Identical live structures still share one witness. A long-lived watch or editor process no longer keeps every witness it authored.
+- **JSON codecs.** `schema-json` keys its encode and decode operations by the witness object, not its id string. An unrelated program reusing an id no longer fails at authoring; within one program, `derive` still refuses two operations with one id (`IDENTITY_COLLISION`).
+- **`elementOperations`** is module-private, so importers can no longer replace an element's operation.
+- **Still strong.** The element-operation table, keyed by shape text, remains a strong `Map`. It is bounded by the distinct element shapes authored.
+- **Validation.**
+  - New `registries` test, which fails on the previous code: a forgotten struct, with its array and JSON codec, is garbage-collected (GC forced through `--expose-gc`, each check in a later job), a referenced one stays interned, and `elementOperations` is not exported.
+  - Passing suites: `records`, `records-js`, `records-rpc`, `schema-json-rpc`, `optional-fields`, `option`, `arrays`, `html`, `remote-mutate`, `remote-query`, `todo-fullstack`, `compiler`, `naming`; `vp check` clean.
+
 ## 2026-10-05 — 64-bit naming digest (#30)
 
 - **#30.** Composite witness ids (`reffect/struct@1/…`), generated Rust struct and union names, JSON encoder and decoder names, and RPC codec names now come from one shared 64-bit digest, `src/naming.ts` (cyrb64: synchronous, dependency-free, browser-safe). Before, they came from three copies of a 32-bit FNV-1a. At 10k composites that gave about a 1% chance of a spurious `NATIVE_NAME_COLLISION` or schema-json `TYPE_MISMATCH`; now it is about 3e-12. Generated names change once, from 8 to 16 hex digits.

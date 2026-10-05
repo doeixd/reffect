@@ -112,7 +112,8 @@ export interface ElementShape {
   readonly isVoid: boolean;
 }
 const elementShapes = new WeakMap<AnyOperation, ElementShape>();
-export const elementOperations = new Map<string, AnyOperation>();
+// Module-private (#39): an importer could otherwise set any operation as an element's.
+const elementOperations = new Map<string, AnyOperation>();
 /** The shape an element operation was interned for, if it is one. */
 export const elementShapeOf = (operation: AnyOperation): ElementShape | undefined =>
   elementShapes.get(operation);

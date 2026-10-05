@@ -24,23 +24,17 @@ import {
 } from "./kernel.ts";
 
 type EncodeJson = Operation<readonly [IRType<unknown>], unknown>;
-const byWitness = new Map<string, EncodeJson>();
+// Keyed by the witness itself, not its id string (#39): an id reused by an unrelated program no
+// longer fails at authoring, and a forgotten witness takes its operation with it. Within one
+// program, two operations with one id are still refused by derive (IDENTITY_COLLISION).
+const byWitness = new WeakMap<IRType<unknown>, EncodeJson>();
 const witnesses = new WeakMap<object, IRType<unknown>>();
 // Operations a host implements as `crate::reffect_json::<name>(&args...)`.
 const hostFunctions = new WeakMap<object, string>();
 
 const encodeOperation = (witness: IRType<unknown>): EncodeJson => {
-  const known = byWitness.get(witness.id);
-  if (known) {
-    if (!IRType.same(known.input[0], witness))
-      throw fail(
-        "TYPE_MISMATCH",
-        "authoring",
-        "Schema.toCodecJson",
-        `Witness ID ${witness.id} is reused with a different schema`,
-      );
-    return known;
-  }
+  const known = byWitness.get(witness);
+  if (known) return known;
   if (IRType.same(witness, NeverType))
     throw fail("TYPE_MISMATCH", "authoring", "Schema.toCodecJson", "Never has no values");
   const encode = Schema.encodeSync(Schema.toCodecJson(witness.schema));
@@ -50,31 +44,22 @@ const encodeOperation = (witness: IRType<unknown>): EncodeJson => {
     UnknownType,
     (value) => encode(value),
   ).pipe(Operation.withCapabilities([Capabilities.Json, Capabilities.JsonEncoders]));
-  byWitness.set(witness.id, operation);
+  byWitness.set(witness, operation);
   witnesses.set(operation, witness);
   hostFunctions.set(operation, jsonEncoderName(witness));
   return operation;
 };
 
 type DecodeJson = Operation<readonly [IRType<unknown>], unknown>;
-const decodersByWitness = new Map<string, DecodeJson>();
+const decodersByWitness = new WeakMap<IRType<unknown>, DecodeJson>();
 const decodedWitnesses = new WeakMap<object, IRType<unknown>>();
 /**
  * The decode half: `Unknown` to `UndefinedOr<W>`, undefined when the JSON is not a `W`. Natively
  * that is Rust `Option<W>`, from the same verified decoder the server uses for requests.
  */
 const decodeOperation = (witness: IRType<unknown>): DecodeJson => {
-  const known = decodersByWitness.get(witness.id);
-  if (known) {
-    if (!IRType.same(decodedWitnesses.get(known)!, witness))
-      throw fail(
-        "TYPE_MISMATCH",
-        "authoring",
-        "Schema.toCodecJson",
-        `Witness ID ${witness.id} is reused with a different schema`,
-      );
-    return known;
-  }
+  const known = decodersByWitness.get(witness);
+  if (known) return known;
   if (IRType.same(witness, NeverType))
     throw fail("TYPE_MISMATCH", "authoring", "Schema.toCodecJson", "Never has no values");
   const decode = Schema.decodeUnknownOption(Schema.toCodecJson(witness.schema));
@@ -84,7 +69,7 @@ const decodeOperation = (witness: IRType<unknown>): DecodeJson => {
     UndefinedOr(witness),
     (value) => Option.getOrUndefined(decode(value)),
   ).pipe(Operation.withCapabilities([Capabilities.Json, Capabilities.JsonEncoders]));
-  decodersByWitness.set(witness.id, operation);
+  decodersByWitness.set(witness, operation);
   decodedWitnesses.set(operation, witness);
   hostFunctions.set(operation, jsonDecoderName(witness));
   return operation;

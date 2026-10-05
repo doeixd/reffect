@@ -88,19 +88,46 @@ const freeze = <S extends Schema.Top>(schema: S): S => {
   return Object.freeze(schema);
 };
 
-// Structural interning: identical structures share one witness, so IRType.same stays identity.
-const interned = new Map<unknown, unknown>();
-const intern = <W>(path: readonly unknown[], make: () => W): W => {
-  let node: Map<unknown, unknown> = interned;
+/**
+ * Structural interning: identical structures share one witness, so IRType.same stays identity.
+ * Identity matters only among witnesses still referenced, so the table holds them weakly (#39):
+ * a path steps through child witnesses by WeakMap and ends in a WeakRef, and a long-lived
+ * process (watch, editor) no longer keeps every witness it ever authored.
+ */
+interface InternNode {
+  readonly byValue: Map<unknown, InternNode>;
+  readonly byObject: WeakMap<object, InternNode>;
+  leaf: WeakRef<object> | undefined;
+}
+const internNode = (): InternNode => ({
+  byValue: new Map(),
+  byObject: new WeakMap(),
+  leaf: undefined,
+});
+const interned = internNode();
+const released = new FinalizationRegistry<{ node: InternNode; leaf: WeakRef<object> }>(
+  ({ node, leaf }) => {
+    if (node.leaf === leaf) node.leaf = undefined;
+  },
+);
+const intern = <W extends object>(path: readonly unknown[], make: () => W): W => {
+  let node = interned;
   for (const key of path) {
-    let next = node.get(key) as Map<unknown, unknown> | undefined;
-    if (!next) node.set(key, (next = new Map()));
+    const byObject = typeof key === "object" && key !== null;
+    let next = byObject ? node.byObject.get(key) : node.byValue.get(key);
+    if (!next) {
+      next = internNode();
+      if (byObject) node.byObject.set(key, next);
+      else node.byValue.set(key, next);
+    }
     node = next;
   }
-  const existing = node.get(intern);
+  const existing = node.leaf?.deref();
   if (existing) return existing as W;
   const witness = make();
-  node.set(intern, witness);
+  const leaf = new WeakRef<object>(witness);
+  node.leaf = leaf;
+  released.register(witness, { node, leaf });
   return witness;
 };
 
