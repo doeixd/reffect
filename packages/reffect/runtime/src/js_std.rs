@@ -157,3 +157,104 @@ pub fn number_parse(s: &str) -> Option<f64> {
 pub fn is_safe_integer(n: f64) -> bool {
     n.is_finite() && n.trunc() == n && n.abs() <= 9_007_199_254_740_991.0
 }
+
+/// A canonical array index, which JS objects order first, ascending.
+fn array_index(key: &str) -> Option<u32> {
+    if key == "0" {
+        return Some(0);
+    }
+    if key.is_empty() || key.starts_with('0') || !key.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    key.parse::<u32>().ok().filter(|index| *index != u32::MAX)
+}
+
+/// ECMAScript `decodeURIComponent`, or None where it throws a URIError: every `%XX` is a byte,
+/// and the bytes must be well-formed UTF-8 (no overlong form, surrogate or code point past
+/// U+10FFFF), which `from_utf8` checks exactly as the URI decoding algorithm does.
+pub fn decode_uri_component(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = |at: usize| bytes.get(at).and_then(|b| (*b as char).to_digit(16));
+            let (high, low) = (hex(i + 1)?, hex(i + 2)?);
+            out.push((high * 16 + low) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Effect `Cookies.parseHeader` (effect 4.0.0, from fastify-cookie), over UTF-16 code units as
+/// JS indexes them, with the result in JS own-property order. A lone surrogate the JS algorithm
+/// could leave in a malformed quoted value becomes U+FFFD (recorded in native divergences).
+pub fn cookies_parse_header(header: &str) -> Vec<(String, String)> {
+    let units: Vec<u16> = header.encode_utf16().collect();
+    let len = units.len();
+    let index_of = |unit: u8, from: usize| {
+        units
+            .get(from.min(len)..)
+            .and_then(|rest| rest.iter().position(|u| *u == unit as u16))
+            .map(|at| at + from)
+    };
+    // JS `substring`: clamped, and swapped when start > end.
+    let substring = |start: usize, end: usize| {
+        let (start, end) = (start.min(len), end.min(len));
+        let (start, end) = if start > end {
+            (end, start)
+        } else {
+            (start, end)
+        };
+        String::from_utf16_lossy(&units[start..end])
+    };
+    let trim = |text: String| text.trim_matches(is_js_space).to_string();
+    let mut indexed: Vec<(u32, String, String)> = Vec::new();
+    let mut named: Vec<(String, String)> = Vec::new();
+    let mut pos = 0;
+    let mut terminator = 0;
+    loop {
+        if terminator == len {
+            break;
+        }
+        terminator = index_of(b';', pos).unwrap_or(len);
+        let Some(eq) = index_of(b'=', pos) else {
+            break;
+        };
+        if eq > terminator {
+            pos = terminator + 1;
+            continue;
+        }
+        let key = trim(substring(pos, eq));
+        let value_at = eq + 1;
+        let taken =
+            indexed.iter().any(|(_, k, _)| *k == key) || named.iter().any(|(k, _)| *k == key);
+        if !taken {
+            let value = if units.get(value_at) == Some(&0x22) {
+                trim(substring(value_at + 1, terminator.saturating_sub(1)))
+            } else {
+                trim(substring(value_at, terminator))
+            };
+            let value = if value.contains('%') {
+                decode_uri_component(&value).unwrap_or(value)
+            } else {
+                value
+            };
+            match array_index(&key) {
+                Some(index) => indexed.push((index, key, value)),
+                None => named.push((key, value)),
+            }
+        }
+        pos = terminator + 1;
+    }
+    indexed.sort_by_key(|(index, _, _)| *index);
+    indexed
+        .into_iter()
+        .map(|(_, key, value)| (key, value))
+        .chain(named)
+        .collect()
+}

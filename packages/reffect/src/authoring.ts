@@ -1,4 +1,4 @@
-import "./js-std.ts";
+import { CookiesIR } from "./js-std.ts";
 import { SchemaIR } from "./schema-json.ts";
 import { UrlIR } from "./url.ts";
 import { StreamAuthoring } from "./stream.ts";
@@ -130,6 +130,8 @@ export const R = Object.freeze({
   Schema: SchemaIR,
   /** What a page reads of its URL: the Web URL API's pathname and search parameters. */
   Url: UrlIR,
+  /** `effect/http` Cookies: what a page reads of its `Cookie` header. */
+  Cookies: CookiesIR,
   RemoteStore: RemoteStoreIR,
   LiveHub: LiveHubIR,
   /** Foldkit Remote values an R page reads (M9-3). */

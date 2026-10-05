@@ -2476,9 +2476,7 @@ export const emitFunctions = (
                           `crate::js_std::${std.function}(`,
                           ...n.args.flatMap((_, index) => [
                             ...(index === 0 ? [] : [", "]),
-                            ...(std.borrow[index]
-                              ? ["&(", arg(index), ")[..]"]
-                              : ["(", arg(index), ")"]),
+                            ...(std.borrow[index] ? ["&(", arg(index), ")[..]"] : [arg(index)]),
                           ]),
                           ")",
                         ]);

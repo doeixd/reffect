@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
 import { UrlPathname, UrlSearchParam } from "./url.ts";
-import { NumberParse } from "./js-std.ts";
+import { CookiesParseHeader, NumberParse } from "./js-std.ts";
 import { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
 import { streamExpressions, streamFinalizers, streamSources } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
@@ -235,6 +235,7 @@ const implementations = Object.freeze([
   ...(
     [
       [NumberParse, "number_parse"],
+      [CookiesParseHeader, "cookies_parse_header"],
       [IsSafeIntegerNumber, "is_safe_integer"],
     ] as const
   ).map(([operation, name]) =>

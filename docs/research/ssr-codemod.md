@@ -120,3 +120,7 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
   - `R.Number.parse` (Effect `Number.parse`, read as an Option) and `R.Number.isSafeInteger`.
   - Natively they are the std-only `js_std` runtime module, reached through a generic `Std` lowering that borrows String arguments. It holds a port of ECMAScript `StringToNumber`, with exact round-to-even radix literals.
   - Evidence: `tests/js-std.test.ts` passes 2/2. Native and reference agree on 60 strings (white space sets, `Infinity`/`NaN` spellings including Rust-only ones, signs, dots, exponents, radix prefixes, ties at 2^53, overflow, separators, non-ASCII digits). A runtime test pins `-0` and the ties.
+- **1d-ii (2026-10-05):**
+  - `R.Cookies.parseHeader` (Effect `Cookies.parseHeader`, reference Effect's own) is ported in `js_std` over UTF-16 code units as JS indexes them, with `decodeURIComponent` as percent-decoding plus UTF-8 validation, and the Record in JS own-property order.
+  - Evidence: `tests/js-std.test.ts` passes 3/3. A NativeRpc server answers 29 headers byte-equal to the official server, key order included. The headers cover duplicates, Unicode trimming, quotes, missing `=`, every `%` failure (bad hex, truncated, overlong, surrogate, past U+10FFFF), `__proto__`, integer keys and non-ASCII.
+  - One divergence, a lone surrogate from a malformed quoted value, is recorded (COOKIE-SURROGATE).

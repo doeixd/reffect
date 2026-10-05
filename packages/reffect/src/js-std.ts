@@ -4,6 +4,7 @@
  * step 1d). Each is total, and agrees with its JS reference on a differential corpus.
  */
 import { Number as EffectNumber, Option } from "effect";
+import { Cookies } from "effect/http";
 import {
   Capabilities,
   Expr,
@@ -13,7 +14,7 @@ import {
   StringType,
   installNumberParse,
 } from "./kernel.ts";
-import { UndefinedOr } from "./records.ts";
+import { RecordType, UndefinedOr } from "./records.ts";
 import { OptionIR } from "./option.ts";
 
 /** Effect `Number.parse` as `T | undefined`; `R.Number.parse` reads it as an Option. */
@@ -25,3 +26,18 @@ export const NumberParse = Operation.make(
 ).pipe(Operation.withCapabilities([Capabilities.Number, Capabilities.String]));
 
 installNumberParse((text) => OptionIR.fromUndefinedOr(Expr.apply(NumberParse, text)));
+
+/** Effect `Cookies.parseHeader`: a `Cookie` header's pairs, the first of each name kept. */
+export const CookiesParseHeader = Operation.make(
+  SemanticRef.operation("reffect/cookies.parse-header@1"),
+  [StringType] as const,
+  RecordType.of(StringType, StringType),
+  (header) => Cookies.parseHeader(header),
+).pipe(Operation.withCapabilities([Capabilities.String]));
+
+/** `effect/http` `Cookies`, by what R reads of it. */
+export const CookiesIR = Object.freeze({
+  /** Effect `Cookies.parseHeader(header)`: name to value, decoded where it holds a `%`. */
+  parseHeader: (header: Expr<string>): Expr<Readonly<Record<string, string>>> =>
+    Expr.apply(CookiesParseHeader, header),
+});
