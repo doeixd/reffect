@@ -307,7 +307,6 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 
 - [#4](https://github.com/doeixd/reffect/issues/4): a cookie session adapter, so authenticated pages work in browsers
 - [#6](https://github.com/doeixd/reffect/issues/6): derive view item witnesses from the selection schema
-- [#7](https://github.com/doeixd/reffect/issues/7): record Ready-only views as a divergence
 - [#8](https://github.com/doeixd/reffect/issues/8): snapshot and `changed` interleaving (documented race)
 - [#10](https://github.com/doeixd/reffect/issues/10): batch snapshot reads
 - [#11](https://github.com/doeixd/reffect/issues/11): mutation latency includes after-commit re-reads
