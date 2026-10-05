@@ -61,3 +61,9 @@ A separate actual default-scheduler probe passes 1/1 (54ms assertions): each new
 Full check passes 447 formatted files and 267 TypeScript files without warnings/errors; strict TypeScript and rebuilt workspace pass. Independent review verifies root suffix semantics, cross-subtree sharing refusal, recorder lifetime and conservative receipt attribution. Post-commit regression/review evidence follows in PROGRESS.
 
 Post-commit review/regression passes 50/50 across ten suites (216.42s), including native capture/storage costs and ordinary failure-frame/pipeline/admission/nesting regressions. Full check, strict TypeScript and cached workspace builds pass. Documentation review clarifies private admission wording and numeric spacing; no code defect remains.
+
+## Merged compiler review
+
+Rebased both Deferred commits unchanged onto remote 43e7315, preserving #33 concatenation fusion and #34 shared-tree SSR. Strict package TypeScript exposes a #33 typing defect: after a plain-object prototype guard, TypeScript narrows to object but does not infer a string index signature. Use an internal readonly unknown-valued record assertion at that already checked bridge. This changes no JavaScript traversal or emitted Rust; it avoids cloning records or weakening fields to any. Existing merged string/array conformance exercises the traversal. Repeat strict/check/build and review before publication.
+
+Merged checks pass 31/31 across six suites (164.00s), including exact Deferred native diagnostics, context/budget isolation, string/array native conformance, Rust literal refusal and embedded runtime parity. The corrected bridge passes strict package TypeScript.
