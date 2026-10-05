@@ -5,7 +5,10 @@
  * resumes from the reads the server made.
  *
  * vp exec node --experimental-transform-types examples/todo-fullstack/main.ts [--port 8787]
- *   [--database todos.db] [--auth]
+ *   [--database todos.db | --postgres postgres://user:password@host/db] [--auth]
+ *
+ * With `--postgres`, the server runs on that Postgres database instead: the todos table is made
+ * and seeded there when it does not exist yet, and an existing one is kept.
  *
  * With `--auth`, pages and RPC need a principal: the browser signs in on a login page with the
  * token printed at start (or TODO_TOKEN), which becomes an HttpOnly session cookie (#4).
@@ -20,7 +23,7 @@ import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import { ChildProcess } from "effect/process";
 import { NodeServices } from "@effect/platform-node";
 import { CargoApi } from "../../packages/reffect/src/index.ts";
-import { seed, sqliteUrl } from "./db.ts";
+import { seed, seedPostgres, sqliteUrl } from "./db.ts";
 import { CREDENTIALS_ENV, DATABASE_URL_ENV, compileShowcase } from "./server.ts";
 
 const option = (name: string) => {
@@ -37,9 +40,12 @@ await Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-fullstack-" });
+      const postgres = option("--postgres");
       const given = option("--database");
       const database = given === undefined ? `${parent}/todos.db` : resolve(given);
-      if (given === undefined || !existsSync(database)) seed(database);
+      if (postgres !== undefined) yield* Effect.promise(() => seedPostgres(postgres));
+      else if (given === undefined || !existsSync(database)) seed(database);
+      const databaseUrl = postgres ?? sqliteUrl(database);
       const template = yield* fs.readFileString(
         `${import.meta.dirname}/../todo-remote/web/index.html`,
       );
@@ -47,7 +53,10 @@ await Effect.runPromise(
         ? yield* fs.readFileString(`${import.meta.dirname}/login.html`)
         : undefined;
       const directory = yield* CargoApi.write(
-        yield* compileShowcase(template, loginPage === undefined ? {} : { loginPage }),
+        yield* compileShowcase(template, {
+          ...(loginPage === undefined ? {} : { loginPage }),
+          ...(postgres === undefined ? {} : { dialect: "postgres" as const }),
+        }),
         `${parent}/server`,
       );
       yield* CargoApi.fetch(directory);
@@ -57,7 +66,7 @@ await Effect.runPromise(
         ["--port", port],
         {
           env: {
-            [DATABASE_URL_ENV]: sqliteUrl(database),
+            [DATABASE_URL_ENV]: databaseUrl,
             ...(auth ? { [CREDENTIALS_ENV]: JSON.stringify([{ token, principal: "1" }]) } : {}),
           },
           extendEnv: true,
@@ -71,7 +80,9 @@ await Effect.runPromise(
       const { address } = Schema.decodeUnknownSync(
         Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
       )(JSON.parse(ready.value));
-      console.log(`todo-fullstack: http://${address} over ${database} (Ctrl-C stops it)`);
+      // The Postgres URL may hold a password, so only the dialect is printed for it.
+      const over = postgres === undefined ? database : "Postgres";
+      console.log(`todo-fullstack: http://${address} over ${over} (Ctrl-C stops it)`);
       if (auth) console.log(`sign in with token: ${token}`);
       console.log(`browser: TODO_REMOTE_PORT=${port} vp dev examples/todo-remote/web`);
       return yield* Effect.never;

@@ -1,15 +1,17 @@
 // @vitest-environment happy-dom
 /**
- * Milestone 9, M9-5: the showcase, one native executable over SQLite. Its first screen equals
- * upstream `handleRequest` around `renderToString` with the browser app's own `init` and `view`
- * (upstream reads the same rows from its memory backend), the stock runtime hydrates it without
- * asking for anything, a mutation commits through SQL, reaches a fresh Live subscription through
- * the snapshot, and survives into the next page render.
+ * Milestone 9, M9-5: the showcase, one native executable over SQLite, and over Postgres when
+ * Docker can run one. Its first screen equals upstream `handleRequest` around `renderToString`
+ * with the browser app's own `init` and `view` (upstream's own SQL server reads the same
+ * database), the stock runtime hydrates it without asking for anything, a mutation commits
+ * through SQL, reaches a fresh Live subscription through the snapshot, and survives into the
+ * next page render.
  */
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { resolve } from "node:path";
 import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import { ChildProcess } from "effect/process";
 import { NodeServices } from "@effect/platform-node";
 import { Runtime } from "foldkit";
@@ -18,6 +20,7 @@ import { RemoteClient } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
 import { databaseLayer, query, source } from "foldkit-remote-drizzle";
 import { drizzle } from "drizzle-orm/node-sqlite";
+import { drizzle as drizzlePostgres } from "drizzle-orm/node-postgres";
 import { DatabaseSync } from "node:sqlite";
 import { expect, test, vi } from "vite-plus/test";
 import { CargoApi } from "../src/index.ts";
@@ -25,7 +28,15 @@ import { record } from "../src/remote-resume.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { Todos } from "../../../examples/todo-remote/domain.ts";
 import { DATABASE_URL_ENV, compileShowcase } from "../../../examples/todo-fullstack/server.ts";
-import { bindings, seed, sqliteUrl } from "../../../examples/todo-fullstack/db.ts";
+import {
+  bindings,
+  pgBindings,
+  seed,
+  seedPostgres,
+  sqliteUrl,
+} from "../../../examples/todo-fullstack/db.ts";
+import type { Dialect } from "../../../examples/todo-fullstack/db.ts";
+import { postgresServer, postgresUnavailable } from "./fixtures/postgres.ts";
 import {
   BUILD_ID,
   Data,
@@ -103,16 +114,74 @@ const rpc = (address: string, request: object, done: (lines: ReadonlyArray<strin
   });
 
 /**
+ * A database the showcase runs on: the URL the native server opens, and upstream's Drizzle
+ * source over the same database for the reference render.
+ */
+interface ShowcaseDatabase {
+  readonly url: string;
+  readonly reference: () => {
+    readonly layer: ReturnType<typeof databaseLayer>;
+    readonly entity: typeof bindings.Todo | typeof pgBindings.Todo;
+    readonly close: () => void;
+  };
+}
+const showcases: ReadonlyArray<{
+  readonly dialect: Dialect;
+  readonly unavailable: string | undefined;
+  readonly open: (parent: string) => Effect.Effect<ShowcaseDatabase, never, Scope.Scope>;
+}> = [
+  {
+    dialect: "sqlite",
+    unavailable: undefined,
+    open: (parent) =>
+      Effect.sync(() => {
+        const file = `${parent}/todos.db`;
+        seed(file);
+        return {
+          url: sqliteUrl(file),
+          reference: () => {
+            const client = new DatabaseSync(file);
+            return {
+              layer: databaseLayer(drizzle({ client })),
+              entity: bindings.Todo,
+              // Windows keeps an open SQLite file locked, so its directory could not be removed.
+              close: () => client.close(),
+            };
+          },
+        };
+      }),
+  },
+  {
+    dialect: "postgres",
+    unavailable: postgresUnavailable,
+    open: () =>
+      Effect.gen(function* () {
+        const server = yield* postgresServer;
+        const pool = yield* server.database("showcase");
+        const url = server.url("showcase");
+        yield* Effect.promise(() => seedPostgres(url));
+        return {
+          url,
+          reference: () => ({
+            layer: databaseLayer(drizzlePostgres({ client: pool })),
+            entity: pgBindings.Todo,
+            close: () => {},
+          }),
+        };
+      }),
+  },
+];
+
+/**
  * Upstream: the app's own init and view, with the exchanges upstream's own SQL server records:
  * RemoteServer over foldkit-remote-drizzle's sources, reading the same SQLite file.
  */
-const upstream = async (now: number, database: string) => {
-  const client = new DatabaseSync(database);
-  const layer = databaseLayer(drizzle({ client }));
+const upstream = async (now: number, database: ShowcaseDatabase) => {
+  const { layer, entity, close } = database.reference();
   const handlers = RemoteServer.handlers(
     RemoteServer.make({
-      entities: [source(bindings.Todo)],
-      queries: [query(Todos, { entity: bindings.Todo })],
+      entities: [source(entity)],
+      queries: [query(Todos, { entity })],
     }),
     undefined,
   );
@@ -133,8 +202,7 @@ const upstream = async (now: number, database: string) => {
       ),
     ).pipe(Effect.provide(drizzleClient)),
   );
-  // Windows keeps an open SQLite file locked, so the scenario's directory could not be removed.
-  client.close();
+  close();
   const response = await handleRequest(
     new Request(`${origin}/`, { headers: { accept: "text/html" } }),
     {
@@ -153,123 +221,126 @@ const upstream = async (now: number, database: string) => {
   return { status: response.status, body: await response.text() };
 };
 
-test(
-  "the SQLite showcase renders, resumes, mutates, goes live and persists",
-  async () => {
-    const {
-      rendered: native,
-      live,
-      after,
-      expected,
-    } = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-fullstack-" });
-          const database = `${parent}/todos.db`;
-          seed(database);
-          const artifact = yield* compileShowcase(template, { origin });
-          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-          yield* CargoApi.fetch(directory);
-          yield* CargoApi.build(directory, "debug");
-          const child = yield* ChildProcess.make(
-            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-            ["--port", "0"],
-            { env: { [DATABASE_URL_ENV]: sqliteUrl(database) }, extendEnv: true },
-          );
-          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-          const ready = yield* Stream.runHead(
-            Stream.splitLines(Stream.decodeText(child.stdout)),
-          ).pipe(Effect.timeout("10 seconds"));
-          if (!Option.isSome(ready)) throw new Error("Missing ready record");
-          const { address } = Schema.decodeUnknownSync(
-            Schema.Struct({
-              schema: Schema.Literal("reffect.rpc.ready@1"),
-              address: Schema.String,
-            }),
-          )(JSON.parse(ready.value));
-          const rendered = yield* Effect.promise(() => get(address, "/"));
-          // Upstream reads the same file now, before the toggle below commits.
-          const now = flagsOf(rendered.body).remote.now;
-          const expected = yield* Effect.promise(() => upstream(now, database));
-          // LIVE-015: t2 changes after the render and before the browser subscribes. The fresh
-          // subscription's snapshot still carries it, where liveHub alone would send nothing.
-          yield* Effect.promise(() =>
-            rpc(
-              address,
-              {
-                id: "1",
-                tag: "FoldkitRemoteMutate",
-                payload: { requestId: "r1", mutation: "ToggleTodo", input: { id: "t2" } },
-              },
-              (lines) => lines.some((line) => line.includes('"Exit"')),
-            ),
-          );
-          const live = yield* Effect.promise(() =>
-            rpc(
-              address,
-              {
-                id: "2",
-                tag: "FoldkitRemoteLive",
-                payload: {
-                  version: 4,
-                  requirements: [{ entity: "Todo", id: "t2", fields: ["done"] }],
-                  after: 0,
+for (const showcase of showcases)
+  test.skipIf(showcase.unavailable !== undefined)(
+    `the ${showcase.dialect} showcase renders, resumes, mutates, goes live and persists`,
+    async () => {
+      const {
+        rendered: native,
+        live,
+        after,
+        expected,
+      } = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-fullstack-" });
+            const database = yield* showcase.open(parent);
+            const artifact = yield* compileShowcase(template, {
+              origin,
+              dialect: showcase.dialect,
+            });
+            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+            yield* CargoApi.fetch(directory);
+            yield* CargoApi.build(directory, "debug");
+            const child = yield* ChildProcess.make(
+              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+              ["--port", "0"],
+              { env: { [DATABASE_URL_ENV]: database.url }, extendEnv: true },
+            );
+            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+            const ready = yield* Stream.runHead(
+              Stream.splitLines(Stream.decodeText(child.stdout)),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (!Option.isSome(ready)) throw new Error("Missing ready record");
+            const { address } = Schema.decodeUnknownSync(
+              Schema.Struct({
+                schema: Schema.Literal("reffect.rpc.ready@1"),
+                address: Schema.String,
+              }),
+            )(JSON.parse(ready.value));
+            const rendered = yield* Effect.promise(() => get(address, "/"));
+            // Upstream reads the same file now, before the toggle below commits.
+            const now = flagsOf(rendered.body).remote.now;
+            const expected = yield* Effect.promise(() => upstream(now, database));
+            // LIVE-015: t2 changes after the render and before the browser subscribes. The fresh
+            // subscription's snapshot still carries it, where liveHub alone would send nothing.
+            yield* Effect.promise(() =>
+              rpc(
+                address,
+                {
+                  id: "1",
+                  tag: "FoldkitRemoteMutate",
+                  payload: { requestId: "r1", mutation: "ToggleTodo", input: { id: "t2" } },
                 },
-              },
-              (lines) => lines.some((line) => line.includes("EntityPatched")),
-            ),
-          ).pipe(Effect.timeout("10 seconds"));
-          // The committed toggle is in SQLite: the next render shows it.
-          const after = yield* Effect.promise(() => get(address, "/"));
-          return { rendered, live, after, expected };
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-    );
-    expect(native.status).toBe(200);
-    expect(live.join("\n")).toContain('"values":{"done":true}');
-    expect(native).toEqual(expected);
-    expect(native.body).toContain("Compile it natively");
-    expect(native.body).toContain('<li data-id="t2" class="open">');
-    expect(after.body).toContain('<li data-id="t2" class="done">');
+                (lines) => lines.some((line) => line.includes('"Exit"')),
+              ),
+            );
+            const live = yield* Effect.promise(() =>
+              rpc(
+                address,
+                {
+                  id: "2",
+                  tag: "FoldkitRemoteLive",
+                  payload: {
+                    version: 4,
+                    requirements: [{ entity: "Todo", id: "t2", fields: ["done"] }],
+                    after: 0,
+                  },
+                },
+                (lines) => lines.some((line) => line.includes("EntityPatched")),
+              ),
+            ).pipe(Effect.timeout("10 seconds"));
+            // The committed toggle is in SQLite: the next render shows it.
+            const after = yield* Effect.promise(() => get(address, "/"));
+            return { rendered, live, after, expected };
+          }),
+        ).pipe(Effect.provide(NodeServices.layer)),
+      );
+      expect(native.status).toBe(200);
+      expect(live.join("\n")).toContain('"values":{"done":true}');
+      expect(native).toEqual(expected);
+      expect(native.body).toContain("Compile it natively");
+      expect(native.body).toContain('<li data-id="t2" class="open">');
+      expect(after.body).toContain('<li data-id="t2" class="done">');
 
-    // The stock runtime adopts the page; its Remote client must never be asked to read or query.
-    // The entry script is the app this test starts itself.
-    document.body.innerHTML = (/<body>(.*)<\/body>/s.exec(native.body)?.[1] ?? "").replace(
-      /<script type="module"[^>]*><\/script>/,
-      "",
-    );
-    const serverItems = Array.from(document.querySelectorAll("li"));
-    expect(serverItems).toHaveLength(2);
-    const asked: Array<string> = [];
-    const application = Runtime.makeApplication({
-      Model,
-      Flags,
-      init,
-      update,
-      view,
-      subscriptions,
-      container: document.getElementById("root"),
-      resources: Layer.succeed(RemoteClient, {
-        query: (request) =>
-          Effect.sync(() => asked.push(`query ${request.query}`)).pipe(
-            Effect.andThen(Effect.never),
-          ),
-        read: (batch) =>
-          Effect.sync(() => asked.push(`read ${batch.requests.length}`)).pipe(
-            Effect.andThen(Effect.never),
-          ),
-        mutate: () => Effect.never,
-        live: () => Stream.never,
-      }),
-      devTools: { Message },
-    });
-    Runtime.hydrate(application, { buildId: BUILD_ID });
-    await vi.waitFor(() => expect(document.querySelector("[data-foldkit-app]")).toBeNull());
-    // Give subscriptions their first turn: a read entry with something to fetch would ask now.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(asked).toEqual([]);
-    expect(Array.from(document.querySelectorAll("li"))).toEqual(serverItems);
-  },
-  nativeTestBudget(0) + 240000,
-);
+      // The stock runtime adopts the page; its Remote client must never be asked to read or query.
+      // The entry script is the app this test starts itself.
+      document.body.innerHTML = (/<body>(.*)<\/body>/s.exec(native.body)?.[1] ?? "").replace(
+        /<script type="module"[^>]*><\/script>/,
+        "",
+      );
+      const serverItems = Array.from(document.querySelectorAll("li"));
+      expect(serverItems).toHaveLength(2);
+      const asked: Array<string> = [];
+      const application = Runtime.makeApplication({
+        Model,
+        Flags,
+        init,
+        update,
+        view,
+        subscriptions,
+        container: document.getElementById("root"),
+        resources: Layer.succeed(RemoteClient, {
+          query: (request) =>
+            Effect.sync(() => asked.push(`query ${request.query}`)).pipe(
+              Effect.andThen(Effect.never),
+            ),
+          read: (batch) =>
+            Effect.sync(() => asked.push(`read ${batch.requests.length}`)).pipe(
+              Effect.andThen(Effect.never),
+            ),
+          mutate: () => Effect.never,
+          live: () => Stream.never,
+        }),
+        devTools: { Message },
+      });
+      Runtime.hydrate(application, { buildId: BUILD_ID });
+      await vi.waitFor(() => expect(document.querySelector("[data-foldkit-app]")).toBeNull());
+      // Give subscriptions their first turn: a read entry with something to fetch would ask now.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(asked).toEqual([]);
+      expect(Array.from(document.querySelectorAll("li"))).toEqual(serverItems);
+    },
+    nativeTestBudget(0) + 240000,
+  );

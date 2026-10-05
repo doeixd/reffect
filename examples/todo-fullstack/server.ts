@@ -16,7 +16,8 @@ import { NativeRemote, NativeRpc } from "../../packages/reffect/src/index.ts";
 import { Data } from "../todo-remote/domain.ts";
 import { page, plan } from "../todo-remote/page.ts";
 import { mutations } from "../todo-remote/sources.ts";
-import { bindings } from "./db.ts";
+import { bindings, pgBindings } from "./db.ts";
+import type { Dialect } from "./db.ts";
 
 /** The variable the server reads its database URL from at run time; never compiled in. */
 export const DATABASE_URL_ENV = "REFFECT_DATABASE_URL";
@@ -31,7 +32,12 @@ class Authentication extends RpcMiddleware.Service<Authentication, { provides: C
 
 export const compileShowcase = (
   template: string,
-  options: { readonly origin?: string; readonly loginPage?: string } = {},
+  options: {
+    readonly origin?: string;
+    readonly loginPage?: string;
+    /** The database the server runs on; SQLite by default. */
+    readonly dialect?: Dialect;
+  } = {},
 ) => {
   const pages = {
     template,
@@ -41,7 +47,10 @@ export const compileShowcase = (
   };
   const shared = {
     domain: Data,
-    sql: { dialect: "sqlite" as const, bindings, databaseUrlEnv: DATABASE_URL_ENV },
+    sql:
+      options.dialect === "postgres"
+        ? { dialect: "postgres" as const, bindings: pgBindings, databaseUrlEnv: DATABASE_URL_ENV }
+        : { dialect: "sqlite" as const, bindings, databaseUrlEnv: DATABASE_URL_ENV },
     mutations,
     live: true,
     liveSnapshot: true,
