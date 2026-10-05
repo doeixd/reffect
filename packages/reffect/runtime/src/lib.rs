@@ -38,6 +38,7 @@ pub mod rpc_host {
 
     include!("rpc_args.rs");
     include!("rpc_wire.rs");
+    include!("rpc_json.rs");
     include!("rpc_stream.rs");
     include!("rpc_serve.rs");
 
@@ -107,6 +108,155 @@ not json
                 "Expected a value greater than or equal to 0n"
             );
             assert_eq!(u64_arg(&json!(1), None).unwrap_err(), "Expected string");
+        }
+    }
+}
+
+/// The RPC server's static items under SchemaBinary: `rpc_binary` in place of `rpc_json`, with
+/// the generated transcoders of one procedure, `Echo` (a String payload and answer), as stubs.
+#[allow(dead_code)]
+pub mod rpc_binary_host {
+    use crate::schema_binary;
+    use axum::response::{IntoResponse, Response};
+    use axum::{body::Bytes, http::StatusCode};
+    use serde_json::{json, Value};
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    pub const MAX_BATCH: usize = 64;
+    const ENVELOPE_FINGERPRINT: [u8; 8] = [0xcc, 0x32, 0x8a, 0xb0, 0x8f, 0x52, 0x45, 0x25];
+    const MAX_FRAME_SIZE: Option<u64> = Some(64);
+
+    fn sb_payload(tag: &str, bytes: &[u8]) -> Result<Value, String> {
+        if tag != "Echo" {
+            return Ok(Value::Null);
+        }
+        let value = schema_binary::one_frame(bytes, None)
+            .map_err(|invalid| schema_binary::Failure::from(invalid).message())?;
+        schema_binary::Reader::new(value)
+            .string()
+            .map(Value::String)
+            .map_err(|invalid| schema_binary::Failure::from(invalid).message())
+    }
+    fn sb_exit(_tag: &str, exit: &Value) -> Result<Vec<u8>, String> {
+        let mut value = Vec::new();
+        match exit["_tag"].as_str() {
+            Some("Success") => schema_binary::put_exit_success(
+                &mut value,
+                exit["value"].as_str().ok_or("a string")?.as_bytes(),
+            ),
+            _ => schema_binary::put_exit_failure(
+                &mut value,
+                &[schema_binary::Reason::Die(
+                    json_text(&exit["cause"][0]["defect"]).into_bytes(),
+                )],
+            ),
+        }
+        let mut frame = Vec::new();
+        schema_binary::put_frame(&mut frame, None, &value);
+        Ok(frame)
+    }
+
+    include!("rpc_args.rs");
+    include!("rpc_wire.rs");
+    include!("rpc_binary.rs");
+    include!("rpc_stream.rs");
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn unhex(text: &str) -> Vec<u8> {
+            (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+                .collect()
+        }
+        fn body_of(response: Response) -> (u16, Vec<u8>) {
+            let status = response.status().as_u16();
+            let body = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+                .unwrap();
+            (status, body.to_vec())
+        }
+
+        /// What the official server answered (`runtime/fixtures/schema-binary.json`): bodies the
+        /// reader refuses get the same status and bytes, and Echo's answers the same frames.
+        #[test]
+        fn bodies_are_answered_as_the_official_server_answers_them() {
+            let fixture: Value =
+                serde_json::from_str(include_str!("../fixtures/schema-binary.json")).unwrap();
+            for case in fixture["server"].as_array().unwrap() {
+                let name = case["name"].as_str().unwrap();
+                let expected = (
+                    case["status"].as_u64().unwrap() as u16,
+                    unhex(case["response"].as_str().unwrap()),
+                );
+                match read_body(&unhex(case["bytes"].as_str().unwrap())) {
+                    Err(response) => assert_eq!(body_of(response), expected, "{name}"),
+                    Ok((messages, _)) if name.contains("echo") => {
+                        // As the server answers them: each request's exit, tagged with its tag.
+                        let answers = messages
+                            .iter()
+                            .map(|message| {
+                                let id = &message["id"];
+                                let tag = message["tag"].as_str().unwrap();
+                                tagged(exit(id, success(message["payload"].clone())), tag)
+                            })
+                            .collect();
+                        assert_eq!(
+                            body_of(write_body(StatusCode::OK, answers)),
+                            expected,
+                            "{name}"
+                        );
+                    }
+                    // A client-sent Pong is refused as the JSON path refuses non-Request messages.
+                    Ok((messages, _)) => {
+                        assert_eq!(messages, [json!({"_tag":"Pong"})], "{name}")
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn a_payload_that_does_not_transcode_is_kept_for_its_request() {
+            // Echo with an empty payload region: a frame without its envelope byte.
+            let request = schema_binary::Message::Request(schema_binary::Request {
+                id: schema_binary::RequestId::Number(0.0),
+                tag: "Echo".into(),
+                payload: vec![0x00],
+                headers: vec![],
+                is_notification: None,
+                trace_id: Some(None),
+                span_id: None,
+                sampled: Some(Some(true)),
+            });
+            let value = message_value(request);
+            assert_eq!(value["payload"], Value::Null);
+            assert_eq!(
+                value["~payloadError"],
+                json!("Expected nonzero frame length")
+            );
+            // A field present as undefined reads as absent.
+            assert!(value.get("traceId").is_none());
+            assert_eq!(value["sampled"], json!(true));
+        }
+
+        #[test]
+        fn numbers_keep_their_sign_and_non_finite_spellings() {
+            assert!(value_number(&number_value(-0.0))
+                .unwrap()
+                .is_sign_negative());
+            assert_eq!(number_value(f64::NAN), json!("NaN"));
+            assert_eq!(value_number(&json!("-Infinity")), Ok(f64::NEG_INFINITY));
+            assert_eq!(
+                json_text(&json!({"name":"Error", "message":"a\"b\n", "n":-0.0})),
+                "{\"name\":\"Error\",\"message\":\"a\\\"b\\n\",\"n\":0}"
+            );
         }
     }
 }

@@ -58,8 +58,9 @@ async fn forward_chunks(
         }
     }
 }
-/// The response body: NDJSON forwards each message as it arrives; JSON writes the array once the
-/// worker is done. Dropping it cancels the worker's requests (STREAM-003).
+/// The response body: a framed serialization (NDJSON, SchemaBinary) forwards each message as it
+/// arrives; JSON writes the array once the worker is done. Dropping it cancels the worker's
+/// requests (STREAM-003).
 struct PendingResponse {
     lines: tokio::sync::mpsc::Receiver<Outgoing>,
     buffered: Vec<Value>,
@@ -79,9 +80,9 @@ impl http_body::Body for PendingResponse {
             match self.lines.poll_recv(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(Outgoing::Message(value))) => {
-                    if NDJSON {
+                    if FRAMED {
                         return Poll::Ready(Some(Ok(http_body::Frame::data(Bytes::from(
-                            format!("{}\n", value),
+                            encode_one(&value),
                         )))));
                     }
                     self.buffered.push(value);
@@ -90,7 +91,7 @@ impl http_body::Body for PendingResponse {
                     self.cancellation.take();
                     // A worker that stops before Done failed.
                     let finished = matches!(done, Some(Outgoing::Done));
-                    if NDJSON {
+                    if FRAMED {
                         return if finished {
                             Poll::Ready(None)
                         } else {

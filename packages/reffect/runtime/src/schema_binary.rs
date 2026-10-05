@@ -414,6 +414,78 @@ fn big_magnitude(groups: &[u8]) -> f64 {
     mantissa as f64 * 2f64.powi(exponent)
 }
 
+// ---- Default-mode struct fields
+
+/// A field tag's id and wire kind.
+pub fn read_field(r: &mut Reader) -> Decoded<(u64, u8)> {
+    let tag = r.field_tag()?;
+    Ok((tag / 8, (tag % 8) as u8))
+}
+fn skip_varint(r: &mut Reader) -> Decoded<()> {
+    while r.byte()? & 0x80 != 0 {}
+    Ok(())
+}
+/// Skips a field's payload by its wire kind alone (`skipFieldPayload`).
+pub fn skip_field(r: &mut Reader, wire: u8) -> Decoded<()> {
+    match wire {
+        FIELD_WIRE_SIZED => {
+            let len = r.uv()?;
+            r.take(usize::try_from(len).map_err(|_| Invalid("complete value"))?)?;
+        }
+        FIELD_WIRE_VARINT => skip_varint(r)?,
+        FIELD_WIRE_FIXED64 => {
+            r.take(8)?;
+        }
+        FIELD_WIRE_DECIMAL => {
+            skip_varint(r)?;
+            skip_varint(r)?;
+        }
+        FIELD_WIRE_FIXED32 => {
+            r.take(4)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+/// A `number` field's payload, by its wire kind (`decodeScalarField`).
+pub fn field_number(r: &mut Reader, wire: u8) -> Decoded<f64> {
+    match wire {
+        FIELD_WIRE_VARINT => r.sm(),
+        FIELD_WIRE_FIXED64 => r.f64(),
+        FIELD_WIRE_DECIMAL => {
+            let mantissa = r.sm()?;
+            let scale = r.uv()?;
+            if scale == 0 || scale > u64::from(DECIMAL_SCALE_MAX) {
+                return Err(Invalid("a decimal scale in [1, 8]"));
+            }
+            Ok(mantissa / POW10[scale as usize])
+        }
+        _ => Err(Invalid("matching field wire kind")),
+    }
+}
+/// The field-0 map of a struct without index signatures: every pair is checked, then skipped.
+pub fn skip_extras(r: &mut Reader, wire: u8, declared: &[&str]) -> Decoded<()> {
+    if wire != FIELD_WIRE_SIZED {
+        return Err(Invalid("extra field map"));
+    }
+    let mut map = r.sized()?;
+    let mut seen: Vec<&[u8]> = Vec::new();
+    while !map.is_empty() {
+        let code = map.uv()?;
+        let key = map.take(usize::try_from(code / 8).map_err(|_| Invalid("complete value"))?)?;
+        let text = std::str::from_utf8(key).map_err(|_| Invalid("utf-8"))?;
+        if declared.contains(&text) {
+            return Err(Invalid("an extra key distinct from declared fields"));
+        }
+        if seen.contains(&key) {
+            return Err(Invalid("unique extra keys"));
+        }
+        seen.push(key);
+        skip_field(&mut map, (code % 8) as u8)?;
+    }
+    Ok(())
+}
+
 /// The frames of a body, in order. A failure ends the sequence; values before it come first.
 /// A body ending inside a frame is no failure (the parser waits for more): the sequence ends,
 /// and `unfinished` reports the frame.

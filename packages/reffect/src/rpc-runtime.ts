@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 /// The configured RpcSerialization (STREAM-001): \`layerJson\` reads one value, an array being a
 /// batch; \`layerNdjson\` reads one message per complete line.
 const NDJSON: bool = ${ndjson};
-${RuntimeSources.rpc_wire}
+${RuntimeSources.rpc_wire}${RuntimeSources.rpc_json}
 ${decodeArgs()}${
   asynchronous
     ? String.raw`${RuntimeSources.rpc_stream}
