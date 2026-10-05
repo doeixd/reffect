@@ -14,6 +14,11 @@ export interface SessionCookie {
   readonly path: string;
   /** Seconds the cookie lives; a browser-session cookie when absent. */
   readonly maxAge: number | undefined;
+  /**
+   * HTML a page refused for want of a principal answers with, still 401: where a browser can sign
+   * in (for example a form posting a token to `path`). Without it a refusal has no body.
+   */
+  readonly loginPage: string | undefined;
 }
 const COOKIE_NAME = /^__Host-[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 const SESSION_PATH = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/;
@@ -71,6 +76,7 @@ export class RpcBearer {
             cookie: requested.cookie ?? "__Host-reffect-session",
             path: requested.path ?? "/session",
             maxAge: requested.maxAge,
+            loginPage: requested.loginPage,
           };
     if (
       session &&
@@ -79,13 +85,15 @@ export class RpcBearer {
         (session.maxAge !== undefined &&
           (!Number.isSafeInteger(session.maxAge) ||
             session.maxAge < 1 ||
-            session.maxAge > MAX_AGE_LIMIT)))
+            session.maxAge > MAX_AGE_LIMIT)) ||
+        (session.loginPage !== undefined &&
+          (session.loginPage.length === 0 || session.loginPage.length > 65536)))
     )
       throw fail(
         "RPC_UNSUPPORTED",
         "rpc",
         "auth.session",
-        "A session cookie is named __Host-<token>, its path is an absolute path of plain segments, and its maxAge is 1 second to 400 days",
+        "A session cookie is named __Host-<token>, its path is an absolute path of plain segments, its maxAge is 1 second to 400 days, and a login page is 1 to 65536 characters",
       );
     return new RpcBearer(
       middleware,

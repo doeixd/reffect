@@ -435,6 +435,12 @@ test("session adapters are checked when compiled", async () => {
       session: { maxAge: 0 },
     }),
   ).toThrow(CompileError);
+  expect(() =>
+    NativeRpc.bearer(Authentication, CurrentPrincipal, {
+      credentialsEnv: "REFFECT_REMOTE_CREDENTIALS",
+      session: { loginPage: "" },
+    }),
+  ).toThrow(CompileError);
   // A session cookie authenticates pages, so it needs them.
   const pageless = await Effect.runPromise(
     NativeRemote.compile(Group, {

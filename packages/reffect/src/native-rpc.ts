@@ -1372,6 +1372,7 @@ ${
                       ? `${prepared.pages.views}_arg(&views, None)`
                       : `decode_${prepared.pages.views.name}(&views, None)`,
                   prepared.auth?.session !== undefined,
+                  prepared.auth?.session?.loginPage,
                 ),
               ),
             ]

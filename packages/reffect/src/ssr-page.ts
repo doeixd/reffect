@@ -180,6 +180,7 @@ export const pageRuntime = (
   data?: string,
   views?: string,
   cookieVary = false,
+  loginPage?: string,
 ): string => {
   const splice = parts
     .map((part) =>
@@ -256,7 +257,20 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
             return empty(StatusCode::NOT_FOUND, &[("vary", negotiated_vary())]);
         }
     }
-    let refuse = |status: StatusCode| if negotiated { empty(status, &[("vary", negotiated_vary())]) } else { empty(status, &[]) };
+    let refuse = |status: StatusCode| {
+        let mut response = if negotiated { empty(status, &[("vary", negotiated_vary())]) } else { empty(status, &[]) };${
+          loginPage === undefined
+            ? ""
+            : `
+        // Wanting a principal, a browser is shown where to sign in; the status stays 401 (#4).
+        if status == StatusCode::UNAUTHORIZED {
+            response.headers_mut().insert("content-type", axum::http::HeaderValue::from_static("text/html; charset=utf-8"));
+            response.headers_mut().insert("cache-control", axum::http::HeaderValue::from_static("no-store"));
+            if method != "HEAD" { *response.body_mut() = axum::body::Body::from(${Rs.stringLiteral(loginPage).text}); }
+        }`
+        }
+        response
+    };
     ${
       data === undefined
         ? "let _ = &state;"
