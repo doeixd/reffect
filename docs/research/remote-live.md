@@ -341,6 +341,18 @@ Status: **proposed**, from the [review](#review-2026-10-03). Checked first:
 3. **Explanation and API.** LIVE-010 (registry and version guard), LIVE-011 (typed signals) and LIVE-014 (written boundary).
 4. **Evidence and code layout.** LIVE-013 (randomized hub conformance), then LIVE-012 (Rust files), before milestone 8 adds another runtime.
 
+## Decision: live signals before the mutation answers (#11, 2026-10-05)
+
+**Question.** Should a mutation's live re-reads move to a spawned task? Today they run inside `finish`: after `COMMIT` on SQL, at once on memory. A mutation's latency includes every re-read its signals trigger.
+
+**Upstream.** In foldkit-remote-server 0.11.0, `liveHub.changed(ref, fields)` is an Effect the mutation source yields. It re-reads through the entity source and enqueues each `EntityPatched` before the source returns, so the mutation answers only after its events are queued. Checked in `dist/index.mjs`, `liveHub.changed`.
+
+**Decision.** Keep the ordering. Native already matches upstream here. The guarantee clients can rely on is that, when a mutation answers, every live event it caused is already queued for each subscriber. That holds both for a client's own subscription and for others. A spawned delivery would break that, and would let a response overtake its own patch.
+
+**Cost.** Latency grows with the number of live subscriber groups selecting the changed rows: one re-read per principal and window group, not per subscriber. Snapshot batching (#10) and per-table caches (#35) bound the work. Queues are bounded (#19), so a slow subscriber never delays the mutation; it loses events as a cursor gap instead.
+
+**Revisit if.** Measured mutation latency is dominated by re-reads in a real workload. Then deliver on a task and state the weaker ordering in [native divergences](../native-divergences.md).
+
 ## Open questions
 
 - Whether the native hub needs `size` (upstream exposes it for tests). The test observes unsubscription through later mutations instead.

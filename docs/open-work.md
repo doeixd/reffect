@@ -307,7 +307,6 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 
 - [#4](https://github.com/doeixd/reffect/issues/4): a cookie session adapter, so authenticated pages work in browsers
 - [#6](https://github.com/doeixd/reffect/issues/6): derive view item witnesses from the selection schema
-- [#11](https://github.com/doeixd/reffect/issues/11): mutation latency includes after-commit re-reads
 - [#13](https://github.com/doeixd/reffect/issues/13): one page plan object and one `PageRequest` input
 - [#14](https://github.com/doeixd/reffect/issues/14): a browser-safe `R.Html` entry, to write views once
 

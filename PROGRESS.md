@@ -94,6 +94,10 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Live signal ordering decision (#11)
+
+- **#11.** Decided: live re-reads stay before the mutation answers. Upstream's `liveHub.changed` is an Effect the mutation source yields, so native already matches it. Clients can rely on every event a mutation caused being queued before its response. The rationale, costs, bounds and revisit condition are in [remote-live research](docs/research/remote-live.md). No code change.
+
 ## 2026-10-05 — SSR follow-ups (#15)
 
 - **Nested `R.Struct.get`.** This is a TypeScript limit, not a signature bug. In isolation, a single-signature function infers `get(get(x, "a"), "b")`, but every overloaded (dual) form fails: data-last first, data-first first, or a data-last form without `S`. TypeScript does not resolve an overloaded generic call's result while it infers the outer call. Effect's dual `Struct.get` has the same shape, so the API stays aligned. The doc comment now names the pipe form and a named intermediate, and `tests/struct-get-types.ts` pins both, plus the nested refusal and an unknown key, with `@ts-expect-error`.
