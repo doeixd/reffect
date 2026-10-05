@@ -319,7 +319,6 @@ Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the 
 - [#30](https://github.com/doeixd/reffect/issues/30): 32-bit hashes in type ids
 - [#31](https://github.com/doeixd/reffect/issues/31): pipeline re-runs check/derive 7–8×
 - [#32](https://github.com/doeixd/reffect/issues/32): source maps cost about 4×
-- [#34](https://github.com/doeixd/reffect/issues/34): SSR render copies and quadratic class splitting
 - [#35](https://github.com/doeixd/reffect/issues/35): per-table memory query cache versions
 - [#38](https://github.com/doeixd/reffect/issues/38): deduplicate runtime and compiler logic
 - [#39](https://github.com/doeixd/reffect/issues/39): process-wide registries

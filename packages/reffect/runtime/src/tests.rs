@@ -3,12 +3,44 @@
 //! `JSON.stringify`); the hub cases pin behavior the differential suites in
 //! `packages/reffect/tests` check against foldkit-remote-server's `liveHub`, which stay the oracle.
 
-use crate::foldkit_html::{element, empty, render, text, Prop};
+use crate::foldkit_html::{element, empty, failure, render, text, Prop};
 use crate::foldkit_json::{json_text, round_trip};
 use crate::remote_engine::{
     page_data, page_views, read, Hub, JsObject, LiveLimits, Memory, PageRead, Subscription,
 };
 use serde_json::json;
+
+#[test]
+fn deep_views_render_once_in_linear_time() {
+    // #34: each element shares its children and the document is written once. Copying each
+    // child into its parent moved the 1 MiB leaf once per ancestor, about 5 GB here.
+    let leaf = "x".repeat(1 << 20);
+    let started = std::time::Instant::now();
+    let mut html = element("b", false, &[], None, &[], None, &[text(&leaf)]);
+    for _ in 0..5_000 {
+        html = element("i", false, &[], None, &[], None, &[html]);
+    }
+    let rendered = render(&html, "app", "b1").unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+    let expected = format!(
+        "<i data-foldkit-app=\"app\" data-foldkit-build=\"b1\">{}<b>{}</b>{}</i>",
+        "<i>".repeat(4_999),
+        leaf,
+        "</i>".repeat(4_999)
+    );
+    assert_eq!(rendered, expected);
+    assert_eq!(rendered.capacity(), rendered.len());
+    // The failure check reads the same verdict without writing the document.
+    assert_eq!(failure(&html, "app", "b1"), None);
+    assert_eq!(
+        failure(&html, "a\0", "b1").is_some(),
+        render(&html, "a\0", "b1").is_err()
+    );
+}
 
 #[test]
 fn renders_attributes_children_and_root_markers_as_upstream() {

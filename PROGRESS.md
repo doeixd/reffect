@@ -94,6 +94,18 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — SSR rendering without repeated copies (#34)
+
+- **#34, Html as a shared tree.** The runtime `Html` is now an `Arc` tree: an element shares its children rather than copying their markup. `render` writes the document once, iteratively, into a buffer sized from the precomputed length. Before, every byte was copied once per ancestor. A custom `Drop` unlinks deep trees without recursion.
+- **No second build.** `failure` checks the root kind, the body's error and the stamp without writing the document, so `renderDocument` no longer builds it twice.
+- **Class tokens** are deduplicated with a `HashSet` (linear) instead of a scan per token.
+- **Template splice.** The page buffer is reserved from the template's byte length at build time.
+- **Remaining.** Encoding the rendered page into the outcome `Value` still copies it once.
+- **Validation.**
+  - New Rust test: a 1 MiB leaf under 5,000 nested elements builds and renders in 0.02 s, exactly and at capacity, and `failure` agrees with `render`. Against the previous renderer the same test took 3.4 s and failed its 2 s bound.
+  - `runtime:check`: 28 tests, clippy and rustfmt clean.
+  - Passing suites: `runtime-sources`, `html`, `html-native`, `html-hydrate`, `html-page`, `html-flags`, `todo-remote-page`, `todo-fullstack`; `vp check` clean.
+
 ## 2026-10-05 — One allocation per concatenation chain (#33)
 
 - **#33.** A string concatenation lowers to `[&(a)[..], &(b)[..], ...].concat()`, one allocation of the exact length. Before, it was a `format!("{}{}")` per link. Lowering binds every intermediate value to a local, so a chain was a run of locals, each link copying its whole prefix.

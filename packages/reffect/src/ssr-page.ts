@@ -120,6 +120,11 @@ export const pageRuntime = (
           : "body.push_str(&title);",
     )
     .join(" ");
+  const templateBytes = parts.reduce(
+    (total, part) =>
+      total + (part._tag === "Text" ? new TextEncoder().encode(part.text).length : 0),
+    0,
+  );
   return (
     runtimeModule("ssr_host", "crate-private") +
     String.raw`
@@ -200,7 +205,8 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
             return refuse(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
-    let mut body = String::new();
+    // Sized once: the template's own text is known at build time (#34).
+    let mut body = String::with_capacity(${templateBytes} + html.len() + title.len());
     ${splice}
     let mut extra = vec![("content-type", "text/html; charset=utf-8".to_string())];${
       data === undefined

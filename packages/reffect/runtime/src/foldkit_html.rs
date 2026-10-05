@@ -6,13 +6,45 @@ enum Kind {
     Text,
     Empty,
 }
-/// A serialized fragment, or the first serialization failure in document order.
+/// A serialized fragment, or the first serialization failure in document order. Children are
+/// shared, not copied, and the document is written once when rendered (#34): copying each
+/// child's markup into its parent cost O(size x depth).
 #[derive(Clone, Debug, PartialEq)]
-pub struct Html {
-    markup: String,
+pub struct Html(std::sync::Arc<Node>);
+#[derive(Debug, PartialEq)]
+struct Node {
     kind: Kind,
+    /// The opening tag, or a text's escaped content; its own attributes end at `own_end`.
+    head: String,
     own_end: usize,
+    children: Vec<Html>,
+    /// The closing tag, if any.
+    tail: String,
+    /// The serialized length of the whole fragment.
+    len: usize,
     error: Option<String>,
+}
+impl Drop for Node {
+    /// Unlinks a deep tree with a stack: the derived drop would recurse once per level.
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.children);
+        while let Some(child) = pending.pop() {
+            if let Ok(mut node) = std::sync::Arc::try_unwrap(child.0) {
+                pending.append(&mut node.children);
+            }
+        }
+    }
+}
+fn leaf(kind: Kind, head: String, error: Option<String>) -> Html {
+    Html(std::sync::Arc::new(Node {
+        kind,
+        len: head.len(),
+        head,
+        own_end: 0,
+        children: Vec::new(),
+        tail: String::new(),
+        error,
+    }))
 }
 pub enum Prop<'a> {
     Text(&'a str),
@@ -21,22 +53,12 @@ pub enum Prop<'a> {
 }
 
 pub fn empty() -> Html {
-    Html {
-        markup: String::new(),
-        kind: Kind::Empty,
-        own_end: 0,
-        error: None,
-    }
+    leaf(Kind::Empty, String::new(), None)
 }
 pub fn text(value: &str) -> Html {
     let mut markup = String::new();
     let error = foldkit_ssr::escape_text(value, &mut markup).err();
-    Html {
-        markup,
-        kind: Kind::Text,
-        own_end: 0,
-        error,
-    }
+    leaf(Kind::Text, markup, error)
 }
 
 /// JS `\s`, which `\s+` splits class strings on.
@@ -67,13 +89,11 @@ fn array_index(key: &str) -> Option<u32> {
 fn class_value(value: &str) -> Option<String> {
     let mut indexed: Vec<(u32, &str)> = Vec::new();
     let mut named: Vec<&str> = Vec::new();
+    // A set, as object keys are: a linear search per token was O(n^2) (#34).
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for token in value.split(js_space) {
         // An empty token is skipped; __proto__ is the object's prototype setter, not a key.
-        if token.is_empty()
-            || token == "__proto__"
-            || indexed.iter().any(|(_, t)| *t == token)
-            || named.contains(&token)
-        {
+        if token.is_empty() || token == "__proto__" || !seen.insert(token) {
             continue;
         }
         match array_index(token) {
@@ -161,24 +181,53 @@ pub fn element(
         markup.push('"');
     }
     markup.push('>');
-    if !is_void {
+    let mut tail = String::new();
+    let mut len = markup.len();
+    let children = if is_void {
+        Vec::new()
+    } else {
         for child in children {
             if error.is_none() {
-                if let Some(message) = &child.error {
+                if let Some(message) = &child.0.error {
                     error = Some(message.clone());
                 }
             }
-            markup.push_str(&child.markup);
+            len += child.0.len;
         }
-        markup.push_str("</");
-        markup.push_str(tag);
-        markup.push('>');
-    }
-    Html {
-        markup,
+        tail.push_str("</");
+        tail.push_str(tag);
+        tail.push('>');
+        len += tail.len();
+        children.to_vec()
+    };
+    Html(std::sync::Arc::new(Node {
         kind: Kind::Element,
+        head: markup,
         own_end,
+        children,
+        tail,
+        len,
         error,
+    }))
+}
+/// A fragment's markup in document order, into `out`; an explicit stack, as views nest deeply.
+fn write(root: &Html, out: &mut String) {
+    enum Step<'a> {
+        Open(&'a Html),
+        Close(&'a str),
+    }
+    let mut stack = vec![Step::Open(root)];
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Open(html) => {
+                out.push_str(&html.0.head);
+                stack.push(Step::Close(&html.0.tail));
+                for child in html.0.children.iter().rev() {
+                    stack.push(Step::Open(child));
+                }
+            }
+            Step::Close(tail) => out.push_str(tail),
+        }
     }
 }
 /// Text as `escapeText` writes it, or its NUL refusal; the page title goes through it.
@@ -187,7 +236,7 @@ pub fn escape_text(value: &str) -> Result<String, String> {
     foldkit_ssr::escape_text(value, &mut out).map(|()| out)
 }
 pub fn root_kind(body: &Html) -> String {
-    match body.kind {
+    match body.0.kind {
         Kind::Element => "Element",
         Kind::Text => "Text",
         Kind::Empty => "Empty",
@@ -196,7 +245,8 @@ pub fn root_kind(body: &Html) -> String {
 }
 /// The first serialization failure of a render: the body's, else a runtime/build id's.
 pub fn failure(body: &Html, runtime_id: &str, build_id: &str) -> Option<String> {
-    render(body, runtime_id, build_id)
+    // Checked without writing the document, which render_html then writes once (#34).
+    stamp(body, runtime_id, build_id)
         .err()
         .map(|(_, message)| message)
 }
@@ -209,24 +259,34 @@ pub fn render(
     runtime_id: &str,
     build_id: &str,
 ) -> Result<String, (&'static str, String)> {
-    match body.kind {
+    let stamp = stamp(body, runtime_id, build_id)?;
+    let root = &body.0;
+    let mut html = String::with_capacity(root.len + stamp.len());
+    html.push_str(&root.head[..root.own_end]);
+    html.push_str(&stamp);
+    html.push_str(&root.head[root.own_end..]);
+    for child in &root.children {
+        write(child, &mut html);
+    }
+    html.push_str(&root.tail);
+    Ok(html)
+}
+/// The root markers a hydratable render stamps on its element, or why it cannot render.
+fn stamp(body: &Html, runtime_id: &str, build_id: &str) -> Result<String, (&'static str, String)> {
+    match body.0.kind {
         Kind::Empty => return Err(("InvalidHydrationRoot", "Empty".to_string())),
         Kind::Text => return Err(("InvalidHydrationRoot", "Text".to_string())),
         Kind::Element => {}
     }
-    if let Some(message) = &body.error {
+    if let Some(message) = &body.0.error {
         return Err(("SerializationError", message.clone()));
     }
     let mut stamp = String::new();
     let mut error = None;
     attribute(&mut stamp, "data-foldkit-app", runtime_id, &mut error);
     attribute(&mut stamp, "data-foldkit-build", build_id, &mut error);
-    if let Some(message) = error {
-        return Err(("SerializationError", message));
+    match error {
+        Some(message) => Err(("SerializationError", message)),
+        None => Ok(stamp),
     }
-    let mut html = String::with_capacity(body.markup.len() + stamp.len());
-    html.push_str(&body.markup[..body.own_end]);
-    html.push_str(&stamp);
-    html.push_str(&body.markup[body.own_end..]);
-    Ok(html)
 }
