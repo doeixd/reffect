@@ -412,3 +412,204 @@ test(
   },
   nativeTestBudget(0) + 180000,
 );
+
+// #4 (docs/research/cookie-sessions.md): the same configured tokens in a __Host- session cookie.
+// The bearer path above is checked against the stock server; the cookie path must answer exactly
+// as the bearer path does for the same token, and only where the CSRF rules admit it.
+const sessionAuth = NativeRpc.bearer(Authentication, CurrentPrincipal, {
+  credentialsEnv: "REFFECT_REMOTE_CREDENTIALS",
+  session: { maxAge: 3600 },
+});
+const pageOrigin = "http://reffect.test";
+
+test("session adapters are checked when compiled", async () => {
+  expect(() =>
+    NativeRpc.bearer(Authentication, CurrentPrincipal, {
+      credentialsEnv: "REFFECT_REMOTE_CREDENTIALS",
+      session: { cookie: "session" },
+    }),
+  ).toThrow(CompileError);
+  expect(() =>
+    NativeRpc.bearer(Authentication, CurrentPrincipal, {
+      credentialsEnv: "REFFECT_REMOTE_CREDENTIALS",
+      session: { maxAge: 0 },
+    }),
+  ).toThrow(CompileError);
+  // A session cookie authenticates pages, so it needs them.
+  const pageless = await Effect.runPromise(
+    NativeRemote.compile(Group, {
+      domain,
+      rows,
+      auth: sessionAuth,
+      authorize: { User: authorizeUser, Project: authorizeProject },
+      mutations: [claim],
+    }).pipe(Effect.flip),
+  );
+  expect(pageless.message).toContain("give pages");
+});
+
+test(
+  "a session cookie signs pages and same-origin RPC in, and nothing cross-site",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-session-" });
+          const artifact = yield* NativeRemote.compile(Group, {
+            domain,
+            rows,
+            auth: sessionAuth,
+            authorize: { User: authorizeUser, Project: authorizeProject },
+            mutations: [claim],
+            pages: {
+              template: pageTemplate,
+              render: page,
+              origin: pageOrigin,
+              remote: { reads: [{ _tag: "Read", request: pageRead }], views: {} },
+            },
+          });
+          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+          yield* CargoApi.fetch(directory);
+          yield* CargoApi.build(directory, "debug");
+          const child = yield* ChildProcess.make(
+            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+            ["--port", "0"],
+            { env: { REFFECT_REMOTE_CREDENTIALS: JSON.stringify(credentials) }, extendEnv: true },
+          );
+          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+          const ready = yield* Stream.runHead(
+            Stream.splitLines(Stream.decodeText(child.stdout)),
+          ).pipe(Effect.timeout("10 seconds"));
+          if (!Option.isSome(ready)) throw new Error("Missing ready record");
+          const { address } = Schema.decodeUnknownSync(Schema.Struct({ address: Schema.String }))(
+            JSON.parse(ready.value),
+          );
+          const send = (path: string, init: RequestInit) =>
+            Effect.promise(async () => {
+              const response = await fetch(`http://${address}${path}`, init);
+              return {
+                status: response.status,
+                body: await response.text(),
+                cookie: response.headers.get("set-cookie"),
+                vary: response.headers.get("vary"),
+              };
+            });
+          const sameOrigin = { "sec-fetch-site": "same-origin" };
+
+          // Login exchanges a configured bearer token for the cookie, from the page's own origin.
+          const login = yield* send("/session", {
+            method: "POST",
+            headers: { ...sameOrigin, authorization: "Bearer member-token" },
+          });
+          expect(login.status).toBe(204);
+          expect(login.cookie).toBe(
+            "__Host-reffect-session=member-token; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600",
+          );
+          const refusedLogins: ReadonlyArray<readonly [string, Record<string, string>, number]> = [
+            ["unknown token", { ...sameOrigin, authorization: "Bearer nope" }, 401],
+            [
+              "cross-site",
+              { "sec-fetch-site": "cross-site", authorization: "Bearer member-token" },
+              403,
+            ],
+            [
+              "foreign origin",
+              { origin: "http://evil.test", authorization: "Bearer member-token" },
+              403,
+            ],
+          ];
+          for (const [label, headers, status] of refusedLogins) {
+            const refused = yield* send("/session", { method: "POST", headers });
+            expect(refused.status, label).toBe(status);
+            expect(refused.cookie, label).toBeNull();
+          }
+          // Without Fetch Metadata, the page's own Origin is accepted (OWASP's fallback).
+          const viaOrigin = yield* send("/session", {
+            method: "POST",
+            headers: { origin: pageOrigin, authorization: "Bearer member-token" },
+          });
+          expect(viaOrigin.status).toBe(204);
+
+          // Pages: the cookie reads as its token's principal; the page varies by Cookie.
+          const cookie = { cookie: "__Host-reffect-session=member-token" };
+          const viaCookie = yield* send("/", { headers: cookie });
+          const viaBearer = yield* send("/", { headers: { authorization: "Bearer member-token" } });
+          expect(viaCookie.status).toBe(200);
+          const exchanges = (body: string) =>
+            JSON.parse(/data-foldkit-flags="app">(.*?)<\/script>/s.exec(body)?.[1] ?? "null").remote
+              .exchanges;
+          expect(exchanges(viaCookie.body)).toStrictEqual(exchanges(viaBearer.body));
+          expect((yield* send("/projects", { headers: cookie })).vary).toBe(
+            "Accept, Sec-Fetch-Dest, Cookie",
+          );
+          const refusedPages: ReadonlyArray<readonly [string, string | undefined]> = [
+            ["no cookie", undefined],
+            ["forged", "__Host-reffect-session=forged-token"],
+            [
+              "sent twice",
+              "__Host-reffect-session=member-token; __Host-reffect-session=admin-token",
+            ],
+            ["another name", "reffect-session=member-token"],
+          ];
+          for (const [label, value] of refusedPages) {
+            const refused = yield* send("/", {
+              headers: value === undefined ? {} : { cookie: value },
+            });
+            expect(refused.status, label).toBe(401);
+          }
+
+          // RPC: the cookie answers as the bearer only from the page's origin with the RPC body.
+          const json = { "content-type": "application/json" };
+          const rpc = (headers: Record<string, string>, body: string) =>
+            send("/rpc", { method: "POST", headers, body });
+          const plainRead = read(undefined, "Project", "p1", ["name", "budget"]);
+          const bearer = yield* rpc(
+            json,
+            read("member-token", "Project", "p1", ["name", "budget"]),
+          );
+          const accepted = yield* rpc({ ...cookie, ...sameOrigin, ...json }, plainRead);
+          expect(accepted.body).toBe(bearer.body);
+          expect(accepted.body).toContain("Borealis");
+          const mutation = envelope("FoldkitRemoteMutate", {
+            requestId: "r",
+            mutation: "Claim",
+            input: { note: "n" },
+          });
+          const claimed = yield* rpc({ ...cookie, ...sameOrigin, ...json }, mutation);
+          expect(claimed.body).toContain('"admin":false');
+          const deniedRequests: ReadonlyArray<readonly [string, Record<string, string>]> = [
+            ["cross-site", { ...cookie, ...json, "sec-fetch-site": "cross-site" }],
+            ["same-site subdomain", { ...cookie, ...json, "sec-fetch-site": "same-site" }],
+            ["foreign origin", { ...cookie, ...json, origin: "http://evil.test" }],
+            ["no origin at all", { ...cookie, ...json }],
+            ["a form's text/plain", { ...cookie, ...sameOrigin, "content-type": "text/plain" }],
+            ["no content type", { ...cookie, ...sameOrigin }],
+            [
+              "a wrong bearer beside the cookie",
+              { ...cookie, ...sameOrigin, ...json, authorization: "Bearer nope" },
+            ],
+          ];
+          for (const [label, headers] of deniedRequests) {
+            const denied = yield* rpc(headers, mutation);
+            expect(denied.body, label).toContain("Unauthorized");
+            expect(denied.body, label).not.toContain('"admin"');
+          }
+
+          // Logout clears the cookie, from the page's own origin only.
+          const logout = yield* send("/session", { method: "DELETE", headers: sameOrigin });
+          expect(logout.status).toBe(204);
+          expect(logout.cookie).toBe(
+            "__Host-reffect-session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",
+          );
+          const crossLogout = yield* send("/session", {
+            method: "DELETE",
+            headers: { "sec-fetch-site": "cross-site" },
+          });
+          expect(crossLogout.status).toBe(403);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(0) + 180000,
+);

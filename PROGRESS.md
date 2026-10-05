@@ -94,6 +94,17 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Session cookies for pages and RPC (#4, steps 1–3)
+
+- **#4.** `NativeRpc.bearer(..., { credentialsEnv, session })` also accepts the configured token in a `__Host-` cookie (`HttpOnly; Secure; SameSite=Lax`). It is set by a native `POST /session` and cleared by `DELETE /session`. Details are in [cookie sessions research](docs/research/cookie-sessions.md#implemented-2026-10-05).
+  - **Pages** read the cookie when no `Authorization` is presented, and vary by `Cookie`.
+  - **RPC** reads it only from the page's own origin (Fetch Metadata, else `Origin`) with the RPC media type.
+  - **A presented credential** is never replaced by the cookie.
+- **Validation.**
+  - `remote-auth`, two new tests: compile-time refusals; and against a native server, login, pages (accepted and refused), RPC (a cookie read byte-equal to the bearer's, a cookie mutation as its principal, seven cross-site and content-type denials) and logout.
+  - Passing suites: `rpc-auth`, `async-rpc`, `schema-rpc`, `remote-live`, `html-page`, `remote-page`, `todo-fullstack`; `vp check` clean.
+- **Remaining.** Step 4: `todo-fullstack` with auth in headless Chrome.
+
 ## 2026-10-05 — Cookie sessions research (#4)
 
 - **#4, research only.** Recorded in [cookie sessions research](docs/research/cookie-sessions.md). Effect 4.0.0 carries a credential in a cookie with `HttpApiSecurity.apiKey({ in: "cookie" })` and sets it with `securitySetCookie` (Secure and HttpOnly by default), but ships no CSRF defence. The stock RPC browser client sends same-origin cookies with no change.

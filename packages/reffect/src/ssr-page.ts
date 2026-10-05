@@ -179,6 +179,7 @@ export const pageRuntime = (
   render: string,
   data?: string,
   views?: string,
+  cookieVary = false,
 ): string => {
   const splice = parts
     .map((part) =>
@@ -218,7 +219,13 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     static VARY: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
     let (destination_vary, negotiated_vary) = VARY.get_or_init(|| {
         let destination = ssr_host::vary_with(None, "Sec-Fetch-Dest");
-        let negotiated = ssr_host::vary_with(Some(&ssr_host::vary_with(None, "Accept")), "Sec-Fetch-Dest");
+        let negotiated = ssr_host::vary_with(Some(&ssr_host::vary_with(None, "Accept")), "Sec-Fetch-Dest");${
+          // A page authenticated by the session cookie differs by it (#4).
+          cookieVary
+            ? `
+        let negotiated = ssr_host::vary_with(Some(&negotiated), "Cookie");`
+            : ""
+        }
         (destination, negotiated)
     });
     let base = ORIGIN.get_or_init(|| url::Url::parse(${Rs.stringLiteral(origin).text}).ok());
@@ -294,7 +301,9 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     // caches must not store it (#3; upstream's host sets no cache headers).
     extra.push(("cache-control", "private, no-store".to_string()));`
     }
-    if negotiated { extra.push(("vary", negotiated_vary())); }
+    if negotiated { extra.push(("vary", negotiated_vary())); }${
+      cookieVary ? ` else { extra.push(("vary", "Cookie".to_string())); }` : ""
+    }
     let mut response = empty(StatusCode::OK, &extra);
     if method != "HEAD" { *response.body_mut() = axum::body::Body::from(body); }
     response

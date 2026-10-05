@@ -118,3 +118,32 @@ Paths and the cookie name are compile options, refused if they clash with page r
 
 - Whether `Max-Age` should default to a session cookie (no `Max-Age`) for the demo profile.
 - Whether a refused cookie-authenticated mutation should be distinguishable from a missing credential in logs. Responses stay the same typed denial.
+
+## Implemented (2026-10-05)
+
+**Configuration.** `NativeRpc.bearer(middleware, principal, { credentialsEnv, session })` takes `session: true` or `{ cookie?, path?, maxAge? }`:
+
+- `cookie` must be a `__Host-` token name, default `__Host-reffect-session`;
+- `path` is plain segments, default `/session`;
+- `maxAge` is 1 second to 400 days.
+
+A session needs `pages`, whose origin is the one `Origin` is compared with. Its path may not be the RPC path.
+
+**Runtime** (`rpc-auth-runtime.ts`):
+
+- **`authenticate`** checks a presented `Authorization`, from the transport or the envelope, as before. Only when none is presented does it consult `session_principal`. That requires `Sec-Fetch-Site: same-origin` (or, without Fetch Metadata, `Origin` equal to the page origin) and the serialization's media type (`application/json` or `application/ndjson`), then verifies the cookie's token. A presented credential is never replaced by the cookie.
+- **`page_principal`** uses `Authorization`, else the cookie, with no cross-site check.
+- **The cookie value** is taken only when its name appears exactly once across the `Cookie` headers.
+- **Login** (`POST`) returns `204` with `Set-Cookie: <name>=<token>; Path=/; Secure; HttpOnly; SameSite=Lax[; Max-Age=N]` and `Cache-Control: no-store`. A cross-site request gets `403` and an unknown token `401`.
+- **Logout** (`DELETE`) returns `204` and clears the cookie with `Max-Age=0`. A cross-site request gets `403`.
+- **`Vary`** gains `Cookie` on page responses.
+
+**Validation** (`remote-auth.test.ts`):
+
+- **Configuration:** adapters are refused for a cookie name without `__Host-`, for `maxAge: 0`, and when there are no pages.
+- **Login:** answers the exact cookie, and is refused for an unknown token (401) or a cross-site request or foreign origin (403). Without Fetch Metadata it is accepted with the page's own `Origin`.
+- **Pages:** with the cookie, a page records the same exchanges as with the bearer and varies by `Cookie`. It answers 401 with no cookie, a forged one, one sent twice, or one under another name.
+- **RPC:** a cookie read answers byte-equal to the same token as a bearer, and a cookie mutation runs as that principal. A cookie request is denied in seven cases: `cross-site`, `same-site` (sibling subdomain), a foreign `Origin`, no origin information, `text/plain`, no content type, or a wrong bearer beside it.
+- **Logout:** clears the cookie, and a cross-site logout is refused.
+
+**Remaining.** The end-to-end browser check (`todo-fullstack` with auth in headless Chrome) is step 4.

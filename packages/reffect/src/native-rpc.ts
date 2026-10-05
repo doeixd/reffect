@@ -1017,6 +1017,14 @@ export const compileServer = (
             origin: base.href,
           };
         }
+        // A session cookie authenticates pages (#4): its Origin check compares the page origin.
+        const session = auth?.session;
+        if (session) {
+          if (!pages)
+            throw unsupported("auth.session", "A session cookie authenticates pages; give pages");
+          if (session.path === path || session.path === `${path}/`)
+            throw unsupported("auth.session.path", "The session path is not the RPC path");
+        }
         if (layer)
           functions.launch = EffectFn.make([], NeverType, layer.error, () =>
             StaticLayer.provide(layer, (context) =>
@@ -1260,7 +1268,15 @@ ${
           .join("")}`
       : "";
     const authRuntime = prepared.auth
-      ? rpcAuthRuntime
+      ? rpcAuthRuntime(
+          prepared.auth.session && prepared.pages
+            ? {
+                origin: new URL(prepared.pages.origin).origin,
+                contentType:
+                  options.serialization === "ndjson" ? "application/ndjson" : "application/json",
+              }
+            : undefined,
+        )
       : "#[derive(Clone)] struct RuntimeState; fn load_state() -> Result<RuntimeState, &'static str> { Ok(RuntimeState) }\n#[allow(dead_code)]\nfn page_principal(_: &HeaderMap, _: &RuntimeState) -> Option<u64> { None }";
     const main = Rs.itemsText(
       [
@@ -1288,6 +1304,32 @@ ${
                 Rs.ident("CREDENTIALS_ENV"),
                 Rs.strRefType(),
                 Rs.stringLiteral(prepared.auth.credentialsEnv),
+              ),
+            ]
+          : []),
+        ...(prepared.auth?.session
+          ? [
+              Rs.constItem(
+                Rs.ident("SESSION_COOKIE"),
+                Rs.strRefType(),
+                Rs.stringLiteral(prepared.auth.session.cookie),
+              ),
+              Rs.constItem(
+                Rs.ident("SESSION_PATH"),
+                Rs.strRefType(),
+                Rs.stringLiteral(prepared.auth.session.path),
+              ),
+              // Lax so a link into the app arrives signed in; never a Domain (__Host-).
+              Rs.constItem(
+                Rs.ident("SESSION_ATTRIBUTES"),
+                Rs.strRefType(),
+                Rs.stringLiteral(
+                  `; Path=/; Secure; HttpOnly; SameSite=Lax${
+                    prepared.auth.session.maxAge === undefined
+                      ? ""
+                      : `; Max-Age=${prepared.auth.session.maxAge}`
+                  }`,
+                ),
               ),
             ]
           : []),
@@ -1329,6 +1371,7 @@ ${
                     : isScalar(prepared.pages.views)
                       ? `${prepared.pages.views}_arg(&views, None)`
                       : `decode_${prepared.pages.views.name}(&views, None)`,
+                  prepared.auth?.session !== undefined,
                 ),
               ),
             ]
@@ -1344,6 +1387,7 @@ ${
             options.serialization === "ndjson",
             prepared.pages !== undefined,
             runtime?.boot,
+            prepared.auth?.session !== undefined,
           ),
         ),
       ],

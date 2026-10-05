@@ -19,6 +19,7 @@ export const rpcRuntime = (
   ndjson = false,
   pages = false,
   boot?: string,
+  session = false,
 ): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use axum::response::{Response, IntoResponse};
@@ -76,12 +77,17 @@ ${
 `
 }
 ${serveRuntime}
-${layered ? layeredMain(pages, boot) : plainMain(pages, boot)}`;
+${layered ? layeredMain(pages, boot, session) : plainMain(pages, boot, session)}`;
 
 /** The RPC routes, and pages for every path and method they do not take (SSR-007). */
-const routes = (pages: boolean): string =>
+const routes = (pages: boolean, session: boolean): string =>
   `let mut app = Router::new().route(RPC_PATH, post(rpc));
-    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }${pages ? "\n    let app = app.fallback(ssr_page);" : ""}`;
+    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }${
+      // Session login and logout (#4) beside the page host.
+      session
+        ? "\n    let app = app.route(SESSION_PATH, post(session_login).delete(session_logout));"
+        : ""
+    }${pages ? "\n    let app = app.fallback(ssr_page);" : ""}`;
 
 /**
  * The accept loop both mains use (#16, docs/research/rpc-serving.md): axum::serve sets no hyper
@@ -93,12 +99,13 @@ const serveRuntime = RuntimeSources.rpc_serve;
 const plainMain = (
   pages: boolean,
   boot?: string,
+  session = false,
 ): string => String.raw`#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = server_args(false)?;
     let state = load_state()?;
     ${boot === undefined ? "" : `${boot}?;`}
-    ${routes(pages)}
+    ${routes(pages, session)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     let listener = bind(&args).await?;
     serve(listener, app, std::future::pending()).await?;
@@ -127,6 +134,7 @@ const shutdownForwarder = String.raw`    {
 const layeredMain = (
   pages: boolean,
   boot?: string,
+  session = false,
 ): string => String.raw`static SERVICES: std::sync::OnceLock<reffect_generated::LaunchValues> = std::sync::OnceLock::new();
 static SHUTDOWN: std::sync::OnceLock<tokio::sync::watch::Receiver<bool>> = std::sync::OnceLock::new();
 #[tokio::main(flavor = "multi_thread")]
@@ -151,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = SERVICES.set(services);
     let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
     let _ = SHUTDOWN.set(shutdown_receiver);
-    ${routes(pages)}
+    ${routes(pages, session)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     let listener = bind(&args).await?;
     let signal = async move {
