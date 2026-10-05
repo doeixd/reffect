@@ -1,6 +1,6 @@
 import { Effect, Match, Schema, SchemaAST } from "effect";
 import { pageRequest } from "./ssr-page.ts";
-import type { PagePlan } from "./remote-resume.ts";
+import type { PagePlan, PlannedViews } from "./remote-resume.ts";
 import { Rpc, type RpcGroup } from "effect/rpc";
 import type { AnyQuery } from "foldkit-entity";
 import { EffectFn, EffectIR, type Computation } from "./effect-ir.ts";
@@ -526,18 +526,6 @@ const hasWindow = (request: unknown): boolean => {
       ("last" in window && typeof window.last === "number"))
   );
 };
-/** The fields a planned query selects, if it carries a selection. */
-const selectedFields = (request: unknown): ReadonlyArray<string> | undefined => {
-  const select =
-    typeof request === "object" && request !== null && "select" in request
-      ? request.select
-      : undefined;
-  const fields =
-    typeof select === "object" && select !== null && "fields" in select ? select.fields : undefined;
-  return Array.isArray(fields) && fields.every((field) => typeof field === "string")
-    ? fields
-    : undefined;
-};
 /** A positive live hub bound, as a Rust integer literal. */
 const liveLimit = (value: number | undefined, fallback: number, path: string): string => {
   const limit = value ?? fallback;
@@ -553,6 +541,34 @@ const hasRelations = (selection: unknown): boolean =>
   typeof selection.relations === "object" &&
   selection.relations !== null &&
   Object.keys(selection.relations).length > 0;
+/** A view's `Page` of its decoded items, as upstream's `pageSchema(select.schema)` reads it. */
+type ViewPages<V extends PlannedViews> = {
+  readonly [K in keyof V]: {
+    readonly items: ReadonlyArray<V[K]["item"]["Type"]>;
+    readonly hasNext: boolean;
+    readonly hasPrevious: boolean;
+  };
+};
+/**
+ * The witness of a plan's views (#6): a Struct of each view's `R.Remote.Page`, its items those
+ * of the projection's own selection schema. A page's request reads `views` of exactly this, so
+ * a field the schema transforms reaches the R view decoded, as it reaches upstream's view.
+ */
+const pageViews = <V extends PlannedViews>(plan: PagePlan<V>): IRType<ViewPages<V>> =>
+  NativeRpc.witness(
+    Schema.Struct(
+      Object.fromEntries(
+        Object.entries(plan.views).map(([name, view]) => [
+          name,
+          Schema.Struct({
+            items: Schema.Array(view.item),
+            hasNext: Schema.Boolean,
+            hasPrevious: Schema.Boolean,
+          }),
+        ]),
+      ),
+    ),
+  ) as IRType<ViewPages<V>>;
 /**
  * The page's data step (M9-3 step 2a): each planned request run against the engine as the RPC
  * handlers run it, recorded with its answer. On a server with bearer auth a page needs its
@@ -592,51 +608,28 @@ const pageReads = (
     }
     return `remote_engine::PageRead { tag: ${Rs.stringLiteral(read._tag).text}, request: serde_json::from_str(${Rs.stringLiteral(JSON.stringify(request)).text}).expect("planned while compiling") }`;
   });
-  // The request's views are a Struct with exactly one field per planned view.
-  const names = Object.keys(views);
+  // The request reads the plan's views as pageViews derives them, or no views at all.
   const viewsType = pageRequest(render).views;
-  if (names.length > 0 || viewsType !== undefined) {
-    const layout = viewsType?.layout;
-    const fields = layout?._tag === "Struct" ? layout.fields.map((field) => field.name) : undefined;
-    if (
-      fields === undefined ||
-      fields.length !== names.length ||
-      !names.every((name) => fields.includes(name))
-    )
-      throw unsupported("pages.views", "The page request's views are a Struct of the views");
-    for (const [name, view] of Object.entries(views)) {
-      const read = reads[view.read];
-      if (read?._tag !== "Query")
-        throw unsupported(`pages.views.${name}`, "A view reads one of the page's queries");
-      // A view without a window would read the whole table on every page request (#5).
-      if (!hasWindow(read.request))
-        throw unsupported(
-          `pages.views.${name}`,
-          "A view's query needs a window (first or last), so a page reads a bounded page",
-        );
-      // The view's items hold exactly the selected fields, as upstream's decoded rows do.
-      const selected = selectedFields(read.request);
-      const page =
-        layout?._tag === "Struct"
-          ? layout.fields.find((field) => field.name === name)?.type.layout
-          : undefined;
-      const items =
-        page?._tag === "Struct"
-          ? page.fields.find((field) => field.name === "items")?.type.layout
-          : undefined;
-      const item = items?._tag === "Array" ? items.item.layout : undefined;
-      const names = item?._tag === "Struct" ? item.fields.map((field) => field.name) : undefined;
-      if (
-        selected === undefined ||
-        names === undefined ||
-        names.length !== selected.length ||
-        !selected.every((field) => names.includes(field))
-      )
-        throw unsupported(
-          `pages.views.${name}`,
-          "A view is R.Remote.Page of a Struct of exactly the query's selected fields",
-        );
-    }
+  for (const [name, view] of Object.entries(views)) {
+    const read = reads[view.read];
+    if (read?._tag !== "Query")
+      throw unsupported(`pages.views.${name}`, "A view reads one of the page's queries");
+    // A view without a window would read the whole table on every page request (#5).
+    if (!hasWindow(read.request))
+      throw unsupported(
+        `pages.views.${name}`,
+        "A view's query needs a window (first or last), so a page reads a bounded page",
+      );
+    if (!Schema.isSchema(view.item))
+      throw unsupported(`pages.views.${name}`, "A view carries its selection schema (planPage)");
+  }
+  if (Object.keys(views).length > 0 || viewsType !== undefined) {
+    const expected = pageViews({ reads, views });
+    if (viewsType === undefined || !IRType.same(viewsType, expected))
+      throw unsupported(
+        "pages.views",
+        "The page request's views are NativeRemote.pageViews(plan): each view's Page of its selection",
+      );
   }
   const viewEntries = Object.entries(views)
     .map(([name, view]) => `(${Rs.stringLiteral(name).text}, ${view.read})`)
@@ -1055,6 +1048,7 @@ export const NativeRemote = Object.freeze({
   prepend,
   append,
   remove,
+  pageViews,
   ServerError: RemoteServerError,
   Patch: RemotePatch,
   Ref: RemoteRef,

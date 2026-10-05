@@ -7,7 +7,7 @@
  * The view mirrors `web/app.ts`'s for a Ready list; `page.test` compares the two renders byte for
  * byte. Event handlers render nothing on a server, so the mirror leaves them to the browser view.
  */
-import { NativeRpc, R } from "../../packages/reffect/src/index.ts";
+import { NativeRemote, NativeRpc, R } from "../../packages/reffect/src/index.ts";
 import type { Expr, Value } from "../../packages/reffect/src/index.ts";
 import { PageSchema } from "../../packages/reffect/src/ssr-page.ts";
 import { planPage } from "../../packages/reffect/src/remote-resume.ts";
@@ -15,7 +15,6 @@ import { BUILD_ID, Data, initial, list } from "./web/app.ts";
 
 const H = R.Html;
 const Todo = R.Struct({ id: R.String, title: R.String, done: R.Bool });
-const Views = R.Struct({ todos: R.Remote.Page(Todo) });
 const Flags = R.Struct({ remote: R.Unknown });
 const ViewModel = R.Struct({ todos: R.Array(Todo) });
 
@@ -64,7 +63,9 @@ const view = (model: Expr<Value<typeof ViewModel>>) => {
 };
 
 /** What the page reads: its one view, the list's first page. */
-export const plan = planPage({ todos: Data.prefetch(initial, list) });
+export const plan = planPage(Data, initial, { todos: list });
+// The view's Page, its items decoded by the list's own selection (#6).
+const Views = NativeRemote.pageViews(plan);
 
 const Page = NativeRpc.witness(PageSchema);
 /** The page reads the exchanges it carries and the list it shows (#13). */

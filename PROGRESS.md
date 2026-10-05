@@ -94,6 +94,17 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Page views decoded by their selection (#6)
+
+- **#6.** The design is in [ssr-data research](docs/research/ssr-data.md#view-witnesses-from-the-selection-6-2026-10-05).
+  - **Plan:** `planPage(Data, initial, { todos: list })` records each projection's selection schema.
+  - **Views witness:** `NativeRemote.pageViews(plan)` derives it, so a page request must read exactly those views. That replaces the name-only check.
+  - **Decoding:** items reach the R view decoded, as upstream's `decodeRow` decodes them.
+  - **Examples:** the `todo-remote` example and `remote-page` now derive their views instead of declaring them.
+- **Validation.**
+  - New `remote-page-decode` test: a `U64Json` field renders byte-equal to upstream, with the bigint deciding each item's class, and a view declaring the wire form (String) is refused. The previous name-only check would have accepted that view.
+  - Passing suites: `remote-page`, `todo-remote-page`, `todo-fullstack`, `remote-auth`; `vp check` clean.
+
 ## 2026-10-05 — One page plan, one page request (#13)
 
 - **#13.** The design is recorded in [ssr-data research](docs/research/ssr-data.md#page-api-simplification-13-2026-10-05).

@@ -26,7 +26,7 @@ const list = Data.query(
   { select: Entity.select(Todo, { id: true, title: true, done: true }), first: 50 },
 );
 const active = { todos: Data.active("Todos", () => Option.some(list)) };
-const plan = planPage({ todos: Data.prefetch(initial, list) });
+const plan = planPage(Data, initial, { todos: list });
 const origin = "http://reffect.test";
 const template =
   '<!doctype html><html lang="en"><head><title>Placeholder</title></head>' +
@@ -36,7 +36,8 @@ const group = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteLive");
 // The page's view renders the todos it read; its Flags carry the exchanges for the browser.
 const Flags = R.Struct({ remote: R.Unknown });
 const TodoItem = R.Struct({ id: R.String, title: R.String, done: R.Bool });
-const Views = R.Struct({ todos: R.Remote.Page(TodoItem) });
+// Derived from the plan's selection, not declared (#6).
+const Views = NativeRemote.pageViews(plan);
 // The page reads its URL, the exchanges it carries, and its view (#13).
 const PageRequest = R.Struct({ url: R.String, remote: R.Unknown, views: Views });
 const page = R.fn([PageRequest], Page, (request) => {
@@ -151,7 +152,7 @@ test("a page plans one query per view, and unknown queries or mismatched views a
       pages: { template, render: page, remote: { reads: plan.reads, views: {} } },
     }).pipe(Effect.flip),
   );
-  expect(mismatched.message).toContain("Struct of the views");
+  expect(mismatched.message).toContain("NativeRemote.pageViews(plan)");
   // #13: a page takes one PageRequest of url, remote and views, which its host must supply.
   const renderOf = (request: IRType<unknown>) =>
     R.fn([request], Page, () =>
@@ -216,13 +217,13 @@ test("a page plans one query per view, and unknown queries or mismatched views a
       pages: { template, render: partialPage, remote: plan },
     }).pipe(Effect.flip),
   );
-  expect(partial.message).toContain("exactly the query's selected fields"); // #5: a view without a window would read the whole table on every request.
+  expect(partial.message).toContain("NativeRemote.pageViews(plan)"); // #5: a view without a window would read the whole table on every request.
   const unbounded = Data.query(
     Todos,
     {},
     { select: Entity.select(Todo, { id: true, title: true, done: true }) },
   );
-  const whole = planPage({ todos: Data.prefetch(initial, unbounded) });
+  const whole = planPage(Data, initial, { todos: unbounded });
   const refusedWhole = await Effect.runPromise(
     NativeRemote.compile(group, {
       domain: Data,

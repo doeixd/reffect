@@ -299,3 +299,17 @@ Results:
 - _Build the request Struct in the generated Rust._ Rejected: the flow composition reuses the verified pipeline and needs no new emission.
 
 **Acceptance.** The page tests (`html-page`, `html-flags`, `remote-page`, `remote-auth`, `todo-remote-page`, `todo-fullstack`) are expressed with the new API and pass unchanged in behaviour.
+
+## View witnesses from the selection (#6, 2026-10-05)
+
+**Gap.** A view's item witness was written by hand, and `NativeRemote` checked only its field names. Upstream decodes each item with `decodeRow(select.schema, ...)` (foldkit-remote `QueryProjection.read`, checked in `dist/index.mjs`). For a field whose schema transforms (`NativeRpc.U64Json`: a string on the wire, a bigint decoded), a hand-written witness could declare the wire form, so the native view saw a different value than upstream's.
+
+**Decision.**
+
+- `planPage(Data, initial, { view: projection })` calls `Data.prefetch` itself and records each projection's `selection.schema` in the plan.
+- `NativeRemote.pageViews(plan)` derives the views witness, through `NativeRpc.witness`, from `Struct({ view: Struct({ items: Array(schema), hasNext, hasPrevious }) })`. This is upstream's `pageSchema(select.schema)`, rebuilt locally to keep the item type static.
+- A page request reads `views` of exactly that witness. Any other witness is refused, which replaces the name-only check.
+- The views codec decodes the answer through the same schema, so items arrive decoded as upstream's.
+- A transform the native codecs do not support is refused when compiling, rather than rendered from the wire value.
+
+**Acceptance.** `remote-page-decode.test.ts`: a `U64Json` field renders natively byte-equal to upstream, its decoded value deciding the markup, and a view declaring the wire form is refused. The `todo-remote` example no longer writes its view witness.

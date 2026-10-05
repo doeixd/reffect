@@ -159,32 +159,49 @@ const planReads = <A, E>(effect: Effect.Effect<A, E, RemoteClient>): ReadonlyArr
  * What a NativeRemote page reads (#13): its planned requests, and the views the render reads
  * from them by index. `planPage` builds one; a hand-written plan is the same plain data.
  */
-export interface PagePlan {
+export interface PagePlan<V extends PlannedViews = PlannedViews> {
   readonly reads: ReadonlyArray<PlannedRead>;
-  readonly views: { readonly [name: string]: PlannedView };
-}
-/** A page view (M9-3 step 2b): the planned Query whose answer becomes the view's `Page`. */
-export interface PlannedView {
-  readonly _tag: "Query";
-  readonly read: number;
+  readonly views: V;
 }
 /**
- * A page's reads and the views its R render reads from them, from each view's
- * `Data.prefetch(initial, projection)`. A view is a query projection with a flat selection; its
- * value is upstream's `Page` (`items`, `hasNext`, `hasPrevious`) of a Ready read.
+ * A page view (M9-3 step 2b): the planned Query whose answer becomes the view's `Page`, and the
+ * projection's selection schema, which decodes each item as upstream's `decodeRow` does (#6).
  */
-export const planPage = (views: {
-  readonly [name: string]: Effect.Effect<unknown, unknown, RemoteClient>;
-}): PagePlan => {
+export interface PlannedView<Item extends Schema.Top = Schema.Top> {
+  readonly _tag: "Query";
+  readonly read: number;
+  readonly item: Item;
+}
+export type PlannedViews = { readonly [name: string]: PlannedView };
+/** A query projection a page view reads: upstream's `QueryProjection`, by what a plan needs. */
+export interface PageProjection {
+  readonly selection: { readonly schema: Schema.Top };
+}
+/**
+ * A page's reads and the views its R render reads from them: each view's
+ * `data.prefetch(initial, projection)`, planned, with the projection's selection schema. A view is
+ * a query projection with a flat selection; its value is upstream's `Page` (`items`, `hasNext`,
+ * `hasPrevious`) of a Ready read, its items decoded by that schema.
+ */
+export const planPage = <M, const V extends { readonly [name: string]: PageProjection }>(
+  data: {
+    prefetch(model: M, projection: V[keyof V]): Effect.Effect<unknown, unknown, RemoteClient>;
+  },
+  initial: M,
+  views: V,
+): PagePlan<{ readonly [K in keyof V]: PlannedView<V[K]["selection"]["schema"]> }> => {
   const reads: Array<PlannedRead> = [];
   const planned: { [name: string]: PlannedView } = {};
-  for (const [name, prefetch] of Object.entries(views)) {
-    const own = planReads(prefetch);
+  for (const [name, projection] of Object.entries(views) as Array<[string, V[keyof V]]>) {
+    const own = planReads(data.prefetch(initial, projection));
     const query = own[0];
     if (own.length !== 1 || query?._tag !== "Query")
       throw new Error(`Remote page view "${name}" is not a single query projection`);
-    planned[name] = { _tag: "Query", read: reads.length };
+    planned[name] = { _tag: "Query", read: reads.length, item: projection.selection.schema };
     reads.push(query);
   }
-  return { reads, views: planned };
+  return {
+    reads,
+    views: planned as { readonly [K in keyof V]: PlannedView<V[K]["selection"]["schema"]> },
+  };
 };

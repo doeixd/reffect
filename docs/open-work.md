@@ -306,7 +306,6 @@ All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reff
 The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHub. Recommended order: security first (#3, #5), then #6, #12 with #9, #10 and #7, then #13, then #4 before any authenticated showcase, then M9-5 and #14.
 
 - [#4](https://github.com/doeixd/reffect/issues/4): a cookie session adapter, so authenticated pages work in browsers
-- [#6](https://github.com/doeixd/reffect/issues/6): derive view item witnesses from the selection schema
 - [#14](https://github.com/doeixd/reffect/issues/14): a browser-safe `R.Html` entry, to write views once
 
 ## Full-codebase review issues (2026-10-03)
