@@ -317,7 +317,6 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the key claims re-verified. Recommended order: #16, #17, #18 (anyone can stall or crash the server), then #21, #22, #23, #24 (SSR security and parity), #19, #20, then correctness, performance and design. The native-only snapshot race is a comment on [#8](https://github.com/doeixd/reffect/issues/8).
 
 - [#26](https://github.com/doeixd/reffect/issues/26): Remote/SQL data correctness gaps
-- [#27](https://github.com/doeixd/reffect/issues/27): RPC JSON mode: invalid UTF-8 and BOM bodies
 - [#29](https://github.com/doeixd/reffect/issues/29): compiler stack overflow on deep programs
 - [#30](https://github.com/doeixd/reffect/issues/30): 32-bit hashes in type ids
 - [#31](https://github.com/doeixd/reffect/issues/31): pipeline re-runs check/derive 7–8×

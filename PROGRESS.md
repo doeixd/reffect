@@ -86,6 +86,11 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — RPC body decoding (#27)
+
+- **#27.** The native RPC server decodes a request body as the official server's `request.text` does, in both JSON and NDJSON modes: a leading BOM is removed and invalid UTF-8 becomes U+FFFD (checked against Node's `Response.text`). Previously JSON mode parsed bytes strictly, so such a body was a `SyntaxError` Defect natively and a call upstream.
+- **Validation.** `vp run runtime:check` (24 Rust tests, including the new body test); `runtime-sources`, `rpc-serving` and `stream-rpc` suites pass.
+
 ## 2026-10-05 — Review fixes: snapshot, nesting, page host (#7, #8, #10, #23, #28)
 
 - **#7.** Ready-only page views are recorded as a native divergence.

@@ -58,6 +58,25 @@ not json
         }
 
         #[test]
+        fn bodies_decode_as_fetch_text_does() {
+            // A leading BOM is removed and an invalid byte becomes U+FFFD, in both
+            // serializations, as the official server's request.text reads the body (#27).
+            let mut json_body = vec![0xEF, 0xBB, 0xBF];
+            json_body.extend_from_slice(b"{\"a\":\"");
+            json_body.push(0xFF);
+            json_body.extend_from_slice(b"\"}");
+            let (messages, batched) = read_body_as(&json_body, false).unwrap();
+            assert!(!batched);
+            assert_eq!(messages, [json!({ "a": "\u{fffd}" })]);
+            let mut ndjson_body = vec![0xEF, 0xBB, 0xBF];
+            ndjson_body.extend_from_slice(b"{\"b\":1}\n");
+            assert_eq!(
+                read_body_as(&ndjson_body, true).unwrap().0,
+                [json!({ "b": 1 })]
+            );
+        }
+
+        #[test]
         fn batches_over_the_limit_or_with_repeated_ids_are_refused() {
             let request = |id: Value| json!({ "_tag": "Request", "id": id });
             assert!(validate_batch(&[request(json!("1")), request(json!("2"))]).is_none());

@@ -20,8 +20,18 @@ fn invalid(message: &str) -> Value {
 // The Err is the early HTTP answer itself, built once on a cold path.
 #[allow(clippy::result_large_err)]
 fn read_body(body: &[u8]) -> Result<(Vec<Value>, bool), Response> {
-    if !NDJSON {
-        return match serde_json::from_slice::<Value>(body) {
+    read_body_as(body, NDJSON)
+}
+/// The body as the official server's `request.text` reads it: UTF-8 with each invalid sequence
+/// replaced by U+FFFD and a leading byte order mark removed (#27).
+fn body_text(body: &[u8]) -> std::borrow::Cow<'_, str> {
+    String::from_utf8_lossy(body.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(body))
+}
+#[allow(clippy::result_large_err)]
+fn read_body_as(body: &[u8], ndjson: bool) -> Result<(Vec<Value>, bool), Response> {
+    let text = body_text(body);
+    if !ndjson {
+        return match serde_json::from_str::<Value>(&text) {
             Ok(Value::Array(batch)) => Ok((batch, true)),
             Ok(value) => Ok((vec![value], false)),
             Err(_) => Err(write_body(
@@ -34,7 +44,6 @@ fn read_body(body: &[u8]) -> Result<(Vec<Value>, bool), Response> {
     }
     // As RpcSerialization.ndjson: a line that does not parse is skipped, and text after the last
     // newline waits for more input that never comes.
-    let text = String::from_utf8_lossy(body);
     let mut messages = Vec::new();
     let mut rest: &str = &text;
     while let Some(end) = rest.find('\n') {
