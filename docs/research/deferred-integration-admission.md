@@ -1,5 +1,7 @@
 # Private Deferred integration admission
 
+The subsequent [standalone execution boundary](deferred-execution-boundary.md) enforces DADM-003 for its private Promise runner. This does not widen ordinary compiler/reference admission or make the Effect-valued research entry context-independent.
+
 Prepared 2026-10-04 against installed Effect **4.0.0**. Reviewed AGENTS, PLAN, PROGRESS, deferred-budget, deferred-core/turns and retained-failure decisions before implementation. Retrieved the pinned [Deferred source](https://unpkg.com/effect@4.0.0/src/Deferred.ts) online; audited installed [evaluator](https://unpkg.com/effect@4.0.0/src/internal/effect.ts) as the authoritative primitive expansion. This record supplements DBUD-001..005 and TURN-009..012.
 
 ## Decisions

@@ -20,6 +20,8 @@ Its implementation decisions are recorded separately for [helper borrows](resear
 
 [Nested future storage](research/nested-future-storage.md) records caller-pinned child borrows, actual layout reduction and the fixture regression budget; [independent layout research](research/nested-future-layout.md) explains the ownership and pinning evidence.
 
+[Standalone Deferred execution](research/deferred-execution-boundary.md) establishes an internal owned scheduler/context boundary, with its [primary-source context audit](research/deferred-context-audit.md). The Effect-valued research entry remains conditional; public admission and exact interruption trails remain gated.
+
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
 **[SSR with Remote data](research/ssr-data.md)** is the milestone 9 plan: upstream prefetch and snapshot resume, native projections in R views, async pages, and the decision to take milestone 9 before 8B.
