@@ -98,7 +98,7 @@
 
 - **#4, research only.** Recorded in [cookie sessions research](docs/research/cookie-sessions.md). Effect 4.0.0 carries a credential in a cookie with `HttpApiSecurity.apiKey({ in: "cookie" })` and sets it with `securitySetCookie` (Secure and HttpOnly by default), but ships no CSRF defence. The stock RPC browser client sends same-origin cookies with no change.
 - **Proposed.** The configured credential in a `__Host-` cookie (`HttpOnly; Secure; SameSite=Lax`), accepted for pages, and for RPC only with Fetch Metadata or Origin and Content-Type checks, plus native login and logout endpoints.
-- **Open.** Three decisions are with the user: the session model, cookie auth for RPC, and native login endpoints.
+- **Decided by the user:** option A (the configured token in the cookie), RPC and Live accept the cookie behind CSRF checks, and native login and logout endpoints. Ready to implement.
 
 ## 2026-10-05 — One view source for browser and server (#14)
 
