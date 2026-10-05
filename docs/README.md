@@ -143,6 +143,8 @@ Section-local **Later update** notes link earlier proposals to the specific revi
 
 [Authenticated RPC research](research/rpc-auth.md) defines the checked bearer adapter, principal service projection, runtime credentials and request/log ownership gates.
 
+[Cookie sessions research](research/cookie-sessions.md) (#4) proposes how authenticated pages and the hydrated browser client authenticate with an HttpOnly session cookie, with the CSRF defences mutations then need.
+
 ## Kernel research
 
 [Unit semantics and representation](research/unit.md) records exact undefined admission versus Effect's discarding Void schema, Rust unit lowering, internal bridge tokens and composition conformance.

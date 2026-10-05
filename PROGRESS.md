@@ -94,6 +94,12 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Cookie sessions research (#4)
+
+- **#4, research only.** Recorded in [cookie sessions research](docs/research/cookie-sessions.md). Effect 4.0.0 carries a credential in a cookie with `HttpApiSecurity.apiKey({ in: "cookie" })` and sets it with `securitySetCookie` (Secure and HttpOnly by default), but ships no CSRF defence. The stock RPC browser client sends same-origin cookies with no change.
+- **Proposed.** The configured credential in a `__Host-` cookie (`HttpOnly; Secure; SameSite=Lax`), accepted for pages, and for RPC only with Fetch Metadata or Origin and Content-Type checks, plus native login and logout endpoints.
+- **Open.** Three decisions are with the user: the session model, cookie auth for RPC, and native login endpoints.
+
 ## 2026-10-05 — One view source for browser and server (#14)
 
 - **#14.** The design is in [native SSR research](docs/research/native-ssr.md#one-view-source-for-browser-and-server-14-2026-10-05).
