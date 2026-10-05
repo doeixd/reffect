@@ -1,7 +1,4 @@
-import {
-  checkDeferredInterruptionPaths,
-  DeferredInterruptionFrames,
-} from "./deferred-interruption-frames.ts";
+import { DeferredInterruptionFrames } from "./deferred-interruption-frames.ts";
 import { Cause, Context, Effect, Exit, Logger, Match, Scheduler } from "effect";
 import type { Computation, EffectFn, FramedExit } from "./effect-ir.ts";
 import { GeneratedDeferredReference } from "./deferred-generated-reference.ts";
@@ -174,17 +171,11 @@ const execute = <A, Out>(
   fn: EffectFn<readonly [], A, never>,
   options: DeferredExecutionOptions | undefined,
   reference: () => Effect.Effect<Out, CompileError>,
-  interruptionFrames = false,
 ): Promise<DeferredObservation<Out>> => {
   let signal: AbortSignal | undefined;
   try {
     signal = cancellation(options);
     checkReferences(fn);
-    if (interruptionFrames) {
-      const diagnostics = checkDeferredInterruptionPaths(fn);
-      if (diagnostics.length)
-        throw new CompileError({ message: "Unsupported Deferred diagnostic sharing", diagnostics });
-    }
     if (!analyzeGeneratedDeferredProfile(Program.make({ work: fn })).has(fn))
       throw refusal("function", "This runner requires the checked private Deferred profile");
   } catch (error) {
@@ -217,11 +208,8 @@ export const DeferredExecution = Object.freeze({
     options?: DeferredExecutionOptions,
   ): Promise<DeferredObservation<FramedExit<A, never>>> => {
     const frames = new DeferredInterruptionFrames();
-    return execute(
-      fn,
-      options,
-      () => GeneratedDeferredReference.runWithInterruptionFrames(fn, [], frames),
-      true,
+    return execute(fn, options, () =>
+      GeneratedDeferredReference.runWithInterruptionFrames(fn, [], frames),
     ).then((observation) => {
       const { exit } = observation;
       const trail = frames.snapshot();

@@ -1,62 +1,77 @@
 import { Cause, Effect, Exit, Match } from "effect";
 import type { Computation, LogicalFrame } from "./effect-ir.ts";
 import { maxLogicalFrames } from "./effect-ir.ts";
-import type { EffectFn } from "./effect-ir.ts";
 import { fail } from "./kernel.ts";
-import type { Diagnostic } from "./kernel.ts";
 
-/** Scope-indexed native helper identities and reference first-seen paths differ on shared roots. */
-export const checkDeferredInterruptionPaths = (
-  fn: EffectFn,
-  basePath = "functions.work.body",
-): readonly Diagnostic[] => {
-  const seen = new Map<
-    Computation<unknown, unknown>["node"],
-    { readonly path: string; readonly observed: boolean }
-  >();
-  const issues: Diagnostic[] = [];
-  const walk = (body: Computation<unknown, unknown>, path: string, observed = true): void => {
-    const previous = seen.get(body.node);
-    if (previous !== undefined) {
-      if (observed || previous.observed)
-        issues.push({
-          code: "DEFERRED_FRAME_SHARING",
-          stage: "check",
-          path,
-          message: `Shared root diagnostic boundaries require scope-indexed paths (first use: ${previous.path})`,
-        });
-      return;
-    }
-    seen.set(body.node, { path, observed });
-    Match.value(body.node).pipe(
+// Execution receipts do not bound helper expansion across unexecuted branches.
+const maxDiagnosticPlanEntries = 4096;
+
+interface FramePlan {
+  readonly node: Computation<unknown, unknown>["node"];
+  readonly path: string;
+  readonly children: ReadonlyMap<string, FramePlan>;
+}
+
+// Mirror private native helper identity. All admitted error channels are Never.
+const planFrames = (root: Computation<unknown, unknown>, basePath: string): FramePlan => {
+  type LexicalScope = object;
+  const memo = new Map<LexicalScope, Map<Computation<unknown, unknown>["node"], FramePlan>>();
+  let entries = 0;
+  const walk = (
+    computation: Computation<unknown, unknown>,
+    path: string,
+    scope: LexicalScope,
+  ): FramePlan => {
+    const nodes = memo.get(scope) ?? new Map<Computation<unknown, unknown>["node"], FramePlan>();
+    const cached = nodes.get(computation.node);
+    if (cached) return cached;
+    if (++entries > maxDiagnosticPlanEntries)
+      throw fail(
+        "DEFERRED_FRAME_GROWTH",
+        "check",
+        path,
+        "Private diagnostic plans require at most 4096 scope-indexed helpers",
+      );
+    const children = new Map<string, FramePlan>();
+    const entry = Object.freeze({ node: computation.node, path, children });
+    nodes.set(computation.node, entry);
+    memo.set(scope, nodes);
+    const child = (body: Computation<unknown, unknown>, edge: string, fresh = false) =>
+      children.set(edge, walk(body, `${path}.${edge}`, fresh ? {} : scope));
+    Match.value(computation.node).pipe(
       Match.tags({
-        DeferredScope: (node) => walk(node.body, `${path}.body`, observed),
-        Map: (node) => walk(node.source, `${path}.source`, observed),
+        DeferredScope: (node) => child(node.body, "body", true),
+        Map: (node) => child(node.source, "source"),
         FlatMap: (node) => {
-          walk(node.source, `${path}.source`, observed);
-          walk(node.body, `${path}.body`, observed);
+          child(node.source, "source");
+          child(node.body, "body", true);
         },
         Match: (node) => {
-          walk(node.onTrue, `${path}.onTrue`, observed);
-          walk(node.onFalse, `${path}.onFalse`, observed);
+          child(node.onTrue, "onTrue");
+          child(node.onFalse, "onFalse");
         },
         Ensuring: (node) => {
-          walk(node.body, `${path}.body`, observed);
-          walk(node.finalizer, `${path}.finalizer`, false);
+          child(node.body, "body");
+          child(node.finalizer, "finalizer");
         },
         TaskGroup: (node) =>
-          node.children.forEach((child, index) => walk(child, `${path}.children[${index}]`, false)),
+          node.children.forEach((body, index) => child(body, `children[${index}]`, true)),
         MatchTags: (node) =>
-          node.cases.forEach((branch, index) =>
-            walk(branch.body, `${path}.cases[${index}]`, observed),
-          ),
+          node.cases.forEach((branch, index) => child(branch.body, `cases[${index}]`, true)),
+        DeferredAwait: () => {},
+        DeferredComplete: () => {},
+        DeferredIsDone: () => {},
+        Succeed: () => {},
+        Sleep: () => {},
+        Log: () => {},
       }),
-      // Excluded subtrees still seed first-seen paths; sharing with the root is ambiguous.
-      Match.orElse(() => {}),
+      Match.orElse(() => {
+        throw fail("DEFERRED_FRAME_NODE", "check", path, "No private diagnostic path mapping");
+      }),
     );
+    return entry;
   };
-  walk(fn.body, basePath);
-  return issues;
+  return walk(root, basePath, {});
 };
 
 interface Boundary {
@@ -70,11 +85,20 @@ export class DeferredInterruptionFrames {
   private omitted = 0;
   private captured = false;
   private claimed = false;
+  private plan?: FramePlan;
 
   claim(): boolean {
     if (this.claimed) return false;
     this.claimed = true;
     return true;
+  }
+
+  prepare(body: Computation<unknown, unknown>, basePath: string): void {
+    this.plan = planFrames(body, basePath);
+  }
+
+  rootPlan(): FramePlan | undefined {
+    return this.plan;
   }
 
   root(basePath: string): DeferredInterruptionBoundary {
@@ -108,12 +132,22 @@ export class DeferredInterruptionBoundary {
   constructor(
     private readonly owner: DeferredInterruptionFrames,
     private readonly boundary: Boundary,
+    private readonly plan?: FramePlan,
   ) {}
+
+  get path(): string {
+    return this.boundary.frame.path;
+  }
 
   child(
     computation: Computation<unknown, unknown>,
-    path: string,
+    fallbackPath: string,
+    edge = "body",
   ): DeferredInterruptionBoundary | undefined {
+    const plan = this.plan ? this.plan.children.get(edge) : this.owner.rootPlan();
+    if (!plan || plan.node !== computation.node)
+      throw fail("DEFERRED_FRAME_EDGE", "reference", fallbackPath, "Missing diagnostic child edge");
+    const path = plan.path;
     const kind: LogicalFrame["kind"] | undefined = Match.value(computation.node).pipe(
       Match.tags({
         DeferredScope: () => "deferredScope" as const,
@@ -141,10 +175,11 @@ export class DeferredInterruptionBoundary {
     );
     // Synchronous inspection has no independently suspendable interruption point.
     if (kind === undefined) return undefined;
-    return new DeferredInterruptionBoundary(this.owner, {
-      frame: Object.freeze({ path, kind }),
-      parent: this.boundary,
-    });
+    return new DeferredInterruptionBoundary(
+      this.owner,
+      { frame: Object.freeze({ path, kind }), parent: this.boundary },
+      plan,
+    );
   }
 
   observe<A, E, R>(body: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {

@@ -2038,14 +2038,15 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
   const evaluate = (
     c: Computation<unknown, unknown>,
     bindings: Bindings,
+    edge = "body",
     parent?: DeferredInterruptionBoundary,
   ): Effect.Effect<unknown, FramedFailure, Scope.Scope> =>
     Effect.suspend(() => {
-      const path = adapted.get(c) ?? basePath;
-      const boundary = parent?.child(c, path);
+      const boundary = parent?.child(c, adapted.get(c) ?? basePath, edge);
+      const path = boundary?.path ?? adapted.get(c) ?? basePath;
       const child = boundary
-        ? (value: Computation<unknown, unknown>, nested: Bindings) =>
-            evaluate(value, nested, boundary)
+        ? (value: Computation<unknown, unknown>, nested: Bindings, step = "body") =>
+            evaluate(value, nested, step, boundary)
         : evaluate;
       const expression = (
         e: Expr<unknown>,
@@ -2221,7 +2222,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 } as const);
           },
           CatchAll: (n) =>
-            child(n.source, bindings).pipe(
+            child(n.source, bindings, "source").pipe(
               Effect.catch((failure) => {
                 if (failure._tag === "Internal") return Effect.fail(failure);
                 const nested = new Map(bindings);
@@ -2339,7 +2340,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               ),
             ),
           Map: (n) =>
-            child(n.source, bindings).pipe(
+            child(n.source, bindings, "source").pipe(
               mapFramedError((failure) => outward(failure, "map")),
               Effect.flatMap((value) => {
                 const nested = new Map(bindings);
@@ -2354,7 +2355,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               }),
             ),
           FlatMap: (n) =>
-            child(n.source, bindings).pipe(
+            child(n.source, bindings, "source").pipe(
               mapFramedError((failure) => outward(failure, "flatMap")),
               Effect.flatMap((value) => {
                 const nested = new Map(bindings);
@@ -2372,9 +2373,10 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   : (cause as FramedFailure),
               ),
               Effect.flatMap((value) =>
-                (value ? child(n.onTrue, bindings) : child(n.onFalse, bindings)).pipe(
-                  mapFramedError((failure) => outward(failure, "match")),
-                ),
+                (value
+                  ? child(n.onTrue, bindings, "onTrue")
+                  : child(n.onFalse, bindings, "onFalse")
+                ).pipe(mapFramedError((failure) => outward(failure, "match"))),
               ),
             ),
           ForEach: (n) =>
@@ -2407,9 +2409,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 const selected = n.cases.find(
                   (x) => x.tag === (value as { readonly _tag: string })._tag,
                 )!;
-                return child(selected.body, new Map(bindings).set(selected.binder, [value])).pipe(
-                  mapFramedError((failure) => outward(failure, "match")),
-                );
+                return child(
+                  selected.body,
+                  new Map(bindings).set(selected.binder, [value]),
+                  boundary ? `cases[${n.cases.indexOf(selected)}]` : "body",
+                ).pipe(mapFramedError((failure) => outward(failure, "match")));
               }),
             ),
           Log: (n) =>
@@ -2455,10 +2459,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
       return boundary ? boundary.observe(body) : body;
     });
   // The lexical checker proves that every registration is discharged by its own Scope node.
-  const checked = evaluate(f.body, new Map([[f.binder, values]]), interruption) as Effect.Effect<
-    unknown,
-    FramedFailure
-  >;
+  const checked = evaluate(
+    f.body,
+    new Map([[f.binder, values]]),
+    "body",
+    interruption,
+  ) as Effect.Effect<unknown, FramedFailure>;
   const outcome = yield* Effect.exit(checked);
   if (Exit.isSuccess(outcome))
     return {

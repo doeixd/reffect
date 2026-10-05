@@ -62,6 +62,62 @@ const programs = {
       ),
     ),
   ),
+  sharedLeaf: R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        const sleep = R.Effect.sleep(100);
+        return R.Match.bool(R.Bool.literal(false), sleep, sleep.withSource(sleep.source));
+      }),
+    ),
+  ),
+  sharedParent: R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        const mapped = R.Effect.sleep(100).pipe(R.Effect.map((value) => value));
+        return R.Match.bool(R.Bool.literal(false), mapped, mapped.withSource(mapped.source));
+      }),
+    ),
+  ),
+  flatMapScope: R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        const sleep = R.Effect.sleep(100);
+        return R.Match.bool(R.Bool.literal(false), sleep, R.Effect.succeed(R.Unit.literal())).pipe(
+          R.Effect.andThen(sleep),
+        );
+      }),
+    ),
+  ),
+  childScope: R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        const sleep = R.Effect.sleep(100);
+        const group = R.Effect.all([sleep, R.Effect.succeed(R.Unit.literal())], {
+          concurrency: "unbounded",
+          discard: true,
+        });
+        return R.Match.bool(R.Bool.literal(false), group, sleep);
+      }),
+    ),
+  ),
+  finalizerScope: R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        const sleep = R.Effect.sleep(100);
+        const bracket = R.Effect.succeed(R.Unit.literal()).pipe(R.Effect.ensuring(sleep));
+        return R.Match.bool(R.Bool.literal(false), bracket, sleep);
+      }),
+    ),
+  ),
+  deferredScope: R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        const sleep = R.Effect.sleep(100);
+        const nested = D.make(R.Unit).pipe(R.Effect.flatMap(() => sleep));
+        return R.Match.bool(R.Bool.literal(false), nested, sleep);
+      }),
+    ),
+  ),
   cleanup: R.fn([], R.Unit, R.Never, () =>
     D.make(R.Unit).pipe(
       R.Effect.flatMap((cell) =>
@@ -101,6 +157,16 @@ const oracles = {
       }),
     ),
   ),
+  sharedLeaf: Deferred.make<void>().pipe(Effect.flatMap(() => Effect.sleep(100))),
+  sharedParent: Deferred.make<void>().pipe(
+    Effect.flatMap(() => Effect.sleep(100).pipe(Effect.map((value) => value))),
+  ),
+  flatMapScope: Deferred.make<void>().pipe(
+    Effect.flatMap(() => Effect.void.pipe(Effect.andThen(Effect.sleep(100)))),
+  ),
+  childScope: Deferred.make<void>().pipe(Effect.flatMap(() => Effect.sleep(100))),
+  finalizerScope: Deferred.make<void>().pipe(Effect.flatMap(() => Effect.sleep(100))),
+  deferredScope: Deferred.make<void>().pipe(Effect.flatMap(() => Effect.sleep(100))),
   cleanup: Deferred.make<void>().pipe(
     Effect.flatMap((cell) =>
       Deferred.succeed(cell, undefined).pipe(
@@ -146,6 +212,41 @@ const expected = (name: string, scenario: Scenario) => {
       };
     case "group":
       return { frames: [[`${root}.body.body`, "all"], ...parent], omitted: 0 };
+    case "sharedLeaf":
+      return {
+        frames: [[`${root}.body.body.onTrue`, "sleep"], [`${root}.body.body`, "match"], ...parent],
+        omitted: 0,
+      };
+    case "sharedParent":
+      return {
+        frames: [
+          [`${root}.body.body.onTrue.source`, "sleep"],
+          [`${root}.body.body.onTrue`, "map"],
+          [`${root}.body.body`, "match"],
+          ...parent,
+        ],
+        omitted: 0,
+      };
+    case "flatMapScope":
+      return {
+        frames: [[`${root}.body.body.body`, "sleep"], [`${root}.body.body`, "flatMap"], ...parent],
+        omitted: 0,
+      };
+    case "childScope":
+    case "deferredScope":
+      return {
+        frames: [[`${root}.body.body.onFalse`, "sleep"], [`${root}.body.body`, "match"], ...parent],
+        omitted: 0,
+      };
+    case "finalizerScope":
+      return {
+        frames: [
+          [`${root}.body.body.onTrue.finalizer`, "sleep"],
+          [`${root}.body.body`, "match"],
+          ...parent,
+        ],
+        omitted: 0,
+      };
     case "cleanup":
       return { frames: [[`${root}.body.body`, "ensuring"], ...parent], omitted: 0 };
   }
@@ -187,7 +288,7 @@ test("standalone interruption preserves official Cause and awaited cleanup with 
   }
 });
 
-test("independent canceled invocations retain their own trails and reject ambiguous shared root paths", async () => {
+test("independent canceled invocations retain their own trails", async () => {
   const controllers = [new AbortController(), new AbortController()];
   const pending = ["wait", "sleep"].map((scenario, index) =>
     DeferredExecution.runWithFrames(programs[scenario as Scenario], {
@@ -203,63 +304,50 @@ test("independent canceled invocations retain their own trails and reject ambigu
         expected("work", index ? "sleep" : "wait").frames,
       );
   }
-  const shared = R.fn([], R.Unit, R.Never, () =>
+});
+
+test("scope-expanded diagnostic plans refuse before source work, while shared success stays empty", async () => {
+  const success = R.fn([], R.Unit, R.Never, () =>
     D.make(R.Unit).pipe(
-      R.Effect.flatMap((cell) => {
-        const wait = D.await(cell);
-        return R.Log.info("must:not:start").pipe(
-          R.Effect.andThen(R.Match.bool(R.Bool.literal(false), wait, wait.withSource(wait.source))),
-        );
+      R.Effect.flatMap(() => {
+        const value = R.Effect.succeed(R.Unit.literal());
+        return R.Match.bool(R.Bool.literal(false), value, value.withSource(value.source));
       }),
     ),
   );
-  const refused = await DeferredExecution.runWithFrames(shared);
+  expect(await DeferredExecution.runWithFrames(success)).toMatchObject({
+    exit: { value: { exit: Exit.succeed(undefined), frames: [], omitted: 0 } },
+    logs: [],
+  });
+  const expanding = R.fn([], R.Unit, R.Never, () =>
+    D.make(R.Unit).pipe(
+      R.Effect.flatMap(() => {
+        let body = R.Effect.sleep(100);
+        for (let i = 0; i < 12; i++) {
+          const left = R.Effect.succeed(R.Unit.literal()).pipe(R.Effect.andThen(body));
+          const right = R.Effect.succeed(R.Unit.literal()).pipe(R.Effect.andThen(body));
+          body = R.Match.bool(R.Bool.literal(false), left, right);
+        }
+        return R.Log.info("must:not:start").pipe(R.Effect.andThen(body));
+      }),
+    ),
+  );
+  expect(
+    analyzeDeferredBudget(expanding, "body", defaultDeferredBudgetContext, true).admitted,
+  ).toBe(true);
+  const refused = await DeferredExecution.runWithFrames(expanding);
   expect(refused.logs).toEqual([]);
   expect(refused.exit).toMatchObject({
     cause: {
       reasons: [
         {
           error: {
-            diagnostics: expect.arrayContaining([
-              expect.objectContaining({ code: "DEFERRED_FRAME_SHARING" }),
-            ]),
+            diagnostics: [expect.objectContaining({ code: "DEFERRED_FRAME_GROWTH" })],
           },
         },
       ],
     },
   });
-  for (const subtree of ["child", "finalizer"] as const) {
-    const across = R.fn([], R.Unit, R.Never, () =>
-      D.make(R.Unit).pipe(
-        R.Effect.flatMap(() => {
-          const shared = R.Effect.sleep(1);
-          const first =
-            subtree === "child"
-              ? R.Effect.all([shared, R.Effect.sleep(2)], {
-                  concurrency: "unbounded",
-                  discard: true,
-                })
-              : R.Effect.succeed(R.Unit.literal()).pipe(R.Effect.ensuring(shared));
-          return first.pipe(R.Effect.andThen(shared));
-        }),
-      ),
-    );
-    const refusal = await DeferredExecution.runWithFrames(across);
-    expect(refusal.logs).toEqual([]);
-    expect(refusal.exit).toMatchObject({
-      cause: {
-        reasons: [
-          {
-            error: {
-              diagnostics: expect.arrayContaining([
-                expect.objectContaining({ code: "DEFERRED_FRAME_SHARING" }),
-              ]),
-            },
-          },
-        ],
-      },
-    });
-  }
 });
 
 test("monitored Race success discards canceled loser trails and research recorders cannot be reused", async () => {

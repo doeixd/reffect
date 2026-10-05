@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-05 — Private Deferred shared diagnostic paths
+
+- [DINT-008](docs/research/deferred-interruption-frames.md#shared-path-preparation--2026-10-05) records verified Effect sources, native lexical transitions, alternatives, ownership and exact differential acceptance before implementation.
+- Replaced the private root-sharing refusal with per-invocation node/scope path planning. Source wrappers and reused parents retain canonical helper descendants; task children and FlatMap/DeferredScope bodies get separate scope identities. Ensuring finalizers share their incoming scope. Root observers retain existing cleanup, bounded-trail and child-discard behavior; native code, scalar/context layout and unmonitored execution stay unchanged.
+- Independent review identified helper-plan expansion across unexecuted branches. A 4096-entry diagnostic limit now returns typed DEFERRED_FRAME_GROWTH before source work. It is separate from the execution-operation receipt and does not establish general native growth admission.
+- JavaScript observation/budget tests pass 5/5 (3.61s), with the native test excluded. Six new topology-authored fixtures cover shared leaf/parent wrappers and FlatMap, task, finalizer and Deferred scope reuse; successful sharing and plan-growth refusal are covered too. Independent code review found no semantic defect; its disabled-path tagged-case cost finding is fixed. The full sequential regression passes 34/34 across six suites (194.51s), including 64 actual native cases across debug/release and None/Bounded. Full check passes 464 formatted files and 282 TypeScript files without warnings/errors; strict package TypeScript and the workspace build pass (one rebuilt package, three cache hits). Self-review makes the new memo map explicitly typed to avoid inferred any. Post-commit checks follow before publication.
+
 ## 2026-10-05 — Private Deferred interruption diagnostics
 
 - Synced remote through d93e0b5 and installed current dependencies, preserving the separately owned Remote/SQL and nesting-limit work. [DINT-001–005](docs/research/deferred-interruption-frames.md) records primary-source preparation before implementation: ordinary catchCause/exit continuations are skipped during external interruption; masked onExit observers and a root-owned recorder preserve actual Cause and awaited cleanup. Native infallible group trails start at the group boundary; public admission stays gated.

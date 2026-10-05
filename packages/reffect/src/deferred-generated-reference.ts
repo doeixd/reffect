@@ -1,7 +1,6 @@
 import { EffectFn, PrivateEffectReference, checkEffectFunction } from "./effect-ir.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
 import { CompileError, Program } from "./kernel.ts";
-import { checkDeferredInterruptionPaths } from "./deferred-interruption-frames.ts";
 import type { DeferredInterruptionFrames } from "./deferred-interruption-frames.ts";
 import type { IRType, Diagnostic } from "./kernel.ts";
 
@@ -42,17 +41,26 @@ export const GeneratedDeferredReference = Object.freeze({
       fn,
       args,
       basePath,
-      (fn, path) =>
-        frames.claim()
-          ? [...check(fn, path, true), ...checkDeferredInterruptionPaths(fn, basePath)]
-          : [
-              {
-                code: "DEFERRED_FRAME_REUSE",
-                stage: "check",
-                path,
-                message: "Each interrupted observation requires a fresh recorder",
-              },
-            ],
+      (fn, path) => {
+        if (!frames.claim())
+          return [
+            {
+              code: "DEFERRED_FRAME_REUSE",
+              stage: "check",
+              path,
+              message: "Each interrupted observation requires a fresh recorder",
+            },
+          ];
+        const diagnostics = check(fn, path, true);
+        if (diagnostics.length) return diagnostics;
+        try {
+          frames.prepare(fn.body, basePath);
+          return [];
+        } catch (error) {
+          if (error instanceof CompileError) return error.diagnostics;
+          throw error;
+        }
+      },
       frames.root(basePath),
     ),
   runWithFrames: <I extends readonly IRType<unknown>[], A, E>(
