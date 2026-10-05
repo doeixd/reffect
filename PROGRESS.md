@@ -94,6 +94,18 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Each stage once per compile (#31)
+
+- **#31.** Every stage re-ran the stages before it, so one `Compile.run` checked 9 times (measured) and derived and planned repeatedly. Programs, analyses and plans are frozen, so each stage now remembers what it accepted, by identity:
+  - `check` keeps a `WeakSet` of checked programs, and `derive` a `WeakMap` from program to analysis;
+  - `verify` answers a plan it returned with itself;
+  - `verify` takes a plan that `plan` produced, or a `withFailureFrames` copy of one, as its own expectation instead of planning again. It still checks representations and the frame policy.
+- **Unchanged.** A plan built through the public `Plan.make` is still planned again and refused when it differs. Refusals are not cached, so their diagnostics are unchanged.
+- **Review.** `localUses` from #33 narrowed `object` to a record by assignment, which `vp check` rejects; it now uses a type guard and pushes array items without spreading.
+- **Validation.**
+  - New `stage-reuse` test (failed before: 9 checks): it counts tracer spans, and one `Compile.run` opens one each of check, derive, plan and verify, for a pure and an Effect program. A forged plan is still refused `INVALID_PLAN`, and re-verifying a verified plan returns it without planning.
+  - Passing suites: `compiler`, `effect`, `async-effect`, `deferred-pipeline`, `fallible-admission`, `structured-concurrency`, `source`, `artifact-policy`, `frame-policy`, `module-foundations`, `context-layer`, `error-recovery`, `logging`, `ref`, `foldkit`, `native-rpc`, `html`, `todo-fullstack`, `string-profile`; `vp check` clean.
+
 ## 2026-10-05 — SSR rendering without repeated copies (#34)
 
 - **#34, Html as a shared tree.** The runtime `Html` is now an `Arc` tree: an element shares its children rather than copying their markup. `render` writes the document once, iteratively, into a buffer sized from the precomputed length. Before, every byte was copied once per ancestor. A custom `Drop` unlinks deep trees without recursion.

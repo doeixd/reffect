@@ -319,6 +319,11 @@ export interface Selection {
   readonly selected: Implementation;
   readonly rejected: readonly { readonly id: string; readonly reason: string }[];
 }
+/**
+ * Plans `plan` produced (and their `withFailureFrames` copies): verify takes such a plan as its
+ * own expectation rather than planning again (#31). Plan.make builds any other plan.
+ */
+const plannedPlans = new WeakSet<Plan>();
 export class Plan extends Pipeable.Class {
   readonly services: readonly ServiceAdapter[];
   readonly runtime: typeof syncResultAdapter | typeof asyncResultAdapter | undefined;
@@ -367,8 +372,8 @@ export class Plan extends Pipeable.Class {
     );
   }
   static withFailureFrames(policy: FailureFramePolicy) {
-    return (self: Plan): Plan =>
-      Plan.make(
+    return (self: Plan): Plan => {
+      const plan = Plan.make(
         self.analysis,
         self.target,
         self.selections,
@@ -376,6 +381,10 @@ export class Plan extends Pipeable.Class {
         policy,
         self.runtimeServices,
       );
+      // Only the policy differs, and verify checks it itself.
+      if (plannedPlans.has(self)) plannedPlans.add(plan);
+      return plan;
+    };
   }
   static withSelections(selections: readonly Selection[]) {
     return (self: Plan): Plan =>
@@ -508,7 +517,17 @@ export const stages = Object.freeze([
 
 // Prefixing with r_ also makes Rust keywords legal and keeps source names out of syntax positions.
 const validName = /^[A-Za-z][A-Za-z0-9_]*$/;
-const check = Effect.fn("Compile.check")(function* (program: Program) {
+// Stage outputs are immutable (frozen programs, analyses and plans), so a stage given a value it
+// has already accepted answers from that first run: one compile checks, derives and verifies once
+// rather than at every later stage (#31). Only successes are kept; a refusal is recomputed.
+const checkedPrograms = new WeakSet<Program>();
+const derivedPrograms = new WeakMap<Program, Analysis>();
+const verifiedPlans = new WeakSet<Plan>();
+const check = (program: Program): Effect.Effect<Program, CompileError> =>
+  checkedPrograms.has(program)
+    ? Effect.succeed(program)
+    : checkProgram(program).pipe(Effect.tap(() => Effect.sync(() => checkedPrograms.add(program))));
+const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
   // Measured first and without recursion: every later walk, this check's own included, would
   // overflow the stack on such a program instead of answering (#29).
   const tooDeep = Object.entries(program.functions).filter(
@@ -560,7 +579,15 @@ const check = Effect.fn("Compile.check")(function* (program: Program) {
   return program;
 });
 
-const derive = Effect.fn("Compile.derive")(function* (
+const derive = (program: Program): Effect.Effect<Analysis, CompileError> => {
+  const derived = derivedPrograms.get(program);
+  return derived
+    ? Effect.succeed(derived)
+    : deriveProgram(program).pipe(
+        Effect.tap((analysis) => Effect.sync(() => derivedPrograms.set(program, analysis))),
+      );
+};
+const deriveProgram = Effect.fn("Compile.derive")(function* (
   program: Program,
 ): Effect.fn.Return<Analysis, CompileError> {
   yield* check(program);
@@ -1014,7 +1041,7 @@ const plan = Effect.fn("Compile.plan")(function* (
       "effects",
       "No verified Result/async adapter for this effect",
     );
-  return Plan.make(
+  const planned = Plan.make(
     derived,
     target,
     selections,
@@ -1029,8 +1056,15 @@ const plan = Effect.fn("Compile.plan")(function* (
     FailureFrames.Bounded,
     selectedServices,
   );
+  plannedPlans.add(planned);
+  return planned;
 });
-const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
+/** A plan this stage returned is answered with itself; any other plan is planned again. */
+const verify = (p: Plan): Effect.Effect<Plan, CompileError> =>
+  verifiedPlans.has(p)
+    ? Effect.succeed(p)
+    : verifyPlan(p).pipe(Effect.tap((verified) => Effect.sync(() => verifiedPlans.add(verified))));
+const verifyPlan = Effect.fn("Compile.verify")(function* (p: Plan) {
   yield* Effect.try({
     try: () => checkFailureFramePolicy(p.failureFrames),
     catch: (cause) =>
@@ -1038,9 +1072,11 @@ const verify = Effect.fn("Compile.verify")(function* (p: Plan) {
         ? cause
         : fail("INVALID_PLAN", "verify", "failureFrames", String(cause)),
   });
-  const expected = (yield* plan(p.analysis, p.target, p.runtimeServices)).pipe(
-    Plan.withFailureFrames(p.failureFrames),
-  );
+  const expected = plannedPlans.has(p)
+    ? p
+    : (yield* plan(p.analysis, p.target, p.runtimeServices)).pipe(
+        Plan.withFailureFrames(p.failureFrames),
+      );
   if (
     p.runtime !== expected.runtime ||
     p.services.length !== expected.services.length ||
