@@ -94,7 +94,7 @@
   - `runtime-sources` (the lock is part of the generated sources);
   - `effect`, `rpc-auth` (`subtle`), `remote-sql`, `remote-sql-mutate`, `todo-fullstack`, `rpc-serving`, `foldkit`.
 
-  `vp check` is clean. `async-rpc` fails on one disconnect test, which also fails without this change. That expectation dates from before #25 and is fixed separately.
+  `vp check` is clean. `async-rpc` failed one disconnect test, which also failed without this change: its expectation that a batch's second request never starts predates #25. That test now expects both requests to start and to be interrupted with their masked cleanup.
 
 ## 2026-10-05 — RPC body decoding (#27)
 

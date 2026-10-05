@@ -255,16 +255,20 @@ const checkNative = (directory: string, profile: "debug" | "release") =>
       yield* cancelStockClient(globalThis.fetch, url, logs);
       const outgoing = httpRequest(url, { method: "POST" });
       outgoing.on("error", () => {});
-      outgoing.end(JSON.stringify([request("cancelled"), request("must-not-start", 1)]));
-      yield* waitUntil(() =>
-        logs.some((log) => log.request.id === "cancelled" && log.message === "started"),
-      );
+      // A body's requests run concurrently, as official forks a fiber per request (#25), so the
+      // disconnect interrupts both, and each still runs its masked cleanup.
+      outgoing.end(JSON.stringify([request("cancelled"), request("sibling", 1)]));
+      const started = (id: string) =>
+        logs.some((log) => log.request.id === id && log.message === "started");
+      yield* waitUntil(() => started("cancelled") && started("sibling"));
       outgoing.destroy();
-      yield* waitUntil(() => logs.filter((log) => log.request.id === "cancelled").length === 5);
-      expect(
-        logs.filter((log) => log.request.id === "cancelled").map((log) => log.message),
-      ).toEqual(interrupted);
-      expect(logs.some((log) => log.request.id === "must-not-start")).toBe(false);
+      for (const id of ["cancelled", "sibling"]) {
+        yield* waitUntil(() => logs.filter((log) => log.request.id === id).length === 5);
+        expect(
+          logs.filter((log) => log.request.id === id).map((log) => log.message),
+          id,
+        ).toEqual(interrupted);
+      }
       // A subsequent principal/request cannot inherit cancelled state or scoped annotations.
       const response = yield* Effect.promise(() =>
         fetch(url, { method: "POST", body: JSON.stringify(request("subsequent", 1)) }).then((r) =>
