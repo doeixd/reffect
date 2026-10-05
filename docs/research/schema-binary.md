@@ -201,6 +201,13 @@ The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its
     - the stock client round-trips each body as Effect's own codec does (inside `Unknown`, `-0` is JSON text `0`);
     - a mutation moving the intern cutoff to 65 fails exactly at the cutoff case. An earlier version of that case did not catch the mutation, because a disabled table stops looking up too; the repeat must follow the 65th value at once.
 
+- **Step 5, done (2026-10-05): authentication.**
+  - The bearer adapter's denial is the middleware's error in `Rpc.exitSchema`'s failure union. The transcoders already derive that union, so `WhoAmI`'s errors (`Boolean | Literal("Unauthorized")`) are kind rows. The refusal is lifted.
+  - The session cookie's RPC check now requires the SchemaBinary media type under binary. It is not exercised by a test yet.
+  - **Evidence** (`tests/schema-binary-auth.test.ts`, the `examples/rpc-auth` contract and handlers):
+    - against the official server with the same middleware, the native bytes are equal for a missing token, a wrong token, a transport header, an envelope header, a typed failure and a public procedure;
+    - the stock client gets `"Unauthorized"` and `false` as typed failures, and the principals as successes.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.

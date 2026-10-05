@@ -5,7 +5,10 @@ export interface SessionRuntime {
   /** The serialized page origin a cookie-authenticated request's `Origin` must equal. */
   readonly origin: string;
   /** The media type cookie-authenticated RPC bodies must declare. */
-  readonly contentType: "application/json" | "application/ndjson";
+  readonly contentType:
+    | "application/json"
+    | "application/ndjson"
+    | "application/vnd.effect.rpc+schema-binary";
 }
 /**
  * Static bounded verifier; only selected by a checked bearer adapter. With a session it also

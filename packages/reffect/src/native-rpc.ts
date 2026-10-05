@@ -498,11 +498,6 @@ export const compileServer = (
             "serialization",
             "Runtime-served procedures over SchemaBinary are not supported yet",
           );
-        if (binary && options.auth)
-          throw unsupported(
-            "serialization",
-            "Authentication over SchemaBinary is not supported yet",
-          );
         if (!binary && options.schemaBinary)
           throw unsupported(
             "schemaBinary",
@@ -1335,7 +1330,11 @@ ${
             ? {
                 origin: new URL(prepared.pages.origin).origin,
                 contentType:
-                  options.serialization === "ndjson" ? "application/ndjson" : "application/json",
+                  options.serialization === "ndjson"
+                    ? "application/ndjson"
+                    : options.serialization === "schema-binary"
+                      ? "application/vnd.effect.rpc+schema-binary"
+                      : "application/json",
               }
             : undefined,
         )

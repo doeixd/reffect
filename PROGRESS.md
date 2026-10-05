@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-05 — Milestone 10 step 5: authentication over SchemaBinary
+
+- [Design record](docs/research/schema-binary.md#progress). `NativeRpc.compile(..., { auth, serialization: "schema-binary" })` is admitted: denials are written in `Rpc.exitSchema`'s failure union, byte-equal to the official middleware's answers.
+- Validation:
+  - `schema-binary-auth` 1/1 passes.
+  - `vp check` and the strict `tsc` pass.
+
 ## 2026-10-05 — Milestone 10 step 4: tagged unions, arrays, row runs, records and Unknown
 
 - [Design record](docs/research/schema-binary.md#progress). The SchemaBinary transcoders now cover:
