@@ -9,6 +9,76 @@
 pub struct Invalid(pub &'static str);
 pub type Decoded<T> = Result<T, Invalid>;
 
+/// A failure where it happened, as `SchemaError.message` reports it: the issue, then its path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Failure {
+    pub issue: Issue,
+    /// Rendered path segments, outermost first: `["headers"]`, `[0]`.
+    pub path: Vec<String>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Issue {
+    Invalid(&'static str),
+    MissingKey,
+    UnexpectedKey,
+}
+impl From<Invalid> for Failure {
+    fn from(Invalid(expected): Invalid) -> Self {
+        Failure::new(Issue::Invalid(expected))
+    }
+}
+impl Failure {
+    pub fn new(issue: Issue) -> Self {
+        Failure {
+            issue,
+            path: Vec::new(),
+        }
+    }
+    /// The same failure inside a property: `JSON.stringify(key)` in brackets.
+    pub fn at_key(mut self, key: &str) -> Self {
+        let mut segment = String::from("[");
+        js_string(key, &mut segment);
+        segment.push(']');
+        self.path.insert(0, segment);
+        self
+    }
+    pub fn at_index(mut self, index: usize) -> Self {
+        self.path.insert(0, format!("[{index}]"));
+        self
+    }
+    /// `SchemaError.message`: the issue, then `\n  at <path>` when it is nested.
+    pub fn message(&self) -> String {
+        let mut text = match self.issue {
+            Issue::Invalid(expected) => format!("Expected {expected}"),
+            Issue::MissingKey => "Missing key".to_string(),
+            Issue::UnexpectedKey => "Expected no excess property".to_string(),
+        };
+        if !self.path.is_empty() {
+            text.push_str("\n  at ");
+            text.push_str(&self.path.concat());
+        }
+        text
+    }
+}
+/// `JSON.stringify` of a string, into `out`.
+pub fn js_string(value: &str, out: &mut String) {
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 pub const ENVELOPE_DEFAULT: u8 = 0x20;
 pub const ENVELOPE_FINGERPRINT: u8 = 0x21;
 pub const FIELD_WIRE_SIZED: u8 = 0;
@@ -535,15 +605,19 @@ fn put_request_id(out: &mut Vec<u8>, id: &RequestId) {
     }
     put_sized(out, &slot);
 }
-fn read_request_id(r: &mut Reader) -> Decoded<RequestId> {
+fn read_request_id(r: &mut Reader) -> Result<RequestId, Failure> {
     let mut slot = r.sized()?;
     let id = match slot.uv()? {
         0 => RequestId::Number(slot.number()?),
         1 => RequestId::String(slot.string()?),
-        _ => return Err(Invalid("known union member")),
+        _ => return Err(Invalid("known union member").into()),
     };
     slot.finish()?;
     Ok(id)
+}
+/// A field's value, its failure located at the field.
+fn field<T>(key: &str, read: impl FnOnce() -> Result<T, Failure>) -> Result<T, Failure> {
+    read().map_err(|failure| failure.at_key(key))
 }
 /// An optional field's `Union[X, Undefined]` slot, with X's and undefined's positions.
 fn put_optional<T>(
@@ -568,7 +642,7 @@ fn read_optional<T>(
     present: bool,
     positions: (u64, u64),
     read: impl Fn(&mut Reader) -> Decoded<T>,
-) -> Decoded<Optional<T>> {
+) -> Result<Optional<T>, Failure> {
     if !present {
         return Ok(None);
     }
@@ -580,7 +654,7 @@ fn read_optional<T>(
         slot.empty()?;
         None
     } else {
-        return Err(Invalid("known union member"));
+        return Err(Invalid("known union member").into());
     };
     slot.finish()?;
     Ok(Some(value))
@@ -620,40 +694,71 @@ fn put_request(out: &mut Vec<u8>, request: &Request) {
     put_sized(out, &headers);
     put_optional(out, &request.is_notification, BOOL_OR_UNDEFINED, boolean);
 }
-fn read_request(r: &mut Reader) -> Decoded<Request> {
+/// A header, `Tuple([String, String])`: two sized slots and nothing after them.
+fn read_header(pair: &mut Reader) -> Result<(String, String), Failure> {
+    let mut slot = |index: usize| -> Result<String, Failure> {
+        if pair.is_empty() {
+            return Err(Failure::new(Issue::MissingKey).at_index(index));
+        }
+        pair.sized()
+            .and_then(|mut slot| slot.string())
+            .map_err(|invalid| Failure::from(invalid).at_index(index))
+    };
+    let name = slot(0)?;
+    let value = slot(1)?;
+    if !pair.is_empty() {
+        return Err(Failure::new(Issue::UnexpectedKey).at_index(2));
+    }
+    Ok((name, value))
+}
+fn read_headers(r: &mut Reader) -> Result<Vec<(String, String)>, Failure> {
+    let mut slot = r.sized()?;
+    let count = slot.uv()?;
+    // Each pair takes at least one byte, so a count beyond the region is never allocated.
+    if count > slot.remaining() as u64 + 1_048_576 {
+        return Err(Invalid("array count within allocation limit").into());
+    }
+    let mut headers = Vec::new();
+    for index in 0..count as usize {
+        let header = slot
+            .sized()
+            .map_err(Failure::from)
+            .and_then(|mut pair| read_header(&mut pair))
+            .map_err(|failure| failure.at_index(index))?;
+        headers.push(header);
+    }
+    slot.finish()?;
+    Ok(headers)
+}
+fn read_request(r: &mut Reader) -> Result<Request, Failure> {
     let bitmap = r.byte()?;
     let string = |slot: &mut Reader| slot.string();
     let boolean = |slot: &mut Reader| slot.bool();
-    let span_id = read_optional(r, bitmap & SPAN_ID != 0, STRING_OR_UNDEFINED, string)?;
-    let payload = r.sized()?.rest().to_vec();
-    let id = read_request_id(r)?;
-    let sampled = read_optional(r, bitmap & SAMPLED != 0, BOOL_OR_UNDEFINED, boolean)?;
-    let tag = r.sized()?.string()?;
-    let trace_id = read_optional(r, bitmap & TRACE_ID != 0, STRING_OR_UNDEFINED, string)?;
-    let mut headers_slot = r.sized()?;
-    let count = headers_slot.uv()?;
-    // Each pair takes at least three bytes, so a count beyond the region is not allocated.
-    if count > headers_slot.remaining() as u64 + 1_048_576 {
-        return Err(Invalid("array count within allocation limit"));
-    }
-    let mut headers = Vec::new();
-    for _ in 0..count {
-        let mut pair = headers_slot.sized()?;
-        let name = pair.sized()?.string()?;
-        let value = pair.sized()?.string()?;
-        pair.finish()?;
-        headers.push((name, value));
-    }
-    headers_slot.finish()?;
-    let is_notification = read_optional(
-        r,
-        bitmap & IS_NOTIFICATION != 0,
-        BOOL_OR_UNDEFINED,
-        |slot| match slot.bool()? {
-            true => Ok(true),
-            false => Err(Invalid("true")),
-        },
-    )?;
+    let present = |bit: u8| bitmap & bit != 0;
+    let span_id = field("spanId", || {
+        read_optional(r, present(SPAN_ID), STRING_OR_UNDEFINED, string)
+    })?;
+    let payload = field("payload", || Ok(r.sized()?.rest().to_vec()))?;
+    let id = field("id", || read_request_id(r))?;
+    let sampled = field("sampled", || {
+        read_optional(r, present(SAMPLED), BOOL_OR_UNDEFINED, boolean)
+    })?;
+    let tag = field("tag", || Ok(r.sized()?.string()?))?;
+    let trace_id = field("traceId", || {
+        read_optional(r, present(TRACE_ID), STRING_OR_UNDEFINED, string)
+    })?;
+    let headers = field("headers", || read_headers(r))?;
+    let is_notification = field("isNotification", || {
+        read_optional(
+            r,
+            present(IS_NOTIFICATION),
+            BOOL_OR_UNDEFINED,
+            |slot| match slot.bool()? {
+                true => Ok(true),
+                false => Err(Invalid("true")),
+            },
+        )
+    })?;
     Ok(Request {
         id,
         tag,
@@ -704,34 +809,37 @@ pub fn put_message(out: &mut Vec<u8>, fingerprint: &[u8; 8], message: &Message) 
     put_frame(out, Some(fingerprint), &value);
 }
 /// One envelope message from a frame's value region.
-pub fn read_message(value: &[u8]) -> Decoded<Message> {
+pub fn read_message(value: &[u8]) -> Result<Message, Failure> {
     let mut r = Reader::new(value);
     let message = match r.uv()? {
         REQUEST => Message::Request(read_request(&mut r)?),
         ACK => Message::Ack {
-            request_id: read_request_id(&mut r)?,
+            request_id: field("requestId", || read_request_id(&mut r))?,
         },
         INTERRUPT => Message::Interrupt {
-            request_id: read_request_id(&mut r)?,
+            request_id: field("requestId", || read_request_id(&mut r))?,
         },
         PING => Message::Ping,
         EOF => Message::Eof,
         PONG => Message::Pong,
         CHUNK => {
-            let values = r.sized()?.rest().to_vec();
+            let values = field("values", || Ok(r.sized()?.rest().to_vec()))?;
             Message::Chunk {
-                request_id: read_request_id(&mut r)?,
+                request_id: field("requestId", || read_request_id(&mut r))?,
                 values,
             }
         }
-        EXIT => Message::Exit {
-            request_id: read_request_id(&mut r)?,
-            exit: r.sized()?.rest().to_vec(),
-        },
+        EXIT => {
+            let request_id = field("requestId", || read_request_id(&mut r))?;
+            Message::Exit {
+                request_id,
+                exit: field("exit", || Ok(r.sized()?.rest().to_vec()))?,
+            }
+        }
         DEFECT => Message::Defect {
-            defect: r.sized()?.rest().to_vec(),
+            defect: field("defect", || Ok(r.sized()?.rest().to_vec()))?,
         },
-        _ => return Err(Invalid("known union member")),
+        _ => return Err(Invalid("known union member").into()),
     };
     r.finish()?;
     Ok(message)

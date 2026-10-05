@@ -1059,16 +1059,16 @@ mod schema_binary {
             let mut before = 0;
             let mut failure = None;
             for frame in frames.by_ref() {
-                match frame.and_then(read_message) {
+                match frame.map_err(Failure::from).and_then(read_message) {
                     Ok(_) => before += 1,
-                    Err(Invalid(expected)) => {
-                        failure = Some(expected);
+                    Err(located) => {
+                        failure = Some(located.message());
                         break;
                     }
                 }
             }
             assert_eq!(before, case["before"].as_u64().unwrap(), "{name}");
-            assert_eq!(failure, case["expected"].as_str(), "{name}");
+            assert_eq!(failure.as_deref(), case["message"].as_str(), "{name}");
             assert_eq!(frames.unfinished(), failure.is_none(), "{name}");
         }
     }

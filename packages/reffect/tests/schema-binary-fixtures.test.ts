@@ -5,7 +5,7 @@
  * read anything in it differently. Regenerate with `REFFECT_REGENERATE=1`, then `vp fmt` the file.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { Cause, Effect, Exit, Schema, SchemaIssue } from "effect";
+import { Cause, Effect, Exit, Schema } from "effect";
 import { SchemaBinary } from "effect/encoding";
 import { RpcSerialization } from "effect/rpc";
 import { expect, test } from "vite-plus/test";
@@ -27,14 +27,6 @@ const serialization = (maxFrameSize: number) =>
   );
 const official = serialization(64);
 
-const expectedOf = (error: unknown) => {
-  if (!Schema.isSchemaError(error)) throw error;
-  // A failure inside a field is the same issue under its path.
-  let issue: SchemaIssue.Issue = error.issue;
-  while (issue._tag === "Pointer") issue = issue.issue;
-  if (issue._tag !== "InvalidValue") throw new Error(`Not an InvalidValue: ${String(error)}`);
-  return issue.annotations?.expected;
-};
 /**
  * How the RPC parser reads a body: the messages before a failure come first and the failure
  * on the next feed; a body ending inside a frame is no failure, only an unfinished frame.
@@ -45,9 +37,11 @@ const failureOf = (bytes: Uint8Array) => {
   try {
     before = parser.decode(bytes).length;
     parser.decode(new Uint8Array());
-    return { before, expected: null };
+    return { before, message: null };
   } catch (error) {
-    return { before, expected: expectedOf(error) ?? null };
+    // The official HTTP server answers with this text as a `SchemaError` defect.
+    if (!Schema.isSchemaError(error)) throw error;
+    return { before, message: error.message };
   }
 };
 
@@ -194,6 +188,17 @@ const BAD_BODIES: ReadonlyArray<{ readonly name: string; readonly bytes: string 
   { name: "id not a union member", bytes: request("00", "020120" + "020200" + "0154" + "0100") },
   { name: "bad utf-8 tag", bytes: request("00", "020120020000" + "01ff" + "0100") },
   { name: "truncated slot", bytes: request("00", "020120020000" + "0954") },
+  { name: "payload truncated", bytes: request("00", "09" + "0120") },
+  { name: "header value", bytes: request("00", "020120020000" + "0154" + "06010401610" + "1ff") },
+  {
+    name: "second header name",
+    bytes: request("00", "020120020000" + "0154" + "0b02040161016204" + "01ff0162"),
+  },
+  { name: "header pair short", bytes: request("00", "020120020000" + "0154" + "0401020161") },
+  {
+    name: "header pair long",
+    bytes: request("00", "020120020000" + "0154" + "080106016101620163"),
+  },
   { name: "pong then zero", bytes: frame("06") + "00" },
   { name: "truncated frame", bytes: frame("06") + "0a21cc" },
   { name: "truncated header", bytes: frame("06") + "ff" },
@@ -234,6 +239,6 @@ test("the committed SchemaBinary fixtures are what the installed Effect writes a
   expect(generated.envelopeFingerprint).toBe("cc328ab08f524525");
   // Only the truncated bodies end without a failure.
   expect(
-    generated.failures.filter((failure) => failure.expected === null).map(({ name }) => name),
+    generated.failures.filter((failure) => failure.message === null).map(({ name }) => name),
   ).toEqual(["truncated frame", "truncated header"]);
 });

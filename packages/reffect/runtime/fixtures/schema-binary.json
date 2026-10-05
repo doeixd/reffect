@@ -334,109 +334,139 @@
       "name": "zero length",
       "bytes": "00",
       "before": 0,
-      "expected": "nonzero frame length"
+      "message": "Expected nonzero frame length"
     },
     {
       "name": "over maxFrameSize",
       "bytes": "4921cc328ab08f52452506060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606",
       "before": 0,
-      "expected": "frame within maxFrameSize"
+      "message": "Expected frame within maxFrameSize"
     },
     {
       "name": "default envelope",
       "bytes": "022006",
       "before": 0,
-      "expected": "version 2 envelope, flags 1"
+      "message": "Expected version 2 envelope, flags 1"
     },
     {
       "name": "fingerprint mismatch",
       "bytes": "0a21cc328ab08f52452606",
       "before": 0,
-      "expected": "matching layout fingerprint"
+      "message": "Expected matching layout fingerprint"
     },
     {
       "name": "short fingerprint",
       "bytes": "0521cc328ab0",
       "before": 0,
-      "expected": "complete value"
+      "message": "Expected complete value"
     },
     {
       "name": "unknown position",
       "bytes": "0a21cc328ab08f52452509",
       "before": 0,
-      "expected": "known union member"
+      "message": "Expected known union member"
     },
     {
       "name": "leftover",
       "bytes": "0b21cc328ab08f5245250600",
       "before": 0,
-      "expected": "no leftover bytes"
+      "message": "Expected no leftover bytes"
     },
     {
       "name": "overlong header",
       "bytes": "ffffffffffffffffffff01",
       "before": 0,
-      "expected": "uvarint"
+      "message": "Expected uvarint"
     },
     {
       "name": "unsafe length",
       "bytes": "ffffffffffffffff7f",
       "before": 0,
-      "expected": "safe integer length"
+      "message": "Expected safe integer length"
     },
     {
       "name": "sampled not a bool",
       "bytes": "1821cc328ab08f524525070202012002000002000201540100",
       "before": 0,
-      "expected": "bool"
+      "message": "Expected bool\n  at [\"sampled\"]"
     },
     {
       "name": "undefined with bytes",
       "bytes": "1821cc328ab08f524525070202012002000002010201540100",
       "before": 0,
-      "expected": "empty"
+      "message": "Expected empty\n  at [\"sampled\"]"
     },
     {
       "name": "notification false",
       "bytes": "1821cc328ab08f524525070802012002000001540100020000",
       "before": 0,
-      "expected": "true"
+      "message": "Expected true\n  at [\"isNotification\"]"
     },
     {
       "name": "id not a union member",
       "bytes": "1521cc328ab08f524525070002012002020001540100",
       "before": 0,
-      "expected": "known union member"
+      "message": "Expected known union member\n  at [\"id\"]"
     },
     {
       "name": "bad utf-8 tag",
       "bytes": "1521cc328ab08f524525070002012002000001ff0100",
       "before": 0,
-      "expected": "utf-8"
+      "message": "Expected utf-8\n  at [\"tag\"]"
     },
     {
       "name": "truncated slot",
       "bytes": "1321cc328ab08f52452507000201200200000954",
       "before": 0,
-      "expected": "complete value"
+      "message": "Expected complete value\n  at [\"tag\"]"
+    },
+    {
+      "name": "payload truncated",
+      "bytes": "0e21cc328ab08f5245250700090120",
+      "before": 0,
+      "message": "Expected complete value\n  at [\"payload\"]"
+    },
+    {
+      "name": "header value",
+      "bytes": "1a21cc328ab08f52452507000201200200000154060104016101ff",
+      "before": 0,
+      "message": "Expected utf-8\n  at [\"headers\"][0][1]"
+    },
+    {
+      "name": "second header name",
+      "bytes": "1f21cc328ab08f524525070002012002000001540b0204016101620401ff0162",
+      "before": 0,
+      "message": "Expected utf-8\n  at [\"headers\"][1][0]"
+    },
+    {
+      "name": "header pair short",
+      "bytes": "1821cc328ab08f524525070002012002000001540401020161",
+      "before": 0,
+      "message": "Missing key\n  at [\"headers\"][0][1]"
+    },
+    {
+      "name": "header pair long",
+      "bytes": "1c21cc328ab08f52452507000201200200000154080106016101620163",
+      "before": 0,
+      "message": "Expected no excess property\n  at [\"headers\"][0][2]"
     },
     {
       "name": "pong then zero",
       "bytes": "0a21cc328ab08f5245250600",
       "before": 1,
-      "expected": "nonzero frame length"
+      "message": "Expected nonzero frame length"
     },
     {
       "name": "truncated frame",
       "bytes": "0a21cc328ab08f524525060a21cc",
       "before": 1,
-      "expected": null
+      "message": null
     },
     {
       "name": "truncated header",
       "bytes": "0a21cc328ab08f52452506ff",
       "before": 1,
-      "expected": null
+      "message": null
     }
   ]
 }
