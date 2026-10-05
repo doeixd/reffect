@@ -224,6 +224,18 @@ test("LiveHub signals need a live hub, served over NDJSON", async () => {
   expect(json.message).toContain('serialization: "ndjson"');
 });
 
+test("an entity name holding a colon is refused, since rows are keyed entity:id (#26)", async () => {
+  const colon = Remote.define({
+    entities: [Entity.define("Todo:1", Schema.Struct({ id: Schema.String }))],
+    mutations: [],
+  });
+  const error = await Effect.runPromise(
+    NativeRemote.compile(RemoteRpc, { domain: colon, rows: {}, mutations: [] }).pipe(Effect.flip),
+  );
+  expect(error).toBeInstanceOf(CompileError);
+  expect(error.message).toContain("Entity names hold no colon");
+});
+
 test(
   "native live subscriptions receive the changes upstream's liveHub sends",
   async () => {

@@ -126,6 +126,83 @@ pub mod sql_sqlite {
                 assert_eq!(super::quote("a`b"), "`a``b`");
                 assert_eq!(super::placeholder(2), "?2");
             }
+
+            // #26: an unset URL is caught at boot, and a value with no wire or column form fails
+            // rather than reading or writing as null.
+            #[test]
+            fn unusable_urls_blobs_and_object_writes_fail() {
+                use super::*;
+                use serde_json::json;
+                static ENTITIES: &[Entity] = &[Entity {
+                    name: "Note",
+                    table: "notes",
+                    id: "id",
+                    columns: &[Column {
+                        field: "body",
+                        column: "body",
+                        kind: Kind::Text,
+                    }],
+                    relations: &[],
+                }];
+                let sql = |url_env: &'static str| -> &'static Sql {
+                    Box::leak(Box::new(Sql {
+                        entities: ENTITIES,
+                        queries: &[],
+                        url_env,
+                        pool: std::sync::OnceLock::new(),
+                    }))
+                };
+                assert_eq!(
+                    sql("REFFECT_TEST_UNSET_DATABASE_URL").ready(),
+                    Err("REFFECT_TEST_UNSET_DATABASE_URL is not set".to_string())
+                );
+                let path = std::env::temp_dir()
+                    .join(format!("reffect-sql-test-{}.db", std::process::id()));
+                let _ = std::fs::remove_file(&path);
+                std::env::set_var(
+                    "REFFECT_TEST_SQLITE_URL",
+                    format!(
+                        "sqlite:{}?mode=rwc",
+                        path.display().to_string().replace('\\', "/")
+                    ),
+                );
+                let store = sql("REFFECT_TEST_SQLITE_URL");
+                let failed = || FAILED.to_string();
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        // The pool spawns its reaper, so it is made inside the runtime, as at boot.
+                        assert_eq!(store.ready(), Ok(()));
+                        let pool = store.pool().unwrap();
+                        for statement in [
+                            "CREATE TABLE notes (id TEXT PRIMARY KEY, body)",
+                            "INSERT INTO notes VALUES ('n1', x'00ff'), ('n2', 'text')",
+                        ] {
+                            sqlx::query(statement).execute(pool).await.unwrap();
+                        }
+                        let session = store.begin().await.unwrap();
+                        assert_eq!(session.get("Note", "n1").await, Err(failed()));
+                        assert_eq!(
+                            session.get("Note", "n2").await,
+                            Ok(Some(json!({ "body": "text" })))
+                        );
+                        for value in [json!({ "a": 1 }), json!(["a"])] {
+                            assert_eq!(
+                                session.write("Note", "n3", json!({ "body": value })).await,
+                                Err(failed())
+                            );
+                        }
+                        assert_eq!(
+                            session.write("Note", "n3", json!({ "body": "x" })).await,
+                            Ok(())
+                        );
+                        session.finish(false).await.unwrap();
+                        pool.close().await;
+                    });
+                let _ = std::fs::remove_file(&path);
+            }
         }
     }
 }

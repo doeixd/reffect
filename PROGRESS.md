@@ -94,6 +94,19 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Remote and SQL data gaps (#26)
+
+- **Keys.** Rows stay keyed `entity:id`, as upstream keys them. Entity names holding a colon are now refused when compiled, and the live hub skips a client requirement whose entity holds one. Before this, `Todo:1` + `x` and `Todo` + `1:x` shared a key.
+- **Memory relation pages.** `valueFor` is now an exact port. A non-string item empties the page only when a cursor search passes it or it bounds the page; `[...new Set]` deduplicates primitives. Before this, any non-string item emptied the page.
+- **SQLite storage classes.** A BLOB, or any class other than INTEGER, REAL, TEXT and NULL, fails as Postgres's unknown types do, instead of reading as null.
+- **Writes.** An object or array written to a column fails instead of binding NULL.
+- **Database URL.** A SQL server checks its URL at boot, through a new `RpcRuntime.boot` hook, and exits naming the variable. Before this, it cached a broken pool and answered every request "Database query failed".
+- **Records.** Divergence row and refusal recorded in [native divergences](docs/native-divergences.md).
+- **Validation.**
+  - Rust (27 tests, each new assertion failing on the old code): colon selection, relation-page windows over `[1, 1, "Tag:a", "Tag:b"]`, and SQLite BLOB/object write/unset URL against a temporary database.
+  - TS: the `remote-live` colon refusal, and `remote-sql-mutate` spawning the built server without `REFFECT_DATABASE_URL` (non-zero exit, no ready record, the variable named).
+  - Passing suites: `remote-sql-mutate`, `remote-read`, `remote-live`, `remote-sql`; `vp check` clean.
+
 ## 2026-10-05 — Reproducible generated builds (#41)
 
 - **#41.** Every written artifact carries the runtime crate's `Cargo.lock`. The crate now depends on `subtle` and tokio `signal` as well, so its lock pins every crate a generated build can reach. Cargo keeps those versions and prunes the rest; `--locked` refuses a superset lock, so it is not used. After each build, `Cargo.build` refuses a resolved registry crate that is outside the lock or differs from it in version or checksum (see [compiler API](docs/compiler-api.md)).

@@ -136,6 +136,29 @@ fn deleted_reaches_selecting_subscribers_on_their_own_cursors() {
 }
 
 #[test]
+fn an_entity_holding_a_colon_selects_no_other_row() {
+    // "Todo:1" + "x" and "Todo" + "1:x" share the key "Todo:1:x"; no source is named with a
+    // colon, so the first selects nothing (#26).
+    let hub = hub();
+    let mut colon = live(
+        hub,
+        0.0,
+        json!([{ "entity": "Todo:1", "id": "x", "fields": ["title"] }]),
+        None,
+    );
+    hub.deleted("Todo", "1:x");
+    assert!(drain(&mut colon).is_empty());
+    let mut plain = live(
+        hub,
+        0.0,
+        json!([{ "entity": "Todo", "id": "1:x", "fields": ["title"] }]),
+        None,
+    );
+    hub.deleted("Todo", "1:x");
+    assert_eq!(drain(&mut plain).len(), 1);
+}
+
+#[test]
 fn changed_sends_each_subscriber_its_selected_authorized_fields() {
     let hub = hub();
     let rows =
@@ -262,6 +285,39 @@ fn a_huge_client_windows_map_reads_in_linear_time() {
         "took {:?}",
         started.elapsed()
     );
+}
+
+#[test]
+fn a_relation_page_fails_only_where_its_window_reaches_a_non_string_ref() {
+    // #26: as the memory backend's valueFor, a non-string item empties the page only when a
+    // cursor search passes it or it bounds the page; elsewhere it is an item like any other.
+    let rows = json!({ "Todo": [["t1", { "id": "t1", "tags": [1, 1, "Tag:a", "Tag:b"] }]] });
+    let memory = Memory::new(vec!["Todo".to_string()], &rows, &[]);
+    let permit_all = |_: &str, fields: &[String]| fields.to_vec();
+    let page = |window: serde_json::Value| {
+        let payload = json!({ "version": 4, "requests": [{ "entity": "Todo", "id": "t1", "fields": ["tags"], "windows": { "tags": window } }] });
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(read(&memory, &permit_all, &payload))
+            .unwrap()["entities"][0]["values"]["tags"]
+            .clone()
+    };
+    let empty = json!({ "refs": [], "hasNext": false, "hasPrevious": false });
+    // The page ends before the list does, so its last item, the number, is its end cursor.
+    assert_eq!(page(json!({ "first": 1 })), empty);
+    // Duplicates go first; the page's first item, a string, is its start cursor.
+    assert_eq!(
+        page(json!({ "last": 1 })),
+        json!({ "refs": ["Tag:b"], "hasNext": false, "hasPrevious": true })
+    );
+    // The whole list needs no cursor at all.
+    assert_eq!(
+        page(json!({ "first": 5 })),
+        json!({ "refs": [1, "Tag:a", "Tag:b"], "hasNext": false, "hasPrevious": false })
+    );
+    // A cursor search reaches the number before the match.
+    assert_eq!(page(json!({ "after": "Tag:a" })), empty);
 }
 
 #[test]

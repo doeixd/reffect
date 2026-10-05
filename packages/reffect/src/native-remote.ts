@@ -734,6 +734,11 @@ const compile = <Rpcs extends Rpc.Any>(
           sourced.add(source.name);
         }
         const entities = Array.from(options.domain.registry.entities.keys());
+        // Rows are keyed `entity:id`, as upstream keys them, and split at the first colon: an
+        // entity name holding one would make keys ambiguous ("A:1" + "x" is "A" + "1:x") (#26).
+        for (const entity of entities)
+          if (entity.includes(":"))
+            throw unsupported(`domain.${entity}`, "Entity names hold no colon");
         const queries = Array.from(options.domain.registry.queries.values());
         if ((options.rows === undefined) === (options.sql === undefined))
           throw unsupported("backend", "Give exactly one backend: rows (memory) or sql");
@@ -1018,6 +1023,7 @@ impl reffect_generated::LiveHub for RemoteLive {
         ),
         store: prepared.store,
         ...(pageData ? { pageData } : {}),
+        ...(prepared.backend === "sql" ? { boot: "REMOTE_SQL.ready()" } : {}),
         dependencies: [
           'ryu-js = { version = "=1.0.3", default-features = false }\n',
           ...(prepared.backend !== "sql"

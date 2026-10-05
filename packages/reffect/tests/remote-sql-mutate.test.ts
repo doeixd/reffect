@@ -424,6 +424,24 @@ for (const backend of sqlBackends)
                 return { status: response.status, body: await response.text() };
               });
             const address = yield* startNative(backend, nativeDb, parent);
+            // #26: without its database URL the same server exits at boot, naming the variable,
+            // rather than answering every request "Database query failed".
+            const unconfigured = yield* ChildProcess.make(
+              `${parent}/crate/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+              ["--port", "0"],
+              { env: { REFFECT_DATABASE_URL: undefined }, extendEnv: true },
+            );
+            const [bootOutput, bootError, bootExit] = yield* Effect.all(
+              [
+                Stream.mkString(Stream.decodeText(unconfigured.stdout)),
+                Stream.mkString(Stream.decodeText(unconfigured.stderr)),
+                unconfigured.exitCode,
+              ],
+              { concurrency: "unbounded" },
+            ).pipe(Effect.timeout("10 seconds"));
+            expect(bootExit).not.toBe(0);
+            expect(bootOutput).toBe("");
+            expect(bootError).toContain("REFFECT_DATABASE_URL is not set");
             const post = (body: string) =>
               Effect.promise(async () => {
                 const response = await fetch(`http://${address}/rpc`, { method: "POST", body });

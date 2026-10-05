@@ -223,6 +223,16 @@ impl Sql {
         });
         pool.as_ref().ok_or_else(|| FAILED.to_string())
     }
+    /// At startup: the database URL is set and usable, so a misconfigured server exits rather
+    /// than answering every request "Database query failed" (#26).
+    pub fn ready(&self) -> Result<(), String> {
+        if std::env::var_os(self.url_env).is_none() {
+            return Err(format!("{} is not set", self.url_env));
+        }
+        self.pool()
+            .map(|_| ())
+            .map_err(|_| format!("{} is not a usable database URL", self.url_env))
+    }
     fn entity(&self, name: &str) -> Option<&'static Entity> {
         self.entities.iter().find(|entity| entity.name == name)
     }
@@ -362,6 +372,12 @@ impl Session {
                 continue;
             }
             if let Some(column) = entity.columns.iter().find(|column| column.field == field) {
+                // A column holds a scalar: an object or array has no binding, and binding it as
+                // NULL would store a value the mutation never wrote (#26).
+                if value.is_object() || value.is_array() {
+                    eprintln!("[reffect] {}.{} is not a scalar", entity.name, field);
+                    return Err(FAILED.to_string());
+                }
                 columns.push(quote(column.column));
                 bound.push((value, column.kind));
             } else if let Some(one) = entity.relations.iter().find(|one| one.field == field) {

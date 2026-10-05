@@ -950,22 +950,32 @@ fn page_of<T: Clone>(
     };
     Ok((page, start, end))
 }
+/// SameValueZero on JSON primitives: numbers by value, so 0 and -0 are one.
+fn same_value_zero(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        _ => a == b,
+    }
+}
 /// The memory backend's `valueFor`: a relation page is the refs in a window of the stored list.
 fn value_for(value: &Value, window: Option<&Window>) -> Value {
     let (Some(window), Some(items)) = (window, value.as_array()) else {
         return value.clone();
     };
     let empty = json!({ "refs": [], "hasNext": false, "hasPrevious": false });
-    // A non-string ref throws inside the reference's try, answering with an empty page.
-    if items.iter().any(|item| !item.is_string()) {
-        return empty;
-    }
-    let mut seen = HashSet::new();
-    let refs: Vec<String> = items
+    // `[...new Set(value)]`: equal primitives once, each array or object its own item.
+    let mut seen: Vec<&Value> = Vec::new();
+    let refs: Vec<Value> = items
         .iter()
-        .filter_map(Value::as_str)
-        .filter(|item| seen.insert(item.to_string()))
-        .map(str::to_string)
+        .filter(|item| {
+            if item.is_array() || item.is_object() {
+                return true;
+            }
+            let repeated = seen.iter().any(|old| same_value_zero(old, item));
+            seen.push(item);
+            !repeated
+        })
+        .cloned()
         .collect();
     let id_of = |reference: &str| -> String {
         match reference.find(':') {
@@ -988,9 +998,19 @@ fn value_for(value: &Value, window: Option<&Window>) -> Value {
         after: named(&window.after),
         before: named(&window.before),
     };
-    let id_of_ref = |reference: &String| id_of(reference);
+    // `ref.slice` throws on a non-string only where the reference's idOf reaches one: a cursor
+    // search passing it, or a page bounded by it. The throw answers with an empty page (#26).
+    let reached_non_string = std::cell::Cell::new(false);
+    let id_of_ref = |reference: &Value| match reference.as_str() {
+        Some(reference) => id_of(reference),
+        None => {
+            reached_non_string.set(true);
+            String::new()
+        }
+    };
     match page_of(&refs, &window, &id_of_ref, None) {
         Err(_) => empty,
+        Ok(_) if reached_non_string.get() => empty,
         Ok((page, start, end)) => json!({
             "refs": page,
             "hasNext": matches!(end, Boundary::Cursor(_)),
@@ -1416,6 +1436,11 @@ impl Hub {
         }
         let mut selected: Ordered<Selected> = Ordered::new();
         for requirement in &requirements {
+            // Source names hold no colon (refused when authored), so such an entity names no
+            // source; keyed, it would collide with a real row ("A:1" + "x" is "A" + "1:x") (#26).
+            if requirement.entity.contains(':') {
+                continue;
+            }
             let key = format!("{}:{}", requirement.entity, requirement.id);
             if selected.get(&key).is_none() {
                 selected.set(

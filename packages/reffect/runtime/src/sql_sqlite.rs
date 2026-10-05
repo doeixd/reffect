@@ -20,6 +20,12 @@ pub(super) fn decode(row: &DbRow, index: usize) -> Result<Cell, sqlx::Error> {
         "INTEGER" => Cell::Integer(row.try_get(index)?),
         "REAL" => Cell::Real(row.try_get(index)?),
         "TEXT" => Cell::Text(row.try_get(index)?),
-        _ => Cell::Null,
+        "NULL" => Cell::Null,
+        // A BLOB has no wire value; reading it as null would hide the stored bytes (#26).
+        other => {
+            return Err(sqlx::Error::Decode(
+                format!("unsupported storage class {}", other).into(),
+            ))
+        }
     })
 }

@@ -18,6 +18,7 @@ export const rpcRuntime = (
   layered = false,
   ndjson = false,
   pages = false,
+  boot?: string,
 ): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use axum::response::{Response, IntoResponse};
@@ -75,7 +76,7 @@ ${
 `
 }
 ${serveRuntime}
-${layered ? layeredMain(pages) : plainMain(pages)}`;
+${layered ? layeredMain(pages, boot) : plainMain(pages, boot)}`;
 
 /** The RPC routes, and pages for every path and method they do not take (SSR-007). */
 const routes = (pages: boolean): string =>
@@ -89,7 +90,10 @@ const routes = (pages: boolean): string =>
  */
 const serveRuntime = RuntimeSources.rpc_serve;
 
-const plainMain = (pages: boolean): string => String.raw`#[tokio::main(flavor = "multi_thread")]
+const plainMain = (
+  pages: boolean,
+  boot?: string,
+): string => String.raw`#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut address = "127.0.0.1".to_string();
@@ -102,6 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let state = load_state()?;
+    ${boot === undefined ? "" : `${boot}?;`}
     let listener = tokio::net::TcpListener::bind((address.as_str(), port)).await?;
     let address = listener.local_addr()?;
     ${routes(pages)}
@@ -132,6 +137,7 @@ const shutdownForwarder = String.raw`    {
  */
 const layeredMain = (
   pages: boolean,
+  boot?: string,
 ): string => String.raw`static SERVICES: std::sync::OnceLock<reffect_generated::LaunchValues> = std::sync::OnceLock::new();
 static SHUTDOWN: std::sync::OnceLock<tokio::sync::watch::Receiver<bool>> = std::sync::OnceLock::new();
 #[tokio::main(flavor = "multi_thread")]
@@ -149,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let state = load_state()?;
+    ${boot === undefined ? "" : `${boot}?;`}
     let (stop_launch, launch_cancellation) = tokio::sync::watch::channel(false);
     let (publish, published) = tokio::sync::oneshot::channel();
     let launch = tokio::spawn(async move {

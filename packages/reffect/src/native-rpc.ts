@@ -934,6 +934,11 @@ export interface RpcRuntime {
    * carries (an Unknown input after the URL) and the JSON of its views (a third, typed input).
    */
   readonly pageData?: string;
+  /**
+   * A Rust expression of type `Result<(), String>` checked at startup, before the listener
+   * binds: a misconfigured server exits instead of failing every request (#26).
+   */
+  readonly boot?: string;
   /** The ported engines these procedures run, listed in the artifact and version-checked. */
   readonly ported?: readonly PortedRuntime[];
   /** Pure R functions compiled into the program, callable as `reffect_generated::r_<name>`. */
@@ -2032,6 +2037,7 @@ ${
             prepared.layered,
             options.serialization === "ndjson",
             prepared.pages !== undefined,
+            runtime?.boot,
           ),
         ),
       ],
