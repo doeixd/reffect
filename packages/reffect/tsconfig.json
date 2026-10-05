@@ -1,5 +1,6 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": { "strict": true, "target": "ES2022", "skipLibCheck": true },
-  "include": ["src", "tests", "vite.config.ts"]
+  "include": ["src", "tests", "vite.config.ts"],
+  "exclude": ["tests/fixtures/upstream-ssr"]
 }
