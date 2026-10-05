@@ -23,6 +23,7 @@ import {
   literalsOf,
 } from "./kernel.ts";
 import { refContent, refType } from "./ref-model.ts";
+import { checkGeneratedDeferredRustBytes } from "./deferred-growth.ts";
 import { normalizeRuntimeServicesSelection } from "./runtime-service-model.ts";
 import type {
   RuntimeServicesSelection,
@@ -3939,6 +3940,7 @@ export const emitFunctions = (
       ).text
     }\n`,
   });
+  if (queryAllowance) checkGeneratedDeferredRustBytes(files);
   return Object.freeze({ files, ranges: writer.ranges });
 };
 

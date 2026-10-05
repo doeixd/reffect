@@ -101,11 +101,12 @@ test("nested and callback-started groups cannot acquire generated admission", ()
 });
 
 test("private generated profile preserves the conditional automatic-yield refusal", () => {
-  let work = unit();
-  for (let index = 0; index < 10; index++) {
-    const previous = work;
-    work = previous.pipe(R.Effect.andThen(previous));
-  }
+  const chain = () => {
+    let body = unit();
+    for (let index = 0; index < 40; index++) body = body.pipe(R.Effect.map((value) => value));
+    return body;
+  };
+  const work = chain().pipe(R.Effect.andThen(chain()));
   const oversized = R.fn([], R.Unit, R.Never, () =>
     D.make(R.Unit).pipe(R.Effect.flatMap(() => work)),
   );

@@ -3,6 +3,7 @@ import { Cause, Context, Effect, Exit, Logger, Match, Scheduler } from "effect";
 import type { Computation, EffectFn, FramedExit } from "./effect-ir.ts";
 import { GeneratedDeferredReference } from "./deferred-generated-reference.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
+import { checkGeneratedDeferredNesting } from "./deferred-growth.ts";
 import { deferredBudgetLimit } from "./deferred-budget.ts";
 import {
   AddNumber,
@@ -175,6 +176,7 @@ const execute = <A, Out>(
   let signal: AbortSignal | undefined;
   try {
     signal = cancellation(options);
+    checkGeneratedDeferredNesting(fn, "function");
     checkReferences(fn);
     if (!analyzeGeneratedDeferredProfile(Program.make({ work: fn })).has(fn))
       throw refusal("function", "This runner requires the checked private Deferred profile");

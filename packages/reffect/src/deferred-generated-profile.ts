@@ -1,5 +1,11 @@
 import { Match } from "effect";
 import { analyzeDeferredBudget, defaultDeferredBudgetContext } from "./deferred-budget.ts";
+import {
+  analyzeGeneratedDeferredGrowth,
+  checkGeneratedDeferredModuleGrowth,
+  checkGeneratedDeferredNesting,
+} from "./deferred-growth.ts";
+import type { GeneratedDeferredGrowth } from "./deferred-growth.ts";
 import { deferredScalar } from "./deferred-model.ts";
 import { EffectFn, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
@@ -18,11 +24,15 @@ export const analyzeGeneratedDeferredProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedDeferredProfile> => {
   const profiles = new Map<EffectFn, GeneratedDeferredProfile>();
+  let growth: GeneratedDeferredGrowth | undefined;
   for (const [name, fn] of Object.entries(program.functions)) {
     if (!(fn instanceof EffectFn)) continue;
     const path = `functions.${name}`;
+    checkGeneratedDeferredNesting(fn, path);
     const topology = analyzeDeferredTopology(fn.body, `${path}.body`, { nestedGroups: true });
     if (!topology.hasDeferred) continue;
+    const receipt = analyzeGeneratedDeferredGrowth(fn, `${path}.body`);
+    growth = checkGeneratedDeferredModuleGrowth(growth ? [growth, receipt] : [receipt]);
     const issues = checkEffectFunction(fn, path).filter(
       (issue) => issue.code !== "NESTED_TASK_GROUP",
     );

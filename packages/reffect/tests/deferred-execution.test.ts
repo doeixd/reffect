@@ -217,9 +217,16 @@ const mapped = (count: number) =>
   R.fn([], R.Unit, R.Never, () =>
     D.make(R.Unit).pipe(
       R.Effect.flatMap((cell) => {
-        let body = D.await(cell);
-        for (let i = 0; i < count; i++) body = R.Effect.map(body, (value) => value);
-        return D.succeed(cell, R.Unit.literal()).pipe(R.Effect.andThen(body));
+        const wrap = (depth: number, source: typeof R.Effect.void) => {
+          let body = source;
+          for (let i = 0; i < depth; i++) body = R.Effect.map(body, (value) => value);
+          return body;
+        };
+        const first = wrap(Math.floor(count / 2), R.Effect.void);
+        const last = wrap(Math.ceil(count / 2), D.await(cell));
+        return D.succeed(cell, R.Unit.literal()).pipe(
+          R.Effect.andThen(first.pipe(R.Effect.andThen(last))),
+        );
       }),
     ),
   );

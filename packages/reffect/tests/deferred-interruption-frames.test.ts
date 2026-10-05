@@ -335,6 +335,8 @@ test("scope-expanded diagnostic plans refuse before source work, while shared su
   expect(
     analyzeDeferredBudget(expanding, "body", defaultDeferredBudgetContext, true).admitted,
   ).toBe(true);
+  const defensive = new DeferredInterruptionFrames();
+  expect(() => defensive.prepare(expanding.body, "functions.work.body")).toThrowError(/4096/);
   const refused = await DeferredExecution.runWithFrames(expanding);
   expect(refused.logs).toEqual([]);
   expect(refused.exit).toMatchObject({
@@ -342,7 +344,7 @@ test("scope-expanded diagnostic plans refuse before source work, while shared su
       reasons: [
         {
           error: {
-            diagnostics: [expect.objectContaining({ code: "DEFERRED_FRAME_GROWTH" })],
+            diagnostics: [expect.objectContaining({ code: "DEFERRED_GENERATED_GROWTH" })],
           },
         },
       ],

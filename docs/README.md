@@ -20,7 +20,9 @@ Its implementation decisions are recorded separately for [helper borrows](resear
 
 [Nested future storage](research/nested-future-storage.md) records caller-pinned child borrows, actual layout reduction and the fixture regression budget; [independent layout research](research/nested-future-layout.md) explains the ownership and pinning evidence.
 
-[Standalone Deferred execution](research/deferred-execution-boundary.md) establishes an internal owned scheduler/context boundary, with its [primary-source context audit](research/deferred-context-audit.md). The Effect-valued research entry remains conditional; [private interruption-frame contract](research/deferred-interruption-frames.md) records exact bounded trails, observer budgets and remaining shared-path/growth gates. Public admission remains gated.
+[Standalone Deferred execution](research/deferred-execution-boundary.md) establishes an internal owned scheduler/context boundary, with its [primary-source context audit](research/deferred-context-audit.md). The Effect-valued research entry remains conditional; [private interruption-frame contract](research/deferred-interruption-frames.md) records exact bounded trails, observer budgets and scope-indexed shared paths. Public admission remains gated.
+
+[Private generated Deferred growth](research/deferred-generated-growth.md) separates whole-graph/helper nesting, expression/text expansion, module aggregation and emitted Rust limits from evaluator receipts and measured future layouts.
 
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
