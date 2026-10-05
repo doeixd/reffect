@@ -141,6 +141,11 @@ These block many items below.
 - Per-function server reachability in the SSR inventory (only per-module measured) ([inventory](research/foldkit-ssr-inventory.md#limits-of-the-measurement))
 - Closure conversion QC-0..QC-5: Oxc analyzer, boundary registry, pure and Effect callbacks, SSR closure report, helper lifting; mutable-capture analysis; capture regression corpus ([qwik-closure-conversion](research/qwik-closure-conversion.md#qc-0--analyzer-foundation))
 - M8B migration targets the tiny R core plus user-land expansions (RT-8) ([r-language](r-language.md#rt-8--migration-integration))
+- M8B ([research](research/ssr-codemod.md)): step 1 (the R surface of the pinned `examples/ssr`) is done. Open:
+  - step 2, the translator on the TypeScript 7 API;
+  - step 3, acceptance against upstream with hydration;
+  - `InnerHTML` with markup, which needs an HTML parser;
+  - non-literal `Tabindex`.
 
 ## Effect modules
 

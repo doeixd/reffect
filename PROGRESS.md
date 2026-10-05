@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-05 — Milestone 8B step 1: the R surface of the pinned SSR example
+
+- [Research, decisions and per-step evidence](docs/research/ssr-codemod.md). The pinned source is `foldkit@0.165.0` `examples/ssr` plus `@foldkit/ui` `Button`. Each step below was probed against upstream and is differential:
+  - **1a.** `pre` and `textarea` (a `textarea`'s `Value` is its content; the parser's leading newline), and `Selected`, `Autofocus`, `AriaDisabled` and `Tabindex`.
+  - **1b.** `select` and `option`, with controlled selection.
+  - **1c.** Markup-free literal `InnerHTML`.
+  - **1d.**
+    - `R.Number.parse`/`isSafeInteger` and `R.Cookies.parseHeader`, std-only in a `js_std` runtime module through a generic `Std` lowering;
+    - `R.DateTime.Utc`/`make`/`formatIso`;
+    - `R.Record.get`;
+    - page requests reading `cookie` (without the session cookie) and `now`.
+  - **1e.** Page requests reading `method`, and pages answering `R.Html.Entry` (upstream's `Rendered`/`Responded`) with upstream's response semantics.
+- One divergence is recorded (COOKIE-SURROGATE).
+- Validation:
+  - `vp check` and `vp run runtime:check` pass (34 runtime tests).
+  - These suites pass, run one at a time: `html` 12/12, `html-native` 2/2, `js-std` 3/3, `page-request` 1/1, every page suite, and `todo-fullstack` 2/2.
+- Next: step 2, the translator on the TypeScript 7 unstable API.
+
 ## 2026-10-05 — Milestone 8B research
 
 - [Research record](docs/research/ssr-codemod.md).
