@@ -1,4 +1,4 @@
-import { CookiesIR } from "./js-std.ts";
+import { CookiesIR, DateTimeIR } from "./js-std.ts";
 import { SchemaIR } from "./schema-json.ts";
 import { UrlIR } from "./url.ts";
 import { StreamAuthoring } from "./stream.ts";
@@ -132,6 +132,8 @@ export const R = Object.freeze({
   Url: UrlIR,
   /** `effect/http` Cookies: what a page reads of its `Cookie` header. */
   Cookies: CookiesIR,
+  /** Effect `DateTime`: UTC instants, as a page's `now` is one. */
+  DateTime: DateTimeIR,
   RemoteStore: RemoteStoreIR,
   LiveHub: LiveHubIR,
   /** Foldkit Remote values an R page reads (M9-3). */

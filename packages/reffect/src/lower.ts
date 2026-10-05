@@ -1,4 +1,5 @@
 import { runtimeModule } from "./runtime-module.ts";
+import { UtcType } from "./js-std.ts";
 import type { ProvenanceSnapshot } from "./provenance.ts";
 import { Provenance } from "./provenance.ts";
 import { SourceWriter, joinFragments, mapFragment, textFragment } from "./source-writer.ts";
@@ -1871,6 +1872,8 @@ export const emitFunctions = (
     if (IRType.same(type, UnitType)) return Rs.unitType();
     if (IRType.same(type, StringType)) return Rs.stringType();
     if (IRType.same(type, NumberType)) return Rs.namedType("f64");
+    // A UTC instant is its epoch milliseconds, always a valid JS time value.
+    if (IRType.same(type, UtcType)) return Rs.namedType("f64");
     if (IRType.same(type, HtmlType)) {
       usesHtml = true;
       return Rs.verbatimType("crate::foldkit_html::Html");

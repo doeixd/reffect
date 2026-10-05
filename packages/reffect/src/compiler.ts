@@ -1,6 +1,13 @@
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
 import { UrlPathname, UrlSearchParam } from "./url.ts";
-import { CookiesParseHeader, NumberParse } from "./js-std.ts";
+import {
+  CookiesParseHeader,
+  DateTimeFormatIso,
+  DateTimeMake,
+  DateTimeToEpochMillis,
+  NumberParse,
+  UtcType,
+} from "./js-std.ts";
 import { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
 import { streamExpressions, streamFinalizers, streamSources } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
@@ -236,6 +243,9 @@ const implementations = Object.freeze([
     [
       [NumberParse, "number_parse"],
       [CookiesParseHeader, "cookies_parse_header"],
+      [DateTimeMake, "date_time_make"],
+      [DateTimeFormatIso, "date_time_format_iso"],
+      [DateTimeToEpochMillis, "date_time_epoch_millis"],
       [IsSafeIntegerNumber, "is_safe_integer"],
     ] as const
   ).map(([operation, name]) =>
@@ -1136,15 +1146,23 @@ const verifyPlan = Effect.fn("Compile.verify")(function* (p: Plan) {
   for (const type of expected.analysis.types) {
     if (
       type.layout === undefined &&
-      ![U64Type, BoolType, UnitType, NeverType, StringType, NumberType, UnknownType, HtmlType].some(
-        (builtin) => IRType.same(type, builtin),
-      )
+      ![
+        U64Type,
+        BoolType,
+        UnitType,
+        NeverType,
+        StringType,
+        NumberType,
+        UnknownType,
+        HtmlType,
+        UtcType,
+      ].some((builtin) => IRType.same(type, builtin))
     )
       return yield* fail(
         "UNSUPPORTED_REPRESENTATION",
         "verify",
         type.id,
-        "Only canonical Boolean/u64/Unit/Never/String witnesses have registered native representations",
+        "Only the builtin scalar witnesses (Bool, u64, Unit, Never, String, Number, Unknown, Html, DateTime.Utc) and composites have registered native representations",
       );
   }
   for (const f of Object.values(expected.analysis.program.functions)) {

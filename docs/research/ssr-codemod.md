@@ -124,3 +124,6 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
   - `R.Cookies.parseHeader` (Effect `Cookies.parseHeader`, reference Effect's own) is ported in `js_std` over UTF-16 code units as JS indexes them, with `decodeURIComponent` as percent-decoding plus UTF-8 validation, and the Record in JS own-property order.
   - Evidence: `tests/js-std.test.ts` passes 3/3. A NativeRpc server answers 29 headers byte-equal to the official server, key order included. The headers cover duplicates, Unicode trimming, quotes, missing `=`, every `%` failure (bad hex, truncated, overlong, surrogate, past U+10FFFF), `__proto__`, integer keys and non-ASCII.
   - One divergence, a lone surrogate from a malformed quoted value, is recorded (COOKIE-SURROGATE).
+- **1d-iii (2026-10-05):**
+  - `R.DateTime.Utc` (natively epoch milliseconds as `f64`), `R.DateTime.make` (Effect `DateTime.make`, so JS `TimeClip` as an Option), `formatIso` (`toISOString`, with six-digit signed years outside 0–9999) and `toEpochMillis`.
+  - Evidence: `tests/js-std.test.ts` passes 3/3. Native agrees with Effect on 20 instants: ±0, fractions, ±8.64e15 and past them, NaN, Infinity, the year 9999/10000 and 0/−1 boundaries, a leap day.

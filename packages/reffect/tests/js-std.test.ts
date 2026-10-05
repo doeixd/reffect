@@ -39,7 +39,42 @@ const parsed = R.fn([R.String], R.String, (text) =>
 const cookies = R.fn([R.String], R.Record(R.String, R.String), (header) =>
   R.Cookies.parseHeader(header),
 );
-const program = R.program({ parsed });
+// DateTime.make on epoch milliseconds, then formatIso and the clipped milliseconds.
+const iso = R.fn([R.Number], R.String, (millis) =>
+  R.DateTime.make(millis).pipe(
+    R.Option.match({
+      onNone: () => R.String.literal("invalid"),
+      onSome: (instant) =>
+        R.String.concat(
+          R.String.concat(R.DateTime.formatIso(instant), R.String.literal(" ")),
+          R.String.fromNumber(R.DateTime.toEpochMillis(instant)),
+        ),
+    }),
+  ),
+);
+const program = R.program({ parsed, iso });
+const instants = [
+  0,
+  -0,
+  1.7,
+  -1.7,
+  -0.5,
+  1e12,
+  1_700_000_000_000,
+  951_782_400_000,
+  8.64e15,
+  -8.64e15,
+  8.64e15 + 1,
+  -8.64e15 - 1,
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  253_402_300_799_999,
+  253_402_300_800_000,
+  -62_167_219_200_000,
+  -62_167_219_200_001,
+  -1,
+  -86_400_000,
+];
 
 const numbers = [
   "",
@@ -162,6 +197,19 @@ test(
           );
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.build(directory, "debug");
+          for (const millis of instants) {
+            const native = yield* NativeRunner.run(
+              artifact,
+              directory,
+              "iso",
+              iso,
+              [millis],
+              "debug",
+            );
+            expect(native, String(millis)).toEqual(
+              yield* Effect.exit(Reference.run(iso, [millis])),
+            );
+          }
           for (const text of numbers) {
             const native = yield* NativeRunner.run(
               artifact,

@@ -258,3 +258,54 @@ pub fn cookies_parse_header(header: &str) -> Vec<(String, String)> {
         .chain(named)
         .collect()
 }
+
+/// Effect `DateTime.make` on epoch milliseconds: JS `TimeClip`, so a value past +-8.64e15 or
+/// not finite is invalid, and any other is truncated toward zero, with -0 as +0.
+pub fn date_time_make(epoch_millis: f64) -> Option<f64> {
+    if !epoch_millis.is_finite() || epoch_millis.abs() > 8.64e15 {
+        return None;
+    }
+    Some(epoch_millis.trunc() + 0.0)
+}
+
+/// Effect `DateTime.toEpochMillis` of a UTC instant, which is natively its milliseconds.
+pub fn date_time_epoch_millis(instant: f64) -> f64 {
+    instant
+}
+
+/// Effect `DateTime.formatIso` of a UTC instant: `Date.prototype.toISOString`, with a six-digit
+/// signed year outside 0..=9999. Days to civil dates follow Howard Hinnant's algorithm.
+pub fn date_time_format_iso(instant: f64) -> String {
+    let millis = instant as i64;
+    let days = millis.div_euclid(86_400_000);
+    let in_day = millis.rem_euclid(86_400_000);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    let year_text = if (0..=9999).contains(&year) {
+        format!("{:04}", year)
+    } else {
+        format!("{}{:06}", if year < 0 { '-' } else { '+' }, year.abs())
+    };
+    format!(
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        year_text,
+        month,
+        day,
+        in_day / 3_600_000,
+        in_day / 60_000 % 60,
+        in_day / 1000 % 60,
+        in_day % 1000
+    )
+}
