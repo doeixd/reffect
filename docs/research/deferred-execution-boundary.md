@@ -1,9 +1,6 @@
-# Current diagnostic refinement
-
-[Private interruption frames](deferred-interruption-frames.md) adds masked observer receipts and exact interrupted observations to this owned boundary. Started cancellation returns a framed Interrupted Exit after cleanup; pre-aborted execution remains unopened. Shared root diagnostic paths remain conservatively refused.
-
 # Standalone Deferred execution boundary
 
+[Private interruption frames](deferred-interruption-frames.md) adds masked observer receipts and exact interrupted observations to this owned boundary. Started cancellation returns a framed Interrupted Exit after cleanup; pre-aborted execution remains unopened. Shared root diagnostic paths remain conservatively refused.
 Prepared 2026-10-05 before implementation. Reviewed DBUD/DADM, private generated profile/reference, the named plain/framed evaluator and current budget probes. Synced through 9c3a6ee and installed dependencies. Checked published [Effect 4.0.0 evaluator](https://unpkg.com/effect@4.0.0/src/internal/effect.ts) and [scheduler](https://unpkg.com/effect@4.0.0/src/Scheduler.ts) against installed source. Independent context findings are recorded in [the audit](deferred-context-audit.md).
 
 **DEXEC-001 — Own the host boundary.** A private standalone Promise runner validates the full generated Deferred profile before starting a fresh root fiber. It passes a fresh default MixedScheduler, explicit 2048 operation limit and automatic yielding enabled through a runner-owned context. It inherits no caller Effect context, continuation, clock, tracer, span, metrics hook or input decoding. Default Clock/Tracer behavior is resolved by official Effect from that context. Returning an Effect would permit arbitrary host wrapping; returning Fiber would permit context mutation. Neither is returned.
