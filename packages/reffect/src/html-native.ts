@@ -44,9 +44,6 @@ export const reflects = (tag: string, attribute: string): boolean => {
   const tags = REFLECTED[attribute];
   return tags === "all" || (tags !== undefined && tags.includes(tag));
 };
-/** Attributes the profile refuses on an element because Foldkit's builder rejects most values. */
-export const refusedOn = (tag: string, attribute: string): boolean =>
-  attribute === "Value" && tag !== "button" && tag !== "input";
 
 const rustString = (value: string): string => JSON.stringify(value);
 

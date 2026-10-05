@@ -34,7 +34,8 @@ export type AttributeValue =
   | { readonly name: StringAttribute; readonly value: string }
   | { readonly name: BooleanAttribute; readonly value: boolean }
   | { readonly name: "DataAttribute"; readonly key: string; readonly value: string }
-  | { readonly name: EventAttribute; readonly message: unknown };
+  | { readonly name: EventAttribute; readonly message: unknown }
+  | { readonly name: ValueEventAttribute; readonly toMessage: (value: string) => unknown };
 
 export const HtmlCapability = SemanticRef.capability("reffect/capability/foldkit-html@1");
 const isHtmlValue = (value: unknown): value is HtmlValue =>
@@ -66,6 +67,11 @@ export const EVENT_ATTRIBUTES = ["OnClick", "OnDoubleClick", "OnSubmit"] as cons
 export type StringAttribute = (typeof STRING_ATTRIBUTES)[number];
 export type BooleanAttribute = (typeof BOOLEAN_ATTRIBUTES)[number];
 export type EventAttribute = (typeof EVENT_ATTRIBUTES)[number];
+/**
+ * Events whose Message takes the element's value (#14): Foldkit's `OnInput(value => Message)`.
+ * In R one String field of the variant receives the value; the others are given as usual.
+ */
+export type ValueEventAttribute = "OnInput";
 
 /** A variant of a `defineMessageUnion` Message: a tagged struct schema that constructs itself. */
 export type MessageVariant = Schema.Top &
@@ -104,9 +110,11 @@ export interface ElementShape {
     | { readonly name: "DataAttribute"; readonly key: string }
     /** Its Message's field values are reference-only arguments: native rendering erases them. */
     | {
-        readonly name: EventAttribute;
+        readonly name: EventAttribute | ValueEventAttribute;
         readonly variant: MessageVariant;
         readonly fields: ReadonlyArray<{ readonly name: string; readonly type: IRType<unknown> }>;
+        /** For a value event, the field the element's value fills. */
+        readonly value?: string;
       }
   >;
   readonly isVoid: boolean;
@@ -128,7 +136,7 @@ const shapeKey = (shape: ElementShape): string =>
       "key" in attribute
         ? `data:${attribute.key}`
         : "variant" in attribute
-          ? `${attribute.name}:${variantId(attribute.variant)}{${attribute.fields.map((field) => field.name).join(",")}}`
+          ? `${attribute.name}:${variantId(attribute.variant)}{${attribute.fields.map((field) => field.name).join(",")}}${attribute.value === undefined ? "" : `<-${attribute.value}`}`
           : attribute.name,
     )
     .join(",")})`;
@@ -154,10 +162,17 @@ export const elementOperation = (shape: ElementShape): AnyOperation => {
           const fields = Object.fromEntries(
             attribute.fields.map((field) => [field.name, args[next++]]),
           );
-          return {
-            name: attribute.name,
-            message: Reflect.apply(attribute.variant, undefined, [fields]),
-          };
+          const { name, value: target, variant } = attribute;
+          if (name === "OnInput") {
+            // Html.OnInput always names the field the value fills.
+            if (target === undefined) throw new Error("OnInput without its value field");
+            return {
+              name,
+              toMessage: (value: string) =>
+                Reflect.apply(variant, undefined, [{ ...fields, [target]: value }]),
+            };
+          }
+          return { name, message: Reflect.apply(variant, undefined, [fields]) };
         }
         const value = args[next++];
         if ("key" in attribute)
@@ -192,13 +207,15 @@ export const toFoldkit = <Message>(
   if (value._tag === "Text") return value.text;
   if (value._tag === "Empty") return h.empty;
   const attributes = value.attributes.map((attribute) =>
-    "message" in attribute
-      ? h[attribute.name](attribute.message as Message)
-      : "key" in attribute
-        ? h.DataAttribute(attribute.key, attribute.value)
-        : attribute.name === "Checked" || attribute.name === "Disabled"
-          ? h[attribute.name](attribute.value === true)
-          : h[attribute.name](String(attribute.value)),
+    "toMessage" in attribute
+      ? h.OnInput((input) => attribute.toMessage(input) as Message)
+      : "message" in attribute
+        ? h[attribute.name](attribute.message as Message)
+        : "key" in attribute
+          ? h.DataAttribute(attribute.key, attribute.value)
+          : attribute.name === "Checked" || attribute.name === "Disabled"
+            ? h[attribute.name](attribute.value === true)
+            : h[attribute.name](String(attribute.value)),
   );
   const build = Reflect.get(h, value.tag) as (
     attributes: ReadonlyArray<unknown>,

@@ -142,6 +142,26 @@ test("Message fields are checked against the variant's own schema", () => {
   expect(() => H.message(Wide.Picked, { id, count: id })).toThrow(CompileError);
 });
 
+test("OnInput fills one String field of its Message with the input's value (#14)", async () => {
+  const Edit = defineMessageUnion({
+    Typed: { id: Schema.String, value: Schema.String },
+    Counted: { count: Schema.Number },
+  });
+  const field = R.fn([R.String], H.Document, (id) =>
+    H.Document.make({
+      title: R.String.literal("t"),
+      body: H.input([H.Id(id), H.OnInput(Edit.Typed, "value", { id })]),
+    }),
+  );
+  const document = await Effect.runPromise(Reference.run(field, ["d1"]));
+  const input = document.body._tag === "Element" ? document.body.attributes[1] : undefined;
+  if (!input || !("toMessage" in input)) throw new Error("Missing OnInput attribute");
+  expect(input.toMessage("hello")).toEqual(Edit.Typed({ id: "d1", value: "hello" }));
+  // The value fills a String field; Counted's count is a Number.
+  expect(() => H.OnInput(Edit.Counted, "count")).toThrow(CompileError);
+  // No trace in server HTML: todo-remote-page renders its draft input natively equal to upstream.
+});
+
 test("the profile refuses what it does not admit", () => {
   expect(() => H.div([H.Class("a"), H.Class("b")])).toThrow(CompileError);
   expect(() => H.DataAttribute("Bad Key", "x")).toThrow(CompileError);

@@ -21,8 +21,8 @@ import { OptionIR } from "./option.ts";
 import { ResultIR } from "./result.ts";
 import type { ResultValue } from "./result.ts";
 import { Reference } from "./reference.ts";
-import { refusedOn } from "./html-native.ts";
-import { NativeRpc } from "./native-rpc.ts";
+import { refusedOn } from "./html-rules.ts";
+import { contractWitness } from "./contract-codec.ts";
 import {
   BOOLEAN_ATTRIBUTES,
   DocumentType,
@@ -46,6 +46,7 @@ import type {
   BooleanAttribute,
   ElementShape,
   EventAttribute,
+  ValueEventAttribute,
   HtmlValue,
   MessageFields,
   MessageVariant,
@@ -69,18 +70,25 @@ export interface MessageExpr {
  * `R.Html.message(Message.ClickedToggle, { id })`: each field is checked against the variant's
  * own schema, so the whole Message union never needs an R witness (SSR-010).
  */
-const message = <V extends MessageVariant>(variant: V, fields: MessageFields<V>): MessageExpr => {
+const message = <V extends MessageVariant>(variant: V, fields: MessageFields<V>): MessageExpr =>
+  messageOf(variant, fields, undefined);
+/** A Message's fields checked against its variant; `filled` is a field an event value fills. */
+const messageOf = (
+  variant: MessageVariant,
+  fields: { readonly [name: string]: Expr<unknown> },
+  filled: string | undefined,
+): MessageExpr => {
   const entries: ReadonlyArray<readonly [string, Expr<unknown>]> = Object.entries(fields);
   for (const [name, value] of entries) {
     const schema = variant.fields[name];
-    if (name === "_tag" || !Schema.isSchema(schema))
+    if (name === "_tag" || name === filled || !Schema.isSchema(schema))
       throw fail(
         "TYPE_MISMATCH",
         "authoring",
         `Html.message.${name}`,
         "Not a field of this Message",
       );
-    if (!IRType.same(value.type, NativeRpc.witness(schema)))
+    if (!IRType.same(value.type, contractWitness(schema)))
       throw fail(
         "TYPE_MISMATCH",
         "authoring",
@@ -89,7 +97,7 @@ const message = <V extends MessageVariant>(variant: V, fields: MessageFields<V>)
       );
   }
   const missing = Object.keys(variant.fields).filter(
-    (name) => name !== "_tag" && !entries.some(([given]) => given === name),
+    (name) => name !== "_tag" && name !== filled && !entries.some(([given]) => given === name),
   );
   if (missing.length)
     throw fail(
@@ -109,7 +117,31 @@ export type Attribute =
   | { readonly name: StringAttribute; readonly value: Expr<string> }
   | { readonly name: BooleanAttribute; readonly value: Expr<boolean> }
   | { readonly name: "DataAttribute"; readonly key: string; readonly value: Expr<string> }
-  | { readonly name: EventAttribute; readonly message: MessageExpr };
+  | { readonly name: EventAttribute; readonly message: MessageExpr }
+  | { readonly name: ValueEventAttribute; readonly message: MessageExpr; readonly value: string };
+/**
+ * `R.Html.OnInput(Message.ChangedDraft, "value")`, Foldkit's `OnInput((value) => ...)` (#14):
+ * the input's value fills the variant's String field `field`; `fields` gives the rest. Like
+ * every event it leaves no trace in server HTML.
+ */
+const OnInput = <
+  V extends MessageVariant,
+  const F extends Exclude<keyof Schema.Schema.Type<V>, "_tag"> & string,
+>(
+  variant: V,
+  field: F,
+  fields?: Omit<MessageFields<V>, F>,
+): Attribute => {
+  const schema = variant.fields[field];
+  if (!Schema.isSchema(schema) || !IRType.same(contractWitness(schema), StringType))
+    throw fail(
+      "TYPE_MISMATCH",
+      "authoring",
+      `Html.OnInput.${field}`,
+      "The input's value fills a String field of the Message",
+    );
+  return { name: "OnInput", message: messageOf(variant, fields ?? {}, field), value: field };
+};
 const stringValue = (value: Expr<string> | string, at: string): Expr<string> => {
   const expr = typeof value === "string" ? Expr.literal(StringType, value) : value;
   if (!IRType.same(expr.type, StringType))
@@ -202,6 +234,7 @@ const element =
                       Object.freeze({ name: field.name, type: field.value.type }),
                     ),
                   ),
+                  ...("value" in attribute ? { value: attribute.value } : {}),
                 })
               : Object.freeze({ name: attribute.name }),
         ),
@@ -588,6 +621,7 @@ export const HtmlIR = Object.freeze({
     ]),
   ) as Record<EventAttribute, (message: MessageExpr) => Attribute>),
   message,
+  OnInput,
   DataAttribute: (key: string, value: Expr<string> | string): Attribute => {
     if (!DATA_KEY.test(key))
       throw fail(
