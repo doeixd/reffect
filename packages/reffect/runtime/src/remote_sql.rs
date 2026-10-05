@@ -499,6 +499,33 @@ impl Session {
     }
 }
 
+/// Where a read runs: the pool, or a page's read transaction (`Snapshot`). The pool is resolved
+/// only when a statement runs, so a read that needs none never touches it.
+#[derive(Clone, Copy)]
+enum On<'a> {
+    Pool(&'a Sql),
+    Tx(&'a tokio::sync::Mutex<sqlx::Transaction<'static, Db>>),
+}
+impl On<'_> {
+    async fn fetch_all(self, query: Query1<'_>) -> Result<Vec<DbRow>, String> {
+        match self {
+            On::Pool(sql) => query.fetch_all(sql.pool()?).await.map_err(failed),
+            On::Tx(tx) => {
+                let mut tx = tx.lock().await;
+                query.fetch_all(&mut **tx).await.map_err(failed)
+            }
+        }
+    }
+    async fn fetch_optional(self, query: Query1<'_>) -> Result<Option<DbRow>, String> {
+        match self {
+            On::Pool(sql) => query.fetch_optional(sql.pool()?).await.map_err(failed),
+            On::Tx(tx) => {
+                let mut tx = tx.lock().await;
+                query.fetch_optional(&mut **tx).await.map_err(failed)
+            }
+        }
+    }
+}
 impl Source for Sql {
     fn has_source(&self, entity: &str) -> bool {
         self.entity(entity).is_some()
@@ -511,6 +538,81 @@ impl Source for Sql {
     }
     async fn read(
         &self,
+        entity: &str,
+        ids: &[String],
+        fields: &[String],
+        windows: &Option<JsObject<Window>>,
+    ) -> Result<Vec<EntityRecord>, String> {
+        self.read_on(On::Pool(self), entity, ids, fields, windows)
+            .await
+    }
+    fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String> {
+        let queries = self
+            .queries
+            .iter()
+            .map(|def| (def.name, def.entity, def.valid));
+        super::remote_engine::checked_query(queries, query, input)
+    }
+    async fn page(&self, query: &str, input: &Value, window: &Window) -> Result<PageIds, String> {
+        self.page_on(On::Pool(self), query, input, window).await
+    }
+}
+/// A page's read transaction (docs/research/ssr-data.md, "One read transaction per page"): every
+/// read and query page of one page request sees one snapshot. `end` rolls it back.
+pub struct Snapshot {
+    sql: &'static Sql,
+    tx: tokio::sync::Mutex<sqlx::Transaction<'static, Db>>,
+}
+impl Sql {
+    pub async fn snapshot(&'static self) -> Result<Snapshot, String> {
+        let tx = self
+            .pool()?
+            .begin_with(dialect::READ)
+            .await
+            .map_err(failed)?;
+        Ok(Snapshot {
+            sql: self,
+            tx: tokio::sync::Mutex::new(tx),
+        })
+    }
+}
+impl Snapshot {
+    /// Ends the read transaction; a read-only one has nothing to commit.
+    pub async fn end(self) {
+        let _ = self.tx.into_inner().rollback().await;
+    }
+}
+impl Source for Snapshot {
+    fn has_source(&self, entity: &str) -> bool {
+        self.sql.has_source(entity)
+    }
+    fn declares(&self, entity: &str, field: &str) -> bool {
+        self.sql.declares(entity, field)
+    }
+    async fn read(
+        &self,
+        entity: &str,
+        ids: &[String],
+        fields: &[String],
+        windows: &Option<JsObject<Window>>,
+    ) -> Result<Vec<EntityRecord>, String> {
+        self.sql
+            .read_on(On::Tx(&self.tx), entity, ids, fields, windows)
+            .await
+    }
+    fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String> {
+        self.sql.check_query(query, input)
+    }
+    async fn page(&self, query: &str, input: &Value, window: &Window) -> Result<PageIds, String> {
+        self.sql
+            .page_on(On::Tx(&self.tx), query, input, window)
+            .await
+    }
+}
+impl Sql {
+    async fn read_on(
+        &self,
+        on: On<'_>,
         entity: &str,
         ids: &[String],
         fields: &[String],
@@ -567,7 +669,7 @@ impl Source for Sql {
         for id in ids {
             query = query.bind(id.clone());
         }
-        let rows = query.fetch_all(self.pool()?).await.map_err(failed)?;
+        let rows = on.fetch_all(query).await?;
         for (field, selected) in &selected {
             if let Selected::One(_) = selected {
                 if windows
@@ -601,14 +703,13 @@ impl Source for Sql {
         }
         Ok(records)
     }
-    fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String> {
-        let queries = self
-            .queries
-            .iter()
-            .map(|def| (def.name, def.entity, def.valid));
-        super::remote_engine::checked_query(queries, query, input)
-    }
-    async fn page(&self, query: &str, input: &Value, window: &Window) -> Result<PageIds, String> {
+    async fn page_on(
+        &self,
+        on: On<'_>,
+        query: &str,
+        input: &Value,
+        window: &Window,
+    ) -> Result<PageIds, String> {
         let Some(def) = self.queries.iter().find(|def| def.name == query) else {
             return Err(format!("Unknown query: {}", query));
         };
@@ -638,7 +739,6 @@ impl Source for Sql {
         } else {
             window.after.clone()
         };
-        let pool = self.pool()?;
         let mut values = Bindings {
             input,
             cursor: &[],
@@ -656,10 +756,7 @@ impl Source for Sql {
             }
             Some(id) => {
                 values.cursor_id = id;
-                let row = bound(&def.cursor_row, &values)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(failed)?;
+                let row = on.fetch_optional(bound(&def.cursor_row, &values)).await?;
                 let Some(row) = row else {
                     return Err("The query cursor no longer resolves to a row".to_string());
                 };
@@ -675,10 +772,7 @@ impl Source for Sql {
                 }
             }
         };
-        let rows = bound(statement, &values)
-            .fetch_all(pool)
-            .await
-            .map_err(failed)?;
+        let rows = on.fetch_all(bound(statement, &values)).await?;
         let mut ids: Vec<String> = rows
             .iter()
             .map(|row| cell(row, 0).map(|id| text_of(&id)))

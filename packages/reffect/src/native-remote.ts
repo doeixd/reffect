@@ -599,6 +599,7 @@ const pageReads = (
   domain: RemoteDomain,
   source: string,
   authenticates: boolean,
+  snapshot: boolean,
 ): { readonly data: string; readonly helpers: { readonly [name: string]: Fn } } => {
   // A view whose input comes from the URL: its R input, encoded by the query's own Input codec,
   // fills its read's request `input` per page request (docs/research/ssr-data.md).
@@ -732,10 +733,20 @@ const pageReads = (
         ${authenticates ? "if principal.is_none() { return Err(StatusCode::UNAUTHORIZED); }" : ""}
         let authorize = remote_authorize(principal);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0);
-        remote_engine::page_data(${source}, &authorize, reads, &[${viewEntries}], now).await.map_err(|error| {
+        let failure = |error: serde_json::Value| {
             eprintln!("{}", json!({ "schema": "reffect.ssr.page@1", "outcome": "read-failure", "error": error }));
             StatusCode::INTERNAL_SERVER_ERROR
-        })
+        };${
+          snapshot
+            ? `
+        // One read transaction for the page's reads, so its first screen is one snapshot.
+        let snapshot = REMOTE_SQL.snapshot().await.map_err(|error| failure(json!(error)))?;
+        let data = remote_engine::page_data(&snapshot, &authorize, reads, &[${viewEntries}], now).await;
+        snapshot.end().await;
+        data.map_err(failure)`
+            : `
+        remote_engine::page_data(${source}, &authorize, reads, &[${viewEntries}], now).await.map_err(failure)`
+        }
     }.await`;
   return { data, helpers };
 };
@@ -1031,6 +1042,7 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
               options.domain,
               prepared.source,
               options.auth !== undefined,
+              prepared.backend === "sql",
             ),
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("pages.remote", String(cause)),

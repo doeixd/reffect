@@ -7,6 +7,17 @@
 - Independent review identified helper-plan expansion across unexecuted branches. A 4096-entry diagnostic limit now returns typed DEFERRED_FRAME_GROWTH before source work. It is separate from the execution-operation receipt and does not establish general native growth admission.
 - JavaScript observation/budget tests pass 5/5 (3.61s), with the native test excluded. Six new topology-authored fixtures cover shared leaf/parent wrappers and FlatMap, task, finalizer and Deferred scope reuse; successful sharing and plan-growth refusal are covered too. Independent code review found no semantic defect; its disabled-path tagged-case cost finding is fixed. The full sequential regression passes 34/34 across six suites (194.51s), including 64 actual native cases across debug/release and None/Bounded. Full check passes 464 formatted files and 282 TypeScript files without warnings/errors; strict package TypeScript and the workspace build pass (one rebuilt package, three cache hits). Self-review makes the new memo map explicitly typed to avoid inferred any. Post-commit strict TypeScript, rebuilt workspace and 12 selected observation/context/budget tests pass (30.09s; six tests excluded by the selector). Rebased unchanged onto 6cbc116 and installed dependencies, preserving the other instance's page-get/Remote engine changes. Deferred implementation and native fixtures are unchanged; Merged strict TypeScript, rebuilt workspace and 13 selected observation/context/budget/runtime-source tests pass (31.73s; six tests excluded). Full check found only formatting in the newly synced divergence and SSR data records; reviewed corrections adjust table spacing, list separators and italic delimiters without changing content. Final post-commit check follows before publication.
 
+## 2026-10-05 — One read transaction per page (M9-3)
+
+- [Design and acceptance](docs/research/ssr-data.md#one-read-transaction-per-page-2026-10-05).
+  - A SQL page's reads share one read transaction: `REPEATABLE READ READ ONLY` on Postgres, a deferred `BEGIN` on SQLite.
+  - `Sql::snapshot()` returns a `Snapshot` that implements `Source`. The read and query-page code runs on either the pool or the transaction through one `On` executor. RPC reads still use the pool.
+  - Recorded as divergence SSR-SNAP: a consistency choice stronger than upstream.
+- Validation:
+  - `tests/remote-page-snapshot.test.ts` (Postgres via Docker) passes. A rename that commits while the page waits on a lock is not shown, while an RPC read under the same interleaving shows it. The test fails with the snapshot disabled.
+  - `vp check` and `vp run runtime:check` pass.
+  - `todo-fullstack` 2/2 (SQLite and Postgres), `remote-sql` 2/2 and `remote-sql-mutate` 6/6 pass, run one at a time.
+
 ## 2026-10-05 — Private Deferred interruption diagnostics
 
 - Synced remote through d93e0b5 and installed current dependencies, preserving the separately owned Remote/SQL and nesting-limit work. [DINT-001–005](docs/research/deferred-interruption-frames.md) records primary-source preparation before implementation: ordinary catchCause/exit continuations are skipped during external interruption; masked onExit observers and a root-owned recorder preserve actual Cause and awaited cleanup. Native infallible group trails start at the group boundary; public admission stays gated.

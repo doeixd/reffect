@@ -7,6 +7,8 @@ pub(super) type Db = sqlx::Postgres;
 /// Runtime-built statements number their placeholders `$1`, `$2`, ...
 pub(super) const PLACEHOLDER: &str = "$";
 pub(super) const BEGIN: &str = "BEGIN ISOLATION LEVEL SERIALIZABLE";
+/// A page's reads: one snapshot from the first statement, refusing writes.
+pub(super) const READ: &str = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
 pub(super) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }

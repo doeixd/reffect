@@ -380,3 +380,30 @@ Validation:
 
 - `tests/remote-page-input.test.ts` passes 2/2. Four URLs (default, `?status=closed&id=c`, an empty list, `?id=missing`) render byte-equal to upstream, the Read is made only where the list lacks the task, and the replay settles `Ready`/`NotFound`.
 - The runtime test `page_reads_ask_only_what_earlier_answers_lack_and_gets_settle` passes.
+
+## One read transaction per page (2026-10-05)
+
+**Gap.** M9-3 decided that on SQL a page's reads share one read transaction, so the first screen is one snapshot (a consistency choice stronger than upstream, like LIVE-003). Each `remote_sql` read and query page still runs on the pool, so a commit between two of a page's reads can show a list and a detail from different states.
+
+**Facts** (checked 2026-10-05):
+- `remote_sql::Sql` reads with `fetch_all(pool)`. A query page with a cursor runs two statements (the cursor row, then the page). Mutations already run in a `Session` transaction opened with `begin_with(dialect::BEGIN)` (SQLx 0.9).
+- **Postgres.** [`REPEATABLE READ`](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-REPEATABLE-READ) takes its snapshot at the transaction's first statement, and every later statement sees that snapshot, including one that waited on a lock. `READ ONLY` refuses writes.
+- **SQLite.** A [deferred `BEGIN`](https://www.sqlite.org/lang_transaction.html) starts a read transaction at its first read. In WAL mode it reads one snapshot until it ends; in rollback-journal mode its shared lock keeps writers from committing until it ends. Either way the reads are consistent.
+- Upstream (`foldkit-remote-server`) reads each request separately; the browser replay is unaffected by how the server read.
+
+**Decisions.**
+- `Sql::snapshot()` opens a read transaction: `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` on Postgres, a deferred `BEGIN` on SQLite. The returned `Snapshot` implements `Source` over that transaction, and `end()` rolls it back.
+- `Sql`'s read and query-page code runs on either the pool or a transaction (one `On` executor choice), so the snapshot path reuses the same SQL text and decoding.
+- The SQL page host opens one snapshot per page request, runs `page_data` on it, then ends it. Memory pages are unchanged.
+- **Not snapshotted:** RPC reads and query pages outside a page still use the pool, as before.
+
+**Alternatives.**
+- *An associated snapshot type on `Source`:* rejected. Only the generated SQL host needs it, and that host already knows its backend at compile time.
+- *`SERIALIZABLE` reads:* rejected. A read-only `REPEATABLE READ` transaction is already a consistent snapshot on Postgres, and needs no retry.
+
+**Acceptance.** A Postgres page lists tasks, then gets a note. Meanwhile another connection holds an exclusive lock on `notes`, updates the note, and commits once the page is waiting on that lock. The page shows the note as it was before that commit. A pool read would show the new note. The SQLite and Postgres showcase pages still render as before.
+
+**Implemented (2026-10-05).** `Sql::snapshot`, `Snapshot` and the `On` executor are in `runtime/src/remote_sql.rs`, with the dialects' `READ` statements. The SQL page host is in `src/native-remote.ts`.
+- `tests/remote-page-snapshot.test.ts` (Postgres; skipped without Docker) uses projects and a user from the SQL test domain. The page shows the user's name from its snapshot, though a rename committed while it waited. The next page shows the rename. An RPC read under the same interleaving also shows the rename, which proves the lock dance can expose it.
+- With the snapshot disabled the test fails (checked by hand on 2026-10-05).
+- **SQLite** relies on the deferred-transaction guarantee cited above. It has no interleaving test, because a SQLite writer cannot commit beneath an open reader in rollback-journal mode.

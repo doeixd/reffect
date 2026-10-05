@@ -7,6 +7,8 @@ pub(super) type Db = sqlx::Sqlite;
 /// Runtime-built statements number their placeholders `?1`, `?2`, ...
 pub(super) const PLACEHOLDER: &str = "?";
 pub(super) const BEGIN: &str = "BEGIN IMMEDIATE";
+/// A page's reads: a deferred transaction reads one snapshot from its first read.
+pub(super) const READ: &str = "BEGIN";
 /// Backticks: an unknown double-quoted name is a string literal in SQLite (DQS), so a missing
 /// column would read as its own name instead of failing.
 pub(super) fn quote(name: &str) -> String {
