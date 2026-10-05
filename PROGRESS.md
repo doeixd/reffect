@@ -94,6 +94,22 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Shared runtime logic (#38)
+
+- **#38.** Same-language duplications are shared:
+  - `check_query` is one `remote_engine::checked_query` over `(name, entity, valid)` for the memory and SQL backends;
+  - `EntityPatched` payloads come from one `patched` helper, used by live events and snapshots;
+  - requirement-to-relation conversion is `Requirement::as_relation`;
+  - both RPC mains use `server_args` and `bind`, so argument parsing and the ready record are written once;
+  - the page host parses its origin and computes its `Vary` values once (`OnceLock`) instead of per request, with `ssr_host::resolve_against`.
+
+  The batch-limit block had already been shared by the runtime-sources split.
+
+- **Kept on purpose.** Identifier quoting and `js_space` exist once in TypeScript (build time) and once in Rust (run time). `array_index` lives in two runtime modules that generated crates include independently.
+- **Validation.**
+  - `runtime:check`: 29 tests, clippy and rustfmt clean.
+  - Passing suites: `runtime-sources`, `rpc-serving`, `async-rpc`, `native-rpc`, `html-page`, `remote-page`, `remote-live`, `remote-query`, `remote-sql`, `todo-fullstack`, `todo-remote-page`; `vp check` clean.
+
 ## 2026-10-05 — Weak authoring registries (#39)
 
 - **#39, interning.** Structural interning holds witnesses weakly. A path steps through child witnesses by `WeakMap` and ends in a `WeakRef`, and a `FinalizationRegistry` clears dead leaves. Identical live structures still share one witness. A long-lived watch or editor process no longer keeps every witness it authored.

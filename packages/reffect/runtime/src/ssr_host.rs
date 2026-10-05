@@ -186,7 +186,10 @@ fn normalize_path(path: &str) -> String {
 /// resolveRequestUrl: the target resolved against the origin, or nothing when it names
 /// another origin or carries credentials.
 pub fn resolve_request_url(target: &str, origin: &str) -> Option<url::Url> {
-    let base = url::Url::parse(origin).ok()?;
+    resolve_against(target, &url::Url::parse(origin).ok()?)
+}
+/// `resolveRequestUrl` against an origin parsed once, as a page host holds it.
+pub fn resolve_against(target: &str, base: &url::Url) -> Option<url::Url> {
     let resolved = base.join(target).ok()?;
     if !resolved.username().is_empty() || resolved.password().is_some() {
         return None;

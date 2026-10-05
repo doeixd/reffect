@@ -323,6 +323,17 @@ fn relation(value: &Value) -> Relation {
         relations: record(present(object, "relations"), relation),
     }
 }
+impl Requirement {
+    /// The requirement as the relation its pages are counted on.
+    fn as_relation(&self) -> Relation {
+        Relation {
+            entity: self.entity.clone(),
+            fields: self.fields.clone().into(),
+            windows: self.windows.clone(),
+            relations: self.relations.clone(),
+        }
+    }
+}
 fn requirement(value: &Value) -> Requirement {
     let empty = Map::new();
     let object = value.as_object().unwrap_or(&empty);
@@ -1047,6 +1058,40 @@ fn into_object(object: JsObject<Value>) -> Value {
     }
     Value::Object(map)
 }
+/// An `EntityPatched` payload: the record's values for `fields`, each as `(field, name told)`,
+/// with the names in order; nothing when none of them is present. Live events and snapshots
+/// both tell a row this way.
+fn patched<'a>(
+    record: &EntityRecord,
+    fields: impl Iterator<Item = (&'a String, String)>,
+) -> Option<(Value, Vec<String>)> {
+    let mut values: JsObject<Value> = JsObject::new();
+    for (field, name) in fields {
+        if let Some(value) = record.values.get(field) {
+            values.set(name, value.clone());
+        }
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let changed: Vec<String> = values.iter().map(|(key, _)| key.clone()).collect();
+    Some((into_object(values), changed))
+}
+/// `check_query` for any registry of `(name, entity, valid)` queries: the query's entity, or why
+/// it cannot run. Every backend answers an unknown query and invalid input the same way.
+pub fn checked_query<'a>(
+    queries: impl IntoIterator<Item = (&'a str, &'static str, fn(&Value) -> bool)>,
+    query: &str,
+    input: &Value,
+) -> Result<&'static str, String> {
+    let Some((_, entity, valid)) = queries.into_iter().find(|(name, _, _)| *name == query) else {
+        return Err(format!("Unknown query: {}", query));
+    };
+    if !valid(input) {
+        return Err("Invalid query input".to_string());
+    }
+    Ok(entity)
+}
 
 /// `readHelper`.
 /// An entity source's `authorize` for the bound principal: declared fields in, permitted fields out.
@@ -1087,15 +1132,7 @@ async fn read_helper<S: Source>(
             over
         )));
     }
-    let relations: Vec<Relation> = requests
-        .iter()
-        .map(|request| Relation {
-            entity: request.entity.clone(),
-            fields: request.fields.clone().into(),
-            windows: request.windows.clone(),
-            relations: request.relations.clone(),
-        })
-        .collect();
+    let relations: Vec<Relation> = requests.iter().map(Requirement::as_relation).collect();
     if let Some(paged) = check_pages_per_relation(&relations) {
         return Err(read_error(format!(
             "Too many pages of \"{}\" in one read",
@@ -1437,15 +1474,7 @@ impl Hub {
                 over
             )));
         }
-        let relations: Vec<Relation> = requirements
-            .iter()
-            .map(|request| Relation {
-                entity: request.entity.clone(),
-                fields: request.fields.clone().into(),
-                windows: request.windows.clone(),
-                relations: request.relations.clone(),
-            })
-            .collect();
+        let relations: Vec<Relation> = requirements.iter().map(Requirement::as_relation).collect();
         if let Some(paged) = check_pages_per_relation(&relations) {
             return Err(live_error(format!(
                 "Too many pages of \"{}\" in one live subscription",
@@ -1708,33 +1737,16 @@ impl Hub {
                     continue;
                 };
                 for (subscriber, wanted) in &group.entries {
-                    let mut values: JsObject<Value> = JsObject::new();
-                    for field in wanted {
-                        if !allowed_set.contains(field) {
-                            continue;
-                        }
-                        if let Some(value) = record.values.get(field) {
-                            values.set(
-                                group
-                                    .renames
-                                    .get(field)
-                                    .cloned()
-                                    .unwrap_or_else(|| field.clone()),
-                                value.clone(),
-                            );
-                        }
+                    let fields = wanted
+                        .iter()
+                        .filter(|field| allowed_set.contains(field))
+                        .map(|field| {
+                            let name = group.renames.get(field).cloned();
+                            (field, name.unwrap_or_else(|| field.clone()))
+                        });
+                    if let Some(patch) = patched(&record, fields) {
+                        Hub::emit(subscriber, "EntityPatched", entity, id, Some(patch));
                     }
-                    if values.is_empty() {
-                        continue;
-                    }
-                    let changed: Vec<String> = values.iter().map(|(key, _)| key.clone()).collect();
-                    Hub::emit(
-                        subscriber,
-                        "EntityPatched",
-                        entity,
-                        id,
-                        Some((into_object(values), changed)),
-                    );
                 }
             }
         }
@@ -1859,26 +1871,16 @@ impl Hub {
             };
             match records.get(id) {
                 Some(record) => {
-                    let mut values: JsObject<Value> = JsObject::new();
-                    for field in &group.fields {
-                        if matches!(already, Some(Some(fields)) if fields.contains(field)) {
-                            continue;
-                        }
-                        if let Some(value) = record.values.get(field) {
-                            values.set(field.clone(), value.clone());
-                        }
+                    let fields = group
+                        .fields
+                        .iter()
+                        .filter(
+                            |field| !matches!(already, Some(Some(told)) if told.contains(*field)),
+                        )
+                        .map(|field| (field, field.clone()));
+                    if let Some(patch) = patched(record, fields) {
+                        Hub::send(&subscriber, "EntityPatched", entity, id, Some(patch));
                     }
-                    if values.is_empty() {
-                        continue;
-                    }
-                    let changed: Vec<String> = values.iter().map(|(key, _)| key.clone()).collect();
-                    Hub::send(
-                        &subscriber,
-                        "EntityPatched",
-                        entity,
-                        id,
-                        Some((into_object(values), changed)),
-                    );
                 }
                 None => Hub::send(&subscriber, "EntityDeleted", entity, id, None),
             }
@@ -2110,13 +2112,11 @@ impl Source for Memory {
         std::future::ready(Ok(self.read_now(entity, ids, fields, windows)))
     }
     fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String> {
-        let Some(def) = self.queries.iter().find(|def| def.name == query) else {
-            return Err(format!("Unknown query: {}", query));
-        };
-        if !(def.valid)(input) {
-            return Err("Invalid query input".to_string());
-        }
-        Ok(def.entity)
+        let queries = self
+            .queries
+            .iter()
+            .map(|def| (def.name, def.entity, def.valid));
+        checked_query(queries, query, input)
     }
     fn page(
         &self,

@@ -144,7 +144,16 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     // against the configured origin, refused before anything else when it names another origin
     // or carries credentials (#21). Hyper keeps an absolute-form target's authority outside its path.
     let raw_target = if uri.scheme().is_some() { uri.to_string() } else { uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| "/".to_string()) };
-    let Some(resolved) = ssr_host::resolve_request_url(&raw_target, ${Rs.stringLiteral(origin).text}) else {
+    // The origin and the Vary values are fixed for the server's life: computed once (#38).
+    static ORIGIN: std::sync::OnceLock<Option<url::Url>> = std::sync::OnceLock::new();
+    static VARY: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    let (destination_vary, negotiated_vary) = VARY.get_or_init(|| {
+        let destination = ssr_host::vary_with(None, "Sec-Fetch-Dest");
+        let negotiated = ssr_host::vary_with(Some(&ssr_host::vary_with(None, "Accept")), "Sec-Fetch-Dest");
+        (destination, negotiated)
+    });
+    let base = ORIGIN.get_or_init(|| url::Url::parse(${Rs.stringLiteral(origin).text}).ok());
+    let Some(resolved) = base.as_ref().and_then(|base| ssr_host::resolve_against(&raw_target, base)) else {
         return empty(StatusCode::BAD_REQUEST, &[]);
     };
     #[allow(unused_variables)]
@@ -154,7 +163,7 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
         return empty(StatusCode::METHOD_NOT_ALLOWED, &[("allow", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS".to_string())]);
     }
     // Once negotiated, every answer says it varies by Accept and Sec-Fetch-Dest (#28).
-    let negotiated_vary = || ssr_host::vary_with(Some(&ssr_host::vary_with(None, "Accept")), "Sec-Fetch-Dest");
+    let negotiated_vary = || negotiated_vary.clone();
     let routed = if uri.scheme().is_some() { format!("{}{}", resolved.path(), resolved.query().map(|query| format!("?{}", query)).unwrap_or_default()) } else { raw_target.clone() };
     let target = routed.as_str();
     let get_or_head = method == "GET" || method == "HEAD";
@@ -163,7 +172,7 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
         let destination = ssr_host::header_value(&headers, "sec-fetch-dest");
         match ssr_host::classify(target, destination.as_deref()) {
             ssr_host::Class::PathAsset => return empty(StatusCode::NOT_FOUND, &[]),
-            ssr_host::Class::DestinationAsset => return empty(StatusCode::NOT_FOUND, &[("vary", ssr_host::vary_with(None, "Sec-Fetch-Dest"))]),
+            ssr_host::Class::DestinationAsset => return empty(StatusCode::NOT_FOUND, &[("vary", destination_vary.clone())]),
             ssr_host::Class::Page => {}
         }
         negotiated = true;

@@ -1,3 +1,37 @@
+/// A server's command line, shared by both mains: `--host`, `--port`, and, for a server with a
+/// lifetime, `--shutdown-on-stdin-eof`.
+struct ServerArgs {
+    address: String,
+    port: u16,
+    stdin_shutdown: bool,
+}
+#[allow(dead_code)]
+fn server_args(lifetime: bool) -> Result<ServerArgs, Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let mut parsed = ServerArgs {
+        address: "127.0.0.1".to_string(),
+        port: 3000,
+        stdin_shutdown: false,
+    };
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--port" => parsed.port = args.next().ok_or("missing port")?.parse()?,
+            "--host" => parsed.address = args.next().ok_or("missing host")?,
+            "--shutdown-on-stdin-eof" if lifetime => parsed.stdin_shutdown = true,
+            _ => return Err("unknown server argument".into()),
+        }
+    }
+    Ok(parsed)
+}
+/// Binds the listener and prints the ready record the tests and tools wait for.
+async fn bind(args: &ServerArgs) -> std::io::Result<tokio::net::TcpListener> {
+    let listener = tokio::net::TcpListener::bind((args.address.as_str(), args.port)).await?;
+    println!(
+        "{}",
+        json!({"schema":"reffect.rpc.ready@1", "address":listener.local_addr()?.to_string()})
+    );
+    Ok(listener)
+}
 async fn serve(
     listener: tokio::net::TcpListener,
     app: Router,

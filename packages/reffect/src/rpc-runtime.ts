@@ -95,23 +95,12 @@ const plainMain = (
   boot?: string,
 ): string => String.raw`#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
-    let mut address = "127.0.0.1".to_string();
-    let mut port: u16 = 3000;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--port" => port = args.next().ok_or("missing port")?.parse()?,
-            "--host" => address = args.next().ok_or("missing host")?,
-            _ => return Err("unknown server argument".into()),
-        }
-    }
+    let args = server_args(false)?;
     let state = load_state()?;
     ${boot === undefined ? "" : `${boot}?;`}
-    let listener = tokio::net::TcpListener::bind((address.as_str(), port)).await?;
-    let address = listener.local_addr()?;
     ${routes(pages)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
-    println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
+    let listener = bind(&args).await?;
     serve(listener, app, std::future::pending()).await?;
     Ok(())
 }
@@ -142,18 +131,8 @@ const layeredMain = (
 static SHUTDOWN: std::sync::OnceLock<tokio::sync::watch::Receiver<bool>> = std::sync::OnceLock::new();
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
-    let mut address = "127.0.0.1".to_string();
-    let mut port: u16 = 3000;
-    let mut stdin_shutdown = false;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--port" => port = args.next().ok_or("missing port")?.parse()?,
-            "--host" => address = args.next().ok_or("missing host")?,
-            "--shutdown-on-stdin-eof" => stdin_shutdown = true,
-            _ => return Err("unknown server argument".into()),
-        }
-    }
+    let args = server_args(true)?;
+    let stdin_shutdown = args.stdin_shutdown;
     let state = load_state()?;
     ${boot === undefined ? "" : `${boot}?;`}
     let (stop_launch, launch_cancellation) = tokio::sync::watch::channel(false);
@@ -172,11 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = SERVICES.set(services);
     let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
     let _ = SHUTDOWN.set(shutdown_receiver);
-    let listener = tokio::net::TcpListener::bind((address.as_str(), port)).await?;
-    let address = listener.local_addr()?;
     ${routes(pages)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
-    println!("{}", json!({"schema":"reffect.rpc.ready@1", "address":address.to_string()}));
+    let listener = bind(&args).await?;
     let signal = async move {
         let stdin_eof = async {
             if !stdin_shutdown { return std::future::pending::<()>().await; }

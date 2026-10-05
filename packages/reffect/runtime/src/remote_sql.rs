@@ -602,13 +602,11 @@ impl Source for Sql {
         Ok(records)
     }
     fn check_query(&self, query: &str, input: &Value) -> Result<&'static str, String> {
-        let Some(def) = self.queries.iter().find(|def| def.name == query) else {
-            return Err(format!("Unknown query: {}", query));
-        };
-        if !(def.valid)(input) {
-            return Err("Invalid query input".to_string());
-        }
-        Ok(def.entity)
+        let queries = self
+            .queries
+            .iter()
+            .map(|def| (def.name, def.entity, def.valid));
+        super::remote_engine::checked_query(queries, query, input)
     }
     async fn page(&self, query: &str, input: &Value, window: &Window) -> Result<PageIds, String> {
         let Some(def) = self.queries.iter().find(|def| def.name == query) else {
