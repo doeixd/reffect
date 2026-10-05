@@ -2138,149 +2138,307 @@ pub struct PageRead {
     pub tag: &'static str,
     pub request: Value,
 }
+/// What a page's answers so far hold, as upstream's store would after merging them: each
+/// entity's present values, the fields the server settled (withheld), and the entities a Read
+/// asked for and did not get (upstream's tombstones). Keys are upstream's `Entity:id`.
+#[derive(Default)]
+struct PageStore {
+    values: HashMap<String, Map<String, Value>>,
+    settled: HashMap<String, HashSet<String>>,
+    tombstones: HashSet<String>,
+}
+fn entity_key(entity: &Value, id: &Value) -> String {
+    format!(
+        "{}:{}",
+        entity.as_str().unwrap_or_default(),
+        id.as_str().unwrap_or_default()
+    )
+}
+fn listed<'a>(value: &'a Value, key: &str) -> &'a [Value] {
+    value[key].as_array().map(Vec::as_slice).unwrap_or_default()
+}
+/// Upstream's `targetsOf`: the refs a relation value carries that name `relation`'s entity.
+fn targets_of(value: &Value, relation: &Value) -> Vec<(String, String)> {
+    refs_in(value)
+        .into_iter()
+        .filter(|(entity, _)| relation["entity"].as_str() == Some(entity.as_str()))
+        .collect()
+}
+impl PageStore {
+    fn of(exchanges: &[Value]) -> Self {
+        let mut store = PageStore::default();
+        for exchange in exchanges {
+            let answer = &exchange["answer"];
+            for entity in listed(answer, "entities") {
+                if let Some(values) = entity["values"].as_object() {
+                    store
+                        .values
+                        .entry(entity_key(&entity["entity"], &entity["id"]))
+                        .or_default()
+                        .extend(values.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+            }
+            for entry in listed(answer, "settled") {
+                store
+                    .settled
+                    .entry(entity_key(&entry["entity"], &entry["id"]))
+                    .or_default()
+                    .extend(
+                        listed(entry, "fields")
+                            .iter()
+                            .filter_map(|field| field.as_str().map(str::to_string)),
+                    );
+            }
+            if exchange["_tag"] == "Read" {
+                for requirement in listed(&exchange["request"], "requests") {
+                    let key = entity_key(&requirement["entity"], &requirement["id"]);
+                    if !store.values.contains_key(&key) && !store.settled.contains_key(&key) {
+                        store.tombstones.insert(key);
+                    }
+                }
+            }
+        }
+        store
+    }
+    fn field(&self, key: &str, field: &str) -> Option<&Value> {
+        if self.tombstones.contains(key) {
+            return None;
+        }
+        self.values.get(key)?.get(field)
+    }
+    /// Upstream's `missingFields` for a fresh store: none of a tombstone, and otherwise each field
+    /// neither present nor settled.
+    fn missing(&self, key: &str, fields: &[Value]) -> Vec<Value> {
+        if self.tombstones.contains(key) {
+            return Vec::new();
+        }
+        fields
+            .iter()
+            .filter(|field| {
+                field.as_str().is_some_and(|field| {
+                    self.field(key, field).is_none()
+                        && !self
+                            .settled
+                            .get(key)
+                            .is_some_and(|settled| settled.contains(field))
+                })
+            })
+            .cloned()
+            .collect()
+    }
+    /// Upstream's `plan` over this store: each entity's missing fields with their windows and
+    /// relations, then the targets of the relations it already holds, merged and sorted by key.
+    fn plan(&self, requirements: Vec<Value>) -> Vec<Value> {
+        let mut planned = Vec::new();
+        let mut followed = Vec::new();
+        for group in merge_requirements(requirements) {
+            let key = entity_key(&group["entity"], &group["id"]);
+            let missing = self.missing(&key, listed(&group, "fields"));
+            let is_missing = |field: &str| missing.iter().any(|m| m.as_str() == Some(field));
+            if let Some(relations) = group["relations"].as_object() {
+                for (field, relation) in relations {
+                    if is_missing(field) {
+                        continue;
+                    }
+                    if let Some(value) = self.field(&key, field) {
+                        for (entity, id) in targets_of(value, relation) {
+                            let mut target = Map::new();
+                            target.insert("entity".to_string(), Value::String(entity));
+                            target.insert("id".to_string(), Value::String(id));
+                            for part in ["fields", "windows", "relations"] {
+                                if let Some(value) = relation.get(part) {
+                                    target.insert(part.to_string(), value.clone());
+                                }
+                            }
+                            followed.push(Value::Object(target));
+                        }
+                    }
+                }
+            }
+            if missing.is_empty() {
+                continue;
+            }
+            let mut narrowed = Map::new();
+            narrowed.insert("entity".to_string(), group["entity"].clone());
+            narrowed.insert("id".to_string(), group["id"].clone());
+            for part in ["windows", "relations"] {
+                if let Some(record) = group[part].as_object() {
+                    let picked: Map<String, Value> = record
+                        .iter()
+                        .filter(|(field, _)| is_missing(field))
+                        .map(|(field, value)| (field.clone(), value.clone()))
+                        .collect();
+                    if !picked.is_empty() {
+                        narrowed.insert(part.to_string(), Value::Object(picked));
+                    }
+                }
+            }
+            narrowed.insert("fields".to_string(), Value::Array(missing));
+            planned.push(Value::Object(narrowed));
+        }
+        let nested = if followed.is_empty() {
+            Vec::new()
+        } else {
+            self.plan(followed)
+        };
+        let mut all = merge_requirements(planned.into_iter().chain(nested).collect());
+        all.sort_by_key(|requirement| entity_key(&requirement["entity"], &requirement["id"]));
+        all.into_iter().map(canonical_requirement).collect()
+    }
+    /// Upstream's `assemble`: the entity's selected fields, following each relation into its
+    /// targets. None when a field, at any depth, is not present.
+    fn assemble(&self, key: &str, requirement: &Value) -> Option<Value> {
+        let mut values = Map::new();
+        for field in listed(requirement, "fields") {
+            let field = field.as_str()?;
+            let value = self.field(key, field)?;
+            let assembled = match requirement["relations"].get(field) {
+                None => value.clone(),
+                Some(relation) => self.assemble_relation(value, relation)?,
+            };
+            values.insert(aliased_field(field).to_string(), assembled);
+        }
+        Some(Value::Object(values))
+    }
+    /// Upstream's `assembleRelation`: the targets a relation value refers to, in its own shape.
+    /// A tombstoned target is dropped, so a ref to one reads as null.
+    fn assemble_relation(&self, value: &Value, relation: &Value) -> Option<Value> {
+        if value.is_null() {
+            return Some(Value::Null);
+        }
+        let mut targets = Vec::new();
+        for (entity, id) in targets_of(value, relation) {
+            let key = format!("{}:{}", entity, id);
+            if self.tombstones.contains(&key) {
+                continue;
+            }
+            targets.push(self.assemble(&key, relation)?);
+        }
+        Some(match value {
+            Value::String(_) => targets.into_iter().next().unwrap_or(Value::Null),
+            Value::Object(page) if page.get("refs").is_some_and(Value::is_array) => json!({
+                "items": targets,
+                "hasNext": page.get("hasNext").cloned().unwrap_or(Value::Bool(false)),
+                "hasPrevious": page.get("hasPrevious").cloned().unwrap_or(Value::Bool(false)),
+            }),
+            _ => Value::Array(targets),
+        })
+    }
+}
+/// Upstream's `Requirement.merge`: one requirement per entity key in first-seen order, its fields
+/// unioned in order and its windows and relations combined.
+fn merge_requirements(requirements: Vec<Value>) -> Vec<Value> {
+    let mut merged: Vec<Value> = Vec::new();
+    for requirement in requirements {
+        let key = entity_key(&requirement["entity"], &requirement["id"]);
+        let Some(existing) = merged
+            .iter_mut()
+            .find(|existing| entity_key(&existing["entity"], &existing["id"]) == key)
+        else {
+            merged.push(requirement);
+            continue;
+        };
+        for field in listed(&requirement, "fields") {
+            let fields = existing["fields"].as_array_mut();
+            if let Some(fields) = fields {
+                if !fields.contains(field) {
+                    fields.push(field.clone());
+                }
+            }
+        }
+        for part in ["windows", "relations"] {
+            if let Some(record) = requirement[part].as_object() {
+                if !existing[part].is_object() {
+                    existing[part] = json!({});
+                }
+                if let Some(target) = existing[part].as_object_mut() {
+                    for (field, value) in record {
+                        target.entry(field.clone()).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+        }
+    }
+    merged
+}
+/// A requirement in its schema's key order (`entity, id, fields, windows, relations`), as the
+/// page's Flags encode it.
+fn canonical_requirement(requirement: Value) -> Value {
+    let mut ordered = Map::new();
+    for part in ["entity", "id", "fields", "windows", "relations", "live"] {
+        if let Some(value) = requirement.get(part) {
+            ordered.insert(part.to_string(), value.clone());
+        }
+    }
+    Value::Object(ordered)
+}
 /// Each view: a query view as upstream's `Page` of a Ready read, a get view as its settled
-/// `RemoteData` (`get_view`). `made[i]` is the exchange planned read `i` made, if any.
+/// `RemoteData` (`get_view`), both assembled from everything the page's answers hold.
 pub(crate) fn page_views(
     reads: &[PageRead],
     made: &[Option<usize>],
     exchanges: &[Value],
     views: &[(&str, usize)],
 ) -> Value {
+    let store = PageStore::of(exchanges);
     let mut out = Map::new();
     for (name, read) in views {
         let view = match (reads[*read].tag, made[*read]) {
-            ("Query", Some(exchange)) => query_view(&exchanges[exchange]["answer"]),
+            ("Query", Some(exchange)) => query_view(
+                &exchanges[exchange]["answer"],
+                &reads[*read].request["select"],
+                &store,
+            ),
             ("Query", None) => Value::Null,
-            _ => get_view(&reads[*read].request["requests"][0], exchanges),
+            _ => get_view(&reads[*read].request["requests"][0], &store),
         };
         out.insert(name.to_string(), view);
     }
     Value::Object(out)
 }
-/// A query view as upstream's `Page` of a Ready read: the edges' entity values in edge order,
-/// and more on a side whose boundary is not `Terminal` (one segment, cut to its own window). An
-/// edge whose entity is missing reads as null, which the page's typed decoding then refuses (#9:
-/// entities are indexed once, so assembly is linear).
-fn query_view(answer: &Value) -> Value {
-    let entities: HashMap<(&str, &str), &Value> = answer["entities"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|entity| {
-            Some((
-                (entity["entity"].as_str()?, entity["id"].as_str()?),
-                &entity["values"],
-            ))
-        })
-        .collect();
-    let items: Vec<Value> = answer["edges"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+/// A query view as upstream's `Page` of a Ready read: each edge's entity assembled through the
+/// query's selection, in edge order, and more on a side whose boundary is not `Terminal` (one
+/// segment, cut to its own window). An item that does not assemble reads as null, which the
+/// page's typed decoding then refuses.
+fn query_view(answer: &Value, select: &Value, store: &PageStore) -> Value {
+    let items: Vec<Value> = listed(answer, "edges")
         .iter()
         .map(|edge| {
-            edge["entity"]
-                .as_str()
-                .zip(edge["id"].as_str())
-                .and_then(|key| entities.get(&key))
-                .map(|values| (*values).clone())
+            store
+                .assemble(&entity_key(&edge["entity"], &edge["id"]), select)
                 .unwrap_or(Value::Null)
         })
         .collect();
     let more = |side: &str| answer[side]["_tag"].as_str() != Some("Terminal");
     json!({ "items": items, "hasNext": more("end"), "hasPrevious": more("start") })
 }
-/// Whether `candidate` (an answered entity or a settled entry) is `requirement`'s entity.
-fn same_entity(candidate: &Value, requirement: &Value) -> bool {
-    candidate["entity"] == requirement["entity"] && candidate["id"] == requirement["id"]
-}
-fn listed<'a>(answer: &'a Value, key: &str) -> &'a [Value] {
-    answer[key]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-}
-/// What the page's answers so far hold of `requirement`'s entity: its values merged in answer
-/// order, and the fields the server settled (withheld).
-fn known(requirement: &Value, exchanges: &[Value]) -> (Map<String, Value>, Vec<String>) {
-    let mut values = Map::new();
-    let mut settled = Vec::new();
-    for exchange in exchanges {
-        let answer = &exchange["answer"];
-        for entity in listed(answer, "entities") {
-            if let (true, Some(answered)) = (
-                same_entity(entity, requirement),
-                entity["values"].as_object(),
-            ) {
-                values.extend(answered.iter().map(|(k, v)| (k.clone(), v.clone())));
-            }
-        }
-        for entry in listed(answer, "settled") {
-            if same_entity(entry, requirement) {
-                settled.extend(
-                    listed(entry, "fields")
-                        .iter()
-                        .filter_map(|field| field.as_str().map(str::to_string)),
-                );
-            }
-        }
+/// A get view as upstream's settled `RemoteData` of its requirement: `NotFound` for a tombstone,
+/// `Ready` with the assembled value, and otherwise null, which the page's typed decoding
+/// refuses, as upstream reads `Failed` or a value still loading.
+fn get_view(requirement: &Value, store: &PageStore) -> Value {
+    let key = entity_key(&requirement["entity"], &requirement["id"]);
+    if store.tombstones.contains(&key) {
+        return json!({ "_tag": "NotFound" });
     }
-    (values, settled)
+    let settled = store
+        .settled
+        .get(&key)
+        .is_some_and(|settled| !settled.is_empty());
+    match store.assemble(&key, requirement) {
+        Some(value) if !settled => json!({ "_tag": "Ready", "value": value }),
+        _ => Value::Null,
+    }
 }
-/// A planned Read narrowed as upstream's planner narrows it over the store the page's earlier
-/// answers built: each requirement asks only for the fields neither answered nor settled, and
-/// one with none left is dropped. None when nothing is left to read.
-fn lacking(request: &Value, exchanges: &[Value]) -> Option<Value> {
-    let requirements: Vec<Value> = listed(request, "requests")
-        .iter()
-        .filter_map(|requirement| {
-            let (values, settled) = known(requirement, exchanges);
-            let fields: Vec<Value> = listed(requirement, "fields")
-                .iter()
-                .filter(|field| {
-                    field.as_str().is_some_and(|field| {
-                        !values.contains_key(field) && !settled.iter().any(|s| s == field)
-                    })
-                })
-                .cloned()
-                .collect();
-            if fields.is_empty() {
-                return None;
-            }
-            let mut narrowed = requirement.clone();
-            narrowed["fields"] = Value::Array(fields);
-            Some(narrowed)
-        })
-        .collect();
+/// A planned Read as upstream's planner plans it over the store the page's earlier answers
+/// built (`PageStore::plan`). None when nothing is left to read.
+pub(crate) fn lacking(request: &Value, exchanges: &[Value]) -> Option<Value> {
+    let requirements = PageStore::of(exchanges).plan(listed(request, "requests").to_vec());
     if requirements.is_empty() {
         return None;
     }
     let mut narrowed = request.clone();
     narrowed["requests"] = Value::Array(requirements);
     Some(narrowed)
-}
-/// A get view as upstream's settled `RemoteData` of its requirement, over everything the page's
-/// answers hold of the entity: `Ready` with the selected fields when all are answered,
-/// `NotFound` when nothing is answered or settled of it (upstream's tombstone). A partly
-/// answered or settled (withheld) entity reads as null, which the page's typed decoding
-/// refuses, as upstream reads `Failed`.
-fn get_view(requirement: &Value, exchanges: &[Value]) -> Value {
-    let (values, settled) = known(requirement, exchanges);
-    if values.is_empty() && settled.is_empty() {
-        return json!({ "_tag": "NotFound" });
-    }
-    let selected: Option<Map<String, Value>> = listed(requirement, "fields")
-        .iter()
-        .map(|field| {
-            let field = field.as_str()?;
-            Some((field.to_string(), values.get(field)?.clone()))
-        })
-        .collect();
-    match selected {
-        Some(value) if settled.is_empty() => json!({ "_tag": "Ready", "value": value }),
-        _ => Value::Null,
-    }
 }
 /// The page's data: each planned request run as the RPC handlers run it, recorded with its
 /// answer as `{ now, exchanges }` for the browser's replay, and the views built from them. A

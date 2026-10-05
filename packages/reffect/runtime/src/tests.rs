@@ -6,7 +6,7 @@
 use crate::foldkit_html::{element, empty, failure, render, text, Prop};
 use crate::foldkit_json::{json_text, round_trip};
 use crate::remote_engine::{
-    page_data, page_views, read, Hub, JsObject, LiveLimits, Memory, PageRead, Subscription,
+    lacking, page_data, page_views, read, Hub, JsObject, LiveLimits, Memory, PageRead, Subscription,
 };
 use serde_json::json;
 
@@ -546,7 +546,7 @@ fn page_views_are_ready_pages_in_edge_order() {
         page_views(
             &[PageRead {
                 tag: "Query",
-                request: json!({})
+                request: json!({ "select": { "entity": "Todo", "fields": ["title"] } }),
             }],
             &[Some(0)],
             &[exchange],
@@ -554,6 +554,62 @@ fn page_views_are_ready_pages_in_edge_order() {
         ),
         // Edge order; a missing entity is null, which typed decoding refuses.
         json!({ "todos": { "items": [{ "title": "b" }, { "title": "a" }, null], "hasNext": true, "hasPrevious": false } })
+    );
+}
+
+/// The exchanges upstream's satisfy makes for a project with its owner and a post with a page of
+/// its comments (foldkit-remote 0.11.0, probed 2026-10-05), and the values its projections read.
+#[test]
+fn page_views_assemble_relations_as_upstream() {
+    let project = json!({ "_tag": "Read",
+        "request": { "version": 4, "requests": [{ "entity": "Project", "id": "p1", "fields": ["name", "owner"], "relations": { "owner": { "entity": "User", "fields": ["name"] } } }] },
+        "answer": { "entities": [
+            { "entity": "Project", "id": "p1", "values": { "name": "Borealis", "owner": "User:u1" } },
+            { "entity": "User", "id": "u1", "values": { "name": "Ada" } },
+        ], "settled": [] } });
+    let post = json!({ "_tag": "Read",
+        "request": { "version": 4, "requests": [{ "entity": "Post", "id": "a", "fields": ["title", "comments@first=2"], "windows": { "comments@first=2": { "first": 2 } }, "relations": { "comments@first=2": { "entity": "Comment", "fields": ["body"] } } }] },
+        "answer": { "entities": [
+            { "entity": "Post", "id": "a", "values": { "title": "Hello", "comments@first=2": { "refs": ["Comment:c1", "Comment:c2"], "hasNext": true, "hasPrevious": false } } },
+            { "entity": "Comment", "id": "c1", "values": { "body": "first" } },
+            { "entity": "Comment", "id": "c2", "values": { "body": "second" } },
+        ], "settled": [] } });
+    let reads = [
+        PageRead {
+            tag: "Read",
+            request: project["request"].clone(),
+        },
+        PageRead {
+            tag: "Read",
+            request: post["request"].clone(),
+        },
+    ];
+    assert_eq!(
+        page_views(
+            &reads,
+            &[Some(0), Some(1)],
+            &[project, post],
+            &[("project", 0), ("post", 1)]
+        ),
+        json!({
+            "project": { "_tag": "Ready", "value": { "name": "Borealis", "owner": { "name": "Ada" } } },
+            "post": { "_tag": "Ready", "value": { "title": "Hello", "comments": { "items": [{ "body": "first" }, { "body": "second" }], "hasNext": true, "hasPrevious": false } } },
+        })
+    );
+}
+
+/// Upstream's planner over a store whose project holds its owner ref but not the owner's name
+/// asks for the owner alone, in schema key order (probed 2026-10-05).
+#[test]
+fn page_reads_follow_held_relations_as_upstream() {
+    let list = json!({ "_tag": "Query", "answer": { "edges": [], "entities": [
+        { "entity": "Project", "id": "p1", "values": { "name": "Borealis", "owner": "User:u1" } },
+    ], "settled": [] } });
+    let planned = json!({ "version": 4, "requests": [{ "entity": "Project", "id": "p1", "fields": ["name", "owner"], "relations": { "owner": { "entity": "User", "fields": ["name"] } } }] });
+    let narrowed = lacking(&planned, &[list]).unwrap();
+    assert_eq!(
+        serde_json::to_string(&narrowed).unwrap(),
+        r#"{"version":4,"requests":[{"entity":"User","id":"u1","fields":["name"]}]}"#
     );
 }
 

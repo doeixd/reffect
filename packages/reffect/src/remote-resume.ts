@@ -256,10 +256,11 @@ const isGet = (entry: ViewEntry): entry is GetView => "get" in entry;
  */
 export const planPage = <M, const V extends { readonly [name: string]: ViewEntry }>(
   data: {
-    prefetch(
-      model: M,
-      projection: ProjectionOf<V[keyof V]>,
-    ): Effect.Effect<unknown, unknown, RemoteClient>;
+    /**
+     * Upstream's `Data.prefetch`, generic over each projection's value; views of different
+     * selections are each its own projection, so none narrows the others.
+     */
+    prefetch(model: M, projection: never): Effect.Effect<unknown, unknown, RemoteClient>;
     /** Upstream's `Data.get`; the selection is checked against the domain when planned. */
     get(selection: never, id: string): unknown;
   },
@@ -290,7 +291,7 @@ export const planPage = <M, const V extends { readonly [name: string]: ViewEntry
     const projection = isTemplated(entry)
       ? entry.projection(Effect.runSync(Reference.run(entry.input, [sample])) as never)
       : entry;
-    const own = planReads(data.prefetch(initial, projection as ProjectionOf<V[keyof V]>));
+    const own = planReads(data.prefetch(initial, projection as never));
     const query = own[0];
     if (own.length !== 1 || query?._tag !== "Query")
       throw new Error(`Remote page view "${name}" is not a single query projection`);

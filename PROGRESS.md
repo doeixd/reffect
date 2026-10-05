@@ -1,5 +1,18 @@
 # Progress
 
+## 2026-10-05 — Relations in page views (M9-3)
+
+- [Upstream probe, design and acceptance](docs/research/ssr-data.md#relations-in-page-views-2026-10-05).
+  - The page engine ports upstream's `plan` and `assemble` over a store merged from the page's answers.
+  - Query and get views select related entities: one-relations, many-relations and paged many-relations.
+  - Planned Reads narrow and follow held refs exactly as upstream does.
+  - Optional (`NullOr`) relations remain open.
+- Fixed `planPage`'s typing for pages whose query views select different shapes.
+- Validation:
+  - `vp check` passes.
+  - `vp run runtime:check` passes (32 runtime tests, two of them new relation tests).
+  - These suites pass, run one at a time: `remote-page-relations` 1/1 (byte-equal to upstream across five planning cases), `remote-page-input` 2/2, `remote-page` 2/2, `todo-remote-page` 1/1, `remote-page-decode` 2/2, `remote-auth` 4/4, `todo-fullstack` 2/2.
+
 ## 2026-10-05 — Private Deferred shared diagnostic paths
 
 - [DINT-008](docs/research/deferred-interruption-frames.md#shared-path-preparation--2026-10-05) records verified Effect sources, native lexical transitions, alternatives, ownership and exact differential acceptance before implementation.

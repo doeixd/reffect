@@ -534,14 +534,6 @@ const liveLimit = (value: number | undefined, fallback: number, path: string): s
     throw unsupported(`liveLimits.${path}`, "Live limits are positive safe integers");
   return String(limit);
 };
-/** Whether a selection asks for related entities, which a first-pass plan cannot follow. */
-const hasRelations = (selection: unknown): boolean =>
-  typeof selection === "object" &&
-  selection !== null &&
-  "relations" in selection &&
-  typeof selection.relations === "object" &&
-  selection.relations !== null &&
-  Object.keys(selection.relations).length > 0;
 /**
  * A query view's `Page` of its decoded items, as upstream's `pageSchema(select.schema)` reads it,
  * or a get view's settled `RemoteData`.
@@ -663,8 +655,6 @@ const pageReads = (
       const query = "query" in request ? request.query : undefined;
       if (typeof query !== "string" || !domain.registry.queries.has(query))
         throw unsupported(path, "The query is one of the domain's");
-      if ("select" in request && hasRelations(request.select))
-        throw unsupported(path, "Page reads select no relations yet (M9-3)");
     } else {
       const requests = "requests" in request ? request.requests : undefined;
       if (!Array.isArray(requests)) throw unsupported(path, "A planned read is a ReadBatch");
@@ -675,8 +665,6 @@ const pageReads = (
             : undefined;
         if (typeof entity !== "string" || !domain.registry.entities.has(entity))
           throw unsupported(path, "The read's entities are the domain's");
-        if (hasRelations(requirement))
-          throw unsupported(path, "Page reads select no relations yet (M9-3)");
       }
     }
     return `remote_engine::PageRead { tag: ${Rs.stringLiteral(read._tag).text}, request: serde_json::from_str(${Rs.stringLiteral(JSON.stringify(request)).text}).expect("planned while compiling") }`;

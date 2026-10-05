@@ -407,3 +407,40 @@ Validation:
 - `tests/remote-page-snapshot.test.ts` (Postgres; skipped without Docker) uses projects and a user from the SQL test domain. The page shows the user's name from its snapshot, though a rename committed while it waited. The next page shows the rename. An RPC read under the same interleaving also shows the rename, which proves the lock dance can expose it.
 - With the snapshot disabled the test fails (checked by hand on 2026-10-05).
 - **SQLite** relies on the deferred-transaction guarantee cited above. It has no interleaving test, because a SQLite writer cannot commit beneath an open reader in rollback-journal mode.
+
+## Relations in page views (2026-10-05)
+
+**Gap.** Page reads refused selections with relations ("Page reads select no relations yet"). M9-3 noted that relations need a port of upstream's `assemble`.
+
+**Upstream facts** (foldkit-remote 0.11.0 `index.mjs`, probed 2026-10-05 against `RemoteServer.memory`):
+- **One exchange.** A relation selection is answered in one exchange: the server returns the targets normalized beside the root.
+  - A one-relation's value is a ref (`"User:u1"`).
+  - A paged many-relation reads under its alias (`comments@first=2`) as `{ refs, hasNext, hasPrevious }`.
+  - A plain many-relation's value is an array of refs.
+- **`assemble`.** It reads each selected field from the store and follows a relation into its targets. A target that is tombstoned is dropped, so a one-relation to it reads `null`. A field that is not present, at any depth, makes the whole value unavailable. A paged relation becomes `{ items, hasNext, hasPrevious }`, and aliased fields are named by their field.
+- **`plan`.** Requirements are merged by entity key. Each requirement asks for its missing fields, keeping windows and relations only for those fields. Relation fields the store already holds are followed into their targets, recursively. The result is merged and sorted by entity key, for example a project with its owner ref held but not the owner's name plans only `User u1 [name]`.
+- **Encoding.** Requirements encode as `entity, id, fields, windows, relations`.
+
+**Decisions.**
+- The page engine holds a `PageStore`, which merges the page's answers so far. It records values, settled fields, and tombstones for Read roots that were neither answered nor settled. On that store it ports `plan`, `assemble` and `assembleRelation`.
+- Query items and get values are assembled through their selection. A planned Read is narrowed by `plan` and skipped when nothing is missing.
+- **Witnesses.** Views of required one-relations and of (paged) many-relations have witnesses.
+- **Refused for now:** an optional relation's selection schema is `NullOr`, which R witnesses do not represent yet, so `NativeRemote.pageViews` refuses it at authoring time. This is recorded in open work.
+- **Not followed:** reads a second `satisfy` pass would add (a Surface waiting on another's data), as before.
+
+**Acceptance.**
+- A memory page has a query view of projects with their owners, a get of a project the list already answered, a get of one it did not, and a post with a page of comments. It renders byte-equal to upstream, and its Flags hold upstream's exact exchanges.
+- Runtime tests pin assembly and the follow-a-held-ref plan against the probed upstream exchanges.
+
+**Implemented (2026-10-05).** `PageStore`, its `plan`/`assemble`/`assemble_relation` and `merge_requirements` are in `runtime/src/remote_engine.rs`, and the relation refusals are removed from `src/native-remote.ts`.
+- `tests/remote-page-relations.test.ts` passes. Its page has five views:
+  - a query with owners;
+  - a get the list already answered, which makes no Read;
+  - a query holding only owner ids;
+  - a get whose plan follows the held ref (`User u2 [name]` alone);
+  - a post with a page of two of its three comments.
+
+  The page is byte-equal to upstream, its exchanges are upstream's, and the replay resumes.
+- Runtime tests `page_views_assemble_relations_as_upstream` and `page_reads_follow_held_relations_as_upstream` pin the probed upstream exchanges.
+- **Fixed on the way.** `planPage` typed `data.prefetch` over the union of its views' projections. Upstream's generic `prefetch` rejected that as soon as two query views selected different shapes, so `prefetch` now takes each projection separately.
+- **Authoring gap.** `R.Match.valueTags` types its case values loosely, so the test annotates one `R.Array.map` parameter. This is recorded in open work.
