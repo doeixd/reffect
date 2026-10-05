@@ -94,6 +94,14 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — One allocation per concatenation chain (#33)
+
+- **#33.** A string concatenation lowers to `[&(a)[..], &(b)[..], ...].concat()`, one allocation of the exact length. Before, it was a `format!("{}{}")` per link. Lowering binds every intermediate value to a local, so a chain was a run of locals, each link copying its whole prefix.
+- **Fusion.** A concatenation local named exactly once, as an argument of another concatenation in the same block, now moves inline, and the chain renders as one list of parts. Inlining is safe there because each block is one straight-line scope whose locals nested helpers never name, and concatenation is pure. A shared link stays a local. Each inlined link keeps its own source range over its parts.
+- **Validation.**
+  - `string-profile` asserts that its three-link chain is a single four-part `.concat()` with no `format!`, and still agrees with the reference natively in debug and release.
+  - Passing suites: `html`, `html-native`, `html-page`, `exit-cause`, `async-effect`, `source`, `artifact-policy`, `frame-policy`, `failure-frames`, `compiler`, `foldkit`; `vp check` clean.
+
 ## 2026-10-05 — Literal and argument robustness (#40, part)
 
 - **Lone surrogates.** Rust string and char literals now refuse text with a lone surrogate, raising `INVALID_LITERAL` from the emitter. Before, they emitted `\u{d800}`, which rustc rejects. File paths were already refused at `check`, and log text is JSON-escaped before it becomes a literal.

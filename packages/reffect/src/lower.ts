@@ -175,6 +175,73 @@ interface RustBlock {
   readonly bindings: readonly RustBinding[];
   readonly body: RustExpr;
 }
+const isConcat = (value: RustExpr): value is Extract<RustExpr, { readonly _tag: "Call" }> =>
+  Match.value(value).pipe(
+    Match.when({ _tag: "Call", lowering: { _tag: "Concat" } }, () => true),
+    Match.orElse(() => false),
+  );
+/** How often each local index is named anywhere below `roots`; nested blocks only add to it. */
+const localUses = (roots: ReadonlyArray<unknown>): Map<number, number> => {
+  const uses = new Map<number, number>();
+  const pending = [...roots];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value !== "object" || value === null) continue;
+    if (Array.isArray(value)) {
+      pending.push(...value);
+      continue;
+    }
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) continue;
+    const record: Readonly<Record<string, unknown>> = value;
+    if (record._tag === "Local" && typeof record.index === "number")
+      uses.set(record.index, (uses.get(record.index) ?? 0) + 1);
+    pending.push(...Object.values(record));
+  }
+  return uses;
+};
+/**
+ * A concatenation local named once, as an argument of another concatenation in the same block,
+ * moves inline, so the whole chain renders as one `[..].concat()` (#33). A block is one
+ * straight-line scope whose locals nested helpers never name, and concatenation is pure, so
+ * this only drops the copies of each prefix.
+ */
+const fuseConcatenations = (bindings: readonly RustBinding[], body: RustExpr): RustBlock => {
+  const uses = localUses([...bindings.map((binding) => binding.value), body]);
+  const values = new Map(bindings.map((binding) => [binding.index, binding.value]));
+  const inlined = new Set<number>();
+  const fuse = (value: RustExpr): RustExpr =>
+    isConcat(value)
+      ? Object.freeze({
+          ...value,
+          args: Object.freeze(
+            value.args.map((arg) =>
+              Match.value(arg).pipe(
+                Match.when({ _tag: "Local" }, (local): RustExpr => {
+                  const definition = values.get(local.index);
+                  if (uses.get(local.index) !== 1 || !definition || !isConcat(definition))
+                    return arg;
+                  inlined.add(local.index);
+                  return definition;
+                }),
+                Match.orElse(() => arg),
+              ),
+            ),
+          ),
+        })
+      : value;
+  // In order, so a link takes its predecessor already fused.
+  for (const binding of bindings) values.set(binding.index, fuse(binding.value));
+  const fused = fuse(body);
+  return Object.freeze({
+    bindings: Object.freeze(
+      bindings
+        .filter((binding) => !inlined.has(binding.index))
+        .map((binding) => Object.freeze({ ...binding, value: values.get(binding.index)! })),
+    ),
+    body: fused,
+  });
+};
 interface Parameter {
   readonly name: string;
   readonly type: IRType<unknown>;
@@ -992,7 +1059,7 @@ function lowerFunctionsInternal(
           return result;
         };
         const body = expression(root, path);
-        return Object.freeze({ bindings: Object.freeze(bindings), body });
+        return fuseConcatenations(bindings, body);
       };
       const effectHelper = (
         c: Computation<unknown, unknown>,
@@ -2137,6 +2204,19 @@ export const emitFunctions = (
             }),
             Match.orElse((n) => render(n, undefined, true)),
           );
+    /** The `&str` parts of a concatenation, flattening the inline concatenations it holds. */
+    const concatParts = (call: Extract<RustExpr, { readonly _tag: "Call" }>): MappedFragment =>
+      joinFragments(
+        call.args.flatMap((part, i) => {
+          const fragment = Match.value(part).pipe(
+            Match.when({ _tag: "Call", lowering: { _tag: "Concat" } }, (inner): MappedFragment =>
+              mapFragment(inner.origin, inner.occurrence, concatParts(inner)),
+            ),
+            Match.orElse((leaf) => joinFragments(["&(", operand(leaf), ")[..]"])),
+          );
+          return i ? [", ", fragment] : [fragment];
+        }),
+      );
     const render = (e: RustExpr, role?: GeneratedRange["role"], plain = false): MappedFragment =>
       e.owned && !plain
         ? Match.value(e).pipe(
@@ -2374,7 +2454,10 @@ export const emitFunctions = (
                   return Match.value(n.lowering).pipe(
                     Match.tagsExhaustive({
                       Not: () => joinFragments(["!(", arg(0), ")"]),
-                      Concat: () => joinFragments(['format!("{}{}", ', arg(0), ", ", arg(1), ")"]),
+                      // A chain of concatenations is one `[..].concat()`, a single allocation of
+                      // the exact length, rather than a format! per link copying the prefix (#33).
+                      // Each inner link keeps its own source range over its parts.
+                      Concat: () => joinFragments(["[", concatParts(n), "].concat()"]),
                       Html: ({ kind }) => html(kind),
                       NumberText: () => {
                         usesRyu = true;
