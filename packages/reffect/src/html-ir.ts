@@ -62,6 +62,8 @@ export const STRING_ATTRIBUTES = [
   "Placeholder",
   "For",
   "Value",
+  /** Trusted raw content; `R.Html.InnerHTML` admits only a literal without markup (8B). */
+  "InnerHTML",
 ] as const;
 export const BOOLEAN_ATTRIBUTES = [
   "Checked",

@@ -176,6 +176,21 @@ const selects = R.fn([R.String], Page, (value) =>
     ),
   ),
 );
+// 8B: InnerHTML literals without markup are written verbatim; a pre's always gets a newline.
+const raw = R.fn([R.String], Page, (text) =>
+  render(
+    H.div(
+      [],
+      [
+        H.pre([H.Id("equivalence-pre"), H.InnerHTML("\nleading")]),
+        H.pre([H.InnerHTML("")]),
+        H.div([H.InnerHTML("a &amp; b\r&#10;")]),
+        H.span([H.InnerHTML("&lt;b&gt; x\u0000y")]),
+        H.p([], [text]),
+      ],
+    ),
+  ),
+);
 const nulInText = R.fn([R.String], Page, (text) => render(H.p([], [text])));
 const nulInAttribute = R.fn([R.String], Page, (text) =>
   render(H.p([H.Title(text)], [H.span([], [text])])),
@@ -195,6 +210,7 @@ const Group = RpcGroup.make(
   Rpc.make("Links", { payload: { hrefs: Schema.Array(Schema.String) }, success: PageSchema }),
   Rpc.make("Classes", { payload: { names: Schema.Array(Schema.String) }, success: PageSchema }),
   Rpc.make("Forms", { payload: { text: Schema.String }, success: PageSchema }),
+  Rpc.make("Raw", { payload: { text: Schema.String }, success: PageSchema }),
   Rpc.make("Selects", { payload: { value: Schema.String }, success: PageSchema }),
   Rpc.make("NulInText", { payload: { text: Schema.String }, success: PageSchema }),
   Rpc.make("NulInAttribute", { payload: { text: Schema.String }, success: PageSchema }),
@@ -207,6 +223,7 @@ const bindings = {
   Links: NativeRpc.bind(links, ["hrefs"]),
   Classes: NativeRpc.bind(classes, ["names"]),
   Forms: NativeRpc.bind(forms, ["text"]),
+  Raw: NativeRpc.bind(raw, ["text"]),
   Selects: NativeRpc.bind(selects, ["value"]),
   NulInText: NativeRpc.bind(nulInText, ["text"]),
   NulInAttribute: NativeRpc.bind(nulInAttribute, ["text"]),
@@ -222,6 +239,7 @@ const oracle = Effect.gen(function* () {
     Links: ({ hrefs }) => run(Reference.run(links, [hrefs])),
     Classes: ({ names }) => run(Reference.run(classes, [names])),
     Forms: ({ text }) => run(Reference.run(forms, [text])),
+    Raw: ({ text }) => run(Reference.run(raw, [text])),
     Selects: ({ value }) => run(Reference.run(selects, [value])),
     NulInText: ({ text }) => run(Reference.run(nulInText, [text])),
     NulInAttribute: ({ text }) => run(Reference.run(nulInAttribute, [text])),
@@ -283,6 +301,7 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
   ...["a", "b c", "zzz", "zzz!", "", "a\u0000", "<&\r>"].map(
     (value) => [`selects ${JSON.stringify(value)}`, request("Selects", { value })] as const,
   ),
+  ["raw", request("Raw", { text: "x" })],
   ["nul in text", request("NulInText", { text: "a\u0000b" })],
   ["nul in attribute", request("NulInAttribute", { text: "a\u0000b" })],
   ["no nul", request("NulInText", { text: "fine" })],

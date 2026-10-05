@@ -83,6 +83,8 @@ export const elementCall = <T>(
     else if (attribute.name === "Class") classArg = arg;
     else if (attribute.name === "Value" && shape.tag === "textarea")
       props.push('("value", crate::foldkit_html::Prop::Content(&(', arg, ")[..])), ");
+    else if (attribute.name === "InnerHTML")
+      props.push('("innerHTML", crate::foldkit_html::Prop::Raw(&(', arg, ")[..])), ");
     else if (attribute.name === "Value" && shape.tag === "select")
       props.push('("value", crate::foldkit_html::Prop::Selection(&(', arg, ")[..])), ");
     else if (!reflects(shape.tag, attribute.name)) continue;

@@ -233,6 +233,18 @@ const element =
       if (tag === "select" && (text || beneath.some((tree) => tree.tag !== "option")))
         throw fail("INVALID_NESTING", "authoring", at, "<select> holds <option> elements only");
     }
+    // InnerHTML owns the whole content: upstream's builder refuses children beside it and on a
+    // textarea; an option's or select's raw content would hide the values selection reads.
+    if (seen.has("InnerHTML")) {
+      const empty = !(children instanceof Expr) && children.length === 0;
+      if (!empty || isVoid || tag === "textarea" || tag === "option" || tag === "select")
+        throw fail(
+          "INVALID_CONTENT",
+          "authoring",
+          at,
+          "InnerHTML owns an element's whole content: give it no children, and not on a void element, textarea, option or select",
+        );
+    }
     // A textarea's value is its content: upstream's builder refuses both owners, and an element
     // inside one would read back as text.
     if (tag === "textarea") {
@@ -652,6 +664,21 @@ export const HtmlIR = Object.freeze({
   ...(Object.fromEntries(
     BOOLEAN_ATTRIBUTES.map((name) => [name, booleanAttribute(name)]),
   ) as Record<BooleanAttribute, (value: Expr<boolean> | boolean) => Attribute>),
+  /**
+   * Foldkit's `InnerHTML`, trusted content written verbatim. The profile admits a literal holding
+   * no markup (no `<`), so the browser parses it as the text it is, whatever surrounds it; markup
+   * would need an HTML parser to check it parses the same in place (server.js).
+   */
+  InnerHTML: (html: string): Attribute => {
+    if (typeof html !== "string" || html.includes("<"))
+      throw fail(
+        "INVALID_ATTRIBUTE",
+        "authoring",
+        "Html.InnerHTML",
+        "InnerHTML is a literal string without markup in this profile",
+      );
+    return { name: "InnerHTML", value: Expr.literal(StringType, html) };
+  },
   /**
    * Foldkit's `Tabindex`: a literal integer the browser's `long` holds, which upstream's builder
    * otherwise refuses at render time.

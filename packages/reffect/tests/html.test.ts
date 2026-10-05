@@ -387,3 +387,12 @@ test("select holds options and option text, as the controlled selection reads th
   expect(() => H.p([H.Value("x")], [])).toThrow("Value");
   expect(() => H.select([H.Value("x")], [])).not.toThrow();
 });
+
+test("InnerHTML is a markup-free literal that owns its element's content (8B)", () => {
+  expect(() => H.pre([H.InnerHTML("\nleading")])).not.toThrow();
+  expect(() => H.InnerHTML("<b>x</b>")).toThrow("without markup");
+  expect(() => H.div([H.InnerHTML("x")], ["child"])).toThrow("whole content");
+  expect(() => H.textarea([H.InnerHTML("x")])).toThrow("whole content");
+  expect(() => H.option([H.InnerHTML("x")])).toThrow("whole content");
+  expect(() => H.input([H.InnerHTML("x")])).toThrow("whole content");
+});

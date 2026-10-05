@@ -65,3 +65,9 @@ Status: **research (2026-10-05)**, not implemented. 8B mechanically transforms t
   - A single-line `select` with options and none matching fails with upstream's exact message, after its options' own failures.
   - The profile admits only `option` children in a `select`, and only text in an `option`.
   - Evidence: `tests/html-native.test.ts` passes 2/2 with a `Selects` view over seven values (a first duplicate, a match by text, no match, NUL, escapes), byte-equal to the official server. `tests/html.test.ts` passes 11/11 with the nesting refusals.
+- **Step 1c (2026-10-05):**
+  - `InnerHTML` is admitted as a literal without markup (no `<`). It owns its element's content: no children, and not on void elements, `textarea`, `option` or `select`, where upstream's builder refuses it or selection would read hidden values.
+  - Upstream writes it verbatim, including CR and NUL. A `pre`'s raw content always gets the leading newline.
+  - Fragments with markup would need an HTML parser to check that they parse the same in place (server.js), and stay refused.
+  - Evidence: `tests/html-native.test.ts` passes 2/2 with a `Raw` view, including the example's `pre` (`InnerHTML('
+leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/12 with the refusals.

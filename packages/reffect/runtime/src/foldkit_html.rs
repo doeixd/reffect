@@ -5,6 +5,8 @@ enum Kind {
     Element,
     Text,
     Empty,
+    /// Trusted `InnerHTML` content, written verbatim.
+    Raw,
 }
 /// A serialized fragment, or the first serialization failure in document order. Children are
 /// shared, not copied, and the document is written once when rendered (#34): copying each
@@ -63,6 +65,8 @@ pub enum Prop<'a> {
     Content(&'a str),
     /// A select's controlled `value`: the first option carrying it is the selected one.
     Selection(&'a str),
+    /// Trusted `InnerHTML`, which replaces the element's (empty) children verbatim.
+    Raw(&'a str),
 }
 /// Text as `escape_text` wrote it, read back: it escapes `&`, `<`, `>` and CR only.
 fn unescape_text(markup: &str) -> String {
@@ -261,6 +265,7 @@ pub fn element(
             Prop::Flag(false) => {}
             Prop::Content(value) => content = Some(text(value)),
             Prop::Selection(value) => selection = Some(value),
+            Prop::Raw(value) => content = Some(leaf(Kind::Raw, value.to_string(), None)),
         }
     }
     let content = content.map(|text| vec![text]);
@@ -303,7 +308,12 @@ pub fn element(
     // The HTML parser drops one newline right after `<pre>` or `<textarea>`, so content that
     // starts with one gets another (serialize.js `leadingTextOf`): the first nonempty text,
     // unless an element comes first.
-    if tag == "pre" || tag == "textarea" {
+    // Raw content always gets it: the fragment may begin with a newline any number of ways.
+    if (tag == "pre" || tag == "textarea")
+        && children.first().is_some_and(|c| c.0.kind == Kind::Raw)
+    {
+        markup.push('\n');
+    } else if tag == "pre" || tag == "textarea" {
         let leading = children
             .iter()
             .find(|child| child.0.kind == Kind::Element || !child.0.head.is_empty());
@@ -375,7 +385,7 @@ pub fn escape_text(value: &str) -> Result<String, String> {
 pub fn root_kind(body: &Html) -> String {
     match body.0.kind {
         Kind::Element => "Element",
-        Kind::Text => "Text",
+        Kind::Text | Kind::Raw => "Text",
         Kind::Empty => "Empty",
     }
     .to_string()
@@ -412,7 +422,8 @@ pub fn render(
 fn stamp(body: &Html, runtime_id: &str, build_id: &str) -> Result<String, (&'static str, String)> {
     match body.0.kind {
         Kind::Empty => return Err(("InvalidHydrationRoot", "Empty".to_string())),
-        Kind::Text => return Err(("InvalidHydrationRoot", "Text".to_string())),
+        // Raw content is only ever an element's child, never a body.
+        Kind::Text | Kind::Raw => return Err(("InvalidHydrationRoot", "Text".to_string())),
         Kind::Element => {}
     }
     if let Some(message) = &body.0.error {
