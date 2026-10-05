@@ -805,3 +805,15 @@ fn header_values_read_as_fetch_reads_them() {
     );
     assert_eq!(header_value(&headers, "origin"), None);
 }
+
+#[test]
+fn js_number_parse_keeps_negative_zero_and_rounds_radix_literals_to_even() {
+    use crate::js_std::{is_safe_integer, number_parse};
+    // `-0` prints as `0` in JS, so the differential corpus cannot see its sign; the bits can.
+    assert!(number_parse("-0").unwrap().is_sign_negative());
+    assert!(!number_parse("0").unwrap().is_sign_negative());
+    // 2^53 + 1 is a tie between 2^53 and 2^53 + 2; ties go to the even mantissa.
+    assert_eq!(number_parse("0x20000000000001"), Some(9007199254740992.0));
+    assert_eq!(number_parse("0x20000000000003"), Some(9007199254740996.0));
+    assert!(is_safe_integer(9007199254740991.0) && !is_safe_integer(9007199254740992.0));
+}

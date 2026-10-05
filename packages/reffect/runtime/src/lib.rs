@@ -10,6 +10,8 @@ pub mod foldkit_json;
 #[allow(dead_code)]
 mod foldkit_ssr;
 #[allow(dead_code)]
+pub mod js_std;
+#[allow(dead_code)]
 mod remote_engine;
 #[allow(dead_code)]
 pub mod ssr_host;

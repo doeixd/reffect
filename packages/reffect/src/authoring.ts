@@ -1,3 +1,4 @@
+import "./js-std.ts";
 import { SchemaIR } from "./schema-json.ts";
 import { UrlIR } from "./url.ts";
 import { StreamAuthoring } from "./stream.ts";

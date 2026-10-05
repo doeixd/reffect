@@ -1,3 +1,4 @@
+import { runtimeModule } from "./runtime-module.ts";
 import type { ProvenanceSnapshot } from "./provenance.ts";
 import { Provenance } from "./provenance.ts";
 import { SourceWriter, joinFragments, mapFragment, textFragment } from "./source-writer.ts";
@@ -1857,6 +1858,7 @@ export const emitFunctions = (
   // Set when a number is written as JS text (SSR-012).
   let usesRyu = false;
   let usesUrl = false;
+  let usesJsStd = false;
   // Set when an Html value is reachable, which brings the ported serializer (SSR-003).
   let usesHtml = false;
   // Set when JSON text is written as JSON.stringify does (M9-1).
@@ -2468,6 +2470,19 @@ export const emitFunctions = (
                   return Match.value(n.lowering).pipe(
                     Match.tagsExhaustive({
                       Not: () => joinFragments(["!(", arg(0), ")"]),
+                      Std: (std) => {
+                        usesJsStd = true;
+                        return joinFragments([
+                          `crate::js_std::${std.function}(`,
+                          ...n.args.flatMap((_, index) => [
+                            ...(index === 0 ? [] : [", "]),
+                            ...(std.borrow[index]
+                              ? ["&(", arg(index), ")[..]"]
+                              : ["(", arg(index), ")"]),
+                          ]),
+                          ")",
+                        ]);
+                      },
                       Url: ({ kind }) => {
                         usesUrl = true;
                         return kind === "Pathname"
@@ -3963,7 +3978,7 @@ export const emitFunctions = (
         : "") +
       (usesRyu ? 'ryu-js = { version = "=1.0.3", default-features = false }\n' : "") +
       (usesUrl ? 'url = "=2.5.8"\n' : ""),
-    "src/lib.rs": `${writer.text}${usesHtml ? `\n${htmlRuntime}` : ""}${usesJsonText ? `\n${jsonTextRuntime}` : ""}${usesUrl ? `\n${urlRuntime}` : ""}`,
+    "src/lib.rs": `${writer.text}${usesHtml ? `\n${htmlRuntime}` : ""}${usesJsonText ? `\n${jsonTextRuntime}` : ""}${usesUrl ? `\n${urlRuntime}` : ""}${usesJsStd ? runtimeModule("js_std", "pub") : ""}`,
     "src/main.rs": `${queryAllowance}${usesStrings ? stringBoundary : ""}${
       (hasAsync
         ? Rs.withAttributes(

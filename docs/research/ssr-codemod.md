@@ -113,3 +113,10 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
 
 - Each operation agrees with the JS reference natively, on corpora covering `%` decoding failures, quotes, duplicates, `__proto__`, every numeric literal form, Unicode white space, and safe-integer edges.
 - A page's `cookie` never holds the session cookie.
+
+### Step 1d progress
+
+- **1d-i (2026-10-05):**
+  - `R.Number.parse` (Effect `Number.parse`, read as an Option) and `R.Number.isSafeInteger`.
+  - Natively they are the std-only `js_std` runtime module, reached through a generic `Std` lowering that borrows String arguments. It holds a port of ECMAScript `StringToNumber`, with exact round-to-even radix literals.
+  - Evidence: `tests/js-std.test.ts` passes 2/2. Native and reference agree on 60 strings (white space sets, `Infinity`/`NaN` spellings including Rust-only ones, signs, dots, exponents, radix prefixes, ties at 2^53, overflow, separators, non-ASCII digits). A runtime test pins `-0` and the ties.

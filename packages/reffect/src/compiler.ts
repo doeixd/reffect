@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
 import { UrlPathname, UrlSearchParam } from "./url.ts";
+import { NumberParse } from "./js-std.ts";
 import { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
 import { streamExpressions, streamFinalizers, streamSources } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
@@ -74,6 +75,7 @@ import {
   ReplaceAllString,
   ConcatString,
   NumberToString,
+  IsSafeIntegerNumber,
   StringType,
   NotBool,
   checkFunction,
@@ -121,7 +123,12 @@ export type Lowering =
   /** The ported Foldkit serializer (SSR-003). */
   | { readonly _tag: "Html"; readonly kind: HtmlOperationKind }
   /** A WHATWG URL reading in `crate::reffect_url`, on the `url` crate. */
-  | { readonly _tag: "Url"; readonly kind: "Pathname" | "SearchParam" };
+  | { readonly _tag: "Url"; readonly kind: "Pathname" | "SearchParam" }
+  /**
+   * A function of the std-only `crate::js_std` runtime module; `borrow[i]` passes argument `i`
+   * as `&str` (a String) rather than by value.
+   */
+  | { readonly _tag: "Std"; readonly function: string; readonly borrow: readonly boolean[] };
 export class Target extends Pipeable.Class {
   private constructor(
     readonly ref: SemanticRef<"target">,
@@ -223,6 +230,21 @@ const implementations = Object.freeze([
       ...implementation(operation as AnyOperation, { _tag: "Url", kind }),
       crates: Object.freeze(["url@2.5.8"]),
       rationale: "The url crate implements the WHATWG URL Standard the reference evaluates with",
+    }),
+  ),
+  ...(
+    [
+      [NumberParse, "number_parse"],
+      [IsSafeIntegerNumber, "is_safe_integer"],
+    ] as const
+  ).map(([operation, name]) =>
+    Object.freeze({
+      ...implementation(operation as AnyOperation, {
+        _tag: "Std",
+        function: name,
+        borrow: Object.freeze(operation.input.map((type) => IRType.same(type, StringType))),
+      }),
+      rationale: "A std-only port differential against the ECMAScript/Effect function it names",
     }),
   ),
   Object.freeze({

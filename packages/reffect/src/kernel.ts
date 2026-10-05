@@ -5,6 +5,7 @@ import { isWellFormed, wellFormedMessage } from "./unicode.ts";
 export { isWellFormed } from "./unicode.ts";
 import type { SourceMetadata } from "./source.ts";
 import type { EffectFn } from "./effect-ir.ts";
+import type { OptionValue } from "./option.ts";
 
 export const Diagnostic = Schema.Struct({
   code: Schema.String,
@@ -1134,7 +1135,24 @@ class NumberWitness extends IRType<number> {
     (that: Expr<number>): (self: Expr<number>) => Expr<boolean>;
     (self: Expr<number>, that: Expr<number>): Expr<boolean>;
   } = dual(2, (a: Expr<number>, b: Expr<number>) => Expr.apply(LtNumber, a, b));
+  /** Effect `Number.parse`: `NaN`/`Infinity` literally, nothing for blank text, else `Number(s)`. */
+  parse(value: Expr<string>): Expr<OptionValue<number>> {
+    if (numberParse === undefined)
+      throw fail("UNSUPPORTED_OPERATION", "authoring", "Number.parse", "js-std is not loaded");
+    return numberParse(value);
+  }
+  /** JS `Number.isSafeInteger` (Effect's Number module has none). */
+  isSafeInteger(value: Expr<number>): Expr<boolean> {
+    return Expr.apply(IsSafeIntegerNumber, value);
+  }
 }
+// `Number.parse` returns an Option, whose witness lives above the kernel; `js-std.ts` installs it.
+let numberParse: ((value: Expr<string>) => Expr<OptionValue<number>>) | undefined;
+export const installNumberParse = (
+  parse: (value: Expr<string>) => Expr<OptionValue<number>>,
+): void => {
+  numberParse = parse;
+};
 export const NumberType = new NumberWitness();
 
 /**
@@ -1190,6 +1208,12 @@ export const LtNumber = Operation.make(
   [NumberType, NumberType],
   BoolType,
   (a, b) => a < b,
+).pipe(Operation.withCapabilities([Capabilities.Number, Capabilities.Bool]));
+export const IsSafeIntegerNumber = Operation.make(
+  SemanticRef.operation("reffect/number.is-safe-integer@1"),
+  [NumberType],
+  BoolType,
+  (value) => Number.isSafeInteger(value),
 ).pipe(Operation.withCapabilities([Capabilities.Number, Capabilities.Bool]));
 // JS Number#toString: well-formed by construction (SSR-012).
 export const NumberToString = Operation.make(
