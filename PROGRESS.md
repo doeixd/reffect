@@ -94,6 +94,19 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — One view source for browser and server (#14)
+
+- **#14.** The design is in [native SSR research](docs/research/native-ssr.md#one-view-source-for-browser-and-server-14-2026-10-05).
+  - **Codec split:** the contract-codec analysis moves out of `native-rpc.ts` into the compiler-free `contract-codec.ts`, and `NativeRpc.witness` is unchanged.
+  - **Rule split:** `refusedOn` moves into `html-rules.ts`.
+  - **Browser-safe R:** with both splits, `R` and `R.Html` import no compiler code. The `html.ts` browser bundle went from 63 reffect modules (about 2 MB) to 30.
+- **`R.Html.OnInput(variant, field, fields?)`** is Foldkit's `OnInput((value) => Message)`. The input's value fills one String field, and like every event it leaves no trace in server HTML.
+- **`todo-remote` has one view:** an R function in `web/app.ts` over a small view model. The browser runs it through `toFoldkitView`, and `page.ts` renders it for the first screen.
+- **Validation.**
+  - New `browser-bundle` test: builds the real browser app (788 kB with Foldkit and Effect) and checks it holds the R view layer but none of `compiler`, `lower`, `cargo`, `native-rpc`, `native-remote`, `rpc-runtime`, `ssr-page` or the Rust runtime sources.
+  - New `html` case: `OnInput` builds the Message from the typed value, and refuses a non-String field.
+  - Passing suites: `html`, `html-native`, `html-hydrate`, `html-flags`, `html-page`, `todo-remote-page` (still byte-equal to upstream), `todo-fullstack`, `remote-acceptance`, `native-rpc`, `schema-rpc`, `records-rpc`, `optional-rpc`; `vp check` clean.
+
 ## 2026-10-05 — Page views decoded by their selection (#6)
 
 - **#6.** The design is in [ssr-data research](docs/research/ssr-data.md#view-witnesses-from-the-selection-6-2026-10-05).

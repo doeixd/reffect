@@ -233,3 +233,22 @@ The four open questions are settled. The checks behind each are listed below.
 - step 2 is `R.Html` (SSR-009/010) with its reference view;
 - `R.Number.toString` (SSR-012) can land before or alongside it;
 - step 4 adds `happy-dom` (SSR-011).
+
+## One view source for browser and server (#14, 2026-10-05)
+
+**Gap.** `todo-remote`'s Ready view existed twice: in Foldkit (`web/app.ts`) for the browser, and in R (`page.ts`) for the server. The browser could not import `R.Html`. `html.ts` reached the compiler through `NativeRpc` (Message field witnesses) and through `html-native.ts` (the Rust runtime sources), and its bundle was 63 reffect modules, about 2 MB.
+
+**Decisions.**
+
+- **Contract codecs move out of the compiler.** The Effect-schema-to-witness analysis (`codec`, `composite`, `contractWitness`, …) moves from `native-rpc.ts` into `contract-codec.ts`, which imports only effect, kernel, records and rpc-codecs. `NativeRpc.witness` is the same function, re-exported.
+- **A dependency-free rule.** `refusedOn` moves into `html-rules.ts`. `html.ts` imports it and `contractWitness` directly, so `R` (`authoring.ts`) and `R.Html` are browser-safe. What reaches the browser is the IR, `records` (whose witnesses carry their Rust representation names through `rust-emit`'s `RustIdent`) and the reference interpreter that evaluates views.
+- **Value events.** `R.Html.OnInput(Message.ChangedDraft, "value", fields?)` is Foldkit's `OnInput((value) => Message.ChangedDraft({ value }))`. One String field of the variant receives the element's value, and any other fields are given as R values. Like every event, it leaves no trace in server HTML. In the reference it becomes a `toMessage` function that `toFoldkit` hands to `h.OnInput`.
+- **The example.** `web/app.ts` holds the app's one view as an R function (`screen`) over a view model (`draft`, the list read's `status`, `todos`). The browser's `view` applies it through `R.Html.toFoldkitView`. `page.ts` renders the same `screenDocument` with an empty draft and a Ready status.
+
+**Remaining.** `reference-files.ts` dynamically imports `node:fs` for File effects. Vite stubs it as a browser external, and views never reach it.
+
+**Acceptance.**
+
+- `todo-remote` has one view source.
+- `browser-bundle.test.ts` builds its browser app and checks that the bundle holds `authoring`, `html`, `html-ir` and `reference` but none of `compiler`, `lower`, `cargo`, `native-rpc`, `native-remote`, `rpc-runtime`, `ssr-page` or the runtime sources. The bundle is 788 kB with Foldkit and Effect.
+- `todo-remote-page` still equals upstream.
