@@ -12,10 +12,12 @@ import {
   Traits,
   U64Type,
   UnitType,
+  UnknownType,
   arrayItem,
   fail,
   structLayout,
   recordValue,
+  optionalItem,
   undefinedOrItem,
   unionCases,
 } from "./kernel.ts";
@@ -426,15 +428,16 @@ export class UndefinedOrType<T> extends Composite<T | undefined> {
       `reffect/undefined-or@1/${digest(item.id)}`,
       freeze(Schema.UndefinedOr(item.schema)) as unknown as Schema.Codec<T | undefined>,
       `Option<${item.native.type}>`,
-      { _tag: "UndefinedOr", item },
+      { _tag: "UndefinedOr", item, absent: "undefined" },
     );
     Object.freeze(this);
   }
   static of<T>(item: IRType<T>): UndefinedOrType<T> {
     if (!(item instanceof IRType))
       throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr", "UndefinedOr requires a witness");
-    // `undefined | undefined` collapses in JS, so a witness admitting undefined cannot nest.
-    if (IRType.same(item, UnitType) || undefinedOrItem(item))
+    // `undefined | undefined` collapses in JS, so a witness admitting undefined cannot nest; a
+    // NullOr item would share JSON `null` with the absent value (OPT-006).
+    if (IRType.same(item, UnitType) || optionalItem(item))
       throw fail(
         "TYPE_MISMATCH",
         "authoring",
@@ -444,6 +447,31 @@ export class UndefinedOrType<T> extends Composite<T | undefined> {
     return intern(["undefinedOr", item], () => new UndefinedOrType(item));
   }
 }
+/**
+ * `Schema.NullOr(T)`: a plain `T | null`, natively `Option<T>` like `UndefinedOr`, whose layout
+ * and nodes it shares with `null` as the absent value (OPT-006).
+ */
+export class NullOrType<T> extends Composite<T | null> {
+  private constructor(readonly item: IRType<T>) {
+    super(
+      `reffect/null-or@1/${digest(item.id)}`,
+      freeze(Schema.NullOr(item.schema)) as unknown as Schema.Codec<T | null>,
+      `Option<${item.native.type}>`,
+      { _tag: "UndefinedOr", item, absent: "null" },
+    );
+    Object.freeze(this);
+  }
+  static of<T>(item: IRType<T>): NullOrType<T> {
+    if (!(item instanceof IRType))
+      throw fail("TYPE_MISMATCH", "authoring", "NullOr", "NullOr requires a witness");
+    // A witness that already admits null (or undefined, which shares JSON `null`) cannot nest.
+    if (IRType.same(item, UnitType) || IRType.same(item, UnknownType) || optionalItem(item))
+      throw fail("TYPE_MISMATCH", "authoring", "NullOr", "The item witness must not admit null");
+    return intern(["nullOr", item], () => new NullOrType(item));
+  }
+}
+/** `Schema.NullOr(T)`; read it with `R.Option.fromNullOr` (OPT-007). */
+export const NullOr = <T>(item: IRType<T>): NullOrType<T> => NullOrType.of(item);
 const undefinedOrMatch = <A, B>(
   self: Expr<A | undefined>,
   options: {

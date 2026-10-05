@@ -25,10 +25,18 @@ const WirePage = Schema.Struct({
   size: Schema.optional(PageSize),
   cursor: Schema.optionalKey(Schema.Number),
 });
+// `Schema.NullOr` values (OPT-006..008), as upstream selections declare nullable columns.
+const WireNulls = Schema.Struct({
+  s: Schema.NullOr(Schema.String),
+  d: Schema.NullOr(Schema.Struct({ x: Schema.Boolean })),
+  n: Schema.NullOr(Schema.Number),
+  a: Schema.NullOr(Schema.Array(Schema.Boolean)),
+});
 const Group = RpcGroup.make(
   Rpc.make("Echo", { payload: WireWide, success: WireWide }),
   Rpc.make("Touch", { payload: WireWide, success: WireWide }),
   Rpc.make("Page", { payload: WirePage, success: Schema.Number }),
+  Rpc.make("Nulls", { payload: WireNulls, success: WireNulls }),
 );
 
 const Union = R.TaggedUnion({ A: {}, B: { y: R.Bool } });
@@ -73,10 +81,30 @@ const page = R.fn([Page], R.Number, (value) =>
     }),
   ),
 );
+const Nulls = R.Struct({
+  s: R.NullOr(R.String),
+  d: R.NullOr(R.Struct({ x: R.Bool })),
+  n: R.NullOr(R.Number),
+  a: R.NullOr(R.Array(R.Bool)),
+});
+// `s` is read through Option and written back; the rest pass through.
+const nulls = R.fn([Nulls], Nulls, (value) =>
+  Nulls.make({
+    s: R.Option.getOrNull(
+      R.Option.map(R.Option.fromNullOr(R.Struct.get(value, "s")), (s) =>
+        R.String.concat(s, R.String.literal("!")),
+      ),
+    ),
+    d: R.Struct.get(value, "d"),
+    n: R.Struct.get(value, "n"),
+    a: R.Struct.get(value, "a"),
+  }),
+);
 const bindings = {
   Echo: NativeRpc.bind(echo),
   Touch: NativeRpc.bind(touch),
   Page: NativeRpc.bind(page),
+  Nulls: NativeRpc.bind(nulls),
 };
 
 const request = (tag: string, payload: string, id = "1") =>
@@ -143,6 +171,16 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
     '"cursor":"x"',
     '"size":2,"cursor":"Infinity"',
   ].map((body) => [`page {${body}}`, request("Page", `{${body}}`)] as const),
+  ["nulls all null", request("Nulls", '{"s":null,"d":null,"n":null,"a":null}')],
+  ["nulls all present", request("Nulls", '{"s":"a","d":{"x":true},"n":"NaN","a":[false]}')],
+  ["nulls missing", request("Nulls", '{"s":null,"d":null,"n":null}')],
+  ...["s", "d", "n", "a"].flatMap((field) =>
+    wrong.map((value) => {
+      const others = { s: null, d: null, n: null, a: null, [field]: "VALUE" };
+      const body = JSON.stringify(others).replace('"VALUE"', value);
+      return [`nulls ${field}=${value}`, request("Nulls", body)] as const;
+    }),
+  ),
 ];
 
 const oracle = Effect.gen(function* () {
@@ -152,6 +190,7 @@ const oracle = Effect.gen(function* () {
     Echo: (value) => run(Reference.run(echo, [value])),
     Touch: (value) => run(Reference.run(touch, [value])),
     Page: (value) => run(Reference.run(page, [value])),
+    Nulls: (value) => run(Reference.run(nulls, [value])),
   });
   const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
     Effect.provide([handlers, RpcSerialization.layerJson]),
@@ -252,6 +291,19 @@ test(
             s: "bb",
           });
           expect(yield* client.Page({})).toBe(10.25);
+          // A NullOr is null, not undefined, through the native server and the Option round trip.
+          expect(yield* client.Nulls({ s: null, d: null, n: null, a: null })).toStrictEqual({
+            s: null,
+            d: null,
+            n: null,
+            a: null,
+          });
+          expect(yield* client.Nulls({ s: "x", d: { x: false }, n: 2, a: [] })).toStrictEqual({
+            s: "x!",
+            d: { x: false },
+            n: 2,
+            a: [],
+          });
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );

@@ -68,6 +68,8 @@ export {
   ArrayIR,
   UndefinedOr,
   UndefinedOrType,
+  NullOr,
+  NullOrType,
   RecordIR,
   RecordType,
   Literals,

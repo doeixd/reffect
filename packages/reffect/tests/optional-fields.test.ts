@@ -110,3 +110,44 @@ test("construction admits omitted optional keys only", () => {
     R.fn([Wide], R.Bool, (w) => R.UndefinedOr.match(R.Struct.get(w, "a"), effectful)),
   ).toThrow("pure expressions");
 });
+
+test("NullOr shares UndefinedOr's nodes with null as its absent value (OPT-006, OPT-007)", async () => {
+  const Name = R.NullOr(R.String);
+  expect([null, "x", undefined].map((value) => Schema.is(Name.schema)(value))).toEqual([
+    true,
+    true,
+    false,
+  ]);
+  expect(Name.id).not.toBe(R.UndefinedOr(R.String).id);
+  // Through Option and back: null stays null, a string is mapped.
+  const shout = R.fn([Name], Name, (name) =>
+    R.Option.getOrNull(
+      R.Option.map(R.Option.fromNullOr(name), (value) =>
+        R.String.concat(value, R.String.literal("!")),
+      ),
+    ),
+  );
+  const run = (value: string | null) => Effect.runPromise(Reference.run(shout, [value]));
+  expect(await run(null)).toBeNull();
+  expect(await run("hi")).toBe("hi!");
+  // Nesting would read JSON null two ways, and undefined-only operations refuse a NullOr.
+  expect(() => R.NullOr(Name)).toThrow("must not admit null");
+  expect(() => R.NullOr(R.Unknown)).toThrow("must not admit null");
+  expect(() => R.UndefinedOr(Name)).toThrow("must not admit undefined");
+  expect(() => R.NullOr(R.UndefinedOr(R.String))).toThrow("must not admit null");
+  expect(() =>
+    R.fn([Name], R.String, (value) =>
+      R.UndefinedOr.match(value, {
+        onUndefined: () => R.String.literal("none"),
+        // @ts-expect-error a NullOr's present value is not its undefined-free item
+        onDefined: (defined) => defined,
+      }),
+    ),
+  ).toThrow("match requires UndefinedOr");
+  expect(() => R.fn([Name], R.Option(R.String), R.Option.fromUndefinedOr)).toThrow(
+    "Requires UndefinedOr",
+  );
+  expect(() => R.fn([R.UndefinedOr(R.String)], R.Option(R.String), R.Option.fromNullOr)).toThrow(
+    "Requires NullOr",
+  );
+});

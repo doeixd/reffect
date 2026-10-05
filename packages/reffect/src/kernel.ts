@@ -178,8 +178,15 @@ export type Layout =
     }
   | { readonly _tag: "Union"; readonly cases: readonly IRType<unknown>[] }
   | { readonly _tag: "Array"; readonly item: IRType<unknown> }
-  /** A plain `T | undefined` (OPT-001). */
-  | { readonly _tag: "UndefinedOr"; readonly item: IRType<unknown> }
+  /**
+   * A plain `T | undefined` (OPT-001), or `T | null` when `absent` is `"null"` (OPT-006): one
+   * layout and one set of nodes, natively `Option<T>`, differing only in the JS absent value.
+   */
+  | {
+      readonly _tag: "UndefinedOr";
+      readonly item: IRType<unknown>;
+      readonly absent: "undefined" | "null";
+    }
   /** A string-keyed record in JS own-property order (RECJS-001). */
   | { readonly _tag: "Record"; readonly value: IRType<unknown> }
   /** A union of string literals, natively a unit-variant enum (LIT-001). */
@@ -442,14 +449,28 @@ export const arrayItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
         Match.tag("Array", (layout) => layout.item),
         Match.orElse(() => undefined),
       );
-/** The defined witness of an `UndefinedOr`, or undefined for any other witness. */
-export const undefinedOrItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
+/** The present witness of an `UndefinedOr` or `NullOr`, or undefined for any other witness. */
+export const optionalItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
   type.layout === undefined
     ? undefined
     : Match.value(type.layout).pipe(
         Match.tag("UndefinedOr", (layout) => layout.item),
         Match.orElse(() => undefined),
       );
+/** The JS absent value of an `UndefinedOr` (`undefined`) or `NullOr` (`null`) witness. */
+export const absentOf = (type: IRType<unknown>): undefined | null =>
+  type.layout === undefined
+    ? undefined
+    : Match.value(type.layout).pipe(
+        Match.tag("UndefinedOr", (layout) => (layout.absent === "null" ? null : undefined)),
+        Match.orElse(() => undefined),
+      );
+/** The defined witness of an `UndefinedOr`, or undefined for any other witness (`NullOr` too). */
+export const undefinedOrItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
+  optionalItem(type) !== undefined && absentOf(type) === undefined ? optionalItem(type) : undefined;
+/** The non-null witness of a `NullOr`, or undefined for any other witness. */
+export const nullOrItem = (type: IRType<unknown>): IRType<unknown> | undefined =>
+  absentOf(type) === null ? optionalItem(type) : undefined;
 /** The literals of a string literal union, or undefined for any other witness. */
 export const literalsOf = (type: IRType<unknown>): readonly string[] | undefined =>
   type.layout === undefined
@@ -566,7 +587,7 @@ export class Expr<A> extends Pipeable.Class {
     onDefined: Expr<A>,
     onUndefined: Expr<A>,
   ): Expr<A> {
-    if (!undefinedOrItem(value.type) || !IRType.same(onDefined.type, onUndefined.type))
+    if (!optionalItem(value.type) || !IRType.same(onDefined.type, onUndefined.type))
       throw fail(
         "TYPE_MISMATCH",
         "authoring",
@@ -590,14 +611,16 @@ export class Expr<A> extends Pipeable.Class {
       throw fail("TYPE_MISMATCH", "authoring", "Record", "Record queries require a Record");
     return new Expr(output, Object.freeze({ _tag: "RecordQuery", query, value, key }));
   }
-  static defined<A>(this: void, type: IRType<A | undefined>, value: Expr<A>): Expr<A | undefined> {
-    const item = undefinedOrItem(type);
+  /** A present value widened to its `UndefinedOr`/`NullOr` witness (OPT-001, OPT-006). */
+  static defined<T, A extends T>(this: void, type: IRType<T>, value: Expr<A>): Expr<T> {
+    const item = optionalItem(type);
     if (!item || !IRType.same(item, value.type))
       throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr", "Value disagrees with the witness");
     return new Expr(type, Object.freeze({ _tag: "Defined", value }));
   }
-  static undefined<A>(this: void, type: IRType<A | undefined>): Expr<A | undefined> {
-    if (!undefinedOrItem(type))
+  /** The absent value of an `UndefinedOr` (`undefined`) or `NullOr` (`null`) witness. */
+  static undefined<T>(this: void, type: IRType<T>): Expr<T> {
+    if (!optionalItem(type))
       throw fail("TYPE_MISMATCH", "authoring", "UndefinedOr", "Requires an UndefinedOr witness");
     return new Expr(type, Object.freeze({ _tag: "Undefined" }));
   }
@@ -1259,7 +1282,7 @@ export const checkExpression = (
           n.fields.forEach((field, i) => field && walk(field, `${at}.fields[${i}]`));
         },
         MatchUndefined: (n) => {
-          const item = undefinedOrItem(n.value.type);
+          const item = optionalItem(n.value.type);
           walk(n.value, `${at}.value`);
           if (
             !item ||
@@ -1279,15 +1302,12 @@ export const checkExpression = (
           walk(n.onUndefined, `${at}.onUndefined`);
         },
         Defined: (n) => {
-          if (
-            !IRType.same(undefinedOrItem(e.type) ?? e.type, n.value.type) ||
-            !undefinedOrItem(e.type)
-          )
+          if (!IRType.same(optionalItem(e.type) ?? e.type, n.value.type) || !optionalItem(e.type))
             add("TYPE_MISMATCH", at, "A defined value must match its UndefinedOr witness");
           walk(n.value, `${at}.value`);
         },
         Undefined: () => {
-          if (!undefinedOrItem(e.type))
+          if (!optionalItem(e.type))
             add("TYPE_MISMATCH", at, "undefined requires an UndefinedOr witness");
         },
         RecordQuery: (n) => {
@@ -1484,13 +1504,13 @@ export const evaluateExpression = (
         },
         MatchUndefined: (n) => {
           const value = evaluate(n.value);
-          if (value === undefined) return evaluate(n.onUndefined);
+          if (value === absentOf(n.value.type)) return evaluate(n.onUndefined);
           const nested = new Map(scope);
           nested.set(n.binder, [value]);
           return evaluateExpression(n.onDefined, nested);
         },
         Defined: (n) => evaluate(n.value),
-        Undefined: () => undefined,
+        Undefined: () => absentOf(e.type),
         RecordQuery: (n) => {
           const record = evaluate(n.value) as Readonly<Record<string, unknown>>;
           return Match.value(n.query).pipe(

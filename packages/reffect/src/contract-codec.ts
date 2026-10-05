@@ -19,6 +19,7 @@ import {
 import {
   ArrayType,
   Literals,
+  NullOr,
   optional as optionalField,
   optionalKey as optionalKeyField,
   RecordType,
@@ -66,6 +67,12 @@ export interface Composite {
   readonly json?: true;
   /** A union of string literals, in declaration order (LIT-002). */
   readonly literals?: readonly string[];
+  /** `Schema.NullOr(item)`: `null` or the item, with the verified mismatch text (OPT-008). */
+  readonly nullable?: {
+    readonly item: Codec;
+    readonly kinds: readonly JsonKind[];
+    readonly mismatch: string;
+  };
   /** A JS number: plain JSON numbers when finite-only, plus verified checks (NUM-002). */
   readonly number?: {
     readonly finiteOnly: boolean;
@@ -147,6 +154,8 @@ export const kindsOf = (
   if (codec.item) return { kinds: ["array"], expected: codec.expected };
   if (codec.record) return { kinds: ["object"], expected: codec.expected };
   if (codec.literals) return { kinds: ["string"], expected: codec.expected };
+  if (codec.nullable)
+    throw unsupported(path, "An optional NullOr would read JSON null two ways and is refused");
   if (codec.json)
     throw unsupported(path, "optional(Unknown) is not supported: null matches Unknown first");
   if (codec.cases.length === 0 && codec.fields.length === 0)
@@ -285,7 +294,7 @@ export const sampleOf = (codec: Codec, path: string): unknown => {
     );
   if (codec.number) return 1.5;
   if (codec.literals) return codec.literals[0];
-  if (codec.json) return null;
+  if (codec.json || codec.nullable) return null;
   if (codec.item) return [];
   if (codec.record) return {};
   if (codec.cases.length)
@@ -467,6 +476,21 @@ export const composite = (
       expected: expectedOf(type),
     });
   }
+  const nullable = nullOrMember(ast);
+  if (nullable) {
+    const item = codec(nullable, path, false, registry, decodeOnly);
+    const { kinds, expected } = kindsOf(item, path);
+    const mismatch = `${expected} | null`;
+    // Effect's own decoder must accept null and give this text for every other JSON kind.
+    verifyOptional(ast, path, kinds, mismatch);
+    return register(registry, "NullOr", {
+      type: NullOr(witnessOf(item)),
+      fields: [],
+      cases: [],
+      nullable: { item, kinds, mismatch },
+      expected: mismatch,
+    });
+  }
   if (SchemaAST.isUnion(ast) || SchemaAST.isDeclaration(ast)) {
     if (SchemaAST.isUnion(ast) && (ast.checks || ast.encoding || ast.context || ast.annotations))
       throw unsupported(path, "Annotated or checked unions are not supported");
@@ -495,6 +519,20 @@ export const composite = (
   }
   throw unsupported(path, "Unsupported schema");
 };
+/** The item of a plain `Schema.NullOr(item)` union, or undefined for any other schema. */
+const nullOrMember = (ast: SchemaAST.AST): SchemaAST.AST | undefined => {
+  if (
+    !SchemaAST.isUnion(ast) ||
+    ast.types.length !== 2 ||
+    ast.checks ||
+    ast.encoding ||
+    ast.context ||
+    ast.annotations
+  )
+    return undefined;
+  const [item, absent] = ast.types;
+  return SchemaAST.isNull(absent!) && !absent.checks && !absent.annotations ? item : undefined;
+};
 export const register = (
   registry: Registry,
   base: string,
@@ -514,6 +552,7 @@ export const register = (
     shape.lengths ?? null,
     shape.json ?? null,
     shape.literals ?? null,
+    shape.nullable === undefined ? null : codecKey(shape.nullable.item),
   ]);
   const name = `${base}_${digest(signature)}`;
   const existing = registry.get(name);

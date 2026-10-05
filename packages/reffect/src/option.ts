@@ -6,10 +6,11 @@ import {
   UnitType,
   fail,
   structLayout,
+  nullOrItem,
   unionCases,
   undefinedOrItem,
 } from "./kernel.ts";
-import { TaggedUnionType, UndefinedOr, matchTags } from "./records.ts";
+import { NullOr, TaggedUnionType, UndefinedOr, matchTags } from "./records.ts";
 
 /** The readonly tagged-data projection of Effect Option; no instance brand or methods. */
 export type OptionValue<A> =
@@ -186,6 +187,26 @@ const fromUndefinedOr = <A>(self: Expr<A | undefined>): Expr<OptionValue<A>> => 
     throw fail("TYPE_MISMATCH", "authoring", "Option.fromUndefinedOr", "Requires UndefinedOr");
   return UndefinedOr.match(self, { onUndefined: () => none(item as IRType<A>), onDefined: some });
 };
+/** Effect `Option.fromNullOr`, the way to read an `R.NullOr` value (OPT-007). */
+const fromNullOr = <A>(self: Expr<A | null>): Expr<OptionValue<A>> => {
+  const item = nullOrItem(self.type);
+  if (!item) throw fail("TYPE_MISMATCH", "authoring", "Option.fromNullOr", "Requires NullOr");
+  const binder = Symbol("reffect/nullOr/present");
+  return Expr.matchUndefined(
+    self,
+    binder,
+    some(Expr.parameter(item as IRType<A>, binder, 0)),
+    none(item as IRType<A>),
+  );
+};
+/** Effect `Option.getOrNull`; payload witnesses must exclude null. */
+const getOrNull = <A>(self: Expr<OptionValue<A>>): Expr<A | null> => {
+  const output = NullOr(itemType(self, "getOrNull"));
+  return match(self, {
+    onNone: () => Expr.undefined(output),
+    onSome: (value) => Expr.defined(output, value),
+  });
+};
 /** Effect `Option.getOrUndefined`; payload witnesses must exclude undefined. */
 const getOrUndefined = <A>(self: Expr<OptionValue<A>>): Expr<A | undefined> => {
   const output = UndefinedOr(itemType(self, "getOrUndefined"));
@@ -239,6 +260,8 @@ export const OptionIR = Object.freeze(
     flatten,
     fromUndefinedOr,
     getOrUndefined,
+    fromNullOr,
+    getOrNull,
     zipRight,
     zipLeft,
     tap,

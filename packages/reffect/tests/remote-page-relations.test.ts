@@ -21,7 +21,11 @@ import { RemoteResume, planPage, record, replay } from "../src/remote-resume.ts"
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { BUILD_ID, Page } from "./fixtures/ssr-todos.ts";
 
-const UserBase = Entity.define("User", Schema.Struct({ id: Schema.String, name: Schema.String }));
+// A nullable column and an optional relation read as `Schema.NullOr` (OPT-006..008).
+const UserBase = Entity.define(
+  "User",
+  Schema.Struct({ id: Schema.String, name: Schema.String, email: Schema.NullOr(Schema.String) }),
+);
 const ProjectBase = Entity.define(
   "Project",
   Schema.Struct({ id: Schema.String, name: Schema.String, status: Schema.String }),
@@ -35,7 +39,10 @@ const { User, Project, Comment, Post } = Entity.relate(
   { User: UserBase, Project: ProjectBase, Comment: CommentBase, Post: PostBase },
   {
     Project: { owner: Relation.one(UserBase) },
-    Post: { comments: Relation.many(CommentBase) },
+    Post: {
+      comments: Relation.many(CommentBase),
+      author: Relation.one(UserBase, { optional: true }),
+    },
   },
 );
 const ByStatus = Query.define("ByStatus", { status: Schema.String }, ({ input }) =>
@@ -54,15 +61,22 @@ const Data = Remote.make({
 const initial: typeof Model.Type = { remote: Remote.initial };
 const rows = {
   User: [
-    { id: "u1", name: "Ada" },
-    { id: "u2", name: "Grace" },
+    { id: "u1", name: "Ada", email: "ada@example.test" },
+    { id: "u2", name: "Grace", email: null },
   ],
   Project: [
     { id: "p1", name: "Borealis", status: "active", owner: "User:u1" },
     { id: "p2", name: "Apollo", status: "active", owner: "User:u1" },
     { id: "p3", name: "Calypso", status: "archived", owner: "User:u2" },
   ],
-  Post: [{ id: "a", title: "Hello", comments: ["Comment:c1", "Comment:c2", "Comment:c3"] }],
+  Post: [
+    {
+      id: "a",
+      title: "Hello",
+      comments: ["Comment:c1", "Comment:c2", "Comment:c3"],
+      author: null,
+    },
+  ],
   Comment: [
     { id: "c1", body: "first" },
     { id: "c2", body: "second" },
@@ -70,17 +84,21 @@ const rows = {
   ],
 };
 
-const summary = Entity.select(Project, { name: true, owner: Entity.select(User, { name: true }) });
+const summary = Entity.select(Project, {
+  name: true,
+  owner: Entity.select(User, { name: true, email: true }),
+});
 const discussion = Entity.select(Post, {
   title: true,
   comments: Entity.page(Entity.select(Comment, { body: true }), { first: 2 }),
+  author: Entity.select(User, { name: true }),
 });
 // Each view exercises one planning case:
 // - list: a query whose items carry their owners;
 // - project: a get the list already answered, so no Read;
 // - archived: a query holding only the owner's id;
 // - other: a get whose project is held, so its plan follows the owner ref alone;
-// - post: a get with a page of a many-relation.
+// - post: a get with a page of a many-relation, and an optional relation that is null.
 const list = Data.query(ByStatus, { status: "active" }, { select: summary, first: 2 });
 const archived = Data.query(
   ByStatus,
@@ -117,6 +135,7 @@ const Screen = R.Struct({
   project: R.String,
   other: R.String,
   post: R.String,
+  author: R.String,
   comments: R.Array(R.String),
   more: R.Bool,
 });
@@ -139,6 +158,7 @@ const screenDocument = (screen: RExpr<Value<typeof Screen>>) =>
           [],
           [
             H.h2([], [R.Struct.get(screen, "post")]),
+            H.p([], [R.Struct.get(screen, "author")]),
             H.ul(
               [],
               R.Array.map(R.Struct.get(screen, "comments"), (body) => H.li([], [body])),
@@ -162,7 +182,16 @@ const page = R.fn([PageRequest], Page, (request) => {
           projects: R.Array.map(views.pipe(R.Struct.get("list"), R.Struct.get("items")), (item) =>
             ProjectItem.make({
               name: R.Struct.get(item, "name"),
-              owner: item.pipe(R.Struct.get("owner"), R.Struct.get("name")),
+              // The owner's email, a NullOr, read through Option as Effect reads it.
+              owner: item.pipe(
+                R.Struct.get("owner"),
+                R.Struct.get("email"),
+                R.Option.fromNullOr,
+                R.Option.match({
+                  onNone: () => R.String.literal("no email"),
+                  onSome: (email) => email,
+                }),
+              ),
             }),
           ),
           project: views.pipe(
@@ -184,6 +213,21 @@ const page = R.fn([PageRequest], Page, (request) => {
           post: post.pipe(
             R.Match.valueTags({
               Ready: (ready) => ready.pipe(R.Struct.get("value"), R.Struct.get("title")),
+              NotFound: () => R.String.literal("?"),
+            }),
+          ),
+          author: post.pipe(
+            R.Match.valueTags({
+              Ready: (ready) =>
+                ready.pipe(
+                  R.Struct.get("value"),
+                  R.Struct.get("author"),
+                  R.Option.fromNullOr,
+                  R.Option.match({
+                    onNone: () => R.String.literal("anonymous"),
+                    onSome: (author) => R.Struct.get(author, "name"),
+                  }),
+                ),
               NotFound: () => R.String.literal("?"),
             }),
           ),
@@ -255,12 +299,16 @@ const upstream = async (now: number) => {
                     projects: ready(
                       list.read(model),
                       (page) =>
-                        page.items.map((item) => ({ name: item.name, owner: item.owner.name })),
+                        page.items.map((item) => ({
+                          name: item.name,
+                          owner: item.owner.email ?? "no email",
+                        })),
                       [],
                     ),
                     project: ready(Data.get(summary, "p1").read(model), (v) => v.owner.name, "?"),
                     other: ready(Data.get(summary, "p3").read(model), (v) => v.owner.name, "?"),
                     post: ready(post, (v) => v.title, "?"),
+                    author: ready(post, (v) => v.author?.name ?? "anonymous", "?"),
                     comments: ready(post, (v) => v.comments.items.map((c) => c.body), []),
                     more: ready(post, (v) => v.comments.hasNext, false),
                   },
@@ -338,12 +386,13 @@ test(
           expect(flags.remote.exchanges.map((exchange) => exchange.request)).toEqual([
             expect.objectContaining({ query: "ByStatus", input: { status: "active" } }),
             expect.objectContaining({ query: "ByStatus", input: { status: "archived" } }),
-            { version: 4, requests: [{ entity: "User", id: "u2", fields: ["name"] }] },
+            { version: 4, requests: [{ entity: "User", id: "u2", fields: ["name", "email"] }] },
             expect.objectContaining({ requests: [expect.objectContaining({ entity: "Post" })] }),
           ]);
           expect(native.body).toContain("<h1>Ada</h1>");
           expect(native.body).toContain("<h2>Grace</h2>");
-          expect(native.body).toContain("<li>Apollo by Ada</li>");
+          expect(native.body).toContain("<li>Apollo by ada@example.test</li>");
+          expect(native.body).toContain("<p>anonymous</p>");
           expect(native.body).toContain("<li>second</li>");
           expect(native.body).not.toContain("third");
 

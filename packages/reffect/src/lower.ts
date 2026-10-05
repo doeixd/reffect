@@ -19,7 +19,8 @@ import {
   arrayItem,
   structLayout,
   unionCases,
-  undefinedOrItem,
+  absentOf,
+  optionalItem,
   literalsOf,
 } from "./kernel.ts";
 import { refContent, refType } from "./ref-model.ts";
@@ -890,8 +891,8 @@ function lowerFunctionsInternal(
                     _tag: "Variant",
                     text: `${e.type.native.type}::${rustLiteralVariants(literals)[literals.indexOf(n.value as string)]}`,
                   });
-                if (!undefinedOrItem(e.type)) return literal;
-                return n.value === undefined
+                if (!optionalItem(e.type)) return literal;
+                return n.value === absentOf(e.type)
                   ? Object.freeze({ _tag: "Undefined" })
                   : Object.freeze({ _tag: "Defined", value: literal });
               },
@@ -950,7 +951,7 @@ function lowerFunctionsInternal(
                   : place;
               },
               MatchUndefined: (n): RustExpr => {
-                const item = undefinedOrItem(n.value.type)!;
+                const item = optionalItem(n.value.type)!;
                 const nested = caseScope(scope, n.binder, item);
                 return Object.freeze({
                   _tag: "MatchUndefined",
@@ -4006,6 +4007,8 @@ const writeCompositeTypes = (
         Literals: () => undefined,
       }),
     );
+    // `Option<T>` is structural: an UndefinedOr and a NullOr of one item share it (OPT-006).
+    if (optionalItem(type)) return;
     const previous = names.get(type.native.type);
     if (previous && !IRType.same(previous, type))
       throw fail(

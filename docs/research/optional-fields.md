@@ -45,3 +45,34 @@ All decisions are implemented as recorded. Two details surfaced during implement
 - A `Never` field reached struct codecs for the first time (`optionalKey(Never)`); the generated decoder now has `never_in` (`Expected never`).
 
 Evidence: [optional-fields.test.ts](../../packages/reffect/tests/optional-fields.test.ts) 3/3 and [optional-rpc.test.ts](../../packages/reffect/tests/optional-rpc.test.ts) 2/2. About 170 raw requests cover every optional field kind with absent, `null`, valid and wrong-kind values, plus nested failures. Native responses are strictly equal to the official server's, and a mutation that decodes `null` as absent fails the test. Lone-surrogate escapes stay excluded as the known whole-body divergence (STR-007).
+
+## `NullOr` values (2026-10-05)
+
+**Need.** Upstream selection schemas use `Schema.NullOr` for nullable columns (`email: Schema.NullOr(Schema.String)`) and optional relations (`nullable(...)`). A native page view selecting either is refused, because R has no `NullOr` witness and the contract codec refuses non-tagged unions. See [relations in page views](ssr-data.md#relations-in-page-views-2026-10-05).
+
+**Facts** (effect 4 installed here, probed 2026-10-05 with `Schema.toCodecJson`):
+- Effect v4 has `Schema.NullOr`, `Option.fromNullOr`, `Option.getOrNull` and `Predicate.isNull`, but no `NullOr` data module like `UndefinedOr`.
+- A decode whose JSON kind is wrong reads `Expected <item> | null`, for example `Expected string | null` or `Expected object | null`. A matching kind that fails inside reports the item's own error at the inner path. `null` decodes to `null` and encodes as `null`.
+- On the wire this is exactly what an `optional(T)` field's present-but-`undefined` value already is (OPT-003), and natively both are `Option<T>`.
+
+**Decisions.**
+- **OPT-006 — `R.NullOr(T)` witness.** It represents `T | null` (`Schema.NullOr`), natively `Option<T>`, with its own identity (`reffect/null-or@1`). It shares the `UndefinedOr` layout and its kernel nodes (`Defined`, `Undefined`, `MatchUndefined`), with an `absent` of `null`. The reference evaluates the absent value as the witness says. This follows the guidance to expose a shared node rather than duplicate behaviour under two names. It is refused for `T` that already admits `null` (another `NullOr`, `Unknown`).
+- **OPT-007 — Effect's surface only.** `R.Option.fromNullOr` and `R.Option.getOrNull` convert, so a value is matched with `R.Option.match`. `R.UndefinedOr.match`/`map`, `Option.fromUndefinedOr` and other `undefined`-only operations refuse a `NullOr` witness. `undefinedOrItem` keeps meaning `undefined` only, and a separate `optionalItem` serves the shared nodes.
+- **OPT-008 — contract codec.** `Schema.NullOr(X)` (`Union[X, Null]`) derives `R.NullOr(witness(X))`. Its generated Rust decoder maps `null` to `None`. A wrong JSON kind fails with the mismatch text, which is verified against Effect's own decoder by the optional-field probe (`verifyOptional` on a `NullOr` property). Otherwise it decodes the item into `Some`. Encoding writes `null` for `None`.
+
+**Alternatives.** *A new `NullOr` layout and kernel nodes* was rejected: it duplicates every match, lowering and check of `UndefinedOr` for a difference that exists only in the JS reference. *Mapping `NullOr` onto `UndefinedOr`* was rejected: the reference value would be `undefined` where Effect's is `null`.
+
+**Acceptance.**
+- Reference and native agree on `fromNullOr`/`getOrNull` round trips.
+- The contract codec decodes and encodes `NullOr` fields with Effect's exact texts across JSON kinds, natively against Effect.
+- A native page selecting a nullable column and an optional relation renders byte-equal to upstream, including a `null` owner.
+
+**Implemented (2026-10-05).**
+- **Kernel.** `absent` is on the `UndefinedOr` layout, with the helpers `optionalItem`, `absentOf` and `nullOrItem`. The shared nodes evaluate the witness's absent value.
+- **Authoring.** `R.NullOr`/`NullOrType` are in `records.ts`, and `R.Option.fromNullOr`/`getOrNull` in `option.ts`.
+- **Contract codec.** The `nullable` composite verifies its texts with `verifyOptional`, and its Rust decoder and encoder are in `native-rpc.ts`.
+- **Lowering.** The native-name collision check now skips the structural `Option<T>`, which an `UndefinedOr` and a `NullOr` of one item share.
+- **Validation:**
+  - `tests/optional-rpc.test.ts` passes 2/2. The new `Nulls` procedure, with nullable string, struct, number and array fields, matches the official server on every JSON kind of each field, and round-trips `null` through a stock client.
+  - `tests/optional-fields.test.ts` passes 4/4, covering the reference round trip and the nesting and `undefined`-only refusals.
+  - `tests/remote-page-relations.test.ts` passes 1/1 with a nullable `email` and a `null` optional `author`.

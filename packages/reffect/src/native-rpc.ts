@@ -57,6 +57,8 @@ import {
   arrayItem,
   recordValue,
   structLayout,
+  nullOrItem,
+  optionalItem,
   undefinedOrItem,
   unionCases,
 } from "./kernel.ts";
@@ -328,6 +330,8 @@ const contractSchemaOf = (type: IRType<unknown>, path: string): Schema.Top => {
   if (value) return Schema.Record(Schema.String, contractSchemaOf(value, `${path}{}`));
   const literals = literalsOf(type);
   if (literals) return Schema.Literals(literals);
+  const present = nullOrItem(type);
+  if (present) return Schema.NullOr(contractSchemaOf(present, path));
   const fieldsOf = (layout: StructLayout): Schema.Struct.Fields =>
     Object.fromEntries(
       layout.fields.map((field) => {
@@ -1518,7 +1522,7 @@ const compositeCodecs = (
     const value = recordValue(type);
     if (value) return `Vec<(String, ${rustType(value)})>`;
     if (IRType.same(type, UnknownType)) return "Value";
-    const defined = undefinedOrItem(type);
+    const defined = optionalItem(type);
     if (defined) return `Option<${rustType(defined)}>`;
     if (type.layout) return `reffect_generated::${type.native.type}`;
     if (IRType.same(type, NumberType)) return "f64";
@@ -1535,6 +1539,13 @@ const compositeCodecs = (
     if (item) return `[${rustType(item)}]`;
     const value = recordValue(type);
     return value ? `[(String, ${rustType(value)})]` : rustType(type);
+  };
+  const jsonKindTest: Record<JsonKind, string> = {
+    boolean: "value.is_boolean()",
+    number: "value.is_number()",
+    string: "value.is_string()",
+    array: "value.is_array()",
+    object: "value.is_object()",
   };
   const decodeField = (codec: Codec, value: string, path: string): string =>
     isScalar(codec)
@@ -1559,13 +1570,7 @@ const compositeCodecs = (
     const caseType =
       tag === undefined ? type : unionCases(type)!.find((c) => structLayout(c)?.tag === tag)!;
     const names = rustFieldNames(layout);
-    const kindTest: Record<JsonKind, string> = {
-      boolean: "value.is_boolean()",
-      number: "value.is_number()",
-      string: "value.is_string()",
-      array: "value.is_array()",
-      object: "value.is_object()",
-    };
+    const kindTest = jsonKindTest;
     const decode = fields
       .map((field, i) => {
         const key = Rs.stringLiteral(field.name).text;
@@ -1648,6 +1653,16 @@ const compositeCodecs = (
               `        ${type}::${variants[i]} => ${Rs.stringLiteral(literal).text},\n`,
           )
           .join("")}    }.to_string())\n}\n`,
+      };
+    }
+    if (shape.nullable !== undefined) {
+      // OPT-008: null is None; another JSON kind the item cannot take fails with Effect's text.
+      const { item, kinds, mismatch } = shape.nullable;
+      const accepted = kinds.map((kind) => jsonKindTest[kind]).join(" || ") || "false";
+      const type = rustType(shape.type);
+      return {
+        decode: `fn decode_${name}(value: &Value, path: Option<&Path>) -> Result<${type}, String> {\n    match value {\n        Value::Null => Ok(None),\n        value if !(${accepted}) => Err(at(${Rs.stringLiteral(mismatch).text}, path)),\n        value => Ok(Some(${decodeField(item, "value", "path")}?)),\n    }\n}\n`,
+        encode: `fn encode_${name}(value: &${type}) -> Value {\n    match value { None => Value::Null, Some(item) => ${encodeField(item, "(*item)")} }\n}\n`,
       };
     }
     if (shape.json)

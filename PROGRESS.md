@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-05 — `R.NullOr` (OPT-006..008)
+
+- [Decision record](docs/research/optional-fields.md#nullor-values-2026-10-05).
+  - `R.NullOr(T)` is `Schema.NullOr`, natively `Option<T>`. It shares `UndefinedOr`'s layout and kernel nodes, with `null` as the absent value.
+  - It is read through `R.Option.fromNullOr` and `getOrNull`, as Effect does.
+  - The contract codec derives it from `Schema.NullOr`, with decode texts verified against Effect.
+  - Page views can now select nullable columns and optional relations, which closes that M9 item.
+- Validation:
+  - `vp check` passes.
+  - New or extended suites pass, run one at a time: `optional-rpc` 2/2 (native against the official server on every JSON kind), `optional-fields` 4/4, `remote-page-relations` 1/1 (a nullable email and a `null` optional author, byte-equal to upstream).
+  - Regression suites pass: `option` 3/3, `records` 4/4, `records-js` 1/1, `records-rpc` 2/2, `records-js-rpc` 2/2, `schema-json-rpc` 2/2, `url` 2/2, `html` 9/9, `html-native` 2/2, `remote-page-input` 2/2.
+
 ## 2026-10-05 — Typed `R.Match.valueTags` handlers
 
 - `R.Match.valueTags` now types each handler by its own case, as Effect's `Match.valueTags` does: data-first, and data-last in a `pipe`, where the cases come from the piped value. A missing tag or one outside the union is a type error, and both are still refused at run time for untyped callers. This removes the annotation the relation page test needed (open work closed).

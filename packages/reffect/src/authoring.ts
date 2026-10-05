@@ -29,6 +29,7 @@ import {
   Struct,
   TaggedUnion,
   UndefinedOr,
+  NullOr,
   forEach,
   optional,
   optionalKey,
@@ -148,6 +149,8 @@ export const R = Object.freeze({
   Struct,
   TaggedUnion,
   UndefinedOr,
+  /** `Schema.NullOr(T)`, read with `R.Option.fromNullOr`. */
+  NullOr,
   optional,
   optionalKey,
   Array: ArrayModule,
