@@ -122,9 +122,7 @@ export type PlannedRead = typeof PlannedRead.Type;
  * Surface waiting on another's data) is not planned, so declared reads must not depend on data;
  * the browser's replay then fails with its typed error rather than fetching.
  */
-export const planReads = <A, E>(
-  effect: Effect.Effect<A, E, RemoteClient>,
-): ReadonlyArray<PlannedRead> => {
+const planReads = <A, E>(effect: Effect.Effect<A, E, RemoteClient>): ReadonlyArray<PlannedRead> => {
   const planned: Array<PlannedRead> = [];
   Effect.runSync(
     Effect.exit(
@@ -157,6 +155,14 @@ export const planReads = <A, E>(
   return planned;
 };
 
+/**
+ * What a NativeRemote page reads (#13): its planned requests, and the views the render reads
+ * from them by index. `planPage` builds one; a hand-written plan is the same plain data.
+ */
+export interface PagePlan {
+  readonly reads: ReadonlyArray<PlannedRead>;
+  readonly views: { readonly [name: string]: PlannedView };
+}
 /** A page view (M9-3 step 2b): the planned Query whose answer becomes the view's `Page`. */
 export interface PlannedView {
   readonly _tag: "Query";
@@ -169,10 +175,7 @@ export interface PlannedView {
  */
 export const planPage = (views: {
   readonly [name: string]: Effect.Effect<unknown, unknown, RemoteClient>;
-}): {
-  readonly reads: ReadonlyArray<PlannedRead>;
-  readonly views: { readonly [name: string]: PlannedView };
-} => {
+}): PagePlan => {
   const reads: Array<PlannedRead> = [];
   const planned: { [name: string]: PlannedView } = {};
   for (const [name, prefetch] of Object.entries(views)) {

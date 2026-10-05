@@ -63,13 +63,15 @@ const view = (model: Expr<Value<typeof ViewModel>>) => {
   });
 };
 
-/** The requests the page reads, and its one view: the list's first page. */
-export const { reads, views } = planPage({ todos: Data.prefetch(initial, list) });
+/** What the page reads: its one view, the list's first page. */
+export const plan = planPage({ todos: Data.prefetch(initial, list) });
 
 const Page = NativeRpc.witness(PageSchema);
-/** The page: the URL, the exchanges it carries, and the list it shows. */
-export const page = R.fn([R.String, R.Unknown, Views], Page, (_url, remote, read) => {
-  const todos = read.pipe(R.Struct.get("todos"), R.Struct.get("items"));
+/** The page reads the exchanges it carries and the list it shows (#13). */
+const PageRequest = R.Struct({ remote: R.Unknown, views: Views });
+export const page = R.fn([PageRequest], Page, (request) => {
+  const remote = R.Struct.get(request, "remote");
+  const todos = request.pipe(R.Struct.get("views"), R.Struct.get("todos"), R.Struct.get("items"));
   return H.renderToString(
     { init: () => ViewModel.make({ todos }), view },
     { buildId: BUILD_ID, flags: Flags.make({ remote }) },

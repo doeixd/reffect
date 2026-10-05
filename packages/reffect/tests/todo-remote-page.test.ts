@@ -20,7 +20,7 @@ import { record } from "../src/remote-resume.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { Data as DomainData, rows } from "../../../examples/todo-remote/domain.ts";
 import { mutations } from "../../../examples/todo-remote/sources.ts";
-import { page, reads, views } from "../../../examples/todo-remote/page.ts";
+import { page, plan } from "../../../examples/todo-remote/page.ts";
 import {
   BUILD_ID,
   Data,
@@ -139,7 +139,7 @@ test(
             live: true,
             liveSnapshot: true,
             serialization: "ndjson",
-            pages: { template, render: page, origin, reads, views },
+            pages: { template, render: page, origin, remote: plan },
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.fetch(directory);

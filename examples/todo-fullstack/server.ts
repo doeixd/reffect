@@ -8,7 +8,7 @@
 import { RemoteRpc } from "foldkit-remote";
 import { NativeRemote } from "../../packages/reffect/src/index.ts";
 import { Data } from "../todo-remote/domain.ts";
-import { page, reads, views } from "../todo-remote/page.ts";
+import { page, plan } from "../todo-remote/page.ts";
 import { mutations } from "../todo-remote/sources.ts";
 import { bindings } from "./db.ts";
 
@@ -23,5 +23,5 @@ export const compileShowcase = (template: string, origin?: string) =>
     live: true,
     liveSnapshot: true,
     serialization: "ndjson",
-    pages: { template, render: page, reads, views, ...(origin === undefined ? {} : { origin }) },
+    pages: { template, render: page, remote: plan, ...(origin === undefined ? {} : { origin }) },
   });

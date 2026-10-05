@@ -7,9 +7,78 @@
  */
 import { Effect, Schema } from "effect";
 import { injectIntoTemplate, renderToString } from "foldkit/experimental/server";
-import { fail } from "./kernel.ts";
+import { flow } from "./flow.ts";
+import { Expr, Fn, IRType, StringType, UnknownType, fail, structLayout } from "./kernel.ts";
 import { runtimeModule } from "./runtime-module.ts";
 import { Rs } from "./rust-emit.ts";
+
+/**
+ * A page render (#13): nothing, or one `PageRequest` Struct holding any of `url` (String),
+ * `remote` (Unknown: the exchanges a NativeRemote page carries in its Flags) and `views` (a
+ * Struct of each planned view's `R.Remote.Page`). A page declares only what it reads.
+ */
+export type PageRender = Fn<readonly [], unknown> | Fn<readonly [IRType<unknown>], unknown>;
+/** The fields a page's request declares, checked against what a host can supply. */
+export interface PageRequestFields {
+  readonly url: boolean;
+  readonly remote: boolean;
+  readonly views: IRType<unknown> | undefined;
+}
+const refusePage = (message: string) => fail("INVALID_PAGE", "authoring", "pages.render", message);
+/** What `render`'s request reads, refusing a request outside the PageRequest shape. */
+export const pageRequest = (render: Fn): PageRequestFields => {
+  if (render.input.length === 0) return { url: false, remote: false, views: undefined };
+  const layout = render.input.length === 1 ? structLayout(render.input[0]!) : undefined;
+  if (layout === undefined || layout.tag !== undefined)
+    throw refusePage("A page takes nothing or one PageRequest Struct of url, remote and views");
+  const fields = new Map(layout.fields.map((field) => [field.name, field] as const));
+  for (const field of layout.fields) {
+    if (field.optional)
+      throw refusePage(`The page request's ${field.name} is required, not optional`);
+    if (!["url", "remote", "views"].includes(field.name))
+      throw refusePage(`A page request holds url, remote and views, not ${field.name}`);
+  }
+  const url = fields.get("url");
+  if (url && !IRType.same(url.type, StringType))
+    throw refusePage("The page request's url is a String");
+  const remote = fields.get("remote");
+  if (remote && !IRType.same(remote.type, UnknownType))
+    throw refusePage("The page request's remote is an Unknown");
+  return { url: url !== undefined, remote: remote !== undefined, views: fields.get("views")?.type };
+};
+/**
+ * The positional function a page host calls: `(url)`, or with data `(url, remote)` and, when
+ * the request reads views, `(url, remote, views)`. It builds the request and applies `render`
+ * through `R.flow`, so the generated host keeps one page call whatever the request holds.
+ */
+export const positionalPage = (render: Fn, data: boolean): Fn => {
+  const request = pageRequest(render);
+  if (!data && (request.remote || request.views !== undefined))
+    throw refusePage("Only a NativeRemote page with a remote plan reads remote and views");
+  const inputs: IRType<unknown>[] = [
+    StringType,
+    ...(data ? [UnknownType] : []),
+    ...(data && request.views !== undefined ? [request.views] : []),
+  ];
+  const witness = render.input[0];
+  if (witness === undefined) return Fn.make(inputs, render.output, () => render.body);
+  const layout = structLayout(witness)!;
+  const adapter = Fn.make(inputs, witness, (...args) => {
+    const by: { readonly [name: string]: Expr<unknown> | undefined } = {
+      url: args[0],
+      remote: args[1],
+      views: args[2],
+    };
+    return Expr.make(
+      witness,
+      undefined,
+      layout.fields.map((field) => by[field.name]),
+    );
+  });
+  const page = flow(adapter, render);
+  if (!(page instanceof Fn)) throw refusePage("A page is a pure R function");
+  return page;
+};
 
 /** A page's outcome as the server encodes it: `RenderedApplication`'s fields or a render error. */
 export const PageSchema = Schema.Union([

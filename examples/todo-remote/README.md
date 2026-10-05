@@ -52,7 +52,7 @@ In headless Chrome, driven through the DevTools protocol on 2026-10-03:
   - Adding writes a row, returns its patch, and appends it to the `Todos` connection.
   - Toggling writes `done` and signals `R.LiveHub.changed` for it.
   - Deleting removes the row and its edge, and signals `R.LiveHub.deleted`. An empty title fails with `RemoteServerError`.
-- **[page.ts](page.ts)** is the first screen: the reads `planPage` derives from the app's list projection, and the app's Ready view mirrored in R. [todo-remote-page.test.ts](../../packages/reffect/tests/todo-remote-page.test.ts) checks that the native page equals upstream `renderToString` with the app's own `init` and `view`, and that the stock runtime hydrates it without a read or query.
+- **[page.ts](page.ts)** is the first screen: the plan `planPage` derives from the app's list projection, and the app's Ready view mirrored in R, reading the exchanges and the view from one PageRequest. [todo-remote-page.test.ts](../../packages/reffect/tests/todo-remote-page.test.ts) checks that the native page equals upstream `renderToString` with the app's own `init` and `view`, and that the stock runtime hydrates it without a read or query.
 - **[main.ts](main.ts)** compiles the native server, with that page, and starts it on a loopback port. It then runs one screen session through `Remote.clientLayer` over a stock `RpcClient`:
   1. prefetch the list;
   2. `Remote.mutateInto` add, toggle and delete;

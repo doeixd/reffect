@@ -1,4 +1,6 @@
 import { Effect, Match, Schema, SchemaAST } from "effect";
+import { pageRequest } from "./ssr-page.ts";
+import type { PagePlan } from "./remote-resume.ts";
 import { Rpc, type RpcGroup } from "effect/rpc";
 import type { AnyQuery } from "foldkit-entity";
 import { EffectFn, EffectIR, type Computation } from "./effect-ir.ts";
@@ -108,16 +110,13 @@ export interface NativeRemoteOptions {
   /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
   readonly serialization?: "json" | "ndjson";
   /**
-   * Server-rendered pages (8A) whose first screen holds Remote data (M9-3 step 2). `reads` are the
-   * requests `planReads`/`planPage` derive. Each request runs against this server's engine under
-   * the page request's principal. The render takes the URL and `{ now, exchanges }`
-   * (`RemoteResume`'s encoding), which it carries in its Flags for the browser's `replay`, and,
-   * with `views`, a Struct of each view's `R.Remote.Page` built from its query's answer.
+   * Server-rendered pages (8A) whose first screen holds Remote data (M9-3 step 2). `remote` is the
+   * page's plan, usually `planPage(...)` (#13): each planned request runs against this server's
+   * engine under the page request's principal. The render's PageRequest may read `url`, `remote`
+   * (`{ now, exchanges }`, `RemoteResume`'s encoding, which it carries in its Flags for the
+   * browser's `replay`) and `views` (a Struct of each view's `R.Remote.Page` from its answer).
    */
-  readonly pages?: NonNullable<CompileOptions["pages"]> & {
-    readonly reads?: ReadonlyArray<{ readonly _tag: "Query" | "Read"; readonly request: unknown }>;
-    readonly views?: { readonly [name: string]: { readonly _tag: "Query"; readonly read: number } };
-  };
+  readonly pages?: NonNullable<CompileOptions["pages"]> & { readonly remote?: PagePlan };
 }
 
 const unsupported = (path: string, message: string) =>
@@ -505,7 +504,7 @@ pub use std::cmp::Ordering;
 pub enum Value { Null, Bool(bool), Number(f64), Text(Vec<u16>) }
 }`;
 };
-/** NativeRpc's page options: the reads are NativeRemote's to run. */
+/** NativeRpc's page options: the plan is NativeRemote's to run. */
 const withoutReads = (
   pages: NonNullable<NativeRemoteOptions["pages"]>,
 ): NonNullable<CompileOptions["pages"]> => ({
@@ -560,15 +559,14 @@ const hasRelations = (selection: unknown): boolean =>
  * request's principal, so one without is refused (401) rather than read more openly than RPC.
  */
 const pageReads = (
-  reads: ReadonlyArray<{ readonly _tag: "Query" | "Read"; readonly request: unknown }>,
-  views: { readonly [name: string]: { readonly _tag: "Query"; readonly read: number } },
+  { reads, views }: PagePlan,
   render: NonNullable<CompileOptions["pages"]>["render"],
   domain: RemoteDomain,
   source: string,
   authenticates: boolean,
 ): string => {
   const planned = reads.map((read, i) => {
-    const path = `pages.reads[${i}]`;
+    const path = `pages.remote.reads[${i}]`;
     const request = read.request;
     if (typeof request !== "object" || request === null)
       throw unsupported(path, "A planned read carries its wire request");
@@ -594,9 +592,9 @@ const pageReads = (
     }
     return `remote_engine::PageRead { tag: ${Rs.stringLiteral(read._tag).text}, request: serde_json::from_str(${Rs.stringLiteral(JSON.stringify(request)).text}).expect("planned while compiling") }`;
   });
-  // The render's third input is a Struct with exactly one field per view.
+  // The request's views are a Struct with exactly one field per planned view.
   const names = Object.keys(views);
-  const viewsType = render.input[2];
+  const viewsType = pageRequest(render).views;
   if (names.length > 0 || viewsType !== undefined) {
     const layout = viewsType?.layout;
     const fields = layout?._tag === "Struct" ? layout.fields.map((field) => field.name) : undefined;
@@ -605,7 +603,7 @@ const pageReads = (
       fields.length !== names.length ||
       !names.every((name) => fields.includes(name))
     )
-      throw unsupported("pages.views", "The render's third input is a Struct of the views");
+      throw unsupported("pages.views", "The page request's views are a Struct of the views");
     for (const [name, view] of Object.entries(views)) {
       const read = reads[view.read];
       if (read?._tag !== "Query")
@@ -941,18 +939,17 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
       };
     const pageData = yield* Effect.try({
       try: () =>
-        options.pages?.reads === undefined
+        options.pages?.remote === undefined
           ? undefined
           : pageReads(
-              options.pages.reads,
-              options.pages.views ?? {},
+              options.pages.remote,
               options.pages.render,
               options.domain,
               prepared.source,
               options.auth !== undefined,
             ),
       catch: (cause) =>
-        cause instanceof CompileError ? cause : unsupported("pages.reads", String(cause)),
+        cause instanceof CompileError ? cause : unsupported("pages.remote", String(cause)),
     });
     return yield* compileServer(
       group,

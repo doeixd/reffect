@@ -32,7 +32,7 @@ import {
 import type { NativeRemoteMutation } from "../../packages/reffect/src/index.ts";
 import { AddTodo, Data, DeleteTodo, ToggleTodo, Todo, Todos, initial, rows } from "./domain.ts";
 import { addTodo, deleteTodo, mutations, toggleTodo } from "./sources.ts";
-import { page, reads, views } from "./page.ts";
+import { page, plan } from "./page.ts";
 
 const list = Data.query(Todos, {}, { select: Entity.select(Todo, { title: true, done: true }) });
 
@@ -185,7 +185,7 @@ const startServer = (port: string, snapshot = false) =>
       live: true,
       liveSnapshot: snapshot,
       serialization: "ndjson",
-      pages: { template, render: page, reads, views },
+      pages: { template, render: page, remote: plan },
     });
     const directory = yield* CargoApi.write(artifact, `${parent}/server`);
     yield* CargoApi.fetch(directory);

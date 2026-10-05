@@ -200,7 +200,7 @@ Results:
 
 **2a delivered 2026-10-03.**
 
-- **Planning.** `planReads(Data.satisfy(initial, active))` in `reffect/remote-resume` runs upstream's satisfy against a client that records each request and answers it empty, so it captures the first pass.
+- **Planning.** `planReads(Data.satisfy(initial, active))` in `reffect/remote-resume` runs upstream's satisfy against a client that records each request and answers it empty, so it captures the first pass. (Superseded for authors by the [#13 page API](#page-api-simplification-13-2026-10-05): `planReads` is now internal to `planPage`.)
 - **Declaration and checks.** `NativeRemote` takes `pages: { template, render, origin?, reads }`. It refuses unknown queries or entities and selections with relations.
 - **Run time.** The page's data step:
   - runs each request through `remote_engine::query`/`read` with `remote_authorize(principal)`;
@@ -271,3 +271,31 @@ Results:
   - R calls between functions are needed once views split into components with their own projections;
   - NativeRunner takes only scalars, so structured tests go through an RPC server;
   - an editor TypeScript rejects `R.Result` value-type inference.
+
+## Page API simplification (#13, 2026-10-05)
+
+**Seams.**
+
+- `NativeRemote` took `pages.reads` and `pages.views`, two parallel options whose views pointed into the reads by index.
+- `pages.render` chose its shape by argument count: `[]`, `[url]`, `[url, remote]` or `[url, remote, views]`.
+- `planReads` was exported beside `planPage` although only `planPage` had callers.
+
+**Decision.**
+
+- **One plan.** `pages.remote` takes one `PagePlan` (`{ reads, views }`). `planPage(views)` builds it from each view's `Data.prefetch`. A hand-written plan (a raw `Read`, no views) is the same plain data, so the auth test needs no second option.
+- **One input.** `pages.render` takes nothing or one `PageRequest` Struct. Its fields are any of:
+  - `url: String`;
+  - `remote: Unknown`, the exchanges the Flags carry, and only with a plan;
+  - `views`, a Struct of each planned view's `R.Remote.Page`, and only with views.
+
+  The page declares only what it reads, so its witness grows with its needs. A field outside these, a field the host cannot supply, or plan views that the request does not read are refused when compiling.
+
+- **No new runtime path.** Inside, the request is assembled by a positional adapter, `(url, remote?, views?) => PageRequest.make(...)`, composed with the render through `R.flow`. The generated host keeps its one page call, and behaviour is unchanged.
+- **`planReads`** is module-private. It is `planPage`'s per-view step.
+
+**Alternatives.**
+
+- _Keep the positional forms beside the request form._ Rejected: two ways to write one page is the seam #13 is about.
+- _Build the request Struct in the generated Rust._ Rejected: the flow composition reuses the verified pipeline and needs no new emission.
+
+**Acceptance.** The page tests (`html-page`, `html-flags`, `remote-page`, `remote-auth`, `todo-remote-page`, `todo-fullstack`) are expressed with the new API and pass unchanged in behaviour.

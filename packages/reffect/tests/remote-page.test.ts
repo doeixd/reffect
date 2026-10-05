@@ -14,6 +14,7 @@ import { RemoteRpc } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, CompileError, NativeRemote, R } from "../src/index.ts";
+import type { IRType } from "../src/index.ts";
 import { RemoteResume, planPage, record, replay } from "../src/remote-resume.ts";
 import { Data, Todo, Todos, initial, rows } from "../../../examples/todo-remote/domain.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
@@ -25,7 +26,7 @@ const list = Data.query(
   { select: Entity.select(Todo, { id: true, title: true, done: true }), first: 50 },
 );
 const active = { todos: Data.active("Todos", () => Option.some(list)) };
-const { reads, views } = planPage({ todos: Data.prefetch(initial, list) });
+const plan = planPage({ todos: Data.prefetch(initial, list) });
 const origin = "http://reffect.test";
 const template =
   '<!doctype html><html lang="en"><head><title>Placeholder</title></head>' +
@@ -36,8 +37,12 @@ const group = RemoteRpc.omit("FoldkitRemoteMutate", "FoldkitRemoteLive");
 const Flags = R.Struct({ remote: R.Unknown });
 const TodoItem = R.Struct({ id: R.String, title: R.String, done: R.Bool });
 const Views = R.Struct({ todos: R.Remote.Page(TodoItem) });
-const page = R.fn([R.String, R.Unknown, Views], Page, (url, remote, read) => {
-  const todos = read.pipe(R.Struct.get("todos"), R.Struct.get("items"));
+// The page reads its URL, the exchanges it carries, and its view (#13).
+const PageRequest = R.Struct({ url: R.String, remote: R.Unknown, views: Views });
+const page = R.fn([PageRequest], Page, (request) => {
+  const url = R.Struct.get(request, "url");
+  const remote = R.Struct.get(request, "remote");
+  const todos = request.pipe(R.Struct.get("views"), R.Struct.get("todos"), R.Struct.get("items"));
   return R.Html.renderToString(
     {
       init: () =>
@@ -121,7 +126,7 @@ const flagsOf = (body: string) => {
 };
 
 test("a page plans one query per view, and unknown queries or mismatched views are refused", async () => {
-  expect(reads.map((read) => read._tag)).toEqual(["Query"]);
+  expect(plan.reads.map((read) => read._tag)).toEqual(["Query"]);
   const refused = await Effect.runPromise(
     NativeRemote.compile(group, {
       domain: Data,
@@ -129,8 +134,10 @@ test("a page plans one query per view, and unknown queries or mismatched views a
       pages: {
         template,
         render: page,
-        reads: [{ _tag: "Query", request: { query: "Nope", input: {}, window: {} } }],
-        views,
+        remote: {
+          reads: [{ _tag: "Query", request: { query: "Nope", input: {}, window: {} } }],
+          views: plan.views,
+        },
       },
     }).pipe(Effect.flip),
   );
@@ -141,33 +148,72 @@ test("a page plans one query per view, and unknown queries or mismatched views a
     NativeRemote.compile(group, {
       domain: Data,
       rows,
-      pages: { template, render: page, reads, views: {} },
+      pages: { template, render: page, remote: { reads: plan.reads, views: {} } },
     }).pipe(Effect.flip),
   );
   expect(mismatched.message).toContain("Struct of the views");
+  // #13: a page takes one PageRequest of url, remote and views, which its host must supply.
+  const renderOf = (request: IRType<unknown>) =>
+    R.fn([request], Page, () =>
+      R.Html.renderToString(
+        todoDocument(
+          R.Struct({ heading: R.String, todos: R.Array(TodoItem) }).make({
+            heading: R.String.literal("t"),
+            todos: R.Array.empty(TodoItem),
+          }),
+        ),
+        { buildId: BUILD_ID },
+      ),
+    );
+  const refusals = await Promise.all(
+    [
+      { render: renderOf(R.String), remote: plan, says: "one PageRequest Struct" },
+      { render: renderOf(R.Struct({ cookie: R.String })), remote: plan, says: "not cookie" },
+      { render: renderOf(R.Struct({ url: R.Bool })), remote: plan, says: "url is a String" },
+      { render: renderOf(R.Struct({ remote: R.Unknown })), remote: undefined, says: "remote plan" },
+    ].map(({ render, remote, says }) =>
+      Effect.runPromise(
+        NativeRemote.compile(group, {
+          domain: Data,
+          rows,
+          pages: { template, render, ...(remote ? { remote } : {}) },
+        }).pipe(
+          Effect.flip,
+          Effect.map((error) => [says, error.message] as const),
+        ),
+      ),
+    ),
+  );
+  for (const [says, message] of refusals) expect(message, says).toContain(says);
   // A view's items hold exactly the selected fields.
   const Partial = R.Struct({ id: R.String, title: R.String });
   const partialPage = R.fn(
-    [R.String, R.Unknown, R.Struct({ todos: R.Remote.Page(Partial) })],
+    [
+      R.Struct({
+        url: R.String,
+        remote: R.Unknown,
+        views: R.Struct({ todos: R.Remote.Page(Partial) }),
+      }),
+    ],
     Page,
-    (url, remote) =>
+    (request) =>
       R.Html.renderToString(
         {
           init: () =>
             R.Struct({ heading: R.String, todos: R.Array(TodoItem) }).make({
-              heading: url,
+              heading: R.Struct.get(request, "url"),
               todos: R.Array.empty(TodoItem),
             }),
           view: todoDocument,
         },
-        { buildId: BUILD_ID, flags: Flags.make({ remote }) },
+        { buildId: BUILD_ID, flags: Flags.make({ remote: R.Struct.get(request, "remote") }) },
       ),
   );
   const partial = await Effect.runPromise(
     NativeRemote.compile(group, {
       domain: Data,
       rows,
-      pages: { template, render: partialPage, reads, views },
+      pages: { template, render: partialPage, remote: plan },
     }).pipe(Effect.flip),
   );
   expect(partial.message).toContain("exactly the query's selected fields"); // #5: a view without a window would read the whole table on every request.
@@ -181,7 +227,7 @@ test("a page plans one query per view, and unknown queries or mismatched views a
     NativeRemote.compile(group, {
       domain: Data,
       rows,
-      pages: { template, render: page, reads: whole.reads, views: whole.views },
+      pages: { template, render: page, remote: whole },
     }).pipe(Effect.flip),
   );
   expect(refusedWhole.message).toContain("window");
@@ -198,7 +244,7 @@ test(
           const artifact = yield* NativeRemote.compile(group, {
             domain: Data,
             rows,
-            pages: { template, render: page, origin, reads, views },
+            pages: { template, render: page, origin, remote: plan },
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.fetch(directory);

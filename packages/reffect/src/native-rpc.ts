@@ -5,8 +5,8 @@ import type { StreamFn } from "./stream-ir.ts";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
 import { PortedRuntimes, verifyUpstream } from "./ported-runtime.ts";
-import { PageSchema, pageRuntime, splitTemplate } from "./ssr-page.ts";
-import type { TemplatePart } from "./ssr-page.ts";
+import { PageSchema, pageRuntime, positionalPage, splitTemplate } from "./ssr-page.ts";
+import type { PageRender, TemplatePart } from "./ssr-page.ts";
 import type { PortedRuntime, UpstreamCheck } from "./ported-runtime.ts";
 import {
   StableStringify,
@@ -974,14 +974,11 @@ export type CompileOptions = {
   readonly pages?: {
     readonly template: string;
     /**
-     * No input, or the request URL: its target resolved against `origin` as WHATWG resolves it.
-     * A host that reads data for pages (NativeRemote) also passes that data as an Unknown.
+     * Nothing, or one PageRequest Struct (#13): its `url` is the request target resolved against
+     * `origin` as WHATWG resolves it. A NativeRemote page with a plan may also read `remote` and
+     * `views` (see `NativeRemoteOptions.pages`).
      */
-    readonly render:
-      | Fn<readonly [], unknown>
-      | Fn<readonly [IRType<string>], unknown>
-      | Fn<readonly [IRType<string>, IRType<unknown>], unknown>
-      | Fn<readonly [IRType<string>, IRType<unknown>, IRType<unknown>], unknown>;
+    readonly render: PageRender;
     readonly containerId?: string;
     /** The origin page URLs are resolved against; never the untrusted Host header. */
     readonly origin?: string;
@@ -1653,8 +1650,10 @@ export const compileServer = (
             }
           | undefined;
         if (options.pages) {
-          const { render, template, containerId, origin = "http://localhost" } = options.pages;
+          const { template, containerId, origin = "http://localhost" } = options.pages;
           const takesData = runtime?.pageData !== undefined;
+          // The host calls one positional page; the request is assembled inside it (#13).
+          const render = positionalPage(options.pages.render, takesData);
           if (
             !(render instanceof Fn) ||
             (takesData

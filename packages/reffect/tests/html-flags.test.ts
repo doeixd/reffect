@@ -74,8 +74,13 @@ const flagsOf = (url: Expr<string>) =>
     nan: R.Number.literal(numbers.nan),
     low: R.Number.literal(numbers.low),
   });
-const page = R.fn([R.String], Page, (url) =>
-  R.Html.renderToString({ init, view: todoDocument }, { buildId: BUILD_ID, flags: flagsOf(url) }),
+// The page reads only its URL from the request (#13).
+const PageRequest = R.Struct({ url: R.String });
+const page = R.fn([PageRequest], Page, (request) =>
+  R.Html.renderToString(
+    { init, view: todoDocument },
+    { buildId: BUILD_ID, flags: flagsOf(R.Struct.get(request, "url")) },
+  ),
 );
 const template =
   '<!doctype html><html lang="en"><head><title>Placeholder</title></head>' +

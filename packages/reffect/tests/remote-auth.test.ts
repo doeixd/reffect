@@ -8,7 +8,6 @@ import { Mutation, Query, Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer, RemoteServerError } from "foldkit-remote-server";
 import { expect, test } from "vite-plus/test";
 import { CargoApi, CompileError, NativeRemote, NativeRpc, R, Reference } from "../src/index.ts";
-import type { Expr } from "../src/index.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 import { BUILD_ID, Page, todoDocument } from "./fixtures/ssr-todos.ts";
 import { successValue } from "./raw-json.ts";
@@ -275,17 +274,22 @@ const pageRead = {
   requests: [{ entity: "Project", id: "p1", fields: ["name", "budget"] }],
 };
 const PageTodo = R.Struct({ id: R.String, title: R.String, done: R.Bool });
-const page = R.fn([R.String, R.Unknown], Page, (url: Expr<string>, remote: Expr<unknown>) =>
+// The page reads its URL and the exchanges it carries; it has no views (#13).
+const PageRequest = R.Struct({ url: R.String, remote: R.Unknown });
+const page = R.fn([PageRequest], Page, (request) =>
   R.Html.renderToString(
     {
       init: () =>
         R.Struct({ heading: R.String, todos: R.Array(PageTodo) }).make({
-          heading: url,
+          heading: R.Struct.get(request, "url"),
           todos: R.Array.empty(PageTodo),
         }),
       view: todoDocument,
     },
-    { buildId: BUILD_ID, flags: R.Struct({ remote: R.Unknown }).make({ remote }) },
+    {
+      buildId: BUILD_ID,
+      flags: R.Struct({ remote: R.Unknown }).make({ remote: R.Struct.get(request, "remote") }),
+    },
   ),
 );
 const pageTemplate =
@@ -316,7 +320,8 @@ test(
             pages: {
               template: pageTemplate,
               render: page,
-              reads: [{ _tag: "Read", request: pageRead }],
+              // A hand-written plan: one raw read and no views.
+              remote: { reads: [{ _tag: "Read", request: pageRead }], views: {} },
             },
           });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
