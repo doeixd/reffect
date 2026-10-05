@@ -13,14 +13,14 @@ Status: **research (2026-10-05)**, not implemented. 8B mechanically transforms t
 
 ## What the source uses that R lacks
 
-| Area | Source | R today |
-| --- | --- | --- |
-| Elements | `select`, `option`, `pre`, `textarea` (the example's parse-equivalence block) | missing from the 8A element set |
-| Attributes | `Value` on `select`/`textarea`, `Selected`, `InnerHTML`; Button's `Type`, `Tabindex`, `AriaDisabled`, `Autofocus`, `OnClick` | partial; `InnerHTML` (raw HTML) has serialization and safety semantics of its own |
-| Values | `model.count.toString()`, template literals, `+` string concatenation | available (`NumberText`, `R.String.concat`) |
-| Component | `Button.view`: defaults, conditional arrays, spreads, a callback | needs translation (or a registered R equivalent) |
-| Flags from the request | `Cookies.parseHeader`, `Number.parse`, `isSafeInteger`, `new Date().toISOString()` | no cookie parsing, number parsing or ISO time formatting in R |
-| Entry | `OPTIONS` preflight, response headers | the page host sets its own headers; no authored entry |
+| Area                   | Source                                                                                                                       | R today                                                                           |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Elements               | `select`, `option`, `pre`, `textarea` (the example's parse-equivalence block)                                                | missing from the 8A element set                                                   |
+| Attributes             | `Value` on `select`/`textarea`, `Selected`, `InnerHTML`; Button's `Type`, `Tabindex`, `AriaDisabled`, `Autofocus`, `OnClick` | partial; `InnerHTML` (raw HTML) has serialization and safety semantics of its own |
+| Values                 | `model.count.toString()`, template literals, `+` string concatenation                                                        | available (`NumberText`, `R.String.concat`)                                       |
+| Component              | `Button.view`: defaults, conditional arrays, spreads, a callback                                                             | needs translation (or a registered R equivalent)                                  |
+| Flags from the request | `Cookies.parseHeader`, `Number.parse`, `isSafeInteger`, `new Date().toISOString()`                                           | no cookie parsing, number parsing or ISO time formatting in R                     |
+| Entry                  | `OPTIONS` preflight, response headers                                                                                        | the page host sets its own headers; no authored entry                             |
 
 ## The transform: platform question
 

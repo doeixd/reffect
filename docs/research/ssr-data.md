@@ -431,7 +431,7 @@ Validation:
 - The page engine holds a `PageStore`, which merges the page's answers so far. It records values, settled fields, and tombstones for Read roots that were neither answered nor settled. On that store it ports `plan`, `assemble` and `assembleRelation`.
 - Query items and get values are assembled through their selection. A planned Read is narrowed by `plan` and skipped when nothing is missing.
 - **Witnesses.** Views of required one-relations and of (paged) many-relations have witnesses.
-- **Refused for now:** an optional relation's selection schema is `NullOr`, which R witnesses do not represent yet, so `NativeRemote.pageViews` refuses it at authoring time. This is recorded in open work. *Resolved 2026-10-05 by [`R.NullOr`](optional-fields.md#nullor-values-2026-10-05): optional relations and nullable columns now work in page views.*
+- **Refused for now:** an optional relation's selection schema is `NullOr`, which R witnesses do not represent yet, so `NativeRemote.pageViews` refuses it at authoring time. This is recorded in open work. _Resolved 2026-10-05 by [`R.NullOr`](optional-fields.md#nullor-values-2026-10-05): optional relations and nullable columns now work in page views._
 - **Not followed:** reads a second `satisfy` pass would add (a Surface waiting on another's data), as before.
 
 **Acceptance.**
