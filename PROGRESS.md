@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-05 — Milestone 10 (SchemaBinary) researched and planned
+
+- [Design record and plan](docs/research/schema-binary.md), and the [wire format](docs/research/schema-binary-format.md) specified from Effect 4.0.0's `SchemaBinary.ts`, the upstream test and an official RPC probe.
+- Findings:
+  - Without the opt-in dictionary, output is deterministic, so native bytes can be compared with Effect's exactly.
+  - The RPC envelope is a fingerprint-mode frame (layout hash `cc 32 8a b0 8f 52 45 25` in 4.0.0) whose holes are default-mode inner frames.
+- Proposed decisions SB-001..007: `serialization: "schema-binary"` on `NativeRpc.compile`; generated binary↔encoded-JSON transcoders reusing the JSON codecs' checks; an exact canonical encoder; the envelope fingerprint derived from the installed Effect at build time.
+- No feature code yet. The plan awaits approval.
+
 ## 2026-10-05 — Milestone 8B delivered for the pinned SSR example
 
 - [Research, design and evidence](docs/research/ssr-codemod.md).
