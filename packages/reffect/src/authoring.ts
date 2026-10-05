@@ -129,14 +129,12 @@ export const R = Object.freeze({
   LiveHub: LiveHubIR,
   /** Foldkit Remote values an R page reads (M9-3). */
   Remote: Object.freeze({
-    /** Upstream's `Page<A>`: a query read's items in edge order, and whether more lie either side. */
-    Page: <A>(
-      item: IRType<A>,
-    ): IRType<{
-      readonly items: ReadonlyArray<A>;
-      readonly hasNext: boolean;
-      readonly hasPrevious: boolean;
-    }> => Struct({ items: ArrayModule(item), hasNext: BoolType, hasPrevious: BoolType }),
+    /**
+     * Upstream's `Page<A>`: a query read's items in edge order, and whether more lie either side.
+     * A Struct witness, so a page can be made and its fields read like any other (#15).
+     */
+    Page: <A>(item: IRType<A>) =>
+      Struct({ items: ArrayModule(item), hasNext: BoolType, hasPrevious: BoolType }),
   }),
   Html: HtmlIR,
   Struct,

@@ -394,7 +394,11 @@ export const valueTags: {
   <const H extends AnyHandlers>(value: Expr<unknown>, handlers: H) => MatchResult<H>
 >(2, (value, handlers) => matchTags(value, handlers));
 
-/** `Struct.get(key)(self)` / `Struct.get(self, key)`; optional keys read as `T | undefined`. */
+/**
+ * `Struct.get(key)(self)` / `Struct.get(self, key)`; optional keys read as `T | undefined`.
+ * Read nested fields with `self.pipe(Struct.get("a"), Struct.get("b"))` or a named intermediate:
+ * TypeScript cannot infer `Struct.get(Struct.get(self, "a"), "b")`, as for any dual (#15).
+ */
 const get: {
   <S, const K extends keyof S & string>(key: K): (self: Expr<S>) => Expr<S[K]>;
   <S, const K extends keyof S & string>(self: Expr<S>, key: K): Expr<S[K]>;

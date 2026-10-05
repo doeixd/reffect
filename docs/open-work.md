@@ -310,7 +310,6 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 - [#11](https://github.com/doeixd/reffect/issues/11): mutation latency includes after-commit re-reads
 - [#13](https://github.com/doeixd/reffect/issues/13): one page plan object and one `PageRequest` input
 - [#14](https://github.com/doeixd/reffect/issues/14): a browser-safe `R.Html` entry, to write views once
-- [#15](https://github.com/doeixd/reffect/issues/15): resume size, nested `Struct.get` inference, `R.Remote.Page` DX
 
 ## Full-codebase review issues (2026-10-03)
 
