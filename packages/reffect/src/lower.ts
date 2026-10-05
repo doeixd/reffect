@@ -25,6 +25,7 @@ import {
 } from "./kernel.ts";
 import { refContent, refType } from "./ref-model.ts";
 import { checkGeneratedDeferredRustBytes } from "./deferred-growth.ts";
+import { generatedDeferredFutureLayoutPrelude } from "./deferred-layout.ts";
 import { normalizeRuntimeServicesSelection } from "./runtime-service-model.ts";
 import type {
   RuntimeServicesSelection,
@@ -1933,6 +1934,7 @@ export const emitFunctions = (
     ? '#![recursion_limit = "256"]\n\n'
     : "";
   write(queryAllowance);
+  if (queryAllowance) write(generatedDeferredFutureLayoutPrelude);
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   const captureFrames = !FailureFrames.isNone(module.failureFrames);
   if (hasEffect && captureFrames)
@@ -3589,9 +3591,39 @@ export const emitFunctions = (
     const entryCancellation = f.asynchronous
       ? `if ctx.is_cancelled() { ${captureFrames ? `ctx.frames = Some(FrameTrail::new(${frameLiteral(f.name, f.path, "function", f.origin).text}));` : ""} return Err(AsyncError::Interrupted); } `
       : "";
+    const entryBody = Match.value(f.node).pipe(
+      Match.tagsExhaustive({
+        Pure: (n) =>
+          f.input.some((type) => !copyable(type))
+            ? joinFragments([
+                "{ ",
+                ...f.input.flatMap((type, i) =>
+                  copyable(type) ? [] : [`let p${i}: ${helperParameterType(type)} = &p${i}; `],
+                ),
+                renderBlock(n.block),
+                " }",
+              ])
+            : renderBlock(n.block),
+        // Public functions separate typed/interrupted outcomes from observer-owned frames.
+        Effect: (n) =>
+          captureFrames
+            ? joinFragments([
+                f.asynchronous
+                  ? `{ ctx.frames = None; ${entryCancellation}${deferredEntry}match `
+                  : "{ match ",
+                adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
+                ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); ${f.asynchronous ? "ctx.frames = Some(frames)" : "store_frames(frames)"}; Err(error) } } }`,
+              ])
+            : joinFragments([
+                `{ ${entryCancellation}${deferredEntry}`,
+                adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
+                " }",
+              ]),
+      }),
+    );
     writer.writeFragment(
       joinFragments([
-        `\npub ${f.asynchronous ? "async " : ""}fn `,
+        `\npub ${f.asynchronous && !f.deferredProfile ? "async " : ""}fn `,
         mapFragment(
           f.origin,
           useAt(f.path),
@@ -3603,47 +3635,53 @@ export const emitFunctions = (
           f.origin,
           useAt(f.path),
           textFragment(
-            Match.value(f.node).pipe(
-              Match.tagsExhaustive({
-                Pure: () => typeName(f.output),
-                Effect: (n) => resultType(f.output, n.error),
-              }),
-            ),
+            f.deferredProfile
+              ? `impl std::future::Future<Output = ${resultType(f.output, NeverType)}> + '_`
+              : Match.value(f.node).pipe(
+                  Match.tagsExhaustive({
+                    Pure: () => typeName(f.output),
+                    Effect: (n) => resultType(f.output, n.error),
+                  }),
+                ),
           ),
           "definition",
         ),
         " ",
-        Match.value(f.node).pipe(
-          Match.tagsExhaustive({
-            Pure: (n) =>
-              f.input.some((type) => !copyable(type))
-                ? joinFragments([
-                    "{ ",
-                    ...f.input.flatMap((type, i) =>
-                      copyable(type) ? [] : [`let p${i}: ${helperParameterType(type)} = &p${i}; `],
-                    ),
-                    renderBlock(n.block),
-                    " }",
-                  ])
-                : renderBlock(n.block),
-            // Public functions separate typed/interrupted outcomes from observer-owned frames.
-            Effect: (n) =>
-              captureFrames
-                ? joinFragments([
-                    f.asynchronous
-                      ? `{ ctx.frames = None; ${entryCancellation}${deferredEntry}match `
-                      : "{ match ",
-                    adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
-                    ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); ${f.asynchronous ? "ctx.frames = Some(frames)" : "store_frames(frames)"}; Err(error) } } }`,
-                  ])
-                : joinFragments([
-                    `{ ${entryCancellation}${deferredEntry}`,
-                    adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
-                    " }",
-                  ]),
-          }),
-        ),
+        f.deferredProfile
+          ? joinFragments([
+              "{ let future = async move ",
+              entryBody,
+              "; ",
+              mapFragment(
+                f.origin,
+                useAt(f.path),
+                textFragment("let _layout = assert_deferred_future_layout(&future);"),
+                "use",
+              ),
+              " future }",
+            ])
+          : entryBody,
         "\n\n",
+      ]),
+    );
+  }
+  const deferredRoots = module.functions.filter((f) => f.deferredProfile);
+  if (deferredRoots.length) {
+    writer.writeFragment(
+      joinFragments([
+        `#[doc(hidden)]\n#[inline(never)]\npub fn reffect_deferred_future_layouts(ctx: &mut AsyncContext) -> [usize; ${deferredRoots.length}] { [\n`,
+        ...deferredRoots.flatMap((f) => [
+          mapFragment(
+            f.origin,
+            useAt(f.path),
+            textFragment(
+              `{ let future = ${Rs.ident(`r_${f.name}`).text}(ctx); assert_deferred_future_layout(&future) }`,
+            ),
+            "use",
+          ),
+          ",\n",
+        ]),
+        "] }\n\n",
       ]),
     );
   }

@@ -26,6 +26,8 @@ Its implementation decisions are recorded separately for [helper borrows](resear
 
 [Private generated Deferred growth](research/deferred-generated-growth.md) separates whole-graph/helper nesting, expression/text expansion, module aggregation and emitted Rust limits from evaluator receipts and measured future layouts.
 
+[Private Deferred native layout admission](research/deferred-native-layout.md) records the exact-root compile-time size ceiling and its native build boundary.
+
 **[Native Foldkit SSR](research/native-ssr.md)** is the milestone 8A research and design: upstream `renderToString`, serializer and hydration semantics (foldkit 0.165.0), `R.Html` views mirroring Foldkit's builder, a bounded profile, and a ported serializer subset.
 
 **[SSR with Remote data](research/ssr-data.md)** is the milestone 9 plan: upstream prefetch and snapshot resume, native projections in R views, async pages, and the decision to take milestone 9 before 8B.
