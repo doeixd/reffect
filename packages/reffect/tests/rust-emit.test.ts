@@ -49,9 +49,17 @@ test("string literals use Rust escapes, never braceless JSON escapes", () => {
   expect(Rs.stringLiteral("line\ntab\rcr").text).toBe('"line\\ntab\\rcr"');
   expect(Rs.stringLiteral("a\tb").text).toBe('"a\\tb"');
   expect(Rs.stringLiteral("emoji 😀").text).toBe('"emoji 😀"');
-  // A lone surrogate becomes a braced Rust escape (valid UTF-8); JSON uses braceless ones.
-  expect(Rs.stringLiteral("\ud800").text).toBe('"\\u{d800}"');
-  expect(escapeRustContent("\ud800")).toBe("\\u{d800}");
+  // #40: rustc rejects `\u{d800}` (literals hold scalar values), so a lone surrogate is refused
+  // with a structured diagnostic; JSON text keeps its braceless escape.
+  for (const lone of ["\ud800", "a\udc00", "\ud83d"]) {
+    expect(() => Rs.stringLiteral(lone)).toThrow(expect.objectContaining({ _tag: "CompileError" }));
+    expect(() => escapeRustChar(lone)).toThrow(
+      expect.objectContaining({
+        diagnostics: [expect.objectContaining({ code: "INVALID_LITERAL" })],
+      }),
+    );
+  }
+  expect(escapeRustContent("😀")).toBe("😀");
   expect(escapeJsonContent("\ud800")).toBe("\\ud800");
   expect(escapeJsonContent('"\n')).toBe('\\"\\u000a');
 });

@@ -287,6 +287,19 @@ test(
                   ),
                 );
               }
+              // #40: malformed hex is refused as an argument error, never sliced mid-character into
+              // a panic nor read through a sign (`+f`).
+              for (const bad of ["str:aé0", "str:+f", "str:4", "str:zz", "str:4A", "plain"]) {
+                const refused = yield* CargoApi.run(
+                  directory,
+                  "visit",
+                  [bad, "str:62"],
+                  profile,
+                ).pipe(Effect.catchTag("CargoError", Effect.succeed));
+                expect(refused.exitCode, bad).toBe(1);
+                expect(refused.stderr, bad).toContain("invalid String");
+                expect(refused.stderr, bad).not.toContain("panicked");
+              }
               const discarded = yield* CargoApi.run(directory, "discard", [3n], profile);
               expect(messages(discarded.stderr)).toEqual(["discard", "discard"]);
               expect(

@@ -11,6 +11,9 @@
  * raw strings cannot fabricate a fragment except through a `verbatim*` escape
  * hatch, which is reserved for audited static scaffolding (never user text).
  */
+import { fail } from "./kernel.ts";
+import { isWellFormed, wellFormedMessage } from "./unicode.ts";
+
 const brand: unique symbol = Symbol("reffect/rust-emit");
 const pathBrand: unique symbol = Symbol("reffect/rust-path");
 const visibilityBrand: unique symbol = Symbol("reffect/rust-visibility");
@@ -171,30 +174,37 @@ export class RustIdent {
 }
 
 const U64_MAX = (1n << 64n) - 1n;
+/**
+ * Rust string and char literals hold Unicode scalar values, so rustc rejects `\u{d800}`: text
+ * with a lone surrogate is refused as a structured diagnostic rather than at `cargo build` (#40).
+ */
+const wellFormed = (text: string): string => {
+  if (!isWellFormed(text))
+    throw fail("INVALID_LITERAL", "lower", "literal", `Rust literal text: ${wellFormedMessage}`);
+  return text;
+};
 /** Real Rust string content escaping (`\u{...}` with braces, never braceless `\uXXXX`). */
 export const escapeRustContent = (text: string): string =>
-  Array.from(text, (c) => {
+  Array.from(wellFormed(text), (c) => {
     if (c === '"') return '\\"';
     if (c === "\\") return "\\\\";
     if (c === "\n") return "\\n";
     if (c === "\r") return "\\r";
     if (c === "\t") return "\\t";
     const code = c.codePointAt(0) ?? 0;
-    if (code < 32 || code === 127 || (code >= 0xd800 && code <= 0xdfff))
-      return `\\u{${code.toString(16)}}`;
+    if (code < 32 || code === 127) return `\\u{${code.toString(16)}}`;
     return c;
   }).join("");
 /** Rust char-literal content escaping (`"` stays literal; `'` and controls are escaped). */
 export const escapeRustChar = (text: string): string =>
-  Array.from(text, (c) => {
+  Array.from(wellFormed(text), (c) => {
     if (c === "'") return "\\'";
     if (c === "\\") return "\\\\";
     if (c === "\n") return "\\n";
     if (c === "\r") return "\\r";
     if (c === "\t") return "\\t";
     const code = c.codePointAt(0) ?? 0;
-    if (code < 32 || code === 127 || (code >= 0xd800 && code <= 0xdfff))
-      return `\\u{${code.toString(16)}}`;
+    if (code < 32 || code === 127) return `\\u{${code.toString(16)}}`;
     return c;
   }).join("");
 /** JSON content escaping (braceless `\uXXXX`); for wire text, not Rust literals. */

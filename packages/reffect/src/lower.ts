@@ -3841,12 +3841,19 @@ const stringBoundary = `fn hex(value: &str) -> String {
     value.bytes().map(|b| format!("{:02x}", b)).collect()
 }
 fn unhex(value: &str) -> Result<String, &'static str> {
-    let digits = value.strip_prefix("str:").ok_or("invalid String")?;
+    // By byte, so a non-ASCII argument is refused rather than sliced mid-character (#40), and by
+    // lowercase digit, as hex writes them (from_str_radix would also take a sign).
+    let nibble = |digit: u8| match digit {
+        b'0'..=b'9' => Ok(digit - b'0'),
+        b'a'..=b'f' => Ok(digit - b'a' + 10),
+        _ => Err("invalid String"),
+    };
+    let digits = value.strip_prefix("str:").ok_or("invalid String")?.as_bytes();
     if digits.len() % 2 != 0 { return Err("invalid String"); }
-    let bytes = (0..digits.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).map_err(|_| "invalid String"))
-        .collect::<Result<Vec<u8>, _>>()?;
+    let bytes = digits
+        .chunks(2)
+        .map(|pair| Ok(nibble(pair[0])? << 4 | nibble(pair[1])?))
+        .collect::<Result<Vec<u8>, &'static str>>()?;
     String::from_utf8(bytes).map_err(|_| "invalid String")
 }
 `;
