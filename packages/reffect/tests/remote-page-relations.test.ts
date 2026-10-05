@@ -196,8 +196,7 @@ const page = R.fn([PageRequest], Page, (request) => {
                     R.Struct.get("comments"),
                     R.Struct.get("items"),
                   ),
-                  // valueTags hands its cases over untyped, so the item is annotated.
-                  (comment: RExpr<{ readonly body: string }>) => R.Struct.get(comment, "body"),
+                  (comment) => R.Struct.get(comment, "body"),
                 ),
               NotFound: () => R.Array.empty(R.String),
             }),

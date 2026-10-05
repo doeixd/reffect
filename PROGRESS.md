@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-05 — Typed `R.Match.valueTags` handlers
+
+- `R.Match.valueTags` now types each handler by its own case, as Effect's `Match.valueTags` does: data-first, and data-last in a `pipe`, where the cases come from the piped value. A missing tag or one outside the union is a type error, and both are still refused at run time for untyped callers. This removes the annotation the relation page test needed (open work closed).
+- Validation: `vp check` passes, and `tests/records.test.ts` passes 4/4, including a new type-level test whose `@ts-expect-error` lines fail if the case typing regresses.
+
 ## 2026-10-05 — Relations in page views (M9-3)
 
 - [Upstream probe, design and acceptance](docs/research/ssr-data.md#relations-in-page-views-2026-10-05).

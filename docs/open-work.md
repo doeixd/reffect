@@ -26,7 +26,6 @@ Everything still to be done, collected from the design and research records on 2
 - M9 remaining:
   - Optional relations in page views: their selection schema is `NullOr`, which R witnesses do not represent yet ([relations in page views](research/ssr-data.md#relations-in-page-views-2026-10-05)).
   - Reads a second `satisfy` pass would add (a Surface waiting on another's data) are not planned for native pages ([M9-3](research/ssr-data.md#m9-3-plan-agreed-2026-10-03)).
-- `R.Match.valueTags` hands its handlers an untyped case value, so a nested `R.Array.map` inside a case needs an annotated parameter ([relations in page views](research/ssr-data.md#relations-in-page-views-2026-10-05)).
 - Showcase: `examples/todo-fullstack`, one binary serving pages, assets, RPC, Remote live and SQLx/Postgres ([§29](implementation-milestones.md#29-first-major-showcase-application), [conformance](conformance-and-diagnostics.md#46-first-concrete-target))
 - M10: SchemaBinary generated codecs with bidirectional and byte-equality tests ([§30](implementation-milestones.md#30-milestone-10--schemabinary))
 - M11: WebSocket sessions, server notifications, reverse RPC, two-way cancellation ([§31](implementation-milestones.md#31-milestone-11--websocket--bidirectional-rpc))

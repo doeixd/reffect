@@ -161,6 +161,7 @@ test("records and tagged unions agree with official Effect Schema and match", as
 test("composite authoring and checking refuse incomplete or foreign shapes", async () => {
   const value = Boundary.cases.Terminal.make({});
   expect(() =>
+    // @ts-expect-error a missing case is a type error, and refused for untyped callers too
     R.Match.valueTags(value, {
       Terminal: () => R.Bool.literal(true),
       Unknown: () => R.Bool.literal(false),
@@ -273,3 +274,49 @@ test(
   },
   nativeTestBudget(0) + 120000,
 );
+
+test("valueTags gives each handler its own case, data-first and in a pipe", async () => {
+  const value = Boundary.cases.Cursor.make({ cursor: R.String.literal("c") });
+  const handlers = {
+    Terminal: () => R.String.literal("start"),
+    Cursor: (cursor: Expr<{ readonly _tag: "Cursor"; readonly cursor: string }>) =>
+      R.Struct.get(cursor, "cursor"),
+    Unknown: () => R.String.literal("?"),
+  };
+  const first = R.Match.valueTags(value, handlers);
+  // Data-last: the case types come from the piped value, so no annotation is needed.
+  const piped = value.pipe(
+    R.Match.valueTags({
+      Terminal: () => R.String.literal("start"),
+      Cursor: (cursor) => R.Struct.get(cursor, "cursor"),
+      Unknown: () => R.String.literal("?"),
+    }),
+  );
+  const run = R.fn([], R.String, () => first);
+  expect(await Effect.runPromise(Reference.run(run, []))).toBe("c");
+  expect(
+    await Effect.runPromise(
+      Reference.run(
+        R.fn([], R.String, () => piped),
+        [],
+      ),
+    ),
+  ).toBe("c");
+  // Typed only: a field of another case, and a tag outside the union, are type errors.
+  void (() =>
+    value.pipe(
+      R.Match.valueTags({
+        // @ts-expect-error Terminal has no cursor
+        Terminal: (terminal) => R.Struct.get(terminal, "cursor"),
+        Cursor: (cursor) => R.Struct.get(cursor, "cursor"),
+        Unknown: () => R.String.literal("?"),
+      }),
+    ));
+  expect(() =>
+    R.Match.valueTags(value, {
+      ...handlers,
+      // @ts-expect-error Extra is not a tag of the union
+      Extra: () => R.String.literal("x"),
+    }),
+  ).toThrow("outside the union");
+});

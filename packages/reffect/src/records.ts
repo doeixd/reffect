@@ -382,16 +382,24 @@ export const matchTags = (
   );
 };
 
+/** The tags of a tagged-union value type. */
+type TagsOf<A> = A extends { readonly _tag: infer T extends string } ? T : never;
+/**
+ * One handler per tag of `A`, each given its own case, as Effect's `Match.valueTags` types them;
+ * a handler for a tag outside `A` is refused.
+ */
+type CaseHandlers<A, H> = {
+  readonly [K in TagsOf<A>]: (
+    value: Expr<Extract<A, { readonly _tag: K }>>,
+  ) => Expr<any> | Computation<any, any>;
+} & { readonly [K in Exclude<keyof H, TagsOf<A>>]: never };
 /** Effect `Match.valueTags(value, handlers)`, data-first or data-last. */
-type AnyHandlers = {
-  readonly [tag: string]: (value: Expr<any>) => Expr<any> | Computation<any, any>;
-};
 export const valueTags: {
-  <const H extends AnyHandlers>(handlers: H): (value: Expr<unknown>) => MatchResult<H>;
-  <const H extends AnyHandlers>(value: Expr<unknown>, handlers: H): MatchResult<H>;
+  <A, const H extends CaseHandlers<A, H>>(handlers: H): (value: Expr<A>) => MatchResult<H>;
+  <A, const H extends CaseHandlers<A, H>>(value: Expr<A>, handlers: H): MatchResult<H>;
 } = dual<
-  <const H extends AnyHandlers>(handlers: H) => (value: Expr<unknown>) => MatchResult<H>,
-  <const H extends AnyHandlers>(value: Expr<unknown>, handlers: H) => MatchResult<H>
+  <A, const H extends CaseHandlers<A, H>>(handlers: H) => (value: Expr<A>) => MatchResult<H>,
+  <A, const H extends CaseHandlers<A, H>>(value: Expr<A>, handlers: H) => MatchResult<H>
 >(2, (value, handlers) => matchTags(value, handlers));
 
 /**
