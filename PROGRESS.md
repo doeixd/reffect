@@ -94,6 +94,17 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Literal and argument robustness (#40, part)
+
+- **Lone surrogates.** Rust string and char literals now refuse text with a lone surrogate, raising `INVALID_LITERAL` from the emitter. Before, they emitted `\u{d800}`, which rustc rejects. File paths were already refused at `check`, and log text is JSON-escaped before it becomes a literal.
+- **Runner arguments.** The generated `unhex` decodes by byte and by lowercase digit. Before, `str:aé0` panicked slicing mid-character, and `str:+f` decoded through `from_str_radix`'s sign.
+- **Still open: race children under a masked parent.** This is in the coordination area and is left to that work ([open work](docs/open-work.md)).
+- **Review.** `native-rpc` still expected the crate list from before #16, so it had failed since #16; I had not rerun it then. The list now includes hyper, hyper-util and tower. Async servers also list `futures-util`, which their `Cargo.toml` already had.
+- **Validation.**
+  - `rust-emit`: three lone-surrogate shapes are refused in strings and chars; a pair passes.
+  - `arrays`: six malformed arguments exit 1 with "invalid String" and no panic, in debug and release.
+  - Passing suites: `rust-emission-output`, `html-page`, `compiler`, `native-rpc`, `async-rpc`; `vp check` clean.
+
 ## 2026-10-05 — Nesting limit (#29)
 
 - **#29.** `Compile.check` and the reference refuse a function whose IR nests deeper than `NESTING_LIMIT` (512) with a structured `NESTING_LIMIT` diagnostic. The new `src/nesting.ts` measures the depth with an explicit stack, once per shared subterm, through expressions, computations, streams and function bodies. It runs before every other walk: the first overflow in the probe was `check`'s own deferred-model walk, which escaped as an untyped defect.
