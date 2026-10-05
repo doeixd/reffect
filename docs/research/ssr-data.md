@@ -324,7 +324,7 @@ Results:
 - **URL operations.** `R.Url.pathname(url)` and `R.Url.searchParam(url, name)` mirror the Web URL API: `new URL(url).pathname`, and `new URL(url).searchParams.get(name) ?? undefined`, an `UndefinedOr<String>`.
   - The reference evaluates them with WHATWG `URL`. Natively they use the `url` crate already selected for pages: `Url::parse`, `path()`, and `query_pairs()` (form-urlencoded: `+` as space, percent-decoding, invalid UTF-8 as U+FFFD, the first pair named `name`).
   - A differential corpus checks the two agree, covering plus signs, `%20`, malformed escapes, invalid UTF-8, repeated names, missing names and fragments.
-  - A string that does not parse as a URL is refused like a failed decode. Page URLs are always absolute, since they are resolved against the page origin.
+  - Both are total: a string that does not parse as a URL has the empty path and no parameters, in the reference and natively alike. Page URLs are always absolute, since they are resolved against the page origin. (Implemented as total rather than the refusal first recorded, so an R input never fails.)
 - **Templated views.** A `planPage` view may be `{ input, projection }`, where `input` is a pure `R.fn([R.String], I, ...)` over the page URL, and `projection` is `(input) => Data.query(Q, input, options)`.
   - The planner runs the projection on `input` evaluated by the reference at the page origin's root. The request's `input` is the hole, and its window and selection stay constant.
   - The page host evaluates `input` natively on the request's resolved URL, and encodes it with the query's own Input codec (`R.Schema.toCodecJson`). `input`'s output witness must be the query Input's witness, or it is refused. The encoded value replaces the request's `input` before the engine runs it.
@@ -338,3 +338,5 @@ Results:
 - `R.Url` agrees with WHATWG `URL` on the corpus, natively and in the reference.
 - A page whose view's query input comes from `?status=` renders natively byte-equal to upstream, whose `init` derives the same input from the request URL. Two URLs give two different lists.
 - The client's replay issues the recorded request and nothing more.
+
+**Implemented (2026-10-05).** `R.Url` (`src/url.ts`, `tests/url.test.ts`) and templated `planPage` views (`src/remote-resume.ts`). The native page host evaluates each view's input as the generated helper `page_input_<read>` and fills the request's `input` from the request URL (`src/native-remote.ts`). `planPage` types each view's projection against its input's output. `tests/remote-page-input.test.ts` covers the acceptance: three URLs render byte-equal to upstream, and each carries exactly the one request its replay answers. An input whose output is not the query's Input witness is refused. Two gaps found on the way were fixed: the HTTP manifest admits the `url` crate for `R.Url` in handlers, and lowering now declares composite types that are built only inside a pure function body.

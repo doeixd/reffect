@@ -9,6 +9,8 @@
  * Browser-safe: it imports only effect and foldkit-remote.
  */
 import { Effect, Layer, Schema, Stream } from "effect";
+import type { Fn, IRType } from "./kernel.ts";
+import { Reference } from "./reference.ts";
 import {
   QueryRequest,
   QueryResult,
@@ -171,6 +173,11 @@ export interface PlannedView<Item extends Schema.Top = Schema.Top> {
   readonly _tag: "Query";
   readonly read: number;
   readonly item: Item;
+  /**
+   * For a view whose query input comes from the page URL: the pure R function computing it from
+   * the page's resolved URL. The planned request's `input` is then a template the host fills.
+   */
+  readonly input?: Fn<readonly [IRType<string>], unknown>;
 }
 export type PlannedViews = { readonly [name: string]: PlannedView };
 /** A query projection a page view reads: upstream's `QueryProjection`, by what a plan needs. */
@@ -178,30 +185,70 @@ export interface PageProjection {
   readonly selection: { readonly schema: Schema.Top };
 }
 /**
+ * A view whose query input comes from the page URL: `input` derives it (with `R.Url`), and
+ * `projection` builds the view's query projection from it, as the app's own code would.
+ */
+export interface TemplatedView<I, P extends PageProjection> {
+  readonly input: Fn<readonly [IRType<string>], I>;
+  readonly projection: (input: I) => P;
+}
+interface TemplatedEntry {
+  readonly input: Fn<readonly [IRType<string>], unknown>;
+  readonly projection: (input: never) => PageProjection;
+}
+type ViewEntry = PageProjection | TemplatedEntry;
+/** A templated view's projection must accept what its input returns. */
+type CheckedViews<V> = {
+  readonly [K in keyof V]: V[K] extends { readonly input: Fn<readonly [IRType<string>], infer I> }
+    ? { readonly input: V[K]["input"]; readonly projection: (input: I) => PageProjection }
+    : V[K];
+};
+/** The projection a view entry reads. */
+type ProjectionOf<E> = E extends { readonly projection: (input: never) => infer P } ? P : E;
+type ItemOf<E> =
+  ProjectionOf<E> extends PageProjection ? ProjectionOf<E>["selection"]["schema"] : never;
+const isTemplated = (entry: ViewEntry): entry is TemplatedEntry => "projection" in entry;
+/**
  * A page's reads and the views its R render reads from them: each view's
  * `data.prefetch(initial, projection)`, planned, with the projection's selection schema. A view is
  * a query projection with a flat selection; its value is upstream's `Page` (`items`, `hasNext`,
  * `hasPrevious`) of a Ready read, its items decoded by that schema.
+ *
+ * A templated view is planned on `input` evaluated by the reference at `origin`'s root (default
+ * `http://localhost/`); natively the page fills its request's `input` from the request's URL.
  */
-export const planPage = <M, const V extends { readonly [name: string]: PageProjection }>(
+export const planPage = <M, const V extends { readonly [name: string]: ViewEntry }>(
   data: {
-    prefetch(model: M, projection: V[keyof V]): Effect.Effect<unknown, unknown, RemoteClient>;
+    prefetch(
+      model: M,
+      projection: ProjectionOf<V[keyof V]>,
+    ): Effect.Effect<unknown, unknown, RemoteClient>;
   },
   initial: M,
-  views: V,
-): PagePlan<{ readonly [K in keyof V]: PlannedView<V[K]["selection"]["schema"]> }> => {
+  views: V & CheckedViews<V>,
+  options: { readonly origin?: string } = {},
+): PagePlan<{ readonly [K in keyof V]: PlannedView<ItemOf<V[K]>> }> => {
+  const sample = new URL("/", options.origin ?? "http://localhost").href;
   const reads: Array<PlannedRead> = [];
   const planned: { [name: string]: PlannedView } = {};
-  for (const [name, projection] of Object.entries(views) as Array<[string, V[keyof V]]>) {
-    const own = planReads(data.prefetch(initial, projection));
+  for (const [name, entry] of Object.entries(views) as Array<[string, ViewEntry]>) {
+    const projection = isTemplated(entry)
+      ? entry.projection(Effect.runSync(Reference.run(entry.input, [sample])) as never)
+      : entry;
+    const own = planReads(data.prefetch(initial, projection as ProjectionOf<V[keyof V]>));
     const query = own[0];
     if (own.length !== 1 || query?._tag !== "Query")
       throw new Error(`Remote page view "${name}" is not a single query projection`);
-    planned[name] = { _tag: "Query", read: reads.length, item: projection.selection.schema };
+    planned[name] = {
+      _tag: "Query",
+      read: reads.length,
+      item: projection.selection.schema,
+      ...(isTemplated(entry) ? { input: entry.input } : {}),
+    };
     reads.push(query);
   }
   return {
     reads,
-    views: planned as { readonly [K in keyof V]: PlannedView<V[K]["selection"]["schema"]> },
+    views: planned as { readonly [K in keyof V]: PlannedView<ItemOf<V[K]>> },
   };
 };

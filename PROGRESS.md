@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-05 — Page inputs from the URL (M9-3)
+
+- [Design and acceptance](docs/research/ssr-data.md#page-inputs-from-the-url-2026-10-05). `R.Url.pathname`/`R.Url.searchParam` mirror the Web URL API, total over strings, natively on `url` 2.5.8. A differential corpus of 15 URLs × 5 names agrees between native and reference.
+- `planPage` views may be `{ input, projection }`. `input` is a pure R function of the page URL returning the query's Input. The native host fills each planned request's `input` from the request URL, using the query's own JSON codec. A mismatched input witness is refused at compile time, and a mismatched projection is a type error.
+- Fixed on the way: the HTTP manifest now admits the `url` crate, and lowering declares composite types that are only built inside a pure function body.
+- Validation: `vp check` passes. These suites pass when run one at a time: `tests/remote-page-input.test.ts` (2/2: three URLs byte-equal to upstream, with replay resuming), `url`, `remote-page` and `todo-remote-page`. `records` and `native-rpc` pass after the lowering change. `clock-random` has one pre-existing failure ("invalid and exhausted trusted scripts bypass typed recovery") that is unchanged without these edits.
+
 ## 2026-10-05 — Standalone Deferred execution contract
 
 - Synced through 9c3a6ee and installed dependencies. [DEXEC-001–004](docs/research/deferred-execution-boundary.md) and the independent [DCTX-001–005 audit](docs/research/deferred-context-audit.md) record the preparation: initial fiber evaluation precedes startup/signal hooks, ambient guards are too late, and an isolated Promise boundary adds no evaluator primitives to the audited named interpreter.

@@ -1,4 +1,5 @@
 import { Effect, Match, Schema, SchemaAST } from "effect";
+import { flow } from "./flow.ts";
 import { pageRequest } from "./ssr-page.ts";
 import type { PagePlan, PlannedViews } from "./remote-resume.ts";
 import { Rpc, type RpcGroup } from "effect/rpc";
@@ -580,7 +581,43 @@ const pageReads = (
   domain: RemoteDomain,
   source: string,
   authenticates: boolean,
-): string => {
+): { readonly data: string; readonly helpers: { readonly [name: string]: Fn } } => {
+  // A view whose input comes from the URL: its R input, encoded by the query's own Input codec,
+  // fills its read's request `input` per page request (docs/research/ssr-data.md).
+  const helpers: { [name: string]: Fn } = {};
+  const fills: string[] = [];
+  for (const [name, view] of Object.entries(views)) {
+    if (view.input === undefined) continue;
+    const at = `pages.views.${name}.input`;
+    const read = reads[view.read];
+    const queryName =
+      read !== undefined && typeof read.request === "object" && "query" in read.request
+        ? read.request.query
+        : undefined;
+    const query =
+      typeof queryName === "string" ? domain.registry.queries.get(queryName) : undefined;
+    if (query === undefined) throw unsupported(at, "A URL input fills a query of the domain");
+    const witness = NativeRpc.witness(query.Input);
+    if (
+      !(view.input instanceof Fn) ||
+      view.input.input.length !== 1 ||
+      !IRType.same(view.input.input[0]!, StringType) ||
+      !IRType.same(view.input.output, witness)
+    )
+      throw unsupported(
+        at,
+        `A URL input is a pure R function of the page URL (String) returning ${queryName}'s Input`,
+      );
+    const encode = Fn.make([witness], UnknownType, (value) =>
+      SchemaIR.encodeSync(SchemaIR.toCodecJson(witness))(value),
+    );
+    const helper = flow(view.input, encode);
+    const helperName = `page_input_${view.read}`;
+    helpers[helperName] = helper;
+    fills.push(
+      `${view.read} => { request["input"] = reffect_generated::r_${helperName}(href.clone()); }`,
+    );
+  }
   const planned = reads.map((read, i) => {
     const path = `pages.remote.reads[${i}]`;
     const request = read.request;
@@ -636,9 +673,20 @@ const pageReads = (
     .join(", ");
   // The work is the engine's page_data (runtime/src/remote_engine.rs, #37); the planned requests
   // are parsed once per process (#9).
-  return `async {
+  const data = `async {
         static REMOTE_PAGE_READS: std::sync::OnceLock<Vec<remote_engine::PageRead>> = std::sync::OnceLock::new();
-        let reads = REMOTE_PAGE_READS.get_or_init(|| vec![${planned.join(", ")}]);
+        let reads = REMOTE_PAGE_READS.get_or_init(|| vec![${planned.join(", ")}]);${
+          fills.length === 0
+            ? ""
+            : `
+        // Requests whose input comes from this page's URL, filled from it.
+        let filled: Vec<remote_engine::PageRead> = reads.iter().enumerate().map(|(index, read)| {
+            let mut request = read.request.clone();
+            match index { ${fills.join(" ")} _ => {} }
+            remote_engine::PageRead { tag: read.tag, request }
+        }).collect();
+        let reads = &filled[..];`
+        }
         ${authenticates ? "if principal.is_none() { return Err(StatusCode::UNAUTHORIZED); }" : ""}
         let authorize = remote_authorize(principal);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0);
@@ -647,6 +695,7 @@ const pageReads = (
             StatusCode::INTERNAL_SERVER_ERROR
         })
     }.await`;
+  return { data, helpers };
 };
 /** The Rust expression of the hub service each session gets (LIVE-008). */
 const REMOTE_LIVE = "std::sync::Arc::new(RemoteLive)";
@@ -930,7 +979,7 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
       procedures[QUERY] = {
         call: `remote_engine::query(${prepared.source}, &remote_authorize(context.principal), payload).await`,
       };
-    const pageData = yield* Effect.try({
+    const pageRead = yield* Effect.try({
       try: () =>
         options.pages?.remote === undefined
           ? undefined
@@ -944,6 +993,7 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("pages.remote", String(cause)),
     });
+    const pageData = pageRead?.data;
     return yield* compileServer(
       group,
       {},
@@ -1004,7 +1054,10 @@ impl reffect_generated::LiveHub for RemoteLive {
           authorizer,
           ...(group.requests.has(MUTATE) ? [mutate] : []),
         ],
-        helpers: Object.fromEntries(prepared.authorize.map(([, fn], i) => [`authorize_${i}`, fn])),
+        helpers: {
+          ...Object.fromEntries(prepared.authorize.map(([, fn], i) => [`authorize_${i}`, fn])),
+          ...pageRead?.helpers,
+        },
         functions: Object.fromEntries(
           prepared.mutations.map((source, i) => [
             `mutation_${i}`,
