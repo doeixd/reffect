@@ -142,10 +142,11 @@ test("custom reference callbacks and semantic-ref aliases are refused before inv
 
 test("ambient services, yield flags and host continuations cannot enter the root fiber", async () => {
   const hostLog = vi.fn();
+  const clockSleep = vi.fn(() => Effect.die("ambient clock leaked"));
   const customClock: Clock.Clock = Object.assign(
     Object.create(Context.get(Context.empty(), Clock.Clock)),
     {
-      sleep: vi.fn(() => Effect.die("ambient clock leaked")),
+      sleep: clockSleep,
     },
   );
   const tracedFibers = new Set<number>();
@@ -183,7 +184,7 @@ test("ambient services, yield flags and host continuations cannot enter the root
   const result = await Effect.runPromiseWith(host)(invocation);
   expect(result.exit).toEqual(Exit.succeed(undefined));
   expect(result.logs).toEqual(["owned"]);
-  expect(customClock.sleep).not.toHaveBeenCalled();
+  expect(clockSleep).not.toHaveBeenCalled();
   // Only the ambient host fiber enters its tracer hook; the owned root does not.
   expect(tracedFibers.size).toBe(1);
   expect(hostLog).not.toHaveBeenCalled();
