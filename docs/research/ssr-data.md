@@ -128,6 +128,16 @@ Results:
 
 5. **Showcase (M9-5).** SQL, Live, SSR with data and resume in one binary.
 
+   **Delivered 2026-10-04.**
+   - **What it is.** [`examples/todo-fullstack`](../../examples/todo-fullstack/README.md) is one `NativeRemote.compile` call: SQLite through foldkit-remote-drizzle bindings, todo-remote's R sources, Live with the snapshot, NDJSON, and todo-remote's page.
+   - **Acceptance.** [todo-fullstack.test.ts](../../packages/reffect/tests/todo-fullstack.test.ts) checks:
+     - the first page byte for byte against upstream `renderToString`, fed by upstream's own Drizzle-backed `RemoteServer` over the same file;
+     - hydration without fetches;
+     - a toggle committed through SQL reaching a fresh Live subscription through the snapshot;
+     - the next render showing the toggle.
+   - **Finding.** Upstream's memory backend and its Drizzle sources answer the same query with the `entities` of the answer in different orders: edge order for memory, read order for Drizzle. The pages render the same, but the Flags bytes differ, so the oracle must be the backend the server mirrors. Native SQL matches the Drizzle oracle.
+   - **Real browser.** In headless Chrome over CDP the page was adopted with only the Live subscription on load, a toggle updated the list, and after a reload the toggle persisted from SQLite.
+
 ## M9-3 plan (agreed 2026-10-03)
 
 **Order of work**

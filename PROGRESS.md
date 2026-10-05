@@ -70,6 +70,14 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-04 — M9-5: the todo-fullstack showcase (milestone 9 delivered)
+
+- **Change.** `examples/todo-fullstack` is one native executable serving todo-remote's app over SQLite: the server-rendered first screen with resume, Effect RPC, R mutation sources in one transaction each, and Live with the snapshot.
+- **Validation.**
+  - `todo-fullstack` passes. The page is byte-equal to upstream fed by upstream's Drizzle server over the same file; hydration makes no fetch; a SQL toggle reaches a fresh Live subscription and persists into the next render.
+  - Headless Chrome confirmed hydration, a toggle, and persistence across a reload.
+- **Finding.** Upstream memory and Drizzle answers order `entities` differently, so SQL pages are compared against the Drizzle oracle ([record](docs/research/ssr-data.md#plan)).
+
 ## 2026-10-04 — #36: one lowering descriptor per implementation
 
 - **Change.** Each `Implementation` carries a tagged `Lowering` (`Method`, `Infix`, `Not`, `Concat`, `NumberText`, `HostJson`, `Html`), replacing the `method` string. Host JSON and Html implementations fill theirs in when they are created. `lower` dispatches on the plan's selection exhaustively with `Match` and no longer re-derives host or Html kinds from side tables. Registration is checked against the target's own implementations, so custom `Target.make` registrations can be selected.
