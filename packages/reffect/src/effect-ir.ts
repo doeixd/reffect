@@ -1,3 +1,4 @@
+import type { DeferredInterruptionBoundary } from "./deferred-interruption-frames.ts";
 import {
   Deferred,
   Duration,
@@ -1922,6 +1923,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
   args: readonly unknown[],
   basePath = "functions.body",
   check = checkEffectFunction,
+  interruption?: DeferredInterruptionBoundary,
 ): Effect.fn.Return<FramedExit<A, E>, CompileError> {
   const issues = check(f, "function");
   if (issues.length)
@@ -2036,9 +2038,15 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
   const evaluate = (
     c: Computation<unknown, unknown>,
     bindings: Bindings,
+    parent?: DeferredInterruptionBoundary,
   ): Effect.Effect<unknown, FramedFailure, Scope.Scope> =>
     Effect.suspend(() => {
       const path = adapted.get(c) ?? basePath;
+      const boundary = parent?.child(c, path);
+      const child = boundary
+        ? (value: Computation<unknown, unknown>, nested: Bindings) =>
+            evaluate(value, nested, boundary)
+        : evaluate;
       const expression = (
         e: Expr<unknown>,
         step: string,
@@ -2061,12 +2069,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 : failure.frames,
               failure.omitted + (failure.frames.length < maxLogicalFrames ? 0 : 1),
             );
-      return Match.value(c.node).pipe(
+      const body = Match.value(c.node).pipe(
         Match.tagsExhaustive({
           TaskGroup: (n) =>
             (n.mode === "All"
               ? Effect.all(
-                  n.children.map((child) => evaluate(child, bindings)),
+                  n.children.map((value) => evaluate(value, bindings)),
                   { concurrency: "unbounded", discard: true },
                 )
               : Effect.race(evaluate(n.children[0], bindings), evaluate(n.children[1], bindings))
@@ -2074,18 +2082,18 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               mapFramedError((failure) => outward(failure, n.mode === "All" ? "all" : "race")),
             ),
           Scope: (n) =>
-            Effect.scoped(evaluate(n.body, bindings)).pipe(
+            Effect.scoped(child(n.body, bindings)).pipe(
               mapFramedError((failure) => outward(failure, "scope")),
             ),
           AddFinalizer: (n) =>
             Effect.addFinalizer(() =>
-              evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie),
+              child(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie),
             ),
           AcquireRelease: (n) =>
-            Effect.acquireRelease(evaluate(n.acquire, bindings), (resource) => {
+            Effect.acquireRelease(child(n.acquire, bindings), (resource) => {
               const nested = new Map(bindings);
               nested.set(n.binder, [resource]);
-              return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
+              return child(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
             }).pipe(mapFramedError((failure) => outward(failure, "acquireRelease"))),
           RegisteredFile: (n) =>
             Effect.acquireRelease(
@@ -2094,7 +2102,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               ),
               (file) =>
                 file.close.pipe(
-                  Effect.flatMap(() => evaluate(n.afterClose, bindings)),
+                  Effect.flatMap(() => child(n.afterClose, bindings)),
                   Effect.asVoid,
                   Effect.orDie,
                 ),
@@ -2102,7 +2110,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.flatMap((file) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [file]);
-                return evaluate(n.body, nested);
+                return child(n.body, nested);
               }),
               mapFramedError((failure) => outward(failure, "registeredFile")),
             ),
@@ -2114,11 +2122,11 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               (file) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [file]);
-                return evaluate(n.body, nested);
+                return child(n.body, nested);
               },
               (file) =>
                 file.close.pipe(
-                  Effect.flatMap(() => evaluate(n.afterClose, bindings)),
+                  Effect.flatMap(() => child(n.afterClose, bindings)),
                   Effect.asVoid,
                   Effect.orDie,
                 ),
@@ -2129,7 +2137,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.flatMap((cell) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [cell]);
-                return evaluate(n.body, nested);
+                return child(n.body, nested);
               }),
               mapFramedError((failure) => outward(failure, "deferredScope")),
             ),
@@ -2163,7 +2171,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.flatMap((cell) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [cell]);
-                return evaluate(n.body, nested);
+                return child(n.body, nested);
               }),
               mapFramedError((failure) => outward(failure, "refScope")),
             ),
@@ -2213,28 +2221,28 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 } as const);
           },
           CatchAll: (n) =>
-            evaluate(n.source, bindings).pipe(
+            child(n.source, bindings).pipe(
               Effect.catch((failure) => {
                 if (failure._tag === "Internal") return Effect.fail(failure);
                 const nested = new Map(bindings);
                 nested.set(n.binder, [failure.error]);
-                return evaluate(n.body, nested).pipe(
+                return child(n.body, nested).pipe(
                   mapFramedError((error) => outward(error, "catchAll")),
                 );
               }),
             ),
           AcquireUseRelease: (n) =>
             Effect.acquireUseRelease(
-              evaluate(n.acquire, bindings),
+              child(n.acquire, bindings),
               (resource) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [resource]);
-                return evaluate(n.use, nested);
+                return child(n.use, nested);
               },
               (resource) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [resource]);
-                return evaluate(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
+                return child(n.release, nested).pipe(Effect.asVoid, Effect.orDie);
               },
             ).pipe(mapFramedError((failure) => outward(failure, "acquireUseRelease"))),
           Sleep: (n) => Effect.sleep(n.milliseconds),
@@ -2262,7 +2270,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               Effect.flatMap(([id, values]) => remoteStoreReference(n.op, n.entity, id, values)),
             ),
           Repeat: (n) =>
-            evaluate(n.body, bindings).pipe(
+            child(n.body, bindings).pipe(
               Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),
               Effect.asVoid,
               mapFramedError((failure) => outward(failure, "repeat")),
@@ -2270,7 +2278,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           Retry: (n) => {
             let completed = 0;
             const attempt = (): Effect.Effect<unknown, FramedFailure, Scope.Scope> =>
-              evaluate(n.body, bindings).pipe(
+              child(n.body, bindings).pipe(
                 Effect.catch((failure: FramedFailure) => {
                   if (failure._tag === "Internal") return Effect.fail(failure);
                   if (!scheduleContinues(n.schedule, completed, n.times))
@@ -2283,13 +2291,13 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
             return attempt().pipe(mapFramedError((failure) => outward(failure, "retry")));
           },
           Ensuring: (n) =>
-            evaluate(n.body, bindings).pipe(
+            child(n.body, bindings).pipe(
               Effect.ensuring(evaluate(n.finalizer, bindings).pipe(Effect.asVoid, Effect.orDie)),
               mapFramedError((failure) => outward(failure, "ensuring")),
             ),
           StreamEmit: (n) =>
             emitReference(n, bindings, (finalizer) =>
-              Effect.scoped(evaluate(finalizer, bindings)).pipe(Effect.orDie),
+              Effect.scoped(child(finalizer, bindings)).pipe(Effect.orDie),
             ).pipe(
               mapFramedError(
                 (error): FramedFailure => new FramedDomain(error, [frame(path, "fail")], 0),
@@ -2303,7 +2311,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 bindings,
                 evaluateExpression,
                 (outer, binder, value) => new Map(outer).set(binder, [value]),
-                (finalizer) => Effect.scoped(evaluate(finalizer, bindings)).pipe(Effect.orDie),
+                (finalizer) => Effect.scoped(child(finalizer, bindings)).pipe(Effect.orDie),
               ),
             ).pipe(
               Effect.map((elements) => [...elements]),
@@ -2331,7 +2339,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               ),
             ),
           Map: (n) =>
-            evaluate(n.source, bindings).pipe(
+            child(n.source, bindings).pipe(
               mapFramedError((failure) => outward(failure, "map")),
               Effect.flatMap((value) => {
                 const nested = new Map(bindings);
@@ -2346,12 +2354,12 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
               }),
             ),
           FlatMap: (n) =>
-            evaluate(n.source, bindings).pipe(
+            child(n.source, bindings).pipe(
               mapFramedError((failure) => outward(failure, "flatMap")),
               Effect.flatMap((value) => {
                 const nested = new Map(bindings);
                 nested.set(n.binder, [value]);
-                return evaluate(n.body, nested).pipe(
+                return child(n.body, nested).pipe(
                   mapFramedError((failure) => outward(failure, "flatMap")),
                 );
               }),
@@ -2364,7 +2372,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   : (cause as FramedFailure),
               ),
               Effect.flatMap((value) =>
-                (value ? evaluate(n.onTrue, bindings) : evaluate(n.onFalse, bindings)).pipe(
+                (value ? child(n.onTrue, bindings) : child(n.onFalse, bindings)).pipe(
                   mapFramedError((failure) => outward(failure, "match")),
                 ),
               ),
@@ -2380,7 +2388,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 Effect.forEach(
                   items as readonly unknown[],
                   (item, i) =>
-                    evaluate(
+                    child(
                       n.body,
                       new Map(bindings).set(n.item, [item]).set(n.index, [BigInt(i)]),
                     ).pipe(mapFramedError((failure) => outward(failure, "forEach"))),
@@ -2399,10 +2407,9 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                 const selected = n.cases.find(
                   (x) => x.tag === (value as { readonly _tag: string })._tag,
                 )!;
-                return evaluate(
-                  selected.body,
-                  new Map(bindings).set(selected.binder, [value]),
-                ).pipe(mapFramedError((failure) => outward(failure, "match")));
+                return child(selected.body, new Map(bindings).set(selected.binder, [value])).pipe(
+                  mapFramedError((failure) => outward(failure, "match")),
+                );
               }),
             ),
           Log: (n) =>
@@ -2432,22 +2439,23 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   : (cause as FramedFailure),
               ),
               Effect.flatMap((value) =>
-                evaluate(n.body, bindings).pipe(
+                child(n.body, bindings).pipe(
                   Effect.annotateLogs(n.key, value),
                   mapFramedError((failure) => outward(failure, "annotate")),
                 ),
               ),
             ),
           Span: (n) =>
-            evaluate(n.body, bindings).pipe(
+            child(n.body, bindings).pipe(
               Effect.withLogSpan(n.label),
               mapFramedError((failure) => outward(failure, "span")),
             ),
         }),
       );
+      return boundary ? boundary.observe(body) : body;
     });
   // The lexical checker proves that every registration is discharged by its own Scope node.
-  const checked = evaluate(f.body, new Map([[f.binder, values]])) as Effect.Effect<
+  const checked = evaluate(f.body, new Map([[f.binder, values]]), interruption) as Effect.Effect<
     unknown,
     FramedFailure
   >;

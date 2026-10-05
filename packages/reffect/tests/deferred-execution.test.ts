@@ -17,7 +17,11 @@ import { DeferredExecution } from "../src/deferred-execution.ts";
 import type { DeferredExecutionOptions } from "../src/deferred-execution.ts";
 import type { FramedExit } from "../src/effect-ir.ts";
 import { EqU64, Expr, Operation, SemanticRef } from "../src/kernel.ts";
-import { analyzeDeferredBudget, deferredBudgetLimit } from "../src/deferred-budget.ts";
+import {
+  analyzeDeferredBudget,
+  defaultDeferredBudgetContext,
+  deferredBudgetLimit,
+} from "../src/deferred-budget.ts";
 
 const completed = R.fn([], R.U64, R.Never, () =>
   D.make(R.U64).pipe(
@@ -285,11 +289,18 @@ test("standalone groups preserve registration-ordered synchronous waiter prefixe
 });
 test("owned scheduler preserves automatic yielding and refuses beyond the audited budget", async () => {
   let count = 0;
-  while (analyzeDeferredBudget(mapped(count + 1)).admitted) count++;
+  while (
+    analyzeDeferredBudget(mapped(count + 1), "body", defaultDeferredBudgetContext, true).admitted
+  )
+    count++;
   const below = mapped(count);
   const above = mapped(count + 1);
-  expect(analyzeDeferredBudget(below).framed).toBeLessThan(deferredBudgetLimit);
-  expect(analyzeDeferredBudget(above).admitted).toBe(false);
+  expect(
+    analyzeDeferredBudget(below, "body", defaultDeferredBudgetContext, true).framed,
+  ).toBeLessThan(deferredBudgetLimit);
+  expect(analyzeDeferredBudget(above, "body", defaultDeferredBudgetContext, true).admitted).toBe(
+    false,
+  );
   const original = Object.getOwnPropertyDescriptor(
     Scheduler.MixedScheduler.prototype,
     "shouldYield",

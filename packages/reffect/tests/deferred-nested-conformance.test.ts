@@ -6,6 +6,7 @@ import type { EffectFn } from "../src/index.ts";
 import { DeferredIR as D } from "../src/deferred.ts";
 import { emitFunctions, lowerDeferredFunctions } from "../src/lower.ts";
 import { GeneratedDeferredReference } from "../src/deferred-generated-reference.ts";
+import { DeferredInterruptionFrames } from "../src/deferred-interruption-frames.ts";
 import { analyzeGeneratedDeferredProfile } from "../src/deferred-generated-profile.ts";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -342,6 +343,30 @@ test("nested Deferred fixtures match independent official and both references", 
       ),
     ])
       expect(await observe(body, scenario === "cancel")).toEqual(expected[scenario]);
+    const frames = new DeferredInterruptionFrames();
+    expect(
+      await observe(
+        GeneratedDeferredReference.runWithInterruptionFrames(
+          fn,
+          [],
+          frames,
+          `functions.${scenario}.body`,
+        ).pipe(Effect.flatMap((result) => result.exit)),
+        scenario === "cancel",
+      ),
+    ).toEqual(expected[scenario]);
+    expect(frames.snapshot()).toEqual(
+      scenario === "cancel"
+        ? {
+            frames: [
+              { path: "functions.cancel.body.body", kind: "all" },
+              { path: "functions.cancel.body", kind: "deferredScope" },
+              { path: "functions.cancel", kind: "function" },
+            ],
+            omitted: 0,
+          }
+        : { frames: [], omitted: 0 },
+    );
   }
 });
 
@@ -462,7 +487,7 @@ test(
             "FRAME_PROBE",
             policy._tag === "None"
               ? 'println!("frames=0");'
-              : 'println!("frames={}",ctx.take_frames().0.len());',
+              : 'let(frames,omitted)=ctx.take_frames(); for frame in &frames {println!("frame={}",frame);} println!("frames={}",frames.len()); println!("omitted={}",omitted);',
           ),
         );
         for (const profile of ["debug", "release"] as const) {
@@ -508,7 +533,31 @@ test(
             );
             const frames = Number(stdout.match(/frames=(\d+)/)?.[1]);
             if (policy._tag === "None") expect(frames).toBe(0);
-            else if (scenario === "cancel") expect(frames).toBeGreaterThan(0);
+            else {
+              const trail = stdout
+                .split("\n")
+                .filter((line) => line.startsWith("frame="))
+                .map(
+                  (line) =>
+                    JSON.parse(line.slice(6)) as { readonly path: string; readonly kind: string },
+                )
+                .map(({ path, kind }) => ({ path, kind }));
+              expect({
+                frames: trail,
+                omitted: Number(stdout.match(/omitted=(\d+)/)?.[1]),
+              }).toEqual(
+                scenario === "cancel"
+                  ? {
+                      frames: [
+                        { path: "functions.cancel.body.body", kind: "all" },
+                        { path: "functions.cancel.body", kind: "deferredScope" },
+                        { path: "functions.cancel", kind: "function" },
+                      ],
+                      omitted: 0,
+                    }
+                  : { frames: [], omitted: 0 },
+              );
+            }
           }
         }
       }

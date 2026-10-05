@@ -1,5 +1,5 @@
 import { Match } from "effect";
-import { analyzeDeferredBudget } from "./deferred-budget.ts";
+import { analyzeDeferredBudget, defaultDeferredBudgetContext } from "./deferred-budget.ts";
 import { deferredScalar } from "./deferred-model.ts";
 import { EffectFn, checkEffectFunction } from "./effect-ir.ts";
 import type { Computation } from "./effect-ir.ts";
@@ -51,7 +51,7 @@ export const analyzeGeneratedDeferredProfile = (
       );
     if (analyzeTaskGroups(fn.body).requiresRichErrors)
       refuse(path, "Private generated Deferred has no compound outcome adapter");
-    const budget = analyzeDeferredBudget(fn, `${path}.body`);
+    const budget = analyzeDeferredBudget(fn, `${path}.body`, defaultDeferredBudgetContext, true);
     if (!budget.admitted)
       throw new CompileError({
         message: "Unsupported conditional generated Deferred budget",

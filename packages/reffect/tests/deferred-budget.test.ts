@@ -83,7 +83,8 @@ test("exact admission boundary stays below the real default scheduler threshold"
     expect(observed.maximum).toBeLessThan(deferredBudgetLimit);
     expect(observed.automaticYields).toBe(0);
   }
-  const actualYield = fn(maps(512));
+  // Reach the operation threshold without crossing the independent IR nesting limit.
+  const actualYield = fn(R.Effect.andThen(maps(256), maps(256)));
   for (const effect of [Reference.run(actualYield, []), Reference.runWithFrames(actualYield, [])]) {
     const observed = await observe(effect);
     expect(observed.maximum).toBeGreaterThanOrEqual(deferredBudgetLimit);

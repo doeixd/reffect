@@ -1925,6 +1925,12 @@ export const emitFunctions = (
         : `&${Rs.ident(p.name).text}`;
   const write = (text: string | { readonly text: string }) =>
     writer.write(typeof text === "string" ? text : text.text);
+  // DINT-007: inline private Deferred futures exceed rustc's default query depth
+  // before a 32-frame diagnostic trail can overflow. Keep the allowance finite.
+  const queryAllowance = module.functions.some((f) => f.deferredProfile)
+    ? '#![recursion_limit = "256"]\n\n'
+    : "";
+  write(queryAllowance);
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   const captureFrames = !FailureFrames.isNone(module.failureFrames);
   if (hasEffect && captureFrames)
@@ -3918,7 +3924,7 @@ export const emitFunctions = (
       (usesRyu ? 'ryu-js = { version = "=1.0.3", default-features = false }\n' : "") +
       (usesUrl ? 'url = "=2.5.8"\n' : ""),
     "src/lib.rs": `${writer.text}${usesHtml ? `\n${htmlRuntime}` : ""}${usesJsonText ? `\n${jsonTextRuntime}` : ""}${usesUrl ? `\n${urlRuntime}` : ""}`,
-    "src/main.rs": `${usesStrings ? stringBoundary : ""}${
+    "src/main.rs": `${queryAllowance}${usesStrings ? stringBoundary : ""}${
       (hasAsync
         ? Rs.withAttributes(
             [Rs.tokioMainAttribute()],

@@ -51,34 +51,39 @@ export const analyzeDeferredBudget = (
   fn: EffectFn,
   path = "body",
   context: DeferredBudgetContext = defaultDeferredBudgetContext,
+  interruptionFrames = false,
 ): DeferredBudgetAnalysis => {
   const diagnostics: Diagnostic[] = [];
   const active = new Set<Computation<unknown, unknown>>();
   // Reuse context-independent summaries; each incoming edge still adds its full weight.
-  const summaries = new Map<Computation<unknown, unknown>, Weight>();
+  const summaries = new Map<Computation<unknown, unknown>, Map<boolean, Weight>>();
   const issue = (code: string, at: string, message: string): Weight => {
     diagnostics.push({ code, stage: "check", path: at, message });
     return saturated;
   };
-  const walk = (c: Computation<unknown, unknown>, at: string): Weight => {
+  const walk = (
+    c: Computation<unknown, unknown>,
+    at: string,
+    observed = interruptionFrames,
+  ): Weight => {
     if (active.has(c))
       return issue(
         "DEFERRED_BUDGET_CYCLE",
         at,
         "Cyclic computation has no finite occurrence bound",
       );
-    const summary = summaries.get(c);
+    const summary = summaries.get(c)?.get(observed);
     if (summary) return summary;
     active.add(c);
     const child = (value: Computation<unknown, unknown>, edge: string) =>
-      walk(value, `${at}.${edge}`);
+      walk(value, `${at}.${edge}`, observed);
     const unaccounted = () =>
       issue(
         "DEFERRED_BUDGET_UNACCOUNTED",
         at,
         `${c.node._tag} has no audited reference operation receipt`,
       );
-    const result = Match.value(c.node).pipe(
+    const ordinary = Match.value(c.node).pipe(
       Match.tagsExhaustive({
         Succeed: () => weight(5),
         Fail: () => weight(5, 7),
@@ -96,12 +101,15 @@ export const analyzeDeferredBudget = (
           ),
         CatchAll: (n) => add(weight(3, 5), add(child(n.source, "source"), child(n.body, "body"))),
         Ensuring: (n) =>
-          add(weight(12, 14), add(child(n.body, "body"), child(n.finalizer, "finalizer"))),
+          add(
+            weight(12, 14),
+            add(child(n.body, "body"), walk(n.finalizer, `${at}.finalizer`, false)),
+          ),
         TaskGroup: (n) => {
           if (n.children.length < 2 || n.children.length > 3)
             return issue("DEFERRED_BUDGET_TOPOLOGY", at, "Group receipt covers only 2/3 children");
           return n.children.reduce(
-            (value, computation, i) => add(value, child(computation, `children[${i}]`)),
+            (value, computation, i) => add(value, walk(computation, `${at}.children[${i}]`, false)),
             weight(24 + 2 * n.children.length, 26 + 2 * n.children.length),
           );
         },
@@ -143,8 +151,13 @@ export const analyzeDeferredBudget = (
         Span: unaccounted,
       }),
     );
+    // DINT-005: masked onExit observation, including retained Exit and restoration.
+    // Infallible groups discard child trails; masked cleanup has no root observer.
+    const result = observed ? add(weight(0, 20), ordinary) : ordinary;
     active.delete(c);
-    summaries.set(c, result);
+    const modes = summaries.get(c) ?? new Map<boolean, Weight>();
+    modes.set(observed, result);
+    summaries.set(c, modes);
     return result;
   };
   for (const key of Object.keys(defaultDeferredBudgetContext) as (keyof DeferredBudgetContext)[])

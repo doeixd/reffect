@@ -1,3 +1,7 @@
+# Current diagnostic refinement
+
+[Private interruption frames](deferred-interruption-frames.md) adds masked observer receipts and exact interrupted observations to this owned boundary. Started cancellation returns a framed Interrupted Exit after cleanup; pre-aborted execution remains unopened. Shared root diagnostic paths remain conservatively refused.
+
 # Standalone Deferred execution boundary
 
 Prepared 2026-10-05 before implementation. Reviewed DBUD/DADM, private generated profile/reference, the named plain/framed evaluator and current budget probes. Synced through 9c3a6ee and installed dependencies. Checked published [Effect 4.0.0 evaluator](https://unpkg.com/effect@4.0.0/src/internal/effect.ts) and [scheduler](https://unpkg.com/effect@4.0.0/src/Scheduler.ts) against installed source. Independent context findings are recorded in [the audit](deferred-context-audit.md).

@@ -1,4 +1,8 @@
-import { Context, Effect, Exit, Logger, Match, Scheduler } from "effect";
+import {
+  checkDeferredInterruptionPaths,
+  DeferredInterruptionFrames,
+} from "./deferred-interruption-frames.ts";
+import { Cause, Context, Effect, Exit, Logger, Match, Scheduler } from "effect";
 import type { Computation, EffectFn, FramedExit } from "./effect-ir.ts";
 import { GeneratedDeferredReference } from "./deferred-generated-reference.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
@@ -170,11 +174,17 @@ const execute = <A, Out>(
   fn: EffectFn<readonly [], A, never>,
   options: DeferredExecutionOptions | undefined,
   reference: () => Effect.Effect<Out, CompileError>,
+  interruptionFrames = false,
 ): Promise<DeferredObservation<Out>> => {
   let signal: AbortSignal | undefined;
   try {
     signal = cancellation(options);
     checkReferences(fn);
+    if (interruptionFrames) {
+      const diagnostics = checkDeferredInterruptionPaths(fn);
+      if (diagnostics.length)
+        throw new CompileError({ message: "Unsupported Deferred diagnostic sharing", diagnostics });
+    }
     if (!analyzeGeneratedDeferredProfile(Program.make({ work: fn })).has(fn))
       throw refusal("function", "This runner requires the checked private Deferred profile");
   } catch (error) {
@@ -205,6 +215,30 @@ export const DeferredExecution = Object.freeze({
   runWithFrames: <A>(
     fn: EffectFn<readonly [], A, never>,
     options?: DeferredExecutionOptions,
-  ): Promise<DeferredObservation<FramedExit<A, never>>> =>
-    execute(fn, options, () => GeneratedDeferredReference.runWithFrames(fn, [])),
+  ): Promise<DeferredObservation<FramedExit<A, never>>> => {
+    const frames = new DeferredInterruptionFrames();
+    return execute(
+      fn,
+      options,
+      () => GeneratedDeferredReference.runWithInterruptionFrames(fn, [], frames),
+      true,
+    ).then((observation) => {
+      const { exit } = observation;
+      const trail = frames.snapshot();
+      // Pre-aborted invocations have no recorded source boundary and stay unopened.
+      if (!Exit.isFailure(exit) || !Cause.hasInterruptsOnly(exit.cause) || !trail.frames.length)
+        return observation;
+      return Object.freeze({
+        logs: observation.logs,
+        exit: Exit.succeed(
+          Object.freeze({
+            exit: Exit.failCause(
+              Cause.fromReasons<never>(exit.cause.reasons.filter(Cause.isInterruptReason)),
+            ),
+            ...trail,
+          }),
+        ),
+      });
+    });
+  },
 });
