@@ -2482,6 +2482,21 @@ export const emitFunctions = (
                   return Match.value(n.lowering).pipe(
                     Match.tagsExhaustive({
                       Not: () => joinFragments(["!(", arg(0), ")"]),
+                      LiteralText: ({ literals, type: enumType }) => {
+                        const variants = rustLiteralVariants(literals);
+                        return joinFragments([
+                          "(match ",
+                          arg(0),
+                          " { ",
+                          literals
+                            .map(
+                              (literal, i) =>
+                                `${enumType}::${variants[i]} => ${Rs.stringLiteral(literal).text}, `,
+                            )
+                            .join(""),
+                          "}).to_string()",
+                        ]);
+                      },
                       Std: (std) => {
                         usesJsStd = true;
                         return joinFragments([

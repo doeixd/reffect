@@ -9,6 +9,7 @@ import {
   UtcType,
 } from "./js-std.ts";
 import { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
+import { literalTextOf } from "./records.ts";
 import { streamExpressions, streamFinalizers, streamSources } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
 import { SourceMaps } from "./source-artifact.ts";
@@ -135,7 +136,14 @@ export type Lowering =
    * A function of the std-only `crate::js_std` runtime module; `borrow[i]` passes argument `i`
    * as `&str` (a String) rather than by value.
    */
-  | { readonly _tag: "Std"; readonly function: string; readonly borrow: readonly boolean[] };
+  | { readonly _tag: "Std"; readonly function: string; readonly borrow: readonly boolean[] }
+  /** A string-literal union widened to String: a `match` over its enum's variants. */
+  | {
+      readonly _tag: "LiteralText";
+      readonly literals: readonly string[];
+      /** The union's native enum. */
+      readonly type: string;
+    };
 export class Target extends Pipeable.Class {
   private constructor(
     readonly ref: SemanticRef<"target">,
@@ -194,6 +202,19 @@ const hostImplementation = (operation: AnyOperation, hostFunction: string): Impl
 };
 const htmlImplementations = new WeakMap<object, Implementation>();
 /** The ported Foldkit serializer (SSR-003) implements every Html operation. */
+const literalTextImplementation = (
+  operation: AnyOperation,
+  literals: readonly string[],
+  type: string,
+): Implementation =>
+  Object.freeze({
+    ...implementation(operation, {
+      _tag: "LiteralText",
+      literals: Object.freeze([...literals]),
+      type,
+    }),
+    rationale: "Each variant of the literal union's enum is the literal it was declared as",
+  });
 const htmlImplementation = (operation: AnyOperation, kind: HtmlOperationKind): Implementation => {
   const known = htmlImplementations.get(operation);
   if (known) return known;
@@ -1031,11 +1052,14 @@ const plan = Effect.fn("Compile.plan")(function* (
     // other operation chooses among the target's registered ones.
     const encoded = hostFunctionOf(op);
     const html = htmlOperationKind(op);
+    const literalText = literalTextOf(op);
     const provided = encoded
       ? hostImplementation(op, encoded)
       : html
         ? htmlImplementation(op, html)
-        : undefined;
+        : literalText
+          ? literalTextImplementation(op, literalText.literals, literalText.native.type)
+          : undefined;
     const candidates = provided
       ? [provided]
       : target.implementations.filter((i) => i.operation.id === op.id);

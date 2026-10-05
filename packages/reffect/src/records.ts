@@ -3,9 +3,11 @@ import { namingDigest } from "./naming.ts";
 import { dual } from "effect/Function";
 import {
   BoolType,
+  Capabilities,
   Expr,
   IRType,
   NumberType,
+  Operation,
   StringType,
   SemanticRef,
   Targets,
@@ -21,7 +23,7 @@ import {
   undefinedOrItem,
   unionCases,
 } from "./kernel.ts";
-import type { ArrayOp, Layout, MatchCase, StructLayout, Value } from "./kernel.ts";
+import type { AnyOperation, ArrayOp, Layout, MatchCase, StructLayout, Value } from "./kernel.ts";
 import { Computation, joinType } from "./effect-ir.ts";
 import { RustIdent } from "./rust-emit.ts";
 
@@ -818,6 +820,30 @@ export class LiteralsType<L extends string> extends IRType<L> {
   literal(value: L): Expr<L> {
     return Expr.literal(this, value);
   }
+  /** The literal as the String it is: a union of string literals widened to String. */
+  text(value: Expr<L>): Expr<string> {
+    if (!IRType.same(value.type, this))
+      throw fail("TYPE_MISMATCH", "authoring", "Literals.text", "The value is not of this union");
+    return Expr.apply(literalTextOperation(this), value) as Expr<string>;
+  }
 }
+const literalTexts = new WeakMap<AnyOperation, LiteralsType<string>>();
+const literalTextOperations = new WeakMap<LiteralsType<string>, AnyOperation>();
+const literalTextOperation = (type: LiteralsType<string>): AnyOperation => {
+  const known = literalTextOperations.get(type);
+  if (known) return known;
+  const operation = Operation.make(
+    SemanticRef.operation(`reffect/literals.text@1/${digest(type.id)}`),
+    [type] as const,
+    StringType,
+    (value) => value,
+  ).pipe(Operation.withCapabilities([Capabilities.String])) as unknown as AnyOperation;
+  literalTextOperations.set(type, operation);
+  literalTexts.set(operation, type);
+  return operation;
+};
+/** The union an operation widens to String, when it is a `Literals.text` operation. */
+export const literalTextOf = (operation: AnyOperation): LiteralsType<string> | undefined =>
+  literalTexts.get(operation);
 export const Literals = <const L extends string>(literals: readonly [L, ...L[]]): LiteralsType<L> =>
   LiteralsType.of(literals);

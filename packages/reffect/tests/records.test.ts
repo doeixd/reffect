@@ -320,3 +320,16 @@ test("valueTags gives each handler its own case, data-first and in a pipe", asyn
     }),
   ).toThrow("outside the union");
 });
+
+test("a string-literal union widens to String with text (8B)", async () => {
+  const Origin = R.Literals(["Server", "Client"]);
+  const describe = R.fn([R.String], R.String, (prefix) =>
+    R.String.concat(prefix, Origin.text(Origin.literal("Client"))),
+  );
+  expect(await Effect.runPromise(Reference.run(describe, ["on the "]))).toBe("on the Client");
+  // Another union's value is a type error, and refused for untyped callers too.
+  expect(() =>
+    // @ts-expect-error Server is not a literal of ["A"]
+    R.Literals(["A"]).text(Origin.literal("Server")),
+  ).toThrow("not of this union");
+});
