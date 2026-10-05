@@ -720,7 +720,8 @@ const pageReads = (
         }
         ${authenticates ? "if principal.is_none() { return Err(StatusCode::UNAUTHORIZED); }" : ""}
         let authorize = remote_authorize(principal);
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0);
+        // The page's own clock reading, which its render also reads as now (8B).
+        let now = page_now;
         let failure = |error: serde_json::Value| {
             eprintln!("{}", json!({ "schema": "reffect.ssr.page@1", "outcome": "read-failure", "error": error }));
             StatusCode::INTERNAL_SERVER_ERROR

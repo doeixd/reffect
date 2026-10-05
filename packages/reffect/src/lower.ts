@@ -2401,6 +2401,15 @@ export const emitFunctions = (
                         ").iter().any(|(key, _)| key.as_str() == needle) }",
                       ]),
                     ),
+                    Match.when("Get", () =>
+                      joinFragments([
+                        "{ let needle: &str = ",
+                        operand(n.key!),
+                        "; (",
+                        operand(n.source),
+                        ").iter().find(|(key, _)| key.as_str() == needle).map(|(_, value)| value.clone()) }",
+                      ]),
+                    ),
                     Match.exhaustive,
                   ),
                 Flatten: (n) =>

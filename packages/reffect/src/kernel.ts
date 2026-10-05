@@ -423,7 +423,7 @@ export type Node =
       readonly index: symbol;
       readonly body: Expr<unknown>;
     };
-export type RecordQuery = "Keys" | "Values" | "Size" | "Has";
+export type RecordQuery = "Keys" | "Values" | "Size" | "Has" | "Get";
 export type ArrayOp =
   | { readonly _tag: "Map" }
   | { readonly _tag: "Filter" }
@@ -608,7 +608,7 @@ export class Expr<A> extends Pipeable.Class {
     value: Expr<unknown>,
     key?: Expr<unknown>,
   ): Expr<A> {
-    if (!recordValue(value.type) || (query === "Has") !== (key !== undefined))
+    if (!recordValue(value.type) || (query === "Has" || query === "Get") !== (key !== undefined))
       throw fail("TYPE_MISMATCH", "authoring", "Record", "Record queries require a Record");
     return new Expr(output, Object.freeze({ _tag: "RecordQuery", query, value, key }));
   }
@@ -1359,6 +1359,15 @@ export const checkExpression = (
                   n.key !== undefined &&
                   IRType.same(n.key.type, StringType),
               ),
+              // An own key's value, else undefined: `UndefinedOr` of the record's values.
+              Match.when(
+                "Get",
+                () =>
+                  undefinedOrItem(e.type) !== undefined &&
+                  IRType.same(undefinedOrItem(e.type)!, value) &&
+                  n.key !== undefined &&
+                  IRType.same(n.key.type, StringType),
+              ),
               Match.exhaustive,
             );
           if (!valid) add("TYPE_MISMATCH", at, "Record query witnesses are inconsistent");
@@ -1542,6 +1551,10 @@ export const evaluateExpression = (
             Match.when("Values", () => Object.values(record)),
             Match.when("Size", () => Object.keys(record).length),
             Match.when("Has", () => Object.hasOwn(record, evaluate(n.key!) as string)),
+            Match.when("Get", () => {
+              const key = evaluate(n.key!) as string;
+              return Object.hasOwn(record, key) ? record[key] : undefined;
+            }),
             Match.exhaustive,
           );
         },

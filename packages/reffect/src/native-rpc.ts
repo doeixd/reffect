@@ -16,7 +16,7 @@ import type { StreamFn } from "./stream-ir.ts";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
 import { PortedRuntimes, verifyUpstream } from "./ported-runtime.ts";
-import { PageSchema, pageRuntime, positionalPage, splitTemplate } from "./ssr-page.ts";
+import { PageSchema, pageRequest, pageRuntime, positionalPage, splitTemplate } from "./ssr-page.ts";
 import type { PageRender, TemplatePart } from "./ssr-page.ts";
 import type { PortedRuntime, UpstreamCheck } from "./ported-runtime.ts";
 import {
@@ -960,7 +960,7 @@ export const compileServer = (
           | {
               readonly kind: Codec;
               readonly parts: ReadonlyArray<TemplatePart>;
-              readonly takesUrl: boolean;
+              readonly readsCookie: boolean;
               readonly takesData: boolean;
               readonly views: Codec | undefined;
               readonly origin: string;
@@ -971,21 +971,9 @@ export const compileServer = (
           const takesData = runtime?.pageData !== undefined;
           // The host calls one positional page; the request is assembled inside it (#13).
           const render = positionalPage(options.pages.render, takesData);
-          if (
-            !(render instanceof Fn) ||
-            (takesData
-              ? (render.input.length !== 2 && render.input.length !== 3) ||
-                !IRType.same(render.input[0]!, StringType) ||
-                !IRType.same(render.input[1]!, UnknownType)
-              : render.input.length > 1 ||
-                (render.input.length === 1 && !IRType.same(render.input[0]!, StringType)))
-          )
-            throw unsupported(
-              "pages.render",
-              takesData
-                ? "The page is a pure R function of the request URL (String), its data (Unknown) and optionally its views"
-                : "The page is a pure R function of nothing or of the request URL (String)",
-            );
+          // `positionalPage` builds `(url, cookie, now, [remote, [views]])`; a page is pure R.
+          if (!(render instanceof Fn))
+            throw unsupported("pages.render", "The page is a pure R function of its request");
           let base: URL;
           try {
             base = new URL(origin);
@@ -1006,12 +994,13 @@ export const compileServer = (
           pages = {
             kind,
             parts: splitTemplate(template, containerId),
-            takesUrl: render.input.length >= 1,
             takesData,
+            readsCookie: pageRequest(options.pages.render).cookie,
             views:
-              render.input.length === 3
+              // (url, cookie, now, remote, views): the fifth input, when the page reads views.
+              render.input.length === 5
                 ? codec(
-                    contractSchemaOf(render.input[2]!, "pages.render.views").ast,
+                    contractSchemaOf(render.input[4]!, "pages.render.views").ast,
                     "pages.render.views",
                     true,
                     registry,
@@ -1359,19 +1348,17 @@ ${
                   prepared.pages.origin,
                   encode(
                     prepared.pages.kind,
-                    Rs.pathCall(
-                      [Rs.ident("reffect_generated")],
-                      Rs.ident("r_ssr_page"),
-                      prepared.pages.takesData
+                    Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident("r_ssr_page"), [
+                      Rs.verbatimExpr("href.clone()"),
+                      Rs.verbatimExpr("page_cookie.clone()"),
+                      Rs.verbatimExpr("page_now as f64"),
+                      ...(prepared.pages.takesData
                         ? [
-                            Rs.verbatimExpr("href.clone()"),
                             Rs.verbatimExpr("resume"),
                             ...(prepared.pages.views ? [Rs.verbatimExpr("views")] : []),
                           ]
-                        : prepared.pages.takesUrl
-                          ? [Rs.verbatimExpr("href.clone()")]
-                          : [],
-                    ),
+                        : []),
+                    ]),
                   ).text,
                   prepared.pages.takesData ? runtime!.pageData : undefined,
                   prepared.pages.views === undefined
@@ -1379,8 +1366,9 @@ ${
                     : isScalar(prepared.pages.views)
                       ? `${prepared.pages.views}_arg(&views, None)`
                       : `decode_${prepared.pages.views.name}(&views, None)`,
-                  prepared.auth?.session !== undefined,
+                  prepared.auth?.session !== undefined || prepared.pages.readsCookie,
                   prepared.auth?.session?.loginPage,
+                  prepared.auth?.session?.cookie,
                 ),
               ),
             ]

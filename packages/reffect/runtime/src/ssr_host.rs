@@ -302,3 +302,31 @@ pub fn header_value(headers: &axum::http::HeaderMap, name: &str) -> Option<Strin
             .join(", "),
     )
 }
+/// The `Cookie` text a page reads (8B): every `Cookie` header as latin1 text, joined with `"; "`
+/// as a Web `Request` joins a repeated cookie header, without the session cookie's pairs, so no
+/// view can write the HttpOnly token into a page. Each kept pair's text is unchanged, so
+/// `Cookies.parseHeader` reads the rest exactly as it would have.
+pub fn page_cookie(headers: &axum::http::HeaderMap, session: Option<&str>) -> String {
+    let text = headers
+        .get_all("cookie")
+        .iter()
+        .map(|value| {
+            value
+                .as_bytes()
+                .iter()
+                .map(|byte| *byte as char)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let Some(session) = session else {
+        return text;
+    };
+    text.split(';')
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or("");
+            key.trim_matches(js_space) != session
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}

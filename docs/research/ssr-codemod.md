@@ -127,3 +127,9 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
 - **1d-iii (2026-10-05):**
   - `R.DateTime.Utc` (natively epoch milliseconds as `f64`), `R.DateTime.make` (Effect `DateTime.make`, so JS `TimeClip` as an Option), `formatIso` (`toISOString`, with six-digit signed years outside 0–9999) and `toEpochMillis`.
   - Evidence: `tests/js-std.test.ts` passes 3/3. Native agrees with Effect on 20 instants: ±0, fractions, ±8.64e15 and past them, NaN, Infinity, the year 9999/10000 and 0/−1 boundaries, a leap day.
+- **1d-iv (2026-10-05):**
+  - A page request may read `cookie` (the request's `Cookie` text as latin1, repeated headers joined with `"; "`, every session-cookie pair removed) and `now` (an `R.DateTime.Utc` from one clock reading, which the page's Remote data step shares). A page reading `cookie` answers `Vary: Cookie`.
+  - `R.Record.get` (Effect `Record.get`, as an Option) is a `Get` record query.
+  - The positional page is now `(url, cookie, now, [remote, [views]])`.
+  - Evidence: `tests/page-request.test.ts` passes 1/1. A page reading the count cookie exactly as the pinned `cookie.ts` does (`parseHeader` → `Record.get` → `Number.parse` → `isSafeInteger` → 0), plus its instant as ISO, answers byte-equal to upstream `handleRequest` on ten cookie headers, latin1 included. The runtime test `a_page_never_reads_the_session_cookie` passes. Every page suite passes, as does `todo-fullstack` 2/2.
+- **Still needed for the example:** authored response headers on pages (`cache-control`, `vary`, `x-content-type-options`, as `Rendered(…, { headers })` sets them), and the `OPTIONS` preflight answer.

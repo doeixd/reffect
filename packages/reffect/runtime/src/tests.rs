@@ -817,3 +817,29 @@ fn js_number_parse_keeps_negative_zero_and_rounds_radix_literals_to_even() {
     assert_eq!(number_parse("0x20000000000003"), Some(9007199254740996.0));
     assert!(is_safe_integer(9007199254740991.0) && !is_safe_integer(9007199254740992.0));
 }
+
+#[test]
+fn a_page_never_reads_the_session_cookie() {
+    use crate::ssr_host::page_cookie;
+    let mut headers = axum::http::HeaderMap::new();
+    headers.append(
+        "cookie",
+        "a=1; __Host-reffect-session=secret".parse().unwrap(),
+    );
+    headers.append(
+        "cookie",
+        " __Host-reffect-session =again;b=2".parse().unwrap(),
+    );
+    headers.append("cookie", "__Host-reffect-session-x=kept".parse().unwrap());
+    // Repeated headers join as a Web Request joins them; every session pair goes, the rest stay
+    // byte for byte.
+    assert_eq!(
+        page_cookie(&headers, Some("__Host-reffect-session")),
+        "a=1;b=2; __Host-reffect-session-x=kept"
+    );
+    assert_eq!(
+        page_cookie(&headers, None),
+        "a=1; __Host-reffect-session=secret;  __Host-reffect-session =again;b=2; __Host-reffect-session-x=kept"
+    );
+    assert_eq!(page_cookie(&axum::http::HeaderMap::new(), Some("x")), "");
+}

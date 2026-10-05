@@ -17,8 +17,11 @@ import {
   U64Type,
   UnitType,
   NeverType,
+  IRType,
+  fail,
+  recordValue,
 } from "./kernel.ts";
-import type { IRType, Symbols } from "./kernel.ts";
+import type { Symbols } from "./kernel.ts";
 import { Computation, EffectFn, EffectIR, LogIR, matchComputation } from "./effect-ir.ts";
 import { catchAll, mapError, orElse } from "./error-recovery.ts";
 import { ContextIR } from "./context.ts";
@@ -40,6 +43,8 @@ import { FileIR } from "./file-resource.ts";
 import { ScheduleIR } from "./schedule.ts";
 import { ScopedIR } from "./scoped-sequence.ts";
 import { OptionIR } from "./option.ts";
+import type { OptionValue } from "./option.ts";
+import { dual } from "effect/Function";
 import { ResultIR, effectResult } from "./result.ts";
 import { CauseIR } from "./cause.ts";
 import { ExitIR } from "./exit.ts";
@@ -68,11 +73,30 @@ const ArrayModule = Object.freeze(
     ArrayCombinators,
   ),
 );
+/**
+ * Effect `Record.get(self, key)`: the own key's value as an Option. Its Option lives above the
+ * records module, so it is assembled here.
+ */
+const recordGet: {
+  (key: Expr<string>): <V>(self: Expr<Readonly<Record<string, V>>>) => Expr<OptionValue<V>>;
+  <V>(self: Expr<Readonly<Record<string, V>>>, key: Expr<string>): Expr<OptionValue<V>>;
+} = dual(
+  2,
+  <V>(self: Expr<Readonly<Record<string, V>>>, key: Expr<string>): Expr<OptionValue<V>> => {
+    const value = recordValue(self.type);
+    if (value === undefined || !IRType.same(key.type, StringType))
+      throw fail("TYPE_MISMATCH", "authoring", "Record.get", "get takes a Record and a String key");
+    return OptionIR.fromUndefinedOr(
+      Expr.recordQuery("Get", UndefinedOr(value as IRType<V>), self, key),
+    );
+  },
+);
 const RecordModule = Object.freeze(
   Object.assign(
     <A>(key: IRType<string>, value: IRType<A>) => RecordIR(key, value),
     RecordIR,
     RecordCombinators,
+    { get: recordGet },
   ),
 );
 

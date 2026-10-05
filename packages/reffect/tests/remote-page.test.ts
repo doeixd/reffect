@@ -169,7 +169,13 @@ test("a page plans one query per view, and unknown queries or mismatched views a
   const refusals = await Promise.all(
     [
       { render: renderOf(R.String), remote: plan, says: "one PageRequest Struct" },
-      { render: renderOf(R.Struct({ cookie: R.String })), remote: plan, says: "not cookie" },
+      { render: renderOf(R.Struct({ headers: R.String })), remote: plan, says: "not headers" },
+      { render: renderOf(R.Struct({ cookie: R.Bool })), remote: plan, says: "cookie is a String" },
+      {
+        render: renderOf(R.Struct({ now: R.Number })),
+        remote: plan,
+        says: "now is an R.DateTime.Utc",
+      },
       { render: renderOf(R.Struct({ url: R.Bool })), remote: plan, says: "url is a String" },
       { render: renderOf(R.Struct({ remote: R.Unknown })), remote: undefined, says: "remote plan" },
     ].map(({ render, remote, says }) =>
