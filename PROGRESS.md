@@ -11,6 +11,19 @@
 - Rebased unchanged onto remote 43e7315 and installed dependencies, preserving string/concatenation and shared-tree SSR work. Merged native/boundary/string/array/emission/runtime checks pass 31/31 across six suites (164.00s). Strict/check exposed a typing defect in the new #33 plain-object traversal; the checked internal record bridge now uses a readonly unknown-valued assertion without changing emitted code or allocations. Strict TypeScript passes after correction.
 - Synced again through 5fd17d7. Preserved source-writer/provenance, weak registries, naming/codec, cookie-session/hosting, URL and page-input work. Emission conflict preserves both URL support and the private query allowance. Upstream 582f354's plain-record type guard supersedes the local assertion; native runtime changes remain upstream-owned. Latest merged regression passes 40/40 across ten suites (173.96s), including exact native/root/nested diagnostics, ordinary mapped failure frames, context/budget isolation, stage reuse, weak registries, naming and runtime-source parity. Strict TypeScript and rebuilt workspace pass. Review fixes formatting only in the newly synced SSR data record; final check follows before publication.
 
+## 2026-10-05 — Gets as page views (M9-3)
+
+- [Design, upstream probe and acceptance](docs/research/ssr-data.md#gets-as-page-views-2026-10-05).
+  - `planPage` views may be `{ get: select, id }`, with a constant id or a pure R function of the page URL.
+  - The view reads `R.Remote.Data(item)`, the settled subset of upstream `RemoteData` (`Ready { value } | NotFound`).
+  - An id function that is not `String → String` is a type error, and a hand-written plan with one is refused at compile time.
+- The engine now mirrors upstream's planner. A planned Read asks only for the fields the page's earlier answers lack, and is skipped when they hold it all. Planned requests are encoded in schema key order, as the page's Flags are. Both were found by the byte-equal test.
+- Divergence #7 now covers get views (Ready or NotFound only).
+- Validation:
+  - `vp check` passes.
+  - `vp run runtime:check` passes (clippy and 30 runtime tests, including the new narrowing/get test).
+  - These suites pass, run one at a time: `remote-page-input` 2/2, `remote-page` 2/2, `todo-remote-page` 1/1, `remote-auth` 4/4, `remote-page-decode` 2/2, `todo-fullstack` 2/2.
+
 ## 2026-10-05 — Page inputs from the URL (M9-3)
 
 - [Design and acceptance](docs/research/ssr-data.md#page-inputs-from-the-url-2026-10-05). `R.Url.pathname`/`R.Url.searchParam` mirror the Web URL API, total over strings, natively on `url` 2.5.8. A differential corpus of 15 URLs × 5 names agrees between native and reference.

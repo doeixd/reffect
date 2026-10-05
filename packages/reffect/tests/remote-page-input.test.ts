@@ -1,8 +1,9 @@
 /**
- * Page inputs from the URL (docs/research/ssr-data.md): a view's query input is a pure R function
- * of the page's URL. Natively the page fills its planned request's `input` from each request's URL;
- * the reference is upstream `handleRequest` around `renderToString` whose `init` derives the same
- * input from the request URL, and the browser's replay answers that request and nothing more.
+ * Page inputs from the URL and get views (docs/research/ssr-data.md): a view's query input, and a
+ * get view's id, are pure R functions of the page's URL. Natively the page fills its planned
+ * requests from each request's URL; the reference is upstream `handleRequest` around
+ * `renderToString` whose `init` derives the same from the request URL, and the browser's replay
+ * answers those requests and nothing more.
  */
 import { request as httpRequest } from "node:http";
 import { Effect, Exit, FileSystem, Option, Schema, Stream } from "effect";
@@ -11,7 +12,7 @@ import { NodeServices } from "@effect/platform-node";
 import { Rendered, handleRequest, renderToString } from "foldkit/experimental/server";
 import { defineMessageUnion } from "foldkit/message";
 import { Entity, Expr, Order } from "foldkit-entity";
-import { Query, Remote, RemoteRpc } from "foldkit-remote";
+import { Query, Remote, RemoteData, RemoteRpc } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
 import { Surface } from "foldkit-surface";
 import { expect, test } from "vite-plus/test";
@@ -66,8 +67,22 @@ const statusFromUrl = (url: string) => ({
   status: new URL(url).searchParams.get("status") ?? "open",
 });
 
+// The get view's id: `?id=`, `a` when absent.
+const named = Entity.select(Task, { title: true });
+const idOf = R.fn([R.String], R.String, (url) =>
+  R.Url.searchParam(url, "id").pipe(
+    R.UndefinedOr.match({ onUndefined: () => R.String.literal("a"), onDefined: (id) => id }),
+  ),
+);
+const idFromUrl = (url: string) => new URL(url).searchParams.get("id") ?? "a";
+
 const origin = "http://reffect.test";
-const plan = planPage(Data, initial, { tasks: { input: statusOf, projection } }, { origin });
+const plan = planPage(
+  Data,
+  initial,
+  { tasks: { input: statusOf, projection }, task: { get: named, id: idOf } },
+  { origin },
+);
 const template =
   '<!doctype html><html lang="en"><head><title>Placeholder</title></head>' +
   '<body><div id="root"></div></body></html>';
@@ -85,7 +100,15 @@ const page = R.fn([PageRequest], Page, (request) =>
     {
       init: () =>
         R.Struct({ heading: R.String, todos: R.Array(TodoItem) }).make({
-          heading: R.Struct.get(request, "url"),
+          // The heading is the selected task's title, as upstream's RemoteData match reads it.
+          heading: request.pipe(
+            R.Struct.get("views"),
+            R.Struct.get("task"),
+            R.Match.valueTags({
+              Ready: (ready) => ready.pipe(R.Struct.get("value"), R.Struct.get("title")),
+              NotFound: () => R.String.literal("Not found"),
+            }),
+          ),
           todos: request.pipe(R.Struct.get("views"), R.Struct.get("tasks"), R.Struct.get("items")),
         }),
       view: todoDocument,
@@ -96,6 +119,7 @@ const page = R.fn([PageRequest], Page, (request) =>
 const FlagsSchema = Schema.Struct({ remote: RemoteResume });
 const activeAt = (url: string) => ({
   tasks: Data.active("ByStatus", () => Option.some(projection(statusFromUrl(url)))),
+  task: Data.active("Task", () => Option.some(Data.get(named, idFromUrl(url)))),
 });
 
 const upstream = async (target: string, now: number) => {
@@ -120,9 +144,17 @@ const upstream = async (target: string, now: number) => {
                   }).pipe(Effect.provide(replay(flags.remote.exchanges))),
                 );
                 const read = projection(statusFromUrl(request.url)).read(model);
+                const task = Data.get(named, idFromUrl(request.url)).read(model);
                 return {
                   model: {
-                    heading: request.url,
+                    heading: RemoteData.match(task, {
+                      Ready: (value) => value.title,
+                      NotFound: () => "Not found",
+                      Initial: () => "Unsettled",
+                      Loading: () => "Unsettled",
+                      Refreshing: () => "Unsettled",
+                      Failed: () => "Unsettled",
+                    }),
                     todos: read._tag === "Ready" ? [...read.value.items] : [],
                   },
                 };
@@ -159,19 +191,35 @@ const flagsOf = (body: string) => {
   return Schema.decodeUnknownSync(Schema.toCodecJson(FlagsSchema))(JSON.parse(payload[1]!));
 };
 
-test("a templated view is planned at the origin's root, and an ill-typed input is refused", async () => {
+test("templated views are planned at the origin's root, and ill-typed inputs are refused", async () => {
   expect(plan.reads).toEqual([
     {
       _tag: "Query",
       request: expect.objectContaining({ query: "ByStatus", input: { status: "open" } }),
     },
+    {
+      _tag: "Read",
+      request: expect.objectContaining({
+        requests: [{ entity: "Task", fields: ["title"], id: "a" }],
+      }),
+    },
   ]);
   expect(plan.views.tasks.input).toBe(statusOf);
+  expect(plan.views.task).toMatchObject({ _tag: "Get", read: 1, id: idOf });
+  // The view the render reads is R.Remote.Data of the selection.
+  expect(
+    R.Struct({
+      tasks: R.Remote.Page(TodoItem),
+      task: R.Remote.Data(R.Struct({ title: R.String })),
+    }).id,
+  ).toBe(NativeRemote.pageViews(plan).id);
   // A projection that does not accept what the input returns is a type error at the view.
   const byTerm = (input: { readonly term: string }) =>
     Data.query(ByStatus, { status: input.term }, { select, first: 20 });
-  // @ts-expect-error the input returns { status }, not { term }
-  planPage(Data, initial, { tasks: { input: statusOf, projection: byTerm } }, { origin });
+  // Typed only: planning it would run byTerm on { status }.
+  void (() =>
+    // @ts-expect-error the input returns { status }, not { term }
+    planPage(Data, initial, { tasks: { input: statusOf, projection: byTerm } }, { origin }));
   // The input must return the query's own Input.
   const wrong = R.fn([R.String], R.Struct({ state: R.String }), (url) =>
     R.Struct({ state: R.String }).make({ state: R.Url.pathname(url) }),
@@ -190,6 +238,26 @@ test("a templated view is planned at the origin's root, and an ill-typed input i
   );
   expect(refused).toBeInstanceOf(CompileError);
   expect(refused.message).toContain("ByStatus's Input");
+  // A get's id must be a String of the URL.
+  const notText = R.fn([R.String], R.Bool, () => R.Bool.literal(true));
+  const refusedId = await Effect.runPromise(
+    NativeRemote.compile(group, {
+      domain: Data,
+      rows,
+      pages: {
+        template,
+        render: page,
+        origin,
+        remote: {
+          reads: plan.reads,
+          // A hand-written plan is checked too; the planned view's type already refuses it.
+          // @ts-expect-error the id function returns a Bool
+          views: { ...plan.views, task: { ...plan.views.task, id: notText } },
+        },
+      },
+    }).pipe(Effect.flip),
+  );
+  expect(refusedId.message).toContain("A URL id");
 });
 
 test(
@@ -225,7 +293,15 @@ test(
           )(JSON.parse(ready.value));
 
           const bodies: Array<string> = [];
-          for (const target of ["/tasks", "/tasks?status=closed", "/tasks?status=a+b"]) {
+          // Each URL, and whether its get needs a Read: upstream's planner asks only for what
+          // the store lacks, so a task the list already answered is not read again.
+          const targets = [
+            ["/tasks", false],
+            ["/tasks?status=closed&id=c", false],
+            ["/tasks?status=a+b", true],
+            ["/tasks?id=missing", true],
+          ] as const;
+          for (const [target, reads] of targets) {
             const native = yield* Effect.promise(() => send(address, target));
             const flags = flagsOf(native.body);
             const expected = yield* Effect.promise(() => upstream(target, flags.remote.now));
@@ -236,6 +312,13 @@ test(
             const url = `${origin}${target}`;
             expect(flags.remote.exchanges.map((exchange) => exchange.request)).toEqual([
               expect.objectContaining({ input: statusFromUrl(url) }),
+              ...(reads
+                ? [
+                    expect.objectContaining({
+                      requests: [expect.objectContaining({ id: idFromUrl(url) })],
+                    }),
+                  ]
+                : []),
             ]);
             const resumed = Effect.runSyncExit(
               Data.satisfy(initial, activeAt(url), { now: () => flags.remote.now }).pipe(
@@ -246,6 +329,9 @@ test(
             expect(projection(statusFromUrl(url)).read(resumed.value)).toMatchObject({
               _tag: "Ready",
             });
+            expect(Data.get(named, idFromUrl(url)).read(resumed.value)).toMatchObject({
+              _tag: target.endsWith("missing") ? "NotFound" : "Ready",
+            });
           }
           // Two URLs, two lists: the default selects the open tasks, `?status=closed` the other.
           expect(bodies[0]).toContain("Read the URL");
@@ -253,6 +339,10 @@ test(
           expect(bodies[1]).toContain("Ship it");
           expect(bodies[1]).not.toContain("Read the URL");
           expect(bodies[2]).not.toContain("Ship it");
+          // The get view: `?id=c` heads the page with its title, a missing id with NotFound's.
+          expect(bodies[1]).toContain("<h1>Ship it</h1>");
+          expect(bodies[0]).toContain("<h1>Plan the page</h1>");
+          expect(bodies[3]).toContain("<h1>Not found</h1>");
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     );

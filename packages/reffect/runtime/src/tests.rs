@@ -543,7 +543,15 @@ fn page_views_are_ready_pages_in_edge_order() {
         ],
     } });
     assert_eq!(
-        page_views(&[exchange], &[("todos", 0)]),
+        page_views(
+            &[PageRead {
+                tag: "Query",
+                request: json!({})
+            }],
+            &[Some(0)],
+            &[exchange],
+            &[("todos", 0)]
+        ),
         // Edge order; a missing entity is null, which typed decoding refuses.
         json!({ "todos": { "items": [{ "title": "b" }, { "title": "a" }, null], "hasNext": true, "hasPrevious": false } })
     );
@@ -571,6 +579,54 @@ fn page_data_records_each_planned_read_with_its_answer() {
         json!({ "title": "Write" })
     );
     assert_eq!(views, json!({}));
+}
+
+#[test]
+fn page_reads_ask_only_what_earlier_answers_lack_and_gets_settle() {
+    let rows = json!({ "Todo": [["t1", { "id": "t1", "title": "Write", "done": true }]] });
+    let memory = Memory::new(vec!["Todo".to_string()], &rows, &[]);
+    let get = |id: &str, fields: &[&str]| PageRead {
+        tag: "Read",
+        request: json!({ "version": 4, "requests": [{ "entity": "Todo", "id": id, "fields": fields }] }),
+    };
+    let reads = [
+        get("t1", &["title"]),
+        get("t1", &["title", "done"]),
+        get("t1", &["title"]),
+        get("t9", &["title"]),
+    ];
+    let permit_all = |_: &str, fields: &[String]| fields.to_vec();
+    let views = [("first", 0), ("both", 1), ("again", 2), ("missing", 3)];
+    let (resume, views) = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(page_data(&memory, &permit_all, &reads, &views, 7))
+        .unwrap();
+    let requests: Vec<&serde_json::Value> = resume["exchanges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|exchange| &exchange["request"]["requests"][0])
+        .collect();
+    // The second read asks only for `done`; the third is answered already, so it is not made.
+    assert_eq!(
+        requests,
+        [
+            &json!({ "entity": "Todo", "id": "t1", "fields": ["title"] }),
+            &json!({ "entity": "Todo", "id": "t1", "fields": ["done"] }),
+            &json!({ "entity": "Todo", "id": "t9", "fields": ["title"] }),
+        ]
+    );
+    // Each get view is its selection of everything answered; one never answered is NotFound.
+    assert_eq!(
+        views,
+        json!({
+            "first": { "_tag": "Ready", "value": { "title": "Write" } },
+            "both": { "_tag": "Ready", "value": { "title": "Write", "done": true } },
+            "again": { "_tag": "Ready", "value": { "title": "Write" } },
+            "missing": { "_tag": "NotFound" },
+        })
+    );
 }
 
 /// The memory backend, counting reads; during its first read a newer title is committed and

@@ -1,7 +1,7 @@
 import { Effect, Match, Schema, SchemaAST } from "effect";
 import { flow } from "./flow.ts";
 import { pageRequest } from "./ssr-page.ts";
-import type { PagePlan, PlannedViews } from "./remote-resume.ts";
+import type { PagePlan, PlannedGetView, PlannedViews } from "./remote-resume.ts";
 import { Rpc, type RpcGroup } from "effect/rpc";
 import type { AnyQuery } from "foldkit-entity";
 import { EffectFn, EffectIR, type Computation } from "./effect-ir.ts";
@@ -542,18 +542,26 @@ const hasRelations = (selection: unknown): boolean =>
   typeof selection.relations === "object" &&
   selection.relations !== null &&
   Object.keys(selection.relations).length > 0;
-/** A view's `Page` of its decoded items, as upstream's `pageSchema(select.schema)` reads it. */
+/**
+ * A query view's `Page` of its decoded items, as upstream's `pageSchema(select.schema)` reads it,
+ * or a get view's settled `RemoteData`.
+ */
 type ViewPages<V extends PlannedViews> = {
-  readonly [K in keyof V]: {
-    readonly items: ReadonlyArray<V[K]["item"]["Type"]>;
-    readonly hasNext: boolean;
-    readonly hasPrevious: boolean;
-  };
+  readonly [K in keyof V]: V[K] extends PlannedGetView
+    ?
+        | { readonly _tag: "Ready"; readonly value: V[K]["item"]["Type"] }
+        | { readonly _tag: "NotFound" }
+    : {
+        readonly items: ReadonlyArray<V[K]["item"]["Type"]>;
+        readonly hasNext: boolean;
+        readonly hasPrevious: boolean;
+      };
 };
 /**
- * The witness of a plan's views (#6): a Struct of each view's `R.Remote.Page`, its items those
- * of the projection's own selection schema. A page's request reads `views` of exactly this, so
- * a field the schema transforms reaches the R view decoded, as it reaches upstream's view.
+ * The witness of a plan's views (#6): a Struct of each query view's `R.Remote.Page` and each get
+ * view's `R.Remote.Data`, of the selection's own schema. A page's request reads `views` of
+ * exactly this, so a field the schema transforms reaches the R view decoded, as it reaches
+ * upstream's view.
  */
 const pageViews = <V extends PlannedViews>(plan: PagePlan<V>): IRType<ViewPages<V>> =>
   NativeRpc.witness(
@@ -561,11 +569,21 @@ const pageViews = <V extends PlannedViews>(plan: PagePlan<V>): IRType<ViewPages<
       Object.fromEntries(
         Object.entries(plan.views).map(([name, view]) => [
           name,
-          Schema.Struct({
-            items: Schema.Array(view.item),
-            hasNext: Schema.Boolean,
-            hasPrevious: Schema.Boolean,
-          }),
+          Match.value(view).pipe(
+            Match.tagsExhaustive({
+              Query: ({ item }): Schema.Top =>
+                Schema.Struct({
+                  items: Schema.Array(item),
+                  hasNext: Schema.Boolean,
+                  hasPrevious: Schema.Boolean,
+                }),
+              Get: ({ item }): Schema.Top =>
+                Schema.Union([
+                  Schema.TaggedStruct("Ready", { value: item }),
+                  Schema.TaggedStruct("NotFound", {}),
+                ]),
+            }),
+          ),
         ]),
       ),
     ),
@@ -587,6 +605,23 @@ const pageReads = (
   const helpers: { [name: string]: Fn } = {};
   const fills: string[] = [];
   for (const [name, view] of Object.entries(views)) {
+    if (view._tag === "Get") {
+      if (view.id === undefined) continue;
+      const at = `pages.views.${name}.id`;
+      if (
+        !(view.id instanceof Fn) ||
+        view.id.input.length !== 1 ||
+        !IRType.same(view.id.input[0]!, StringType) ||
+        !IRType.same(view.id.output, StringType)
+      )
+        throw unsupported(at, "A URL id is a pure R function of the page URL (String) to String");
+      const helperName = `page_id_${view.read}`;
+      helpers[helperName] = view.id;
+      fills.push(
+        `${view.read} => { request["requests"][0]["id"] = serde_json::Value::String(reffect_generated::r_${helperName}(href.clone())); }`,
+      );
+      continue;
+    }
     if (view.input === undefined) continue;
     const at = `pages.views.${name}.input`;
     const read = reads[view.read];
@@ -649,6 +684,13 @@ const pageReads = (
   const viewsType = pageRequest(render).views;
   for (const [name, view] of Object.entries(views)) {
     const read = reads[view.read];
+    if (view._tag === "Get") {
+      if (read?._tag !== "Read" || read.request.requests.length !== 1)
+        throw unsupported(`pages.views.${name}`, "A get view reads one entity of the page's reads");
+      if (!Schema.isSchema(view.item))
+        throw unsupported(`pages.views.${name}`, "A view carries its selection schema (planPage)");
+      continue;
+    }
     if (read?._tag !== "Query")
       throw unsupported(`pages.views.${name}`, "A view reads one of the page's queries");
     // A view without a window would read the whole table on every page request (#5).

@@ -133,7 +133,8 @@ const planReads = <A, E>(effect: Effect.Effect<A, E, RemoteClient>): ReadonlyArr
           Layer.succeed(RemoteClient, {
             query: (request) =>
               Effect.sync(() => {
-                planned.push({ _tag: "Query", request });
+                // In the schema's key order, as the page's Flags encode it (RemoteResume).
+                planned.push({ _tag: "Query", request: Schema.encodeSync(QueryRequest)(request) });
                 return {
                   edges: [],
                   start: { _tag: "Terminal" as const },
@@ -143,7 +144,7 @@ const planReads = <A, E>(effect: Effect.Effect<A, E, RemoteClient>): ReadonlyArr
               }),
             read: (request) =>
               Effect.sync(() => {
-                planned.push({ _tag: "Read", request });
+                planned.push({ _tag: "Read", request: Schema.encodeSync(ReadBatch)(request) });
                 return { entities: [], settled: [] };
               }),
             mutate: () =>
@@ -169,7 +170,7 @@ export interface PagePlan<V extends PlannedViews = PlannedViews> {
  * A page view (M9-3 step 2b): the planned Query whose answer becomes the view's `Page`, and the
  * projection's selection schema, which decodes each item as upstream's `decodeRow` does (#6).
  */
-export interface PlannedView<Item extends Schema.Top = Schema.Top> {
+export interface PlannedQueryView<Item extends Schema.Top = Schema.Top> {
   readonly _tag: "Query";
   readonly read: number;
   readonly item: Item;
@@ -179,6 +180,20 @@ export interface PlannedView<Item extends Schema.Top = Schema.Top> {
    */
   readonly input?: Fn<readonly [IRType<string>], unknown>;
 }
+/**
+ * A get view (docs/research/ssr-data.md, "Gets as page views"): the planned Read of one entity,
+ * whose answer becomes the view's `R.Remote.Data` (Ready or NotFound), decoded by `item`.
+ */
+export interface PlannedGetView<Item extends Schema.Top = Schema.Top> {
+  readonly _tag: "Get";
+  readonly read: number;
+  readonly item: Item;
+  /** For an id that comes from the page URL: the pure R function computing it from the URL. */
+  readonly id?: Fn<readonly [IRType<string>], string>;
+}
+export type PlannedView<Item extends Schema.Top = Schema.Top> =
+  | PlannedQueryView<Item>
+  | PlannedGetView<Item>;
 export type PlannedViews = { readonly [name: string]: PlannedView };
 /** A query projection a page view reads: upstream's `QueryProjection`, by what a plan needs. */
 export interface PageProjection {
@@ -196,26 +211,48 @@ interface TemplatedEntry {
   readonly input: Fn<readonly [IRType<string>], unknown>;
   readonly projection: (input: never) => PageProjection;
 }
-type ViewEntry = PageProjection | TemplatedEntry;
+/**
+ * A view of one entity: upstream's `Data.get(get, id)`, with the selection itself so the plan can
+ * decode it. `id` is constant, or a pure R function of the page URL (with `R.Url`).
+ */
+export interface GetView<S extends PageSelection = PageSelection> {
+  readonly get: S;
+  readonly id: string | Fn<readonly [IRType<string>], string>;
+}
+/** An entity selection, by what a plan needs: `Entity.select`'s schema. */
+export interface PageSelection {
+  readonly schema: Schema.Top;
+}
+type ViewEntry = PageProjection | TemplatedEntry | GetView;
 /** A templated view's projection must accept what its input returns. */
 type CheckedViews<V> = {
   readonly [K in keyof V]: V[K] extends { readonly input: Fn<readonly [IRType<string>], infer I> }
     ? { readonly input: V[K]["input"]; readonly projection: (input: I) => PageProjection }
     : V[K];
 };
-/** The projection a view entry reads. */
-type ProjectionOf<E> = E extends { readonly projection: (input: never) => infer P } ? P : E;
-type ItemOf<E> =
-  ProjectionOf<E> extends PageProjection ? ProjectionOf<E>["selection"]["schema"] : never;
+/** The query projection a view entry reads; a get view reads none. */
+type ProjectionOf<E> = E extends GetView
+  ? never
+  : E extends { readonly projection: (input: never) => infer P }
+    ? P
+    : E;
+type ItemOf<E> = E extends GetView
+  ? E["get"]["schema"]
+  : ProjectionOf<E> extends PageProjection
+    ? ProjectionOf<E>["selection"]["schema"]
+    : never;
+type PlannedOf<E> = E extends GetView ? PlannedGetView<ItemOf<E>> : PlannedQueryView<ItemOf<E>>;
 const isTemplated = (entry: ViewEntry): entry is TemplatedEntry => "projection" in entry;
+const isGet = (entry: ViewEntry): entry is GetView => "get" in entry;
 /**
  * A page's reads and the views its R render reads from them: each view's
- * `data.prefetch(initial, projection)`, planned, with the projection's selection schema. A view is
- * a query projection with a flat selection; its value is upstream's `Page` (`items`, `hasNext`,
- * `hasPrevious`) of a Ready read, its items decoded by that schema.
+ * `data.prefetch(initial, projection)`, planned, with the projection's selection schema. A query
+ * view is a query projection with a flat selection; its value is upstream's `Page` (`items`,
+ * `hasNext`, `hasPrevious`) of a Ready read, its items decoded by that schema. A get view
+ * (`{ get: select, id }`) reads one entity; its value is `R.Remote.Data`, Ready or NotFound.
  *
- * A templated view is planned on `input` evaluated by the reference at `origin`'s root (default
- * `http://localhost/`); natively the page fills its request's `input` from the request's URL.
+ * A templated view (or id) is planned on its function evaluated by the reference at `origin`'s
+ * root (default `http://localhost/`); natively the page fills its request from the request's URL.
  */
 export const planPage = <M, const V extends { readonly [name: string]: ViewEntry }>(
   data: {
@@ -223,15 +260,33 @@ export const planPage = <M, const V extends { readonly [name: string]: ViewEntry
       model: M,
       projection: ProjectionOf<V[keyof V]>,
     ): Effect.Effect<unknown, unknown, RemoteClient>;
+    /** Upstream's `Data.get`; the selection is checked against the domain when planned. */
+    get(selection: never, id: string): unknown;
   },
   initial: M,
   views: V & CheckedViews<V>,
   options: { readonly origin?: string } = {},
-): PagePlan<{ readonly [K in keyof V]: PlannedView<ItemOf<V[K]>> }> => {
+): PagePlan<{ readonly [K in keyof V]: PlannedOf<V[K]> }> => {
   const sample = new URL("/", options.origin ?? "http://localhost").href;
   const reads: Array<PlannedRead> = [];
   const planned: { [name: string]: PlannedView } = {};
   for (const [name, entry] of Object.entries(views) as Array<[string, ViewEntry]>) {
+    if (isGet(entry)) {
+      const id =
+        typeof entry.id === "string" ? entry.id : Effect.runSync(Reference.run(entry.id, [sample]));
+      const own = planReads(data.prefetch(initial, data.get(entry.get as never, id) as never));
+      const read = own[0];
+      if (own.length !== 1 || read?._tag !== "Read" || read.request.requests.length !== 1)
+        throw new Error(`Remote page view "${name}" is not a single entity read`);
+      planned[name] = {
+        _tag: "Get",
+        read: reads.length,
+        item: entry.get.schema,
+        ...(typeof entry.id === "string" ? {} : { id: entry.id }),
+      };
+      reads.push(read);
+      continue;
+    }
     const projection = isTemplated(entry)
       ? entry.projection(Effect.runSync(Reference.run(entry.input, [sample])) as never)
       : entry;
@@ -249,6 +304,6 @@ export const planPage = <M, const V extends { readonly [name: string]: ViewEntry
   }
   return {
     reads,
-    views: planned as { readonly [K in keyof V]: PlannedView<ItemOf<V[K]>> },
+    views: planned as { readonly [K in keyof V]: PlannedOf<V[K]> },
   };
 };

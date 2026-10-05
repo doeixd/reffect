@@ -2138,51 +2138,154 @@ pub struct PageRead {
     pub tag: &'static str,
     pub request: Value,
 }
-/// Each view as upstream's `Page` of a Ready read: the edges' entity values in edge order, and
-/// more on a side whose boundary is not `Terminal` (one segment, cut to its own window). An edge
-/// whose entity is missing reads as null, which the page's typed decoding then refuses (#9:
-/// entities are indexed once, so assembly is linear).
-pub fn page_views(exchanges: &[Value], views: &[(&str, usize)]) -> Value {
+/// Each view: a query view as upstream's `Page` of a Ready read, a get view as its settled
+/// `RemoteData` (`get_view`). `made[i]` is the exchange planned read `i` made, if any.
+pub(crate) fn page_views(
+    reads: &[PageRead],
+    made: &[Option<usize>],
+    exchanges: &[Value],
+    views: &[(&str, usize)],
+) -> Value {
     let mut out = Map::new();
     for (name, read) in views {
-        let answer = &exchanges[*read]["answer"];
-        let entities: HashMap<(&str, &str), &Value> = answer["entities"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|entity| {
-                Some((
-                    (entity["entity"].as_str()?, entity["id"].as_str()?),
-                    &entity["values"],
-                ))
-            })
-            .collect();
-        let items: Vec<Value> = answer["edges"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
-            .map(|edge| {
-                edge["entity"]
-                    .as_str()
-                    .zip(edge["id"].as_str())
-                    .and_then(|key| entities.get(&key))
-                    .map(|values| (*values).clone())
-                    .unwrap_or(Value::Null)
-            })
-            .collect();
-        let more = |side: &str| answer[side]["_tag"].as_str() != Some("Terminal");
-        out.insert(
-            name.to_string(),
-            json!({ "items": items, "hasNext": more("end"), "hasPrevious": more("start") }),
-        );
+        let view = match (reads[*read].tag, made[*read]) {
+            ("Query", Some(exchange)) => query_view(&exchanges[exchange]["answer"]),
+            ("Query", None) => Value::Null,
+            _ => get_view(&reads[*read].request["requests"][0], exchanges),
+        };
+        out.insert(name.to_string(), view);
     }
     Value::Object(out)
 }
+/// A query view as upstream's `Page` of a Ready read: the edges' entity values in edge order,
+/// and more on a side whose boundary is not `Terminal` (one segment, cut to its own window). An
+/// edge whose entity is missing reads as null, which the page's typed decoding then refuses (#9:
+/// entities are indexed once, so assembly is linear).
+fn query_view(answer: &Value) -> Value {
+    let entities: HashMap<(&str, &str), &Value> = answer["entities"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entity| {
+            Some((
+                (entity["entity"].as_str()?, entity["id"].as_str()?),
+                &entity["values"],
+            ))
+        })
+        .collect();
+    let items: Vec<Value> = answer["edges"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|edge| {
+            edge["entity"]
+                .as_str()
+                .zip(edge["id"].as_str())
+                .and_then(|key| entities.get(&key))
+                .map(|values| (*values).clone())
+                .unwrap_or(Value::Null)
+        })
+        .collect();
+    let more = |side: &str| answer[side]["_tag"].as_str() != Some("Terminal");
+    json!({ "items": items, "hasNext": more("end"), "hasPrevious": more("start") })
+}
+/// Whether `candidate` (an answered entity or a settled entry) is `requirement`'s entity.
+fn same_entity(candidate: &Value, requirement: &Value) -> bool {
+    candidate["entity"] == requirement["entity"] && candidate["id"] == requirement["id"]
+}
+fn listed<'a>(answer: &'a Value, key: &str) -> &'a [Value] {
+    answer[key]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+/// What the page's answers so far hold of `requirement`'s entity: its values merged in answer
+/// order, and the fields the server settled (withheld).
+fn known(requirement: &Value, exchanges: &[Value]) -> (Map<String, Value>, Vec<String>) {
+    let mut values = Map::new();
+    let mut settled = Vec::new();
+    for exchange in exchanges {
+        let answer = &exchange["answer"];
+        for entity in listed(answer, "entities") {
+            if let (true, Some(answered)) = (
+                same_entity(entity, requirement),
+                entity["values"].as_object(),
+            ) {
+                values.extend(answered.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+        for entry in listed(answer, "settled") {
+            if same_entity(entry, requirement) {
+                settled.extend(
+                    listed(entry, "fields")
+                        .iter()
+                        .filter_map(|field| field.as_str().map(str::to_string)),
+                );
+            }
+        }
+    }
+    (values, settled)
+}
+/// A planned Read narrowed as upstream's planner narrows it over the store the page's earlier
+/// answers built: each requirement asks only for the fields neither answered nor settled, and
+/// one with none left is dropped. None when nothing is left to read.
+fn lacking(request: &Value, exchanges: &[Value]) -> Option<Value> {
+    let requirements: Vec<Value> = listed(request, "requests")
+        .iter()
+        .filter_map(|requirement| {
+            let (values, settled) = known(requirement, exchanges);
+            let fields: Vec<Value> = listed(requirement, "fields")
+                .iter()
+                .filter(|field| {
+                    field.as_str().is_some_and(|field| {
+                        !values.contains_key(field) && !settled.iter().any(|s| s == field)
+                    })
+                })
+                .cloned()
+                .collect();
+            if fields.is_empty() {
+                return None;
+            }
+            let mut narrowed = requirement.clone();
+            narrowed["fields"] = Value::Array(fields);
+            Some(narrowed)
+        })
+        .collect();
+    if requirements.is_empty() {
+        return None;
+    }
+    let mut narrowed = request.clone();
+    narrowed["requests"] = Value::Array(requirements);
+    Some(narrowed)
+}
+/// A get view as upstream's settled `RemoteData` of its requirement, over everything the page's
+/// answers hold of the entity: `Ready` with the selected fields when all are answered,
+/// `NotFound` when nothing is answered or settled of it (upstream's tombstone). A partly
+/// answered or settled (withheld) entity reads as null, which the page's typed decoding
+/// refuses, as upstream reads `Failed`.
+fn get_view(requirement: &Value, exchanges: &[Value]) -> Value {
+    let (values, settled) = known(requirement, exchanges);
+    if values.is_empty() && settled.is_empty() {
+        return json!({ "_tag": "NotFound" });
+    }
+    let selected: Option<Map<String, Value>> = listed(requirement, "fields")
+        .iter()
+        .map(|field| {
+            let field = field.as_str()?;
+            Some((field.to_string(), values.get(field)?.clone()))
+        })
+        .collect();
+    match selected {
+        Some(value) if settled.is_empty() => json!({ "_tag": "Ready", "value": value }),
+        _ => Value::Null,
+    }
+}
 /// The page's data: each planned request run as the RPC handlers run it, recorded with its
 /// answer as `{ now, exchanges }` for the browser's replay, and the views built from them. A
-/// read the engine refuses is the error.
+/// planned Read asks only for what earlier answers lack, and is skipped when they hold it all,
+/// as the browser's replayed planner skips it. A read the engine refuses is the error.
 pub async fn page_data<S: Source>(
     server: &S,
     authorize: Authorize<'_>,
@@ -2190,16 +2293,23 @@ pub async fn page_data<S: Source>(
     views: &[(&str, usize)],
     now: u64,
 ) -> Result<(Value, Value), Value> {
-    let mut exchanges = Vec::with_capacity(reads.len());
+    let mut exchanges: Vec<Value> = Vec::with_capacity(reads.len());
+    let mut made = Vec::with_capacity(reads.len());
     for planned in reads {
-        let answer = if planned.tag == "Query" {
-            query(server, authorize, &planned.request).await?
+        let (request, answer) = if planned.tag == "Query" {
+            let answer = query(server, authorize, &planned.request).await?;
+            (planned.request.clone(), answer)
         } else {
-            read(server, authorize, &planned.request).await?
+            let Some(request) = lacking(&planned.request, &exchanges) else {
+                made.push(None);
+                continue;
+            };
+            let answer = read(server, authorize, &request).await?;
+            (request, answer)
         };
-        exchanges
-            .push(json!({ "_tag": planned.tag, "request": planned.request, "answer": answer }));
+        made.push(Some(exchanges.len()));
+        exchanges.push(json!({ "_tag": planned.tag, "request": request, "answer": answer }));
     }
-    let views = page_views(&exchanges, views);
+    let views = page_views(reads, &made, &exchanges, views);
     Ok((json!({ "now": now, "exchanges": exchanges }), views))
 }

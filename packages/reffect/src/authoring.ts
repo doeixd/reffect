@@ -138,6 +138,11 @@ export const R = Object.freeze({
      */
     Page: <A>(item: IRType<A>) =>
       Struct({ items: ArrayModule(item), hasNext: BoolType, hasPrevious: BoolType }),
+    /**
+     * The settled subset of upstream's `RemoteData<A>` a page's get view reads: `Ready` with the
+     * entity's value, or `NotFound`. Match it with `R.Match.valueTags`.
+     */
+    Data: <A>(value: IRType<A>) => TaggedUnion({ Ready: { value }, NotFound: {} }),
   }),
   Html: HtmlIR,
   Struct,
