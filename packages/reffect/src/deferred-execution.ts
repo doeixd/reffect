@@ -1,9 +1,34 @@
-import { Context, Effect, Exit, Logger, Scheduler } from "effect";
-import type { EffectFn, FramedExit } from "./effect-ir.ts";
+import { Context, Effect, Exit, Logger, Match, Scheduler } from "effect";
+import type { Computation, EffectFn, FramedExit } from "./effect-ir.ts";
 import { GeneratedDeferredReference } from "./deferred-generated-reference.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
 import { deferredBudgetLimit } from "./deferred-budget.ts";
-import { CompileError, Program } from "./kernel.ts";
+import {
+  AddNumber,
+  AddU64,
+  BoolType,
+  CompileError,
+  ConcatString,
+  EqBool,
+  EqNumber,
+  EqString,
+  EqU64,
+  IncludesString,
+  LtNumber,
+  LtU64,
+  MulU64,
+  NeverType,
+  NotBool,
+  NumberToString,
+  NumberType,
+  Program,
+  ReplaceAllString,
+  StringType,
+  SubU64,
+  U64Type,
+  UnitType,
+} from "./kernel.ts";
+import type { AnyOperation, Expr, IRType } from "./kernel.ts";
 
 export interface DeferredExecutionOptions {
   readonly signal?: AbortSignal;
@@ -17,6 +42,102 @@ const refusal = (path: string, message: string) =>
     message: "Unsupported standalone Deferred execution",
     diagnostics: [{ code: "DEFERRED_EXECUTION_CONTEXT", stage: "check", path, message }],
   });
+
+const trustedTypes = new Set<IRType<unknown>>([
+  BoolType,
+  U64Type,
+  UnitType,
+  NeverType,
+  StringType,
+  NumberType,
+]);
+const trustedOperations = new Set<AnyOperation>([
+  AddU64,
+  SubU64,
+  MulU64,
+  EqU64,
+  LtU64,
+  EqBool,
+  NotBool,
+  EqString,
+  IncludesString,
+  ConcatString,
+  ReplaceAllString,
+  AddNumber,
+  EqNumber,
+  LtNumber,
+  NumberToString,
+] as AnyOperation[]);
+const checkReferences = (fn: EffectFn): void => {
+  const expressions = new Set<Expr<unknown>>();
+  const computations = new Set<Computation<unknown, unknown>>();
+  const unsupported = () => {
+    throw refusal(
+      "function.reference",
+      "Only audited builtin scalar expressions can execute in the owned context",
+    );
+  };
+  const expression = (e: Expr<unknown>): void => {
+    if (expressions.has(e)) return;
+    expressions.add(e);
+    if (!trustedTypes.has(e.type)) unsupported();
+    Match.value(e.node).pipe(
+      Match.tags({
+        Parameter: () => {},
+        Literal: () => {},
+        Apply: (n) => {
+          if (!trustedOperations.has(n.operation)) unsupported();
+          n.args.forEach(expression);
+        },
+        Match: (n) => {
+          expression(n.condition);
+          expression(n.onTrue);
+          expression(n.onFalse);
+        },
+      }),
+      Match.orElse(unsupported),
+    );
+  };
+  const computation = (c: Computation<unknown, unknown>): void => {
+    if (computations.has(c)) return;
+    computations.add(c);
+    if (!trustedTypes.has(c.output) || !trustedTypes.has(c.error)) unsupported();
+    Match.value(c.node).pipe(
+      Match.tags({
+        Succeed: (n) => expression(n.value),
+        Map: (n) => {
+          computation(n.source);
+          expression(n.body);
+        },
+        FlatMap: (n) => {
+          computation(n.source);
+          computation(n.body);
+        },
+        Match: (n) => {
+          expression(n.condition);
+          computation(n.onTrue);
+          computation(n.onFalse);
+        },
+        Ensuring: (n) => {
+          computation(n.body);
+          computation(n.finalizer);
+        },
+        TaskGroup: (n) => n.children.forEach(computation),
+        DeferredScope: (n) => {
+          if (!trustedTypes.has(n.success) || !trustedTypes.has(n.error)) unsupported();
+          computation(n.body);
+        },
+        DeferredComplete: (n) => expression(n.value),
+        DeferredAwait: () => {},
+        DeferredIsDone: () => {},
+        Sleep: () => {},
+        Log: () => {},
+      }),
+      Match.orElse(unsupported),
+    );
+  };
+  computation(fn.body);
+};
 
 const cancellation = (options: unknown): AbortSignal | undefined => {
   if (options === undefined) return undefined;
@@ -53,6 +174,7 @@ const execute = <A, Out>(
   let signal: AbortSignal | undefined;
   try {
     signal = cancellation(options);
+    checkReferences(fn);
     if (!analyzeGeneratedDeferredProfile(Program.make({ work: fn })).has(fn))
       throw refusal("function", "This runner requires the checked private Deferred profile");
   } catch (error) {

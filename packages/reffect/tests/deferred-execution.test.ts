@@ -16,6 +16,7 @@ import { DeferredIR as D } from "../src/deferred.ts";
 import { DeferredExecution } from "../src/deferred-execution.ts";
 import type { DeferredExecutionOptions } from "../src/deferred-execution.ts";
 import type { FramedExit } from "../src/effect-ir.ts";
+import { EqU64, Expr, Operation, SemanticRef } from "../src/kernel.ts";
 import { analyzeDeferredBudget, deferredBudgetLimit } from "../src/deferred-budget.ts";
 
 const completed = R.fn([], R.U64, R.Never, () =>
@@ -92,23 +93,64 @@ test("context, scheduler, hook and accessor injection fail before authored work"
     });
   }
   expect(accessor).not.toHaveBeenCalled();
-  if (false) {
-    // @ts-expect-error arbitrary Effect RunOptions do not cross this boundary
-    void DeferredExecution.run(completed, { scheduler: new Scheduler.MixedScheduler() });
-    // @ts-expect-error arbitrary contexts do not cross this boundary
-    void DeferredExecution.run(completed, { context: Context.empty() });
+  const optionsShape = (value: DeferredExecutionOptions) => value;
+  // @ts-expect-error arbitrary Effect RunOptions do not cross this boundary
+  optionsShape({ scheduler: new Scheduler.MixedScheduler() });
+  // @ts-expect-error arbitrary contexts do not cross this boundary
+  optionsShape({ context: Context.empty() });
+});
+
+test("custom reference callbacks and semantic-ref aliases are refused before invocation", async () => {
+  const callback = vi.fn(() => true);
+  for (const ref of [SemanticRef.operation("test/custom-context"), EqU64.ref]) {
+    const operation = Operation.make(ref, [R.U64, R.U64], R.Bool, callback);
+    const work = R.fn([], R.Bool, R.Never, () =>
+      D.make(R.Bool).pipe(
+        R.Effect.flatMap((cell) =>
+          D.succeed(cell, Expr.apply(operation, R.U64.literal(1n), R.U64.literal(1n))).pipe(
+            R.Effect.andThen(D.await(cell)),
+          ),
+        ),
+      ),
+    );
+    const result = await DeferredExecution.run(work);
+    expect(result.logs).toEqual([]);
+    expect(result.exit).toMatchObject({
+      cause: {
+        reasons: [
+          {
+            error: {
+              diagnostics: [{ code: "DEFERRED_EXECUTION_CONTEXT", path: "function.reference" }],
+            },
+          },
+        ],
+      },
+    });
   }
+  expect(callback).not.toHaveBeenCalled();
+  const builtin = R.fn([], R.Bool, R.Never, () =>
+    D.make(R.Bool).pipe(
+      R.Effect.flatMap((cell) =>
+        D.succeed(cell, R.U64.eq(R.U64.literal(1n), R.U64.literal(1n))).pipe(
+          R.Effect.andThen(D.await(cell)),
+        ),
+      ),
+    ),
+  );
+  expect((await DeferredExecution.run(builtin)).exit).toEqual(Exit.succeed(true));
 });
 
 test("ambient services, yield flags and host continuations cannot enter the root fiber", async () => {
   const hostLog = vi.fn();
-  const customClock = {
-    ...Context.get(Context.empty(), Clock.Clock),
-    sleep: vi.fn(() => Effect.die("ambient clock leaked")),
-  };
+  const customClock: Clock.Clock = Object.assign(
+    Object.create(Context.get(Context.empty(), Clock.Clock)),
+    {
+      sleep: vi.fn(() => Effect.die("ambient clock leaked")),
+    },
+  );
   const tracedFibers = new Set<number>();
   const customTracer: Tracer.Tracer = {
-    ...Tracer.nativeTracer,
+    span: (options) => Tracer.nativeTracer.span(options),
     context: (primitive, fiber) => {
       tracedFibers.add(fiber.id);
       return primitive["~effect/Effect/evaluate"](fiber);
@@ -247,7 +289,10 @@ test("owned scheduler preserves automatic yielding and refuses beyond the audite
   const above = mapped(count + 1);
   expect(analyzeDeferredBudget(below).framed).toBeLessThan(deferredBudgetLimit);
   expect(analyzeDeferredBudget(above).admitted).toBe(false);
-  const original = Scheduler.MixedScheduler.prototype.shouldYield;
+  const original = Object.getOwnPropertyDescriptor(
+    Scheduler.MixedScheduler.prototype,
+    "shouldYield",
+  )!.value as Scheduler.MixedScheduler["shouldYield"];
   const counts: number[] = [];
   const spy = vi
     .spyOn(Scheduler.MixedScheduler.prototype, "shouldYield")
