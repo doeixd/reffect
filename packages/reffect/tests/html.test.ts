@@ -377,3 +377,13 @@ test("textarea owns its content one way, and Tabindex is an integer the browser 
     expect(() => H.Tabindex(value)).toThrow("long range");
   expect(() => H.div([H.Tabindex(-(2 ** 31))], [])).not.toThrow();
 });
+
+test("select holds options and option text, as the controlled selection reads them (8B)", () => {
+  expect(() => H.select([], [H.option([], ["a"]), H.option([H.Value("b")], ["b"])])).not.toThrow();
+  expect(() => H.select([], ["text"])).toThrow("<option> elements only");
+  expect(() => H.select([], [H.div([], [])])).toThrow("<option> elements only");
+  expect(() => H.select([], [H.select([], [])])).toThrow("<option> elements only");
+  expect(() => H.option([], [H.span([], [])])).toThrow("text only");
+  expect(() => H.p([H.Value("x")], [])).toThrow("Value");
+  expect(() => H.select([H.Value("x")], [])).not.toThrow();
+});

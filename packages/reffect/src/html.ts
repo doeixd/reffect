@@ -217,8 +217,21 @@ const element =
           "REFUSED_ATTRIBUTE",
           "authoring",
           at,
-          `${attribute.name} is admitted on button, input, option and textarea only: Foldkit writes or rejects it elsewhere`,
+          `${attribute.name} is admitted on button, input, option, select and textarea only: Foldkit writes or rejects it elsewhere`,
         );
+    }
+    // A select holds options, and an option text: the parser rearranges anything else inside
+    // them, and the profile's controlled selection reads options only (serialize.js).
+    if (tag === "select" || tag === "option") {
+      const beneath = treesOf(childrenExpr(children, `${at}.children`));
+      if (tag === "option" && beneath.length > 0)
+        throw fail("INVALID_NESTING", "authoring", at, "<option> holds text only");
+      // Literal text and String children are text nodes, which a select does not hold either.
+      const text =
+        !(children instanceof Expr) &&
+        children.some((child) => typeof child === "string" || IRType.same(child.type, StringType));
+      if (tag === "select" && (text || beneath.some((tree) => tree.tag !== "option")))
+        throw fail("INVALID_NESTING", "authoring", at, "<select> holds <option> elements only");
     }
     // A textarea's value is its content: upstream's builder refuses both owners, and an element
     // inside one would read back as text.
@@ -334,6 +347,7 @@ const HEADINGS = new Set(["h1", "h2", "h3"]);
 /** The admitted elements of the parser's "special" category, which end an `li`'s search. */
 const SPECIAL = new Set([
   "pre",
+  "select",
   "textarea",
   "article",
   "aside",
@@ -402,7 +416,9 @@ const misnested = (tag: string, beneath: ReadonlyArray<HtmlTree>): string | unde
 
 /** Elements of the 8A profile: ordinary HTML elements, and the void ones it needs. */
 const ELEMENTS = [
+  "option",
   "pre",
+  "select",
   "textarea",
   "a",
   "article",

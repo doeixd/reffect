@@ -152,6 +152,30 @@ const forms = R.fn([R.String], Page, (text) =>
     ),
   ),
 );
+// 8B: a controlled select selects the first option carrying its value (an option's value is its
+// Value, else its whitespace-collapsed text) and clears every other's `selected`.
+const selects = R.fn([R.String], Page, (value) =>
+  render(
+    H.div(
+      [],
+      [
+        H.select(
+          [H.Value(value), H.Name("s")],
+          [
+            H.option([H.Value("a")], ["A"]),
+            H.option([H.Selected(true), H.Id("b")], ["  b \n c "]),
+            H.option([H.Value("a"), H.Selected(true)], ["second a"]),
+            // Its text is the value with a suffix, so a value no option carries stays unmatched.
+            H.option([], [R.String.concat(value, R.String.literal("!"))]),
+          ],
+        ),
+        H.select([], [H.option([H.Selected(true)], ["x"]), H.option([], ["y"])]),
+        H.select([H.Value(value)], []),
+        H.option([H.Selected(true), H.Value(value)], ["loose"]),
+      ],
+    ),
+  ),
+);
 const nulInText = R.fn([R.String], Page, (text) => render(H.p([], [text])));
 const nulInAttribute = R.fn([R.String], Page, (text) =>
   render(H.p([H.Title(text)], [H.span([], [text])])),
@@ -171,6 +195,7 @@ const Group = RpcGroup.make(
   Rpc.make("Links", { payload: { hrefs: Schema.Array(Schema.String) }, success: PageSchema }),
   Rpc.make("Classes", { payload: { names: Schema.Array(Schema.String) }, success: PageSchema }),
   Rpc.make("Forms", { payload: { text: Schema.String }, success: PageSchema }),
+  Rpc.make("Selects", { payload: { value: Schema.String }, success: PageSchema }),
   Rpc.make("NulInText", { payload: { text: Schema.String }, success: PageSchema }),
   Rpc.make("NulInAttribute", { payload: { text: Schema.String }, success: PageSchema }),
   Rpc.make("TextBody", { payload: { text: Schema.String }, success: PageSchema }),
@@ -182,6 +207,7 @@ const bindings = {
   Links: NativeRpc.bind(links, ["hrefs"]),
   Classes: NativeRpc.bind(classes, ["names"]),
   Forms: NativeRpc.bind(forms, ["text"]),
+  Selects: NativeRpc.bind(selects, ["value"]),
   NulInText: NativeRpc.bind(nulInText, ["text"]),
   NulInAttribute: NativeRpc.bind(nulInAttribute, ["text"]),
   TextBody: NativeRpc.bind(textBody, ["text"]),
@@ -196,6 +222,7 @@ const oracle = Effect.gen(function* () {
     Links: ({ hrefs }) => run(Reference.run(links, [hrefs])),
     Classes: ({ names }) => run(Reference.run(classes, [names])),
     Forms: ({ text }) => run(Reference.run(forms, [text])),
+    Selects: ({ value }) => run(Reference.run(selects, [value])),
     NulInText: ({ text }) => run(Reference.run(nulInText, [text])),
     NulInAttribute: ({ text }) => run(Reference.run(nulInAttribute, [text])),
     TextBody: ({ text }) => run(Reference.run(textBody, [text])),
@@ -252,6 +279,9 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
   ["classes", request("Classes", { names: classNames })],
   ...["plain", "\nleading", "\n\nboth", "", "\r\nx", "a\u0000b", "<&>"].map(
     (text) => [`forms ${JSON.stringify(text)}`, request("Forms", { text })] as const,
+  ),
+  ...["a", "b c", "zzz", "zzz!", "", "a\u0000", "<&\r>"].map(
+    (value) => [`selects ${JSON.stringify(value)}`, request("Selects", { value })] as const,
   ),
   ["nul in text", request("NulInText", { text: "a\u0000b" })],
   ["nul in attribute", request("NulInAttribute", { text: "a\u0000b" })],

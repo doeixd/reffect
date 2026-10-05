@@ -21,14 +21,14 @@ const REFLECTED: Readonly<Record<string, ReadonlyArray<string> | "all">> = {
   Title: "all",
   Href: ["a"],
   Type: ["a", "button", "li", "ol", "ul", "input"],
-  Name: ["a", "button", "form", "input", "textarea"],
+  Name: ["a", "button", "form", "input", "select", "textarea"],
   Placeholder: ["input", "textarea"],
   For: ["label"],
   // A textarea's Value is its content, written by `Prop::Content` rather than reflected.
-  Value: ["button", "input"],
+  Value: ["button", "input", "option"],
   Checked: ["input"],
-  Disabled: ["button", "input", "textarea"],
-  Selected: [],
+  Disabled: ["button", "input", "option", "select", "textarea"],
+  Selected: ["option"],
   Autofocus: "all",
   Tabindex: "all",
 };
@@ -83,6 +83,8 @@ export const elementCall = <T>(
     else if (attribute.name === "Class") classArg = arg;
     else if (attribute.name === "Value" && shape.tag === "textarea")
       props.push('("value", crate::foldkit_html::Prop::Content(&(', arg, ")[..])), ");
+    else if (attribute.name === "Value" && shape.tag === "select")
+      props.push('("value", crate::foldkit_html::Prop::Selection(&(', arg, ")[..])), ");
     else if (!reflects(shape.tag, attribute.name)) continue;
     // Authoring admits only literal integers in the browser's long range, so the text is exact.
     else if (attribute.name === "Tabindex")

@@ -59,3 +59,9 @@ Status: **research (2026-10-05)**, not implemented. 8B mechanically transforms t
   - A `textarea`'s `Value` is its content. Upstream's leading-newline rule for `pre` and `textarea` is ported (`leadingTextOf`).
   - Refused while authoring, as upstream's builder refuses them: a `textarea` with both a `Value` and children, an element inside a `textarea`, and a non-integer `Tabindex`.
   - Evidence: `tests/html-native.test.ts` passes 2/2. Its corpus covers the new elements and attributes, and seven texts through the newline rules, including NUL. `tests/html.test.ts` passes 10/10 with the refusals.
+- **Step 1b (2026-10-05):**
+  - `select` and `option`, with a `select`'s controlled `Value`. The first option carrying it gets `selected=""`, every other option's `selected` is cleared, and an authored one keeps its position.
+  - An option's value is its `Value`, or its ASCII-whitespace-collapsed text (serialize.js `optionValue`).
+  - A single-line `select` with options and none matching fails with upstream's exact message, after its options' own failures.
+  - The profile admits only `option` children in a `select`, and only text in an `option`.
+  - Evidence: `tests/html-native.test.ts` passes 2/2 with a `Selects` view over seven values (a first duplicate, a match by text, no match, NUL, escapes), byte-equal to the official server. `tests/html.test.ts` passes 11/11 with the nesting refusals.

@@ -23,6 +23,14 @@ struct Node {
     /// The serialized length of the whole fragment.
     len: usize,
     error: Option<String>,
+    /// An `<option>`'s value and the byte range of its own `selected` attribute in `head`, which
+    /// a controlled `<select>` sets or clears (serialize.js `openElement`).
+    option: Option<OptionInfo>,
+}
+#[derive(Clone, Debug, PartialEq)]
+struct OptionInfo {
+    value: String,
+    selected: Option<(usize, usize)>,
 }
 impl Drop for Node {
     /// Unlinks a deep tree with a stack: the derived drop would recurse once per level.
@@ -44,6 +52,7 @@ fn leaf(kind: Kind, head: String, error: Option<String>) -> Html {
         children: Vec::new(),
         tail: String::new(),
         error,
+        option: None,
     }))
 }
 pub enum Prop<'a> {
@@ -52,6 +61,66 @@ pub enum Prop<'a> {
     Flag(bool),
     /// A textarea's controlled `value`, serialized as its text content.
     Content(&'a str),
+    /// A select's controlled `value`: the first option carrying it is the selected one.
+    Selection(&'a str),
+}
+/// Text as `escape_text` wrote it, read back: it escapes `&`, `<`, `>` and CR only.
+fn unescape_text(markup: &str) -> String {
+    markup
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&#13;", "\r")
+        .replace("&amp;", "&")
+}
+/// An option's value without a `value` prop: its text with ASCII whitespace runs collapsed to one
+/// space and trimmed, as the DOM computes `option.value` (serialize.js `optionValue`).
+fn option_text_value(children: &[Html]) -> String {
+    let text: String = children
+        .iter()
+        .filter(|child| child.0.kind == Kind::Text)
+        .map(|child| unescape_text(&child.0.head))
+        .collect();
+    let ascii_space = |c: char| matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ');
+    text.split(ascii_space)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+/// `option` with `selected` written or cleared, as a controlled select decides.
+fn with_selection(option: &Html, selected: bool) -> Html {
+    let node = &option.0;
+    let info = node.option.as_ref().expect("an option");
+    let mut head = node.head.clone();
+    let mut own_end = node.own_end;
+    match (info.selected, selected) {
+        (Some(_), true) | (None, false) => return option.clone(),
+        (Some((start, end)), false) => {
+            head.replace_range(start..end, "");
+            own_end -= end - start;
+        }
+        (None, true) => {
+            head.insert_str(own_end, " selected=\"\"");
+            own_end += " selected=\"\"".len();
+        }
+    }
+    let len = node.len - node.head.len() + head.len();
+    Html(std::sync::Arc::new(Node {
+        kind: Kind::Element,
+        head,
+        own_end,
+        children: node.children.clone(),
+        tail: node.tail.clone(),
+        len,
+        error: node.error.clone(),
+        option: Some(OptionInfo {
+            value: info.value.clone(),
+            selected: if selected {
+                Some((own_end - 12, own_end))
+            } else {
+                None
+            },
+        }),
+    }))
 }
 
 pub fn empty() -> Html {
@@ -170,17 +239,60 @@ pub fn element(
     }
     // A textarea's controlled value is its content, which replaces its (empty) children.
     let mut content: Option<Html> = None;
+    let mut selection: Option<&str> = None;
+    let mut option_value: Option<&str> = None;
+    let mut selected: Option<(usize, usize)> = None;
     for (name, prop) in props {
         match prop {
-            Prop::Text(value) => attribute(&mut markup, name, value, &mut error),
+            Prop::Text(value) => {
+                if tag == "option" && *name == "value" {
+                    option_value = Some(value);
+                }
+                attribute(&mut markup, name, value, &mut error)
+            }
             Prop::Url(value) => attribute(&mut markup, name, sanitize_url(value), &mut error),
-            Prop::Flag(true) => attribute(&mut markup, name, "", &mut error),
+            Prop::Flag(true) => {
+                let start = markup.len();
+                attribute(&mut markup, name, "", &mut error);
+                if tag == "option" && *name == "selected" {
+                    selected = Some((start, markup.len()));
+                }
+            }
             Prop::Flag(false) => {}
             Prop::Content(value) => content = Some(text(value)),
+            Prop::Selection(value) => selection = Some(value),
         }
     }
     let content = content.map(|text| vec![text]);
     let children = content.as_deref().unwrap_or(children);
+    let option = (tag == "option").then(|| OptionInfo {
+        value: option_value.map_or_else(|| option_text_value(children), str::to_string),
+        selected,
+    });
+    // A controlled select selects the first option carrying its value and clears every other's
+    // `selected`; a single-line select with options and none carrying it cannot be served.
+    let mut unmatched: Option<String> = None;
+    let selected_children: Option<Vec<Html>> = selection.map(|value| {
+        let mut consumed = false;
+        let mut options = 0;
+        let rewritten = children
+            .iter()
+            .map(|child| match &child.0.option {
+                Some(info) => {
+                    options += 1;
+                    let pick = !consumed && info.value == value;
+                    consumed |= pick;
+                    with_selection(child, pick)
+                }
+                None => child.clone(),
+            })
+            .collect();
+        if !consumed && options > 0 {
+            unmatched = Some(format!("[foldkit] A <select> has the controlled value \"{}\" but no option carries it. A single-line select cannot render with nothing selected: HTML gives the first option the selection, while the client sets `value` and lands on no selection at all, so the served page and the hydrated one would disagree. Render an option with that value, add a placeholder option, or use `multiple`.", value));
+        }
+        rewritten
+    });
+    let children = selected_children.as_deref().unwrap_or(children);
     let own_end = markup.len();
     if let Some(key) = key {
         markup.push_str(" data-foldkit-key=\"");
@@ -217,6 +329,11 @@ pub fn element(
         tail.push_str(tag);
         tail.push('>');
         len += tail.len();
+        // Upstream refuses an unmatched controlled value when it closes the select, after its
+        // options' own failures.
+        if error.is_none() {
+            error = unmatched;
+        }
         children.to_vec()
     };
     Html(std::sync::Arc::new(Node {
@@ -227,6 +344,7 @@ pub fn element(
         tail,
         len,
         error,
+        option,
     }))
 }
 /// A fragment's markup in document order, into `out`; an explicit stack, as views nest deeply.
