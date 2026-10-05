@@ -4,9 +4,15 @@
  * resume, answers Effect RPC (Read, Query, Mutate), runs the R mutation sources in one
  * transaction each, and streams Live changes after commit, with the snapshot that closes the
  * render-to-subscription gap (LIVE-015).
+ *
+ * With `auth`, every page and procedure needs a principal (#4): a browser signs in on the login
+ * page with a configured token, which becomes an HttpOnly session cookie the page and the
+ * hydrated app's RPC then carry.
  */
+import { Context, Schema } from "effect";
+import { RpcMiddleware } from "effect/rpc";
 import { RemoteRpc } from "foldkit-remote";
-import { NativeRemote } from "../../packages/reffect/src/index.ts";
+import { NativeRemote, NativeRpc } from "../../packages/reffect/src/index.ts";
 import { Data } from "../todo-remote/domain.ts";
 import { page, plan } from "../todo-remote/page.ts";
 import { mutations } from "../todo-remote/sources.ts";
@@ -14,14 +20,41 @@ import { bindings } from "./db.ts";
 
 /** The variable the server reads its database URL from at run time; never compiled in. */
 export const DATABASE_URL_ENV = "REFFECT_DATABASE_URL";
+/** The variable the signed-in server reads its tokens from at run time; never compiled in. */
+export const CREDENTIALS_ENV = "REFFECT_TODO_CREDENTIALS";
 
-export const compileShowcase = (template: string, origin?: string) =>
-  NativeRemote.compile(RemoteRpc, {
+class CurrentUser extends Context.Service<CurrentUser, bigint>()("todo-fullstack/CurrentUser") {}
+class Authentication extends RpcMiddleware.Service<Authentication, { provides: CurrentUser }>()(
+  "todo-fullstack/Authentication",
+  { error: Schema.Literal("Unauthorized") },
+) {}
+
+export const compileShowcase = (
+  template: string,
+  options: { readonly origin?: string; readonly loginPage?: string } = {},
+) => {
+  const pages = {
+    template,
+    render: page,
+    remote: plan,
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
+  };
+  const shared = {
     domain: Data,
-    sql: { dialect: "sqlite", bindings, databaseUrlEnv: DATABASE_URL_ENV },
+    sql: { dialect: "sqlite" as const, bindings, databaseUrlEnv: DATABASE_URL_ENV },
     mutations,
     live: true,
     liveSnapshot: true,
-    serialization: "ndjson",
-    pages: { template, render: page, remote: plan, ...(origin === undefined ? {} : { origin }) },
-  });
+    serialization: "ndjson" as const,
+    pages,
+  };
+  return options.loginPage === undefined
+    ? NativeRemote.compile(RemoteRpc, shared)
+    : NativeRemote.compile(RemoteRpc.middleware(Authentication), {
+        ...shared,
+        auth: NativeRpc.bearer(Authentication, CurrentUser, {
+          credentialsEnv: CREDENTIALS_ENV,
+          session: { loginPage: options.loginPage },
+        }),
+      });
+};

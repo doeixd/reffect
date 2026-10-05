@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign in</title>
+  </head>
+  <body>
+    <main>
+      <h1>Sign in</h1>
+      <form id="login">
+        <label for="token">Token</label>
+        <input id="token" type="password" autocomplete="current-password" />
+        <button type="submit">Sign in</button>
+      </form>
+      <p id="error" role="alert"></p>
+    </main>
+    <script>
+      // The token is exchanged for an HttpOnly session cookie, then the page is asked for again.
+      document.getElementById("login").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const token = document.getElementById("token").value;
+        const response = await fetch("/session", {
+          method: "POST",
+          headers: { authorization: "Bearer " + token },
+        });
+        if (response.status === 204) location.reload();
+        else document.getElementById("error").textContent = "That token is not valid.";
+      });
+    </script>
+  </body>
+</html>

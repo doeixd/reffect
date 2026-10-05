@@ -168,7 +168,7 @@ test(
           const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-todo-fullstack-" });
           const database = `${parent}/todos.db`;
           seed(database);
-          const artifact = yield* compileShowcase(template, origin);
+          const artifact = yield* compileShowcase(template, { origin });
           const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
           yield* CargoApi.fetch(directory);
           yield* CargoApi.build(directory, "debug");

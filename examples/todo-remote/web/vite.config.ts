@@ -10,6 +10,8 @@ export default defineConfig({
     host: "127.0.0.1",
     proxy: {
       "/rpc": native,
+      // Sign-in and sign-out of a server started with --auth (#4).
+      "/session": native,
       "/": {
         target: native,
         bypass: (request) =>

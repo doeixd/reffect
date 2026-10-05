@@ -5,11 +5,15 @@
  * resumes from the reads the server made.
  *
  * vp exec node --experimental-transform-types examples/todo-fullstack/main.ts [--port 8787]
- *   [--database todos.db]
+ *   [--database todos.db] [--auth]
+ *
+ * With `--auth`, pages and RPC need a principal: the browser signs in on a login page with the
+ * token printed at start (or TODO_TOKEN), which becomes an HttpOnly session cookie (#4).
  *
  * Without `--database`, a fresh database seeded with the example's rows is made in a temporary
  * directory. The server reads its URL from REFFECT_DATABASE_URL, never from the compiled code.
  */
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { Effect, FileSystem, Option, Schema, Stream } from "effect";
@@ -17,13 +21,16 @@ import { ChildProcess } from "effect/process";
 import { NodeServices } from "@effect/platform-node";
 import { CargoApi } from "../../packages/reffect/src/index.ts";
 import { seed, sqliteUrl } from "./db.ts";
-import { DATABASE_URL_ENV, compileShowcase } from "./server.ts";
+import { CREDENTIALS_ENV, DATABASE_URL_ENV, compileShowcase } from "./server.ts";
 
 const option = (name: string) => {
   const at = process.argv.indexOf(name);
   return at >= 0 ? process.argv[at + 1] : undefined;
 };
 const port = option("--port") ?? "8787";
+const auth = process.argv.includes("--auth");
+// The one configured token: given, or fresh each run; it reaches the server only through its env.
+const token = process.env.TODO_TOKEN ?? randomBytes(24).toString("base64url");
 
 await Effect.runPromise(
   Effect.scoped(
@@ -36,13 +43,25 @@ await Effect.runPromise(
       const template = yield* fs.readFileString(
         `${import.meta.dirname}/../todo-remote/web/index.html`,
       );
-      const directory = yield* CargoApi.write(yield* compileShowcase(template), `${parent}/server`);
+      const loginPage = auth
+        ? yield* fs.readFileString(`${import.meta.dirname}/login.html`)
+        : undefined;
+      const directory = yield* CargoApi.write(
+        yield* compileShowcase(template, loginPage === undefined ? {} : { loginPage }),
+        `${parent}/server`,
+      );
       yield* CargoApi.fetch(directory);
       yield* CargoApi.build(directory);
       const server = yield* ChildProcess.make(
         `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
         ["--port", port],
-        { env: { [DATABASE_URL_ENV]: sqliteUrl(database) }, extendEnv: true },
+        {
+          env: {
+            [DATABASE_URL_ENV]: sqliteUrl(database),
+            ...(auth ? { [CREDENTIALS_ENV]: JSON.stringify([{ token, principal: "1" }]) } : {}),
+          },
+          extendEnv: true,
+        },
       );
       yield* Stream.runDrain(server.stderr).pipe(Effect.forkScoped);
       const ready = yield* Stream.runHead(Stream.splitLines(Stream.decodeText(server.stdout))).pipe(
@@ -53,6 +72,7 @@ await Effect.runPromise(
         Schema.Struct({ schema: Schema.Literal("reffect.rpc.ready@1"), address: Schema.String }),
       )(JSON.parse(ready.value));
       console.log(`todo-fullstack: http://${address} over ${database} (Ctrl-C stops it)`);
+      if (auth) console.log(`sign in with token: ${token}`);
       console.log(`browser: TODO_REMOTE_PORT=${port} vp dev examples/todo-remote/web`);
       return yield* Effect.never;
     }),
