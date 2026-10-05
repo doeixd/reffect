@@ -10,7 +10,7 @@
  *
  * Only the bounded 8A profile (SSR-002) is admitted.
  */
-import { Effect, Schema } from "effect";
+import { Effect, Match, Schema } from "effect";
 import type { Document, HtmlBuilder } from "foldkit/html";
 import { BoolType, EqString, Expr, IRType, NumberType, StringType, fail } from "./kernel.ts";
 import { ConcatString } from "./kernel.ts";
@@ -212,12 +212,140 @@ const element =
         ? attribute.message.fields.map((field) => field.value)
         : [attribute.value],
     );
-    return Expr.apply(
-      elementOperation(shape),
-      ...values,
-      isVoid ? Expr.arrayMake(HtmlArray, []) : childrenExpr(children, `${at}.children`),
-    ) as Expr<HtmlValue>;
+    const kids = isVoid ? Expr.arrayMake(HtmlArray, []) : childrenExpr(children, `${at}.children`);
+    const beneath = treesOf(kids);
+    const misplaced = misnested(tag, beneath);
+    if (misplaced !== undefined)
+      throw fail(
+        "INVALID_NESTING",
+        "authoring",
+        at,
+        `<${tag}> may contain <${misplaced}>, which the browser's HTML parser moves out of it, so the page would not hydrate; Foldkit's renderToString refuses it too`,
+      );
+    const built = Expr.apply(elementOperation(shape), ...values, kids) as Expr<HtmlValue>;
+    trees.set(built, [{ tag, children: beneath }]);
+    return built;
   };
+
+/**
+ * What an Html expression may render, as far as nesting is concerned (#23): each element it can
+ * produce at its root with what may appear beneath it, across every branch and mapped item.
+ */
+interface HtmlTree {
+  readonly tag: string;
+  readonly children: ReadonlyArray<HtmlTree>;
+}
+const trees = new WeakMap<Expr<unknown>, ReadonlyArray<HtmlTree>>();
+const treesOf = (expr: Expr<unknown>): ReadonlyArray<HtmlTree> => {
+  const known = trees.get(expr);
+  if (known !== undefined) return known;
+  const found = Match.value(expr.node).pipe(
+    Match.tag("Match", (node) => [...treesOf(node.onTrue), ...treesOf(node.onFalse)]),
+    Match.tag("MatchTags", (node) => node.cases.flatMap((matched) => treesOf(matched.body))),
+    Match.tag("MatchUndefined", (node) => [
+      ...treesOf(node.onDefined),
+      ...treesOf(node.onUndefined),
+    ]),
+    Match.tag("ArrayMake", (node) => node.elements.flatMap(treesOf)),
+    // A mapped item is its body; a filtered array keeps its source's items.
+    Match.tag("ArrayLoop", (node) =>
+      node.op._tag === "Map"
+        ? treesOf(node.body)
+        : node.op._tag === "Filter"
+          ? treesOf(node.source)
+          : [],
+    ),
+    Match.orElse(() => []),
+  );
+  trees.set(expr, found);
+  return found;
+};
+/** Elements whose start tag closes an open `p` (HTML tree construction, "in body"). */
+const CLOSES_P = new Set([
+  "article",
+  "aside",
+  "div",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "header",
+  "hr",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "section",
+  "ul",
+]);
+const HEADINGS = new Set(["h1", "h2", "h3"]);
+/** The admitted elements of the parser's "special" category, which end an `li`'s search. */
+const SPECIAL = new Set([
+  "article",
+  "aside",
+  "br",
+  "button",
+  "div",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "header",
+  "hr",
+  "input",
+  "li",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "section",
+  "ul",
+]);
+/** The first tag beneath `tag` that would make a match for `found`, or undefined. */
+const search = (
+  beneath: ReadonlyArray<HtmlTree>,
+  found: (tree: HtmlTree) => boolean,
+  stops: (tree: HtmlTree) => boolean,
+): string | undefined => {
+  for (const tree of beneath) {
+    if (found(tree)) return tree.tag;
+    if (stops(tree)) continue;
+    const deeper = search(tree.children, found, stops);
+    if (deeper !== undefined) return deeper;
+  }
+  return undefined;
+};
+/**
+ * A tag beneath `tag` that HTML parsing would move out of it: the cases the admitted elements can
+ * meet, which upstream's renderToString refuses after re-parsing its output.
+ */
+const misnested = (tag: string, beneath: ReadonlyArray<HtmlTree>): string | undefined => {
+  if (tag === "p")
+    // A block start tag closes the p unless a button (a scope boundary) is open between them.
+    return search(
+      beneath,
+      (tree) => CLOSES_P.has(tree.tag),
+      (tree) => tree.tag === "button",
+    );
+  if (tag === "a" || tag === "form" || tag === "button")
+    return search(
+      beneath,
+      (tree) => tree.tag === tag,
+      () => false,
+    );
+  if (HEADINGS.has(tag)) return beneath.find((tree) => HEADINGS.has(tree.tag))?.tag;
+  if (tag === "li")
+    // An li start tag closes the nearest open li unless a special element other than div or p
+    // is open between them.
+    return search(
+      beneath,
+      (tree) => tree.tag === "li",
+      (tree) => SPECIAL.has(tree.tag) && tree.tag !== "div" && tree.tag !== "p",
+    );
+  return undefined;
+};
 
 /** Elements of the 8A profile: ordinary HTML elements, and the void ones it needs. */
 const ELEMENTS = [

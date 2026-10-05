@@ -239,3 +239,92 @@ test("Value outside button and input is refused rather than silently dropped (#2
   expect(() => H.input([H.Value("x")])).not.toThrow();
   expect(() => H.button([H.Value("x")], [])).not.toThrow();
 });
+
+test("nesting the HTML parser would rearrange is refused exactly where upstream refuses it (#23)", async () => {
+  const builders = {
+    a: H.a,
+    button: H.button,
+    div: H.div,
+    form: H.form,
+    h1: H.h1,
+    h2: H.h2,
+    li: H.li,
+    p: H.p,
+    span: H.span,
+    ul: H.ul,
+  };
+  type Shape = readonly [keyof typeof builders, ReadonlyArray<Shape>];
+  const cases: ReadonlyArray<Shape> = [
+    ["p", [["div", []]]],
+    ["p", [["span", [["div", []]]]]],
+    ["p", [["button", [["div", []]]]]],
+    ["p", [["span", []]]],
+    ["a", [["a", []]]],
+    ["a", [["span", [["a", []]]]]],
+    ["form", [["div", [["form", []]]]]],
+    ["button", [["button", []]]],
+    ["h1", [["h2", []]]],
+    ["h1", [["span", [["h2", []]]]]],
+    ["li", [["li", []]]],
+    ["li", [["span", [["li", []]]]]],
+    ["li", [["div", [["li", []]]]]],
+    ["li", [["ul", [["li", []]]]]],
+    [
+      "div",
+      [
+        ["p", []],
+        ["div", []],
+      ],
+    ],
+  ];
+  const native = ([tag, children]: Shape): Expr<Value<typeof H.Node>> =>
+    builders[tag]([], children.map(native));
+  for (const shape of cases) {
+    const upstream = await Effect.runPromise(
+      renderToString(
+        {
+          init: () => ({ model: {} }),
+          view: (_model: object, h: HtmlBuilder<never>): Document => {
+            const upstreamBuilders = {
+              a: h.a,
+              button: h.button,
+              div: h.div,
+              form: h.form,
+              h1: h.h1,
+              h2: h.h2,
+              li: h.li,
+              p: h.p,
+              span: h.span,
+              ul: h.ul,
+            };
+            const build = ([tag, children]: Shape): ReturnType<HtmlBuilder<never>["div"]> =>
+              upstreamBuilders[tag]([], children.map(build));
+            return { title: "t", body: h.main([], [build(shape)]) };
+          },
+        },
+        { buildId: "b" },
+      ).pipe(Effect.result),
+    );
+    const refused = (() => {
+      try {
+        native(shape);
+        return false;
+      } catch (error) {
+        if (error instanceof CompileError) return true;
+        throw error;
+      }
+    })();
+    expect(refused, JSON.stringify(shape)).toBe(upstream._tag === "Failure");
+  }
+  // Reached through a mapped list or a branch, the nesting is refused as well.
+  const items = R.Array.make(R.String.literal("x"));
+  expect(() =>
+    H.p(
+      [],
+      R.Array.map(items, () => H.div([], [])),
+    ),
+  ).toThrow("may contain <div>");
+  expect(() =>
+    H.li([], [R.Match.bool(R.Bool.literal(true), H.span([], []), H.li([], []))]),
+  ).toThrow(CompileError);
+});
