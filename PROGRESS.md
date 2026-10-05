@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-05 — Milestone 8B research
+
+- [Research record](docs/research/ssr-codemod.md).
+  - The pinned source is `foldkit@0.165.0` `examples/ssr` (commit `0b2a4fd`) plus `@foldkit/ui` `Button`.
+  - The record inventories what that source needs that R lacks: elements and attributes, cookie and number parsing, and ISO time.
+  - It records the user's decisions: the TypeScript 7 unstable API as the frontend, Button translated, `InnerHTML` supported.
+- Next: the R surface gaps, then the translator.
+
 ## 2026-10-05 — `R.NullOr` (OPT-006..008)
 
 - [Decision record](docs/research/optional-fields.md#nullor-values-2026-10-05).

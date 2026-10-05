@@ -6,6 +6,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Native Remote Live](research/remote-live.md)** is the milestone 7 research and design: upstream's `liveHub` semantics, `R.LiveHub` signals, the native hub and the runtime-served `FoldkitRemoteLive` stream.
 
+**[Milestone 8B: SSR source to R](research/ssr-codemod.md)** identifies the pinned upstream `examples/ssr` source, the R surface it lacks, and the translator decisions (TypeScript 7 API, `@foldkit/ui` translated, `InnerHTML` supported).
+
 **[Serving native RPC](research/rpc-serving.md)** covers connections, read timeouts and threading for generated servers ([#16](https://github.com/doeixd/reffect/issues/16), [#25](https://github.com/doeixd/reffect/issues/25)).
 
 **[Composite recovery refinement](research/retained-composite-recovery.md)** explains ordinary Remote mutation admission versus cancellation-retained failures during masked suspension.
