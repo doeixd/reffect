@@ -2092,7 +2092,7 @@ ${
           ].concat(
             prepared.auth ? ["subtle@2.6.1"] : [],
             prepared.pages ? ["url@2.5.8"] : [],
-            prepared.asynchronous ? ["http-body@1.0.1"] : [],
+            prepared.asynchronous ? ["http-body@1.0.1", "futures-util@0.3.34"] : [],
             runtime?.crates ?? [],
             ryuJs && !runtime?.crates.includes("ryu-js@1.0.3") ? ["ryu-js@1.0.3"] : [],
           ),

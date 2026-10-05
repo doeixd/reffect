@@ -203,6 +203,9 @@ test(
             expect(artifact.sourceArtifacts).toBe(SourceArtifacts.None);
             expect(artifact.runtime.crates).toEqual([
               "axum@0.8.9",
+              "hyper@1.11.1",
+              "hyper-util@0.1.21",
+              "tower@0.5.3",
               "tokio@1.53.1",
               "serde_json@1.0.151",
             ]);

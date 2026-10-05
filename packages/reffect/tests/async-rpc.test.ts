@@ -306,6 +306,7 @@ test("native HTTP worker retains isolated context and awaits finalizers on socke
           });
           expect(artifact.runtime.handlerProfile).toBe("suspended-scalars");
           expect(artifact.runtime.crates).toContain("http-body@1.0.1");
+          expect(artifact.runtime.crates).toContain("futures-util@0.3.34");
           if (FailureFrames.isNone(policy))
             expect(artifact.files["src/lib.rs"]).not.toContain("FrameTrail");
           const directory = yield* CargoApi.write(
