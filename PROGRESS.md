@@ -104,7 +104,8 @@
   - `remote-auth`, two new tests: compile-time refusals; and against a native server, login, pages (accepted and refused), RPC (a cookie read byte-equal to the bearer's, a cookie mutation as its principal, seven cross-site and content-type denials) and logout.
   - Passing suites: `rpc-auth`, `async-rpc`, `schema-rpc`, `remote-live`, `html-page`, `remote-page`, `todo-fullstack`; `vp check` clean.
 - **Step 4.** `session-browser` runs headless Chrome over CDP against a session-enabled native server. It checks that a navigation without the cookie is 401, login works, HttpOnly hides the cookie from `document.cookie`, a cookie-only navigation renders, and same-origin RPC is authenticated. It also checks that a same-site POST from another port carries the cookie with `Sec-Fetch-Site: same-site` and is refused, and that logout works.
-- **Remaining.** The `todo-fullstack` showcase is not yet authenticated: no login screen or middleware.
+- **Showcase.** `todo-fullstack --auth` signs in. `session.loginPage` gives a 401 page a body to sign in from, and the example adds an auth middleware, a login form and a printed token. The Vite dev config forwards `/session`.
+- **Showcase validation.** New `todo-fullstack-browser` test drives Vite and the native server in headless Chrome: the login page (401), sign-in, an HttpOnly cookie, render and hydration, then a toggle through cookie-authenticated RPC that survives a reload. The CDP client moved into `tests/fixtures/cdp.ts`. Passing suites: `session-browser`, `todo-fullstack`, `remote-auth` (now also refusing an empty login page); `vp check` clean.
 
 ## 2026-10-05 — Cookie sessions research (#4)
 

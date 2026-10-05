@@ -305,8 +305,6 @@ All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reff
 
 The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHub. Recommended order: security first (#3, #5), then #6, #12 with #9, #10 and #7, then #13, then #4 before any authenticated showcase, then M9-5 and #14.
 
-- [#4](https://github.com/doeixd/reffect/issues/4) follow-up: authenticate the `todo-fullstack` showcase with the session cookie (a login screen and middleware); the mechanism is done ([cookie sessions](research/cookie-sessions.md))
-
 ## Full-codebase review issues (2026-10-03)
 
 Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the key claims re-verified. Recommended order: #16, #17, #18 (anyone can stall or crash the server), then #21, #22, #23, #24 (SSR security and parity), #19, #20, then correctness, performance and design. The native-only snapshot race is a comment on [#8](https://github.com/doeixd/reffect/issues/8).

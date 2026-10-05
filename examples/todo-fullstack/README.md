@@ -18,6 +18,10 @@ TODO_REMOTE_PORT=8787 vp dev examples/todo-remote/web
 
 Open the address Vite prints. Vite serves the client modules and forwards page navigations and `/rpc` to the native server. Pass `--database todos.db` to keep the data between runs; otherwise a seeded database is made in a temporary directory. The server reads its database URL from `REFFECT_DATABASE_URL` at run time, never from the compiled code.
 
+## Signed in (`--auth`)
+
+Start the server with `--auth` and every page and procedure needs a principal. A browser without a session sees `login.html` (with status 401). It signs in with the token the server prints at start (or `TODO_TOKEN`). The token becomes an HttpOnly `__Host-` session cookie that the page and the hydrated app's RPC carry. The server accepts the cookie on RPC only from the page's own origin with the RPC content type, so another site cannot act with it. See [cookie sessions](../../docs/research/cookie-sessions.md).
+
 ## The files
 
 - **[db.ts](db.ts):** the `todos` table, its foldkit-remote-drizzle binding to the `Todo` entity, and the seed.

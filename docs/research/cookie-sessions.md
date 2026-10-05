@@ -155,4 +155,11 @@ A session needs `pages`, whose origin is the one `Origin` is compared with. Its 
 - a `no-cors` POST from another port of the same host gets the cookie from Chrome, since SameSite=Lax does not block a same-site request, with `Sec-Fetch-Site: same-site`. The server answers it `Unauthorized`, which CDP reads from the opaque response. Only the Fetch Metadata check stands between that page and the session;
 - logout clears the cookie, and the page is 401 again.
 
-**Remaining.** The `todo-fullstack` showcase itself is not authenticated: it has no login screen or middleware ([open work](../open-work.md)).
+**Login page.** `session.loginPage` is HTML, 1 to 65536 characters. A page refused for want of a principal answers with it as the body of its 401, with `text/html` and `no-store`, so a browser has somewhere to sign in. Without it a refusal has no body, and Chrome shows its own error page.
+
+**Showcase.** `todo-fullstack --auth` compiles the server with an auth middleware and `session: { loginPage }` (`examples/todo-fullstack/login.html`, a form that posts the token to `/session` and reloads). `todo-fullstack-browser.test.ts` drives it in headless Chrome through Vite, as `vp dev` serves it:
+
+- a browser without a session gets the login page (401);
+- signing in sets the cookie, out of `document.cookie`;
+- the list renders and hydrates;
+- a toggle commits through RPC authenticated by the cookie alone, and survives a reload.
