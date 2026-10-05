@@ -1083,12 +1083,16 @@ export const compileServer = (
         Compile.withFailureFrames(options.failureFrames ?? FailureFrames.Bounded),
       ),
     );
-    // The HTTP manifest composes Tokio and serde_json (which Unknown codecs configure with
-    // preserve_order, UNK-003). Refuse other core crates until composition supports them.
+    // The HTTP manifest composes Tokio, serde_json (which Unknown codecs configure with
+    // preserve_order, UNK-003) and url (R.Url). Refuse other core crates until composition
+    // supports them.
     if (
       core.explanation.crates.some(
         (crate) =>
-          crate !== "tokio@1.53.1" && crate !== "serde_json@1.0.151" && crate !== "ryu-js@1.0.3",
+          crate !== "tokio@1.53.1" &&
+          crate !== "serde_json@1.0.151" &&
+          crate !== "ryu-js@1.0.3" &&
+          crate !== "url@2.5.8",
       )
     )
       return yield* unsupported(

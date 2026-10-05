@@ -4034,7 +4034,11 @@ const writeCompositeTypes = (
       blocks.forEach((block) => block.bindings.forEach((binding) => visit(binding.type)));
     }
     Match.value(f.node).pipe(
-      Match.tagsExhaustive({ Pure: () => undefined, Effect: (n) => visit(n.error) }),
+      Match.tagsExhaustive({
+        // A composite built only inside the body still needs its declaration.
+        Pure: (n) => n.block.bindings.forEach((binding) => visit(binding.type)),
+        Effect: (n) => visit(n.error),
+      }),
     );
   }
   for (const type of ordered)
