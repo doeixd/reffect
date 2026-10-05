@@ -318,7 +318,6 @@ Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the 
 
 - [#26](https://github.com/doeixd/reffect/issues/26): Remote/SQL data correctness gaps
 - [#27](https://github.com/doeixd/reffect/issues/27): RPC JSON mode: invalid UTF-8 and BOM bodies
-- [#28](https://github.com/doeixd/reffect/issues/28): SSR page host parity gaps
 - [#29](https://github.com/doeixd/reffect/issues/29): compiler stack overflow on deep programs
 - [#30](https://github.com/doeixd/reffect/issues/30): 32-bit hashes in type ids
 - [#31](https://github.com/doeixd/reffect/issues/31): pipeline re-runs check/derive 7–8×

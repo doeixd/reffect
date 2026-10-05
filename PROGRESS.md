@@ -86,6 +86,22 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Review fixes: snapshot, nesting, page host (#7, #8, #10, #23, #28)
+
+- **#7.** Ready-only page views are recorded as a native divergence.
+- **#10 and #8.** Snapshot rows that read the same fields of one entity share one read. While a snapshot runs, ordinary events record what they told each subscriber, and the snapshot leaves that out, under one lock. A Rust test commits a newer title during the snapshot's read (mutation-checked).
+- **#23.** `R.Html` refuses nesting that HTML tree construction rearranges, through branches and mapped items: a block in `p`, `a` in `a`, `form` in `form`, `button` in `button`, a heading in a heading, `li` in `li`. Fifteen shapes are checked against upstream's own refusal, and `native-ssr.md`'s SSR-005 claim is corrected.
+- **#28.** In the page host:
+  - repeated headers are joined and read as Latin-1;
+  - `Vary` is set on refusals after negotiation;
+  - templates and the origin are embedded as Rust literals;
+  - the runtime id is CR-escaped;
+  - a template that already holds Flags is refused.
+- **Validation.**
+  - `runtime:check` passes 23 Rust tests.
+  - These suites pass, run one at a time: `html`, `html-native`, `html-page`, `html-flags`, `remote-auth`, `remote-page`, `remote-live`, `todo-remote-page` and `todo-fullstack`.
+  - One miss along the way: the generated sources were stale for a run because `runtime:gen` had not been rerun. The sync test would have caught it.
+
 ## 2026-10-04 — M9-5: the todo-fullstack showcase (milestone 9 delivered)
 
 - **Change.** `examples/todo-fullstack` is one native executable serving todo-remote's app over SQLite: the server-rendered first screen with resume, Effect RPC, R mutation sources in one transaction each, and Live with the snapshot.
