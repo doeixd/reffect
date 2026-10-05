@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-05 — Milestone 10 step 2: how the official SchemaBinary server answers
+
+- [Probe results](docs/research/schema-binary.md#progress). Over HTTP, the first undecodable frame gets a `Defect` carrying the `SchemaError` text and path. A failure after a message is ignored. A body without a complete frame gets an empty `500`.
+- **Upstream bug** ([Effect-TS/effect#8826](https://github.com/Effect-TS/effect/issues/8826), filed): an unknown procedure tag, or a payload that fails to decode, becomes a connection `Defect`, and the stock client then fails every later call. By user decision the native server answers that request's `Exit` with a `Die`, as under JSON. This is registered as SB-REQUEST-DEFECT.
+
 ## 2026-10-05 — Milestone 10 step 1: SchemaBinary runtime primitives
 
 - [Design record](docs/research/schema-binary.md#progress). The std-only `runtime/src/schema_binary.rs` holds varints, FNV, number forms, frames, the fingerprint-mode RPC envelope, and Exit/Cause.
