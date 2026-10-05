@@ -1291,6 +1291,10 @@ struct Subscriber {
     principal: Option<u64>,
     queue: tokio::sync::mpsc::Sender<Value>,
     cursor: Mutex<f64>,
+    /// While a snapshot runs (LIVE-015), what ordinary events already told this subscriber, per
+    /// row: the fields patched, or `None` once deleted. The snapshot leaves those out, so its
+    /// older read cannot overwrite a newer event (#8).
+    pending: Mutex<Option<HashMap<String, Option<HashSet<String>>>>>,
 }
 /// Bounds on the hub (#19; upstream's liveHub has none). A subscriber that stops reading loses
 /// events past `queue`; their cursors are still numbered, so its next event shows a gap and the
@@ -1456,6 +1460,7 @@ impl Hub {
             principal,
             queue,
             cursor: Mutex::new(after),
+            pending: Mutex::new(None),
         }));
         trace("subscribed", Some(subscribers.len()));
         drop(subscribers);
@@ -1475,7 +1480,36 @@ impl Hub {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1.0;
     }
     /// Numbers the change on the subscriber's own cursor; a closed stream drops it.
+    /// An ordinary event: recorded for a running snapshot, then numbered and sent, under the
+    /// pending lock so the snapshot sees it either entirely before or entirely after (#8).
     fn emit(
+        subscriber: &Subscriber,
+        tag: &str,
+        entity: &str,
+        id: &str,
+        rest: Option<(Value, Vec<String>)>,
+    ) {
+        let mut pending = subscriber
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(told) = pending.as_mut() {
+            let key = format!("{}:{}", entity, id);
+            match &rest {
+                None => {
+                    told.insert(key, None);
+                }
+                // A row already deleted stays deleted; otherwise its patched fields add up.
+                Some((_, changed)) => {
+                    if let Some(fields) = told.entry(key).or_insert_with(|| Some(HashSet::new())) {
+                        fields.extend(changed.iter().cloned());
+                    }
+                }
+            }
+        }
+        Hub::send(subscriber, tag, entity, id, rest);
+    }
+    fn send(
         subscriber: &Subscriber,
         tag: &str,
         entity: &str,
@@ -1689,8 +1723,21 @@ impl Hub {
         {
             return;
         }
+        *subscriber
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(HashMap::new());
         let principal = subscriber.principal;
         let permit = move |entity: &str, fields: &[String]| authorize(principal, entity, fields);
+        // Rows that read the same fields of one entity are read together (#10).
+        struct Group<'a> {
+            entity: &'a str,
+            fields: Vec<String>,
+            ids: Vec<String>,
+            records: Result<HashMap<String, EntityRecord>, String>,
+        }
+        let mut groups: Vec<Group> = Vec::new();
+        let mut rows: Vec<(&str, &str, usize)> = Vec::new();
         for (key, selected) in subscriber.selected.iter() {
             // Entity names hold no colon, so the first one ends the entity.
             let Some((entity, id)) = key.split_once(':') else {
@@ -1713,40 +1760,84 @@ impl Hub {
             if allowed.is_empty() {
                 continue;
             }
-            match server
-                .read(entity, &[id.to_string()], &allowed, &None)
-                .await
+            let group = match groups
+                .iter()
+                .position(|group| group.entity == entity && group.fields == allowed)
             {
-                Ok(records) => match records.into_iter().find(|record| record.id == id) {
-                    Some(record) => {
-                        let mut values: JsObject<Value> = JsObject::new();
-                        for field in &allowed {
-                            if let Some(value) = record.values.get(field) {
-                                values.set(field.clone(), value.clone());
-                            }
-                        }
-                        if values.is_empty() {
-                            continue;
-                        }
-                        let changed: Vec<String> =
-                            values.iter().map(|(key, _)| key.clone()).collect();
-                        Hub::emit(
-                            &subscriber,
-                            "EntityPatched",
-                            entity,
-                            id,
-                            Some((into_object(values), changed)),
-                        );
-                    }
-                    None => Hub::emit(&subscriber, "EntityDeleted", entity, id, None),
-                },
+                Some(group) => group,
+                None => {
+                    groups.push(Group {
+                        entity,
+                        fields: allowed,
+                        ids: Vec::new(),
+                        records: Ok(HashMap::new()),
+                    });
+                    groups.len() - 1
+                }
+            };
+            groups[group].ids.push(id.to_string());
+            rows.push((entity, id, group));
+        }
+        for group in &mut groups {
+            group.records = server
+                .read(group.entity, &group.ids, &group.fields, &None)
+                .await
+                .map(|records| {
+                    records
+                        .into_iter()
+                        .map(|record| (record.id.clone(), record))
+                        .collect()
+                });
+        }
+        // Rows are told in selection order, under the pending lock: what an ordinary event
+        // already told since registration is left out.
+        let mut pending = subscriber
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let told = pending.take().unwrap_or_default();
+        for (entity, id, group) in rows {
+            let group = &groups[group];
+            let key = format!("{}:{}", entity, id);
+            let already = told.get(&key);
+            if let Some(None) = already {
+                continue;
+            }
+            let records = match &group.records {
+                Ok(records) => records,
                 Err(message) => {
                     eprintln!(
                         "{}",
                         json!({ "schema": "reffect.live@1", "event": "snapshot-failed", "entity": entity, "id": id, "message": message })
                     );
                     Hub::skip(&subscriber);
+                    continue;
                 }
+            };
+            match records.get(id) {
+                Some(record) => {
+                    let mut values: JsObject<Value> = JsObject::new();
+                    for field in &group.fields {
+                        if matches!(already, Some(Some(fields)) if fields.contains(field)) {
+                            continue;
+                        }
+                        if let Some(value) = record.values.get(field) {
+                            values.set(field.clone(), value.clone());
+                        }
+                    }
+                    if values.is_empty() {
+                        continue;
+                    }
+                    let changed: Vec<String> = values.iter().map(|(key, _)| key.clone()).collect();
+                    Hub::send(
+                        &subscriber,
+                        "EntityPatched",
+                        entity,
+                        id,
+                        Some((into_object(values), changed)),
+                    );
+                }
+                None => Hub::send(&subscriber, "EntityDeleted", entity, id, None),
             }
         }
     }

@@ -420,3 +420,98 @@ fn page_data_records_each_planned_read_with_its_answer() {
     );
     assert_eq!(views, json!({}));
 }
+
+/// The memory backend, counting reads; during its first read a newer title is committed and
+/// signalled, as a concurrent mutation would be while a snapshot reads (#8).
+struct RacingSource {
+    inner: Memory,
+    newer: Memory,
+    hub: &'static Hub,
+    reads: std::sync::atomic::AtomicUsize,
+}
+impl crate::remote_engine::Source for RacingSource {
+    fn has_source(&self, entity: &str) -> bool {
+        self.inner.has_source(entity)
+    }
+    fn read(
+        &self,
+        entity: &str,
+        ids: &[String],
+        fields: &[String],
+        windows: &Option<JsObject<crate::remote_engine::Window>>,
+    ) -> impl std::future::Future<Output = Result<Vec<crate::remote_engine::EntityRecord>, String>> + Send
+    {
+        let first = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+        async move {
+            let old = self.inner.read(entity, ids, fields, windows).await;
+            if first {
+                fn permit_all(_: Option<u64>, _: &str, fields: &[String]) -> Vec<String> {
+                    fields.to_vec()
+                }
+                let title = ["title".to_string()];
+                self.hub
+                    .changed(&self.newer, permit_all, "Todo", "t1", &title)
+                    .await;
+            }
+            old
+        }
+    }
+    fn check_query(&self, query: &str, input: &serde_json::Value) -> Result<&'static str, String> {
+        self.inner.check_query(query, input)
+    }
+    fn page(
+        &self,
+        query: &str,
+        input: &serde_json::Value,
+        window: &crate::remote_engine::Window,
+    ) -> impl std::future::Future<Output = Result<crate::remote_engine::PageIds, String>> + Send
+    {
+        self.inner.page(query, input, window)
+    }
+}
+
+#[test]
+fn snapshot_reads_rows_together_and_never_overwrites_a_newer_event() {
+    let hub = hub();
+    let rows = |title: &str| {
+        json!({ "Todo": [
+            ["t1", { "id": "t1", "title": title, "done": false }],
+            ["t2", { "id": "t2", "title": "Other", "done": true }],
+        ] })
+    };
+    let source = RacingSource {
+        inner: Memory::new(vec!["Todo".to_string()], &rows("Old"), &[]),
+        newer: Memory::new(vec!["Todo".to_string()], &rows("New"), &[]),
+        hub,
+        reads: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let fields = json!(["title", "done"]);
+    let mut fresh = live(
+        hub,
+        0.0,
+        json!([
+            { "entity": "Todo", "id": "t1", "fields": fields },
+            { "entity": "Todo", "id": "t2", "fields": fields },
+        ]),
+        None,
+    );
+    fn permit_all(_: Option<u64>, _: &str, fields: &[String]) -> Vec<String> {
+        fields.to_vec()
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(hub.snapshot(&fresh, &source, permit_all));
+    // #10: both rows read the same fields of Todo, so one read serves them.
+    assert_eq!(source.reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // #8: the event's newer title arrives first, and the snapshot (read before it) does not
+    // overwrite it; it still tells t1's done and all of t2.
+    assert_eq!(
+        drain(&mut fresh),
+        [
+            json!({ "_tag": "EntityPatched", "cursor": 1, "entity": "Todo", "id": "t1", "values": { "title": "New" }, "changed": ["title"] }),
+            json!({ "_tag": "EntityPatched", "cursor": 2, "entity": "Todo", "id": "t1", "values": { "done": false }, "changed": ["done"] }),
+            json!({ "_tag": "EntityPatched", "cursor": 3, "entity": "Todo", "id": "t2", "values": { "title": "Other", "done": true }, "changed": ["title", "done"] }),
+        ]
+    );
+}
