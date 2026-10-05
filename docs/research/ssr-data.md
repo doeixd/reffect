@@ -349,6 +349,7 @@ Results:
 **Gap.** A page view is only a query's `Page`. A detail page (one entity by id) cannot be declared, although M9-3 admitted top-level `Data.get(select, id)` with a flat selection.
 
 **Upstream facts** (foldkit-remote 0.11.0, probed 2026-10-05 against `RemoteServer.memory`):
+
 - `Data.get(select, id)` plans exactly one Read, `{ version, requests: [{ entity, fields, id }] }`, with the selection's fields.
 - **Existing entity.** The answer holds the entity's values, and the projection reads `Ready` with the value decoded by `select.schema`.
 - **Missing entity.** The answer is `{ entities: [], settled: [] }`. The store records a tombstone, the projection reads `NotFound`, and the client's replay reproduces both.
@@ -356,22 +357,26 @@ Results:
 - An entity selection carries its `schema` (`Object.keys(select)` is `entity`, `members` and `schema`); the get projection itself does not.
 
 **Decisions.**
+
 - **Declaration.** A `planPage` view may be `{ get: select, id }`. `id` is either a string, or a pure `R.fn([R.String], R.String, ...)` of the page URL as in [page inputs](#page-inputs-from-the-url-2026-10-05). The planner calls `data.get(select, id)` (sampling a templated id at the origin's root) and requires a single Read with a single requirement.
 - **View value.** `R.Remote.Data(item)` is the settled subset of upstream `RemoteData`: the tagged union `Ready { value } | NotFound`. A page matches on it with `R.Match.valueTags`, mirroring upstream's tag names. Natively, a requirement whose entity is in the answer is `Ready` with the entity's values. One absent from both `entities` and `settled` is `NotFound`. Anything else, such as withheld fields, fails the page like a query view's undecodable item (#7, Ready-only).
 - **URL id.** The host evaluates the id function on the request URL, and replaces the planned requirement's `id` before the engine reads it, under the request's principal like any read.
 - **Refused.** A get with relations, a templated id whose function is not `String → String`, and a get projection without its selection.
 
-**Alternatives.** *`UndefinedOr(item)` as the value* was rejected: it hides upstream's tag names, and a view author would rewrite the match when moving code between upstream and R. *Recovering the selection from the projection's metadata* was rejected: the metadata carries field names, not the schema that decodes them.
+**Alternatives.** _`UndefinedOr(item)` as the value_ was rejected: it hides upstream's tag names, and a view author would rewrite the match when moving code between upstream and R. _Recovering the selection from the projection's metadata_ was rejected: the metadata carries field names, not the schema that decodes them.
 
 **Acceptance.**
+
 - A page with a query view and a get view whose id comes from `?id=` renders byte-equal to upstream, whose `init` replays and reads `Data.get(select, id).read(model)`. This holds for an existing id and for a missing id (`NotFound`).
 - The browser's replay is settled with no further request.
 - An id function of the wrong type is refused.
 
 **Implemented (2026-10-05).** `planPage` get views (`src/remote-resume.ts`), `R.Remote.Data` (`src/authoring.ts`), URL id fills and the views witness (`src/native-remote.ts`), and the engine's `get_view` (`runtime/src/remote_engine.rs`). Two upstream behaviours surfaced in the byte-equal test and are now mirrored:
+
 - **Narrowed reads.** Upstream's planner asks only for the fields the store lacks. A get of a task the page's query already answered makes no Read, and a partly answered one asks for the rest. The engine's `page_data` narrows each planned Read over the page's earlier answers, and skips it when nothing is left. A get view is assembled from all of the page's answers. Native order is plan order, and upstream satisfies `active` in its key order, so a page's views and its `active` must be declared in the same order.
 - **Canonical requests.** Upstream's Flags encode each exchange through `RemoteResume`, in schema key order (`entity, id, fields`). The planner now encodes each planned request through `QueryRequest`/`ReadBatch`, so the native echo writes the same bytes.
 
 Validation:
+
 - `tests/remote-page-input.test.ts` passes 2/2. Four URLs (default, `?status=closed&id=c`, an empty list, `?id=missing`) render byte-equal to upstream, the Read is made only where the list lacks the task, and the replay settles `Ready`/`NotFound`.
 - The runtime test `page_reads_ask_only_what_earlier_answers_lack_and_gets_settle` passes.
