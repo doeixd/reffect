@@ -144,3 +144,44 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
   - On a data page the host's `private, no-store` still wins.
   - Evidence: `tests/page-request.test.ts` passes 1/1. A page shaped as the pinned `renderPage` (an `OPTIONS` preflight answering 204 with `allow`, otherwise `Rendered` with the example's three headers) equals upstream `handleRequest` in status, body and headers on ten cookies, `OPTIONS` and `HEAD`. All page suites and `todo-fullstack` pass.
 - **Step 1 is complete:** every surface the pinned example reaches has an R form, differential against upstream. Next is step 2, the translator.
+
+## Step 2 design: the translator (2026-10-05)
+
+**Facts** (typescript 7.0.2, probed 2026-10-05 on the vendored fixture):
+- **Opening.** `new API({ cwd })` from `typescript/unstable/sync` spawns the bundled `tsgo`. `updateSnapshot({ openProjects: [tsconfig] })` gives a `Project` with `program` and `checker`.
+- **The AST.** `program.getSourceFile(path)` returns it with `getText()`, using `SyntaxKind` from `typescript/unstable/ast`.
+- **Types.** `checker.getTypeAtLocation`, `getSymbolAtLocation` and `typeToString` answer them. `Model` reads as `Struct<{ readonly count: Number; … }>`.
+
+**Decisions.**
+- **Output is R builder source.** The translator writes a TypeScript module of `R` builders, so the transformation's result can be reviewed, committed and diffed for stability. The module is compiled like a hand-written 8A page. It imports the upstream `Message` union, since events construct the browser's own Messages.
+- **The frontend is one adapter module.** It is the only code touching `typescript/unstable/*`; the translator works on its plain view of declarations, expressions and types, so an API change is absorbed there.
+- **The graph is server-reachable only.**
+  - It starts from `entry.server.ts` `renderPage` and reaches `Flags`, `init`, `view`, `cookie.ts` and the `@foldkit/ui` `Button`.
+  - `update`, `Command`s and browser-only code are not translated, and stay as they are for the stock client.
+- **Build-time evaluation.**
+  - Values known while translating are evaluated rather than translated: string and number constants, `Button.view`'s defaulted config (`isDisabled = false`), conditional arrays over them, spreads of known arrays, `toView` callbacks and helper functions like `parseEquivalenceView`. This is "ordinary build-time TypeScript remains unrestricted".
+  - Only values depending on the request or Model become R expressions.
+- **Mapping:**
+
+  | Source | R |
+  | --- | --- |
+  | `Schema.Struct`/`Literals`/`Number`/`String` | witnesses |
+  | `h.<element>`/`h.<Attribute>` | `R.Html` |
+  | template literals and `+` | `R.String.concat` |
+  | `number.toString()` | `R.String.fromNumber` |
+  | `request.method === 'OPTIONS'` | `R.Match.bool` on the request's `method` |
+  | `request.headers.get('cookie') ?? ''` | the request's `cookie` |
+  | `new Date().toISOString()` | `R.DateTime.formatIso(now)` |
+  | `Server.renderToString({ Flags, init, view }, { flags })` | `R.Html.renderToString` with the Flags |
+  | `Server.Rendered(app, { headers })` and `Server.Responded(new Response(...))` | `R.Html.rendered`/`responded` |
+  | `cookie.ts`'s pipe | `R.Cookies`/`R.Record.get`/`R.Option`/`R.Number` |
+
+- **Refusals.** Anything else is a structured diagnostic naming the node, its file and position, and why it is outside the profile. The translator never guesses.
+- **Configuration the source cannot state.** The `buildId` the Vite plugin injects, the page `template`, and the origin come from the translation's options, as the 8A host takes them.
+
+**Acceptance (step 3):**
+- Translating the fixture twice gives identical output.
+- The output type-checks with no casts.
+- Served natively, it answers byte-equal to upstream `handleRequest` with the pinned `renderPage`, for the same requests (cookie and clock pinned).
+- The stock client built from the pinned `entry.ts` hydrates it.
+- A construct outside the profile, in a mutated copy of the source, is refused with its location.
