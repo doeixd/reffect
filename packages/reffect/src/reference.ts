@@ -5,9 +5,35 @@ import type { CompileError, IRType, Inputs } from "./kernel.ts";
 import { EffectFn, EffectReference } from "./effect-ir.ts";
 import type { FramedExit } from "./effect-ir.ts";
 import { containsRef } from "./ref-model.ts";
+import { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
 import { containsDeferred, usesDeferredExpression } from "./deferred-model.ts";
 import { Effect, Exit, Match, Stream } from "effect";
 
+/** Why the reference refuses `f` before evaluating it, as `Compile.check` would. */
+const refusal = (f: Fn | EffectFn): CompileError | undefined => {
+  // Measured first and without recursion: evaluation, and the walks below, would overflow (#29).
+  if (nestingDepth(f.body) === undefined)
+    return fail(
+      "NESTING_LIMIT",
+      "check",
+      "function",
+      `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
+    );
+  if (
+    f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
+    containsRef(f.output) ||
+    containsDeferred(f.output) ||
+    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
+    (f instanceof Fn && usesDeferredExpression(f.body))
+  )
+    return fail(
+      "RESOURCE_ESCAPE",
+      "check",
+      "function",
+      "Public channels cannot contain lexical Ref or Deferred handles",
+    );
+  return undefined;
+};
 function runUnknown<I extends readonly IRType<unknown>[], A>(
   f: Fn<I, A>,
   args: readonly unknown[],
@@ -17,21 +43,8 @@ function runUnknown<I extends readonly IRType<unknown>[], A, E>(
   args: readonly unknown[],
 ): Effect.Effect<A, E | CompileError>;
 function runUnknown(f: Fn | EffectFn, args: readonly unknown[]): Effect.Effect<unknown, unknown> {
-  if (
-    f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
-    containsRef(f.output) ||
-    containsDeferred(f.output) ||
-    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
-    (f instanceof Fn && usesDeferredExpression(f.body))
-  )
-    return Effect.fail(
-      fail(
-        "RESOURCE_ESCAPE",
-        "check",
-        "function",
-        "Public channels cannot contain lexical Ref or Deferred handles",
-      ),
-    );
+  const refused = refusal(f);
+  if (refused) return Effect.fail(refused);
   return f instanceof EffectFn
     ? EffectReference.runUnknown(f, args)
     : PureReference.runUnknown(f, args);
@@ -62,21 +75,8 @@ function runWithFramesUnknown(
   args: readonly unknown[],
   basePath?: string,
 ): Effect.Effect<FramedExit<unknown, unknown>, CompileError> {
-  if (
-    f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
-    containsRef(f.output) ||
-    containsDeferred(f.output) ||
-    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
-    (f instanceof Fn && usesDeferredExpression(f.body))
-  )
-    return Effect.fail(
-      fail(
-        "RESOURCE_ESCAPE",
-        "check",
-        "function",
-        "Public channels cannot contain lexical Ref or Deferred handles",
-      ),
-    );
+  const refused = refusal(f);
+  if (refused) return Effect.fail(refused);
   return f instanceof EffectFn
     ? EffectReference.runWithFramesUnknown(f, args, basePath)
     : PureReference.runUnknown(f, args).pipe(

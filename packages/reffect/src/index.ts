@@ -36,6 +36,7 @@ export {
 } from "./kernel.ts";
 export { R } from "./authoring.ts";
 export { OptionIR } from "./option.ts";
+export { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
 export type { OptionValue, OptionType } from "./option.ts";
 export { ResultIR, effectResult } from "./result.ts";
 export type { ResultValue } from "./result.ts";

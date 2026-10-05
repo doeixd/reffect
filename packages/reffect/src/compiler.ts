@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
+import { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
 import { streamExpressions, streamFinalizers, streamSources } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
 import { SourceMaps } from "./source-artifact.ts";
@@ -508,6 +509,21 @@ export const stages = Object.freeze([
 // Prefixing with r_ also makes Rust keywords legal and keeps source names out of syntax positions.
 const validName = /^[A-Za-z][A-Za-z0-9_]*$/;
 const check = Effect.fn("Compile.check")(function* (program: Program) {
+  // Measured first and without recursion: every later walk, this check's own included, would
+  // overflow the stack on such a program instead of answering (#29).
+  const tooDeep = Object.entries(program.functions).filter(
+    ([, f]) => nestingDepth(f.body) === undefined,
+  );
+  if (tooDeep.length)
+    return yield* new CompileError({
+      message: "Invalid program",
+      diagnostics: tooDeep.map(([name]) => ({
+        code: "NESTING_LIMIT",
+        stage: "check",
+        path: `functions.${name}`,
+        message: `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
+      })),
+    });
   const issues = Object.entries(program.functions).flatMap(([name, f]) => [
     ...(!validName.test(name)
       ? [

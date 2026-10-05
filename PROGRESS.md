@@ -94,6 +94,21 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Nesting limit (#29)
+
+- **#29.** `Compile.check` and the reference refuse a function whose IR nests deeper than `NESTING_LIMIT` (512) with a structured `NESTING_LIMIT` diagnostic. The new `src/nesting.ts` measures the depth with an explicit stack, once per shared subterm, through expressions, computations, streams and function bodies. It runs before every other walk: the first overflow in the probe was `check`'s own deferred-model walk, which escaped as an untyped defect.
+  - **Probe** (nested `Match.bool`):
+    - 1025 levels compiled and 2049 overflowed;
+    - 511 levels compiled, ran in the reference and built with cargo;
+    - depth 10k through `Compile`, `Reference` and `NativeRpc.compile` now answers `CompileError`.
+  - **Records:** [compiler API](docs/compiler-api.md) and [native divergences](docs/native-divergences.md).
+- **Validation.** New `nesting` test:
+  - depth 10k, pure and Effect, refused by `run`, `check` and the reference;
+  - the exact boundary at 512;
+  - 400 shared squarings measured by depth.
+
+  `compiler`, `effect`, `html`, `html-page`, `foldkit` and `todo-fullstack` pass; `vp check` is clean.
+
 ## 2026-10-05 — Remote and SQL data gaps (#26)
 
 - **Keys.** Rows stay keyed `entity:id`, as upstream keys them. Entity names holding a colon are now refused when compiled, and the live hub skips a client requirement whose entity holds one. Before this, `Todo:1` + `x` and `Todo` + `1:x` shared a key.

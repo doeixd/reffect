@@ -62,6 +62,7 @@ The injected millis driver also admits only signed safe-integer readings, while 
 - Query inputs must be Structs of plain primitive fields (string, number, boolean, null, literals) with required keys.
 - Unsupported Schema shapes: `optional(Struct({}))`, `optional(Unknown)`, tuples, non-length array checks, non-String record keys, checked outputs, classes in payloads.
 - Remote store calls and live signals inside a finalizer (`STORE_CLEANUP`, [#18](https://github.com/doeixd/reffect/issues/18)): the reference would answer a defect, but natively a failed call in a masked finalizer has no way to be reported.
+- Functions nesting deeper than 512 IR levels (`NESTING_LIMIT`, [#29](https://github.com/doeixd/reffect/issues/29)): the reference refuses them too, since its interpreter recurses as deeply.
 - Entity names holding a colon ([#26](https://github.com/doeixd/reffect/issues/26)): rows are keyed `entity:id`, as upstream keys them, and split at the first colon, so such a name would make keys ambiguous. A live requirement whose entity holds a colon names no source and is skipped, where upstream's key for it could collide with a real row's.
 - `live: true` without NDJSON serialization (LR-4): a Live stream never ends, so a JSON body would never answer.
 - Flags holding Numbers in the document form of `R.Html.renderToString` (M9-1): the view was built from the original Flags, while upstream's `init` reads their JSON round trip, which turns `-0` into `0`. The program form `renderToString({ init, view }, { flags })` admits them (M9-3 step 1).
