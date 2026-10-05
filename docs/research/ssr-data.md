@@ -256,7 +256,7 @@ Results:
 - **Divergence.** Recorded in native divergences. The option is off by default, so the oracle tests against `liveHub` stay exact.
 - **Limits.**
   - Aliased and windowed fields (relation pages) are not snapshotted.
-  - A concurrent `changed` racing the snapshot no longer overwrites newer values: events record what they told while a snapshot runs, and the snapshot leaves it out ([#8](https://github.com/doeixd/reffect/issues/8)). Rows reading the same fields share one read ([#10](https://github.com/doeixd/reffect/issues/10)).
+  - A concurrent `changed` racing the snapshot no longer overwrites newer values: events record what they told while a snapshot runs, and the snapshot leaves it out ([#8](https://github.com/doeixd/reffect/issues/8)). Rows reading the same fields share one read ([#10](https://github.com/doeixd/reffect/issues/10)). Two concurrent `changed` calls can still interleave out of read order, as upstream's can.
   - Connection changes (a todo added elsewhere) are outside the hub, with or without a snapshot.
 - **Validation.**
   - [todo-remote-page.test.ts](../../packages/reffect/tests/todo-remote-page.test.ts) toggles t2 after the render and before a fresh subscription, and the stream carries `done: true`. Mutation-checked: without the snapshot it times out.
