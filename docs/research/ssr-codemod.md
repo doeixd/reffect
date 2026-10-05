@@ -71,3 +71,40 @@ Status: **research (2026-10-05)**, not implemented. 8B mechanically transforms t
   - Fragments with markup would need an HTML parser to check that they parse the same in place (server.js), and stay refused.
   - Evidence: `tests/html-native.test.ts` passes 2/2 with a `Raw` view, including the example's `pre` (`InnerHTML('
 leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/12 with the refusals.
+
+## Step 1d design: Flags from the request (2026-10-05)
+
+**What the entry computes.** `flagsForRequest(cookieHeader)`:
+- `initialCount`: `readCountCookie`, which is `Cookies.parseHeader` → `Record.get("foldkit-ssr-count")` → `Option.flatMap(Number.parse)` → `Option.filter(globalThis.Number.isSafeInteger)` → `getOrElse(0)`;
+- `renderedAt`: `new Date().toISOString()`;
+- `renderedOn`: `"Server"`.
+
+**Upstream semantics** (effect 4.0.0 source, checked 2026-10-05):
+- **`Cookies.parseHeader`** (`effect/http/Cookies.ts`, from fastify-cookie):
+  - It splits on `;` and skips a pair without `=` before its terminator.
+  - Keys are `trim`med, and the first occurrence wins.
+  - A value starting with `"` drops its first and last characters, then trims.
+  - The value is `decodeURIComponent`d only when it holds a `%`, and kept as is when that throws.
+  - Properties are assigned safely (`__proto__` is an ordinary key).
+- **`Number.parse`:**
+  - `"NaN"`, `"Infinity"` and `"-Infinity"` parse literally.
+  - A string that `trim`s to empty is `None`.
+  - Otherwise it is JS `Number(s)`, `None` when NaN. That covers Unicode white space trimming, `0x`/`0o`/`0b`, exponents, and leading `+`/`-` on decimals only.
+- **`isSafeInteger`** is the JS global (Effect's `Number` module has none). **`toISOString`** is `DateTime.formatIso(DateTime.makeUnsafe(ms))` in Effect terms.
+
+**Decisions.**
+- **Operations**, each a total pure function, differential against the JS reference on a corpus:
+  - `R.Cookies.parseHeader(header): Record<String, String>`;
+  - `R.Number.parse(s): Option<Number>`;
+  - `R.Number.isSafeInteger(n): Bool` (named for the JS global, recorded as such);
+  - `R.DateTime.formatIso(R.DateTime.makeUnsafe(ms))`, mirroring Effect's names, over epoch milliseconds the request supplies.
+- **Request inputs.** A page request may read:
+  - `cookie`: the request's `Cookie` header, empty when absent. The reffect session cookie's pairs are removed first, so no view can write the HttpOnly token into HTML.
+  - `now`: the epoch milliseconds the page reads its data at (already its Remote clock).
+
+  A page reading `cookie` answers `Vary: Cookie`, as session pages already do.
+- **Effects stay explicit.** The clock is the host's, given as data like the Remote `now`. The translator maps `new Date()` in the Flags function to it.
+
+**Acceptance.**
+- Each operation agrees with the JS reference natively, on corpora covering `%` decoding failures, quotes, duplicates, `__proto__`, every numeric literal form, Unicode white space, and safe-integer edges.
+- A page's `cookie` never holds the session cookie.
