@@ -187,6 +187,20 @@ The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its
     - the stock client under `layerSchemaBinary` round-trips every value, `-0` included, and keeps working after a procedure the server lacks fails;
     - disabling `-0` preservation makes the byte comparison fail at the `-0` case (mutation check).
 
+- **Step 4, done (2026-10-05): composite shapes.**
+  - **Tagged unions.** A variant is written as kind 10, then its sentinel hash (`sentinelSetHash`, ported, since `collectSentinels` is internal), then the struct without its sentinel fields. The reader adds them back, and an unknown hash reads as absent. Unions mix variants with kind rows, and an error union of tagged structs is written as Effect writes it.
+  - **Arrays** (`Schema.Array` only):
+    - number runs, with the mode byte chosen as `encodeNumberRun` chooses it;
+    - inline, string and sized elements;
+    - struct row runs: shape declaration and reuse by presence mask, `uv(len*2)` regions, per-field string intern tables (`SELF`, `ELEMENTS`) with the 64-value, zero-hit cutoff, and the reader appending every literal.
+  - **Records**: the field-0 map, written first with keys sorted by UTF-8 bytes, read with Effect's checks.
+  - **`Unknown`**: JSON text written by `foldkit_json::json_text` (ryu-js, `Number#toString`), and read with `serde_json`.
+  - **Refused while compiling:** tuples and `NonEmptyArray`, tagged tuples, unique-symbol sentinels, tagged records, records inside row runs (`KEYS` interning), and arrays of records.
+  - **Evidence** (`tests/schema-binary-composites.test.ts`):
+    - against the official server running the same R handlers, the native bytes are equal for 15 requests (11 `Echo` bodies, a typed tagged-union failure in each variant, and more);
+    - the stock client round-trips each body as Effect's own codec does (inside `Unknown`, `-0` is JSON text `0`);
+    - a mutation moving the intern cutoff to 65 fails exactly at the cutoff case. An earlier version of that case did not catch the mutation, because a disabled table stops looking up too; the repeat must follow the 65th value at once.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.

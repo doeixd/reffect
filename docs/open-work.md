@@ -81,7 +81,7 @@ These block many items below.
 
 - NDJSON HTTP streaming (M6), WebSocket sessions (M11), notifications and reverse RPC, SchemaBinary (M10), raw TCP, custom serializers with JS fallback (M14), one transport interface over HTTP/WebSocket/TCP/Worker/in-memory ([rpc-protocol](rpc-protocol.md#one-common-transport-interface))
 - SchemaBinary beyond the first slice ([schema-binary](research/schema-binary.md#progress)):
-  - tagged unions (sentinel hash), arrays (number runs, row runs with interning), records (the field-0 map), and `Unknown` as JSON text;
+  - tuples and `NonEmptyArray`, tagged tuples, records inside row runs (`KEYS` interning) and arrays of records;
   - Exit/Cause with middleware errors, so authentication works over SchemaBinary;
   - streaming `Chunk` frames, NativeRemote procedures, and `fingerprintPayloads`.
 - SchemaBinary: re-probe request-level defects when [Effect-TS/effect#8826](https://github.com/Effect-TS/effect/issues/8826) is fixed, and drop SB-REQUEST-DEFECT if the fixed bytes match ([schema-binary](research/schema-binary.md#progress))

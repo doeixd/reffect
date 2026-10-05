@@ -327,21 +327,17 @@ test("SchemaBinary options outside the first slice are refused while compiling",
   expect(await refusal({ schemaBinary: { maxFrameSize: 1024 } })).toContain(
     'serialization: "schema-binary"',
   );
-  const Tagged = RpcGroup.make(
+  const Tables = RpcGroup.make(
     Rpc.make("Only", {
-      payload: Schema.TaggedUnion({ A: {}, B: { y: Schema.Boolean } }),
+      payload: Schema.Array(Schema.Record(Schema.String, Schema.Number)),
       success: Schema.Boolean,
     }),
   );
-  const only = R.fn([R.TaggedUnion({ A: {}, B: { y: R.Bool } })], R.Bool, () =>
-    R.Bool.literal(true),
+  const only = R.fn([R.Array(R.Record(R.String, R.Number))], R.Bool, () => R.Bool.literal(true));
+  const tables = await Effect.runPromise(
+    NativeRpc.compile(Tables, { Only: NativeRpc.bind(only) }, { serialization: "schema-binary" }).pipe(
+      Effect.flip,
+    ),
   );
-  const tagged = await Effect.runPromise(
-    NativeRpc.compile(
-      Tagged,
-      { Only: NativeRpc.bind(only) },
-      { serialization: "schema-binary" },
-    ).pipe(Effect.flip),
-  );
-  expect(tagged.message).toContain("Tagged unions under SchemaBinary");
+  expect(tables.message).toContain("Arrays of records under SchemaBinary");
 });

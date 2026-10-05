@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-10-05 — Milestone 10 step 4: tagged unions, arrays, row runs, records and Unknown
+
+- [Design record](docs/research/schema-binary.md#progress). The SchemaBinary transcoders now cover:
+  - tagged unions, with sentinel hashes, including as error unions;
+  - `Schema.Array`: number runs, and struct row runs with shape reuse and string interning;
+  - string-keyed records (the field-0 map);
+  - `Unknown` as JS-formatted JSON text.
+- Native bytes equal the official server's on the new corpus. A mutation of the intern cutoff is caught.
+- Validation:
+  - `vp run runtime:check` passes: 43/43 cargo tests.
+  - These suites pass:
+    - `schema-binary-composites` 1/1;
+    - `schema-binary-rpc` 2/2;
+    - `schema-binary-fixtures` 1/1 and `runtime-sources` 1/1.
+  - `vp check` and the strict `tsc` pass.
+
 ## 2026-10-05 — Milestone 10 step 3: a native SchemaBinary RPC server
 
 - [Design record](docs/research/schema-binary.md#progress). `NativeRpc.compile(..., { serialization: "schema-binary" })` serves `RpcSerialization.layerSchemaBinary`. Generated transcoders, derived from the schemas' encoded ASTs and `Rpc.exitSchema`, sit between frames and the verified JSON codecs.

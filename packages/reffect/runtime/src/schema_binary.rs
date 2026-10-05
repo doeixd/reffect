@@ -174,29 +174,52 @@ pub fn put_number(out: &mut Vec<u8>, x: f64) {
         }
     }
 }
-/// A default-mode struct field holding a `number`, with the wire kind its value selects.
-pub fn put_number_field(out: &mut Vec<u8>, id: u32, x: f64) {
+/// Who a field is: a declared field's id, or an extra (index-signature) key.
+#[derive(Clone, Copy)]
+pub enum Tag<'a> {
+    Id(u32),
+    Key(&'a str),
+}
+/// A field's tag: `uv(id*8+wire)`, or for an extra key `uv(keyLen*8+wire)` and the key.
+pub fn put_field_tag(out: &mut Vec<u8>, tag: Tag, wire: u8) {
+    match tag {
+        Tag::Id(id) => put_tag(out, id, wire),
+        Tag::Key(key) => {
+            put_uv(out, key.len() as u64 * 8 + u64::from(wire));
+            out.extend_from_slice(key.as_bytes());
+        }
+    }
+}
+/// A `number` field, tagged with the wire kind its value selects (`valueWireCode`).
+pub fn put_number_tagged(out: &mut Vec<u8>, tag: Tag, x: f64) {
     if is_varint_number(x) {
-        put_tag(out, id, FIELD_WIRE_VARINT);
+        put_field_tag(out, tag, FIELD_WIRE_VARINT);
         return put_sm(out, x);
     }
     match decimal_scale(x) {
         0 => {
-            put_tag(out, id, FIELD_WIRE_FIXED64);
+            put_field_tag(out, tag, FIELD_WIRE_FIXED64);
             put_f64(out, x);
         }
         scale => {
-            put_tag(out, id, FIELD_WIRE_DECIMAL);
+            put_field_tag(out, tag, FIELD_WIRE_DECIMAL);
             put_sm(out, js_round(x * POW10[scale as usize]));
             put_uv(out, u64::from(scale));
         }
     }
 }
+/// A default-mode struct field holding a `number`, with the wire kind its value selects.
+pub fn put_number_field(out: &mut Vec<u8>, id: u32, x: f64) {
+    put_number_tagged(out, Tag::Id(id), x);
+}
 /// A default-mode struct field holding a `boolean`: the wire kind is the value.
 pub fn put_bool_field(out: &mut Vec<u8>, id: u32, value: bool) {
-    put_tag(
+    put_bool_tagged(out, Tag::Id(id), value);
+}
+pub fn put_bool_tagged(out: &mut Vec<u8>, tag: Tag, value: bool) {
+    put_field_tag(
         out,
-        id,
+        tag,
         if value {
             FIELD_WIRE_TRUE
         } else {
@@ -469,6 +492,11 @@ pub fn skip_extras(r: &mut Reader, wire: u8, declared: &[&str]) -> Decoded<()> {
         return Err(Invalid("extra field map"));
     }
     let mut map = r.sized()?;
+    skip_extra_pairs(&mut map, declared)
+}
+/// Extra pairs (`uv(keyLen*8+wire) key payload`) for a struct without index signatures: each is
+/// checked, then skipped.
+pub fn skip_extra_pairs(map: &mut Reader, declared: &[&str]) -> Decoded<()> {
     let mut seen: Vec<&[u8]> = Vec::new();
     while !map.is_empty() {
         let code = map.uv()?;
@@ -481,10 +509,170 @@ pub fn skip_extras(r: &mut Reader, wire: u8, declared: &[&str]) -> Decoded<()> {
             return Err(Invalid("unique extra keys"));
         }
         seen.push(key);
-        skip_field(&mut map, (code % 8) as u8)?;
+        skip_field(map, (code % 8) as u8)?;
     }
     Ok(())
 }
+
+// ---- Unions, arrays and row runs
+
+/// A variant's tag: the union kind byte, then its sentinel hash as u32 LE.
+pub fn put_variant(out: &mut Vec<u8>, tag: u32) {
+    out.push(K_VARIANT);
+    out.extend_from_slice(&tag.to_le_bytes());
+}
+pub const K_VARIANT: u8 = 10;
+pub fn read_u32(r: &mut Reader) -> Decoded<u32> {
+    let bytes = r.take(4)?;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+/// An array's count, bounded as Effect bounds it before allocating.
+pub fn read_count(r: &mut Reader, zero_width: bool) -> Decoded<usize> {
+    let count = r.uv()?;
+    let limit = if zero_width {
+        4_194_304
+    } else {
+        r.remaining() as u64 + 1_048_576
+    };
+    if count > limit {
+        return Err(Invalid("array count within allocation limit"));
+    }
+    Ok(count as usize)
+}
+const NUMBER_RUN_F64: u8 = 0;
+const NUMBER_RUN_VARINT: u8 = 1;
+const NUMBER_RUN_DECIMAL: u8 = 2;
+/// A uniform number array's elements after its count: one mode byte, then each element
+/// (`encodeNumberRun`).
+pub fn put_number_run(out: &mut Vec<u8>, xs: &[f64]) {
+    let mut varint = true;
+    let mut decimal = true;
+    let mut scales = vec![0u8; xs.len()];
+    for (i, &x) in xs.iter().enumerate() {
+        if is_varint_number(x) {
+            if x.abs() > DECIMAL_MANTISSA_MAX {
+                decimal = false;
+            }
+        } else {
+            varint = false;
+            match decimal_scale(x) {
+                0 => decimal = false,
+                scale => scales[i] = scale,
+            }
+        }
+        if !varint && !decimal {
+            break;
+        }
+    }
+    if varint {
+        out.push(NUMBER_RUN_VARINT);
+        xs.iter().for_each(|&x| put_sm(out, x));
+    } else if decimal {
+        out.push(NUMBER_RUN_DECIMAL);
+        for (&x, &scale) in xs.iter().zip(&scales) {
+            // Integers take scale 0 even when a scale would fit.
+            let scale = if x.fract() == 0.0 { 0 } else { scale };
+            let mantissa = if scale == 0 {
+                x
+            } else {
+                js_round(x * POW10[scale as usize])
+            };
+            let code = (mantissa.abs() as u64) * 2 + u64::from(mantissa.is_sign_negative());
+            put_uv(out, code * 16 + u64::from(scale));
+        }
+    } else {
+        out.push(NUMBER_RUN_F64);
+        xs.iter().for_each(|&x| put_f64(out, x));
+    }
+}
+/// A uniform number array's `count` elements (`decodeNumberRun`).
+pub fn read_number_run(r: &mut Reader, count: usize) -> Decoded<Vec<f64>> {
+    let mode = r.byte()?;
+    let mut xs = Vec::with_capacity(count.min(r.remaining()));
+    match mode {
+        NUMBER_RUN_F64 => {
+            if r.remaining() as u64 != count as u64 * 8 {
+                return Err(Invalid("f64"));
+            }
+            for _ in 0..count {
+                xs.push(r.f64()?);
+            }
+        }
+        NUMBER_RUN_DECIMAL => {
+            for _ in 0..count {
+                let code = r.uv()?;
+                let scale = code % 16;
+                if scale > u64::from(DECIMAL_SCALE_MAX) {
+                    return Err(Invalid("decimal"));
+                }
+                let sm = (code - scale) / 16;
+                let magnitude = (sm / 2) as f64;
+                let value = if sm % 2 == 1 { -magnitude } else { magnitude };
+                xs.push(if scale == 0 {
+                    value
+                } else {
+                    value / POW10[scale as usize]
+                });
+            }
+        }
+        NUMBER_RUN_VARINT => {
+            for _ in 0..count {
+                xs.push(r.sm()?);
+            }
+        }
+        _ => return Err(Invalid("f64")),
+    }
+    Ok(xs)
+}
+/// A row-run region: `uv(len*2)`, then the bytes.
+pub fn put_region(out: &mut Vec<u8>, bytes: &[u8]) {
+    put_uv(out, bytes.len() as u64 * 2);
+    out.extend_from_slice(bytes);
+}
+const INTERN_DISABLE_AT: usize = 64;
+/// A run field's string table as the writer keeps it: a value seen before is a back-reference;
+/// a table whose first 64 values never repeated stops interning (`internAdd`).
+#[derive(Default)]
+pub struct InternWrite {
+    values: Vec<String>,
+    hits: usize,
+    disabled: bool,
+}
+impl InternWrite {
+    pub fn put(&mut self, out: &mut Vec<u8>, value: &str) {
+        if !self.disabled {
+            if let Some(index) = self.values.iter().position(|seen| seen == value) {
+                self.hits += 1;
+                put_uv(out, index as u64 * 2 + 1);
+                return;
+            }
+            if self.hits == 0 && self.values.len() >= INTERN_DISABLE_AT {
+                self.disabled = true;
+            } else {
+                self.values.push(value.to_string());
+            }
+        }
+        put_region(out, value.as_bytes());
+    }
+}
+/// A string region or a back-reference into the field's table; the reader keeps every literal.
+pub fn read_interned(r: &mut Reader, table: &mut Vec<String>) -> Decoded<String> {
+    let code = r.uv()?;
+    if code % 2 == 1 {
+        let index =
+            usize::try_from((code - 1) / 2).map_err(|_| Invalid("a known back-reference"))?;
+        return table
+            .get(index)
+            .cloned()
+            .ok_or(Invalid("a known back-reference"));
+    }
+    let len = usize::try_from(code / 2).map_err(|_| Invalid("complete value"))?;
+    let value = Reader::new(r.take(len)?).string()?;
+    table.push(value.clone());
+    Ok(value)
+}
+/// Up to 30 fields, a row run records each new presence mask as a shape (`RUN_MAX_FIELDS`).
+pub const RUN_MAX_FIELDS: usize = 30;
 
 /// The frames of a body, in order. A failure ends the sequence; values before it come first.
 /// A body ending inside a frame is no failure (the parser waits for more): the sequence ends,

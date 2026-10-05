@@ -1222,7 +1222,10 @@ export const compileServer = (
       catch: (cause) =>
         cause instanceof CompileError ? cause : unsupported("Schema.toCodecJson", String(cause)),
     });
-    const ryuJs = encoders.stable || core.explanation.crates.includes("ryu-js@1.0.3");
+    const ryuJs =
+      encoders.stable ||
+      core.explanation.crates.includes("ryu-js@1.0.3") ||
+      prepared.binary?.json === true;
     const hasLogs = core.explanation.analysis.effects.includes(SyncEffects.Log);
     // Live signals travel through the store session, so they need it too (LIVE-001).
     const usesLive = core.explanation.analysis.effects.includes(AsyncEffects.LiveHub);
@@ -1408,7 +1411,11 @@ ${
         ...(prepared.binary
           ? [
               Rs.verbatimItem(runtimeModule("schema_binary", "crate-private")),
-              Rs.verbatimItem(prepared.binary),
+              Rs.verbatimItem(prepared.binary.text),
+              // `Unknown` values are JSON text, written as JavaScript writes it.
+              ...(prepared.binary.json
+                ? [Rs.verbatimItem(runtimeModule("foldkit_json", "crate-private"))]
+                : []),
             ]
           : []),
         Rs.verbatimItem(contextRuntime),
