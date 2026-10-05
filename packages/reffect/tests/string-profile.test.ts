@@ -163,7 +163,9 @@ test(
             const lib = artifact.files["src/lib.rs"];
             expect(lib).not.toContain('format!("{}{}"');
             expect(lib.match(/\]\.concat\(\)/g)).toHaveLength(1);
-            expect(lib).toMatch(/\[&\([^\]]*\)\[\.\.\], &\([^\]]*\)\[\.\.\], &\(.*\)\[\.\.\], &\(.*\)\[\.\.\]\]\.concat\(\)/);
+            expect(lib).toMatch(
+              /\[&\([^\]]*\)\[\.\.\], &\([^\]]*\)\[\.\.\], &\(.*\)\[\.\.\], &\(.*\)\[\.\.\]\]\.concat\(\)/,
+            );
             const directory = yield* CargoApi.write(artifact, `${parent}/${policy._tag}`);
             for (const profile of ["debug", "release"] as const) {
               yield* CargoApi.build(directory, profile);
