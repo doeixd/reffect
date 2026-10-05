@@ -180,23 +180,26 @@ const isConcat = (value: RustExpr): value is Extract<RustExpr, { readonly _tag: 
     Match.when({ _tag: "Call", lowering: { _tag: "Concat" } }, () => true),
     Match.orElse(() => false),
   );
+/** A plain object or record, as lowered nodes are; witnesses and other class instances are not. */
+const isPlainRecord = (value: unknown): value is Readonly<Record<string, unknown>> => {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 /** How often each local index is named anywhere below `roots`; nested blocks only add to it. */
 const localUses = (roots: ReadonlyArray<unknown>): Map<number, number> => {
   const uses = new Map<number, number>();
   const pending = [...roots];
   while (pending.length) {
     const value = pending.pop();
-    if (typeof value !== "object" || value === null) continue;
     if (Array.isArray(value)) {
-      pending.push(...value);
+      for (const item of value) pending.push(item);
       continue;
     }
-    const prototype: unknown = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) continue;
-    const record: Readonly<Record<string, unknown>> = value;
-    if (record._tag === "Local" && typeof record.index === "number")
-      uses.set(record.index, (uses.get(record.index) ?? 0) + 1);
-    pending.push(...Object.values(record));
+    if (!isPlainRecord(value)) continue;
+    if (value._tag === "Local" && typeof value.index === "number")
+      uses.set(value.index, (uses.get(value.index) ?? 0) + 1);
+    for (const item of Object.values(value)) pending.push(item);
   }
   return uses;
 };
