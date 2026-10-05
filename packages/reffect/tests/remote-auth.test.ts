@@ -370,14 +370,22 @@ test(
           expect(answer("missing token, claim")).toContain("Unauthorized");
 
           // Pages: no bearer, no read; with one, the read RPC's own answer for that principal.
-          const getPage = (token?: string) =>
+          const getPage = (token?: string, path = "/") =>
             Effect.promise(async () => {
-              const response = await fetch(`http://${address}/`, {
+              const response = await fetch(`http://${address}${path}`, {
                 headers: token ? { authorization: `Bearer ${token}` } : {},
               });
-              return { status: response.status, body: await response.text() };
+              return {
+                status: response.status,
+                body: await response.text(),
+                vary: response.headers.get("vary"),
+              };
             });
           expect((yield* getPage()).status).toBe(401);
+          // A negotiated page (not index.html) says what it varies by, even when refused (#28).
+          const negotiated = yield* getPage(undefined, "/projects");
+          expect(negotiated.status).toBe(401);
+          expect(negotiated.vary).toBe("Accept, Sec-Fetch-Dest");
           expect((yield* getPage("not-a-token")).status).toBe(401);
           const pageAnswers: Array<string> = [];
           for (const token of ["admin-token", "member-token"]) {

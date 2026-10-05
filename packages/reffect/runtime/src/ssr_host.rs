@@ -281,3 +281,21 @@ pub fn classify(target: &str, destination: Option<&str>) -> Class {
     }
     Class::Page
 }
+/// A request header as Fetch's `headers.get` reads it: repeated values joined with ", ", and
+/// bytes taken as Latin-1, so a non-ASCII value is not mistaken for an absent one (#28).
+pub fn header_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    let mut values = headers.get_all(name).iter().peekable();
+    values.peek()?;
+    Some(
+        values
+            .map(|value| {
+                value
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| *byte as char)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}

@@ -515,3 +515,29 @@ fn snapshot_reads_rows_together_and_never_overwrites_a_newer_event() {
         ]
     );
 }
+
+#[test]
+fn header_values_read_as_fetch_reads_them() {
+    use crate::ssr_host::header_value;
+    let mut headers = axum::http::HeaderMap::new();
+    headers.append("accept", axum::http::HeaderValue::from_static("*/*"));
+    headers.append(
+        "accept",
+        axum::http::HeaderValue::from_static("text/html;q=0"),
+    );
+    headers.append(
+        "sec-fetch-dest",
+        axum::http::HeaderValue::from_bytes(&[b'x', 0xe9]).unwrap(),
+    );
+    // Repeats are joined, so the more specific text/html;q=0 still refuses (#28).
+    assert_eq!(
+        header_value(&headers, "accept").as_deref(),
+        Some("*/*, text/html;q=0")
+    );
+    // A non-ASCII byte is Latin-1, not a missing header.
+    assert_eq!(
+        header_value(&headers, "sec-fetch-dest").as_deref(),
+        Some("x\u{e9}")
+    );
+    assert_eq!(header_value(&headers, "origin"), None);
+}

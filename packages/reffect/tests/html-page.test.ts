@@ -39,12 +39,9 @@ interface Answer {
   readonly allow: string | undefined;
   readonly body: string;
 }
-type Case = readonly [
-  label: string,
-  method: string,
-  target: string,
-  headers?: Record<string, string>,
-];
+type Case = readonly [label: string, method: string, target: string, headers?: Headers];
+/** Request headers; a list is the same header sent once per value. */
+type Headers = Readonly<Record<string, string | ReadonlyArray<string>>>;
 const corpus: ReadonlyArray<Case> = [
   ["root", "GET", "/"],
   ["index.html", "GET", "/index.html"],
@@ -64,17 +61,33 @@ const corpus: ReadonlyArray<Case> = [
   ["empty quality", "GET", "/todos", { accept: "text/html;q=" }],
   ["quoted comma", "GET", "/todos", { accept: 'text/plain;x="a,b", text/html;q=0.5' }],
   ["empty accept", "GET", "/todos", { accept: "" }],
+  // #28: repeated headers join as Fetch joins them, so the specific refusal still wins.
+  ["repeated accept", "GET", "/todos", { accept: ["*/*", "text/html;q=0"] }],
+  ["repeated destination", "GET", "/todos", { "sec-fetch-dest": ["script", "document"] }],
+  // A Latin-1 byte reads as that character rather than as an absent header.
+  ["latin-1 accept", "GET", "/todos", { accept: "text/plain;x=\u00e9, text/html;q=0" }],
   ["head", "HEAD", "/"],
   ["head of a page", "HEAD", "/todos"],
   ["post", "POST", "/form"],
 ];
 
 /** A raw HTTP exchange: the target is sent as written. */
-const send = (address: string, method: string, target: string, headers: Record<string, string>) =>
+const send = (address: string, method: string, target: string, headers: Headers) =>
   new Promise<Answer>((resolve, reject) => {
     const [host, port] = address.split(":");
     const outgoing = httpRequest(
-      { host, port: Number(port), method, path: target, headers },
+      {
+        host,
+        port: Number(port),
+        method,
+        path: target,
+        headers: Object.fromEntries(
+          Object.entries(headers).map(([name, value]) => [
+            name,
+            typeof value === "string" ? value : [...value],
+          ]),
+        ),
+      },
       (response) => {
         let body = "";
         response.setEncoding("utf8");
@@ -95,11 +108,16 @@ const send = (address: string, method: string, target: string, headers: Record<s
   });
 
 /** What upstream handleRequest answers for the same request and rendered application. */
-const upstream = async (method: string, target: string, headers: Record<string, string>) => {
+const upstream = async (method: string, target: string, headers: Headers) => {
   const rendered = await Effect.runPromise(Reference.run(page, []));
   if (rendered._tag !== "Success") throw new Error("The page did not render");
   const response = await handleRequest(
-    new Request(`http://reffect.test${target}`, { method, headers }),
+    new Request(`http://reffect.test${target}`, {
+      method,
+      headers: Object.entries(headers).flatMap(([name, value]) =>
+        (typeof value === "string" ? [value] : value).map((one): [string, string] => [name, one]),
+      ),
+    }),
     { template, renderPage: async () => Rendered(rendered.success) },
   );
   return {

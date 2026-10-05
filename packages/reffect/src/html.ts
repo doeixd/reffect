@@ -428,10 +428,13 @@ const flagsPayload = (
     JsonTextOperation,
     SchemaIR.encodeSync(SchemaIR.toCodecJson(flags.type))(flags),
   );
+  // escapeAttributeValue, as the root stamp writes the same id: CR too, or the browser would
+  // read it as LF here only and the root and its Flags would no longer pair up (#28).
   const escapedId = runtimeId
     .replaceAll("&", "&amp;")
     .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;");
+    .replaceAll("<", "&lt;")
+    .replaceAll("\r", "&#13;");
   return Expr.apply(
     ConcatString,
     Expr.apply(
