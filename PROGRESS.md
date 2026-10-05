@@ -86,6 +86,16 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Reproducible generated builds (#41)
+
+- **#41.** Every written artifact carries the runtime crate's `Cargo.lock`. The crate now depends on `subtle` and tokio `signal` as well, so its lock pins every crate a generated build can reach. Cargo keeps those versions and prunes the rest; `--locked` refuses a superset lock, so it is not used. After each build, `Cargo.build` refuses a resolved registry crate that is outside the lock or differs from it in version or checksum (see [compiler API](docs/compiler-api.md)).
+- **Validation.** Passing suites:
+  - `cargo-lock` (new; the check rejects a newer version, another checksum and an unlisted crate);
+  - `runtime-sources` (the lock is part of the generated sources);
+  - `effect`, `rpc-auth` (`subtle`), `remote-sql`, `remote-sql-mutate`, `todo-fullstack`, `rpc-serving`, `foldkit`.
+
+  `vp check` is clean. `async-rpc` fails on one disconnect test, which also fails without this change. That expectation dates from before #25 and is fixed separately.
+
 ## 2026-10-05 — RPC body decoding (#27)
 
 - **#27.** The native RPC server decodes a request body as the official server's `request.text` does, in both JSON and NDJSON modes: a leading BOM is removed and invalid UTF-8 becomes U+FFFD (checked against Node's `Response.text`). Previously JSON mode parsed bytes strictly, so such a body was a `SyntaxError` Defect natively and a call upstream.

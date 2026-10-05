@@ -1,5 +1,7 @@
 # Check-only crate for the static Rust runtimes reffect emits (LIVE-012). Generated crates
 # inline these module bodies; this crate lets rustfmt, clippy and unit tests run on them.
+# Its dependencies are the union of every generated crate's, with the union of their features, so
+# its Cargo.lock pins each crate a generated build can reach (#41).
 [package]
 name = "reffect-runtime"
 version = "0.0.0"
@@ -19,6 +21,7 @@ tokio = { version = "=1.53.1", features = [
   "net",
   "time",
   "sync",
+  "signal",
 ] }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }
 hyper = { version = "=1.11.1", features = ["server", "http1"] }
@@ -33,6 +36,7 @@ sqlx = { version = "=0.9.0", default-features = false, features = [
 ] }
 libsqlite3-sys = "=0.37.0"
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
+subtle = { version = "=2.6.1", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "=1.53.1", features = ["rt", "sync"] }

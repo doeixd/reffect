@@ -327,4 +327,3 @@ Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the 
 - [#38](https://github.com/doeixd/reffect/issues/38): deduplicate runtime and compiler logic
 - [#39](https://github.com/doeixd/reffect/issues/39): process-wide registries
 - [#40](https://github.com/doeixd/reffect/issues/40): lone-surrogate literals, `unhex` panic, race masking check
-- [#41](https://github.com/doeixd/reffect/issues/41): reproducible builds: lockfile and `--locked`

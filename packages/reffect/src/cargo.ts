@@ -2,6 +2,7 @@ import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema, Stream } f
 import { safeRelativePath } from "./source.ts";
 import { NativeDiagnostic, readBuildDiagnostics } from "./cargo-diagnostics.ts";
 import { ChildProcess } from "effect/process";
+import { RuntimeCargoLock } from "./runtime-sources.generated.ts";
 
 /** Files shared by compiler consumers; native execution does not require a particular IR. */
 export interface GeneratedFiles {
@@ -63,6 +64,8 @@ const artifactEntries = (artifact: GeneratedFiles) =>
       const required = ["Cargo.toml", "src/lib.rs", "src/main.rs"] as const;
       const entries: readonly (readonly [string, string])[] = [
         ...required.map((name) => [name, artifact.files[name]] as const),
+        // Cargo resolves against this lock, keeping its versions and dropping unused entries (#41).
+        ["Cargo.lock", RuntimeCargoLock] as const,
         ...Object.entries(artifact.auxiliaryFiles ?? {}),
       ];
       const seen = new Set<string>();
@@ -112,6 +115,28 @@ const write = Effect.fn("Cargo.write")(function* (artifact: GeneratedFiles, outp
   yield* fs.makeDirectory(directory);
   return yield* writeFiles(artifact, directory);
 });
+/** A lock's registry packages, keyed `name@version`, each with its source and checksum. */
+const lockedPackages = (lock: string): ReadonlyMap<string, string> => {
+  const packages = new Map<string, string>();
+  for (const block of lock.replaceAll("\r\n", "\n").split("[[package]]").slice(1)) {
+    const field = (key: string) => new RegExp(`^${key} = "([^"]*)"$`, "m").exec(block)?.[1];
+    const [name, version, source] = [field("name"), field("version"), field("source")];
+    if (name !== undefined && version !== undefined && source !== undefined)
+      packages.set(`${name}@${version}`, `${source} ${field("checksum") ?? ""}`);
+  }
+  return packages;
+};
+/**
+ * The registry packages a resolved lock holds that `pinned` does not hold identically. A build
+ * reaching a crate outside reffect's lock would resolve it from whatever the local registry
+ * cache holds, so it is refused rather than built differently across machines (#41).
+ */
+export const unlockedPackages = (resolved: string, pinned = RuntimeCargoLock): string[] => {
+  const locked = lockedPackages(pinned);
+  return [...lockedPackages(resolved)]
+    .filter(([key, origin]) => locked.get(key) !== origin)
+    .map(([key]) => key);
+};
 const build = Effect.fn("Cargo.build")(function* (
   directory: string,
   profile: "debug" | "release" = "debug",
@@ -139,6 +164,29 @@ const build = Effect.fn("Cargo.build")(function* (
       }),
     ),
   );
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const resolved = yield* fs.readFileString(path.join(directory, "Cargo.lock")).pipe(
+    Effect.mapError(
+      (error) =>
+        new CargoError({
+          message: `The build left no readable Cargo.lock: ${error.message}`,
+          command: result.command,
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        }),
+    ),
+  );
+  const unlocked = unlockedPackages(resolved);
+  if (unlocked.length)
+    return yield* new CargoError({
+      message: `The build resolved crates outside reffect's lock: ${unlocked.join(", ")}`,
+      command: result.command,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
   return { ...result, diagnostics: yield* readBuildDiagnostics(result.stdout, directory) };
 });
 const run = Effect.fn("Cargo.run")(function* (
