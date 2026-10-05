@@ -185,3 +185,14 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
 - Served natively, it answers byte-equal to upstream `handleRequest` with the pinned `renderPage`, for the same requests (cookie and clock pinned).
 - The stock client built from the pinned `entry.ts` hydrates it.
 - A construct outside the profile, in a mutated copy of the source, is refused with its location.
+
+### Step 2 progress
+
+- **2a (2026-10-05):** the translator (`src/ssr-translate.ts`) over the TypeScript 7 frontend adapter (`src/ts-frontend.ts`). It translates the vendored source into `examples/ssr-8b/page.ts`:
+  - the `Model` and `Flags` witnesses, the `Message` union, and the `init` and `view` callbacks;
+  - `@foldkit/ui` `Button` and `parseEquivalenceView`, evaluated while translating;
+  - the cookie pipe, the clock and the preflight, as the page's `R.Html.Entry`.
+- `HOST_METHOD_ANSWERS.allow` is read from the package at translation.
+- `Literals.text` widens the interpolated `renderedOn`.
+- Evidence: `tests/ssr-translate.test.ts` passes 2/2. Two translations are identical and equal the committed, formatted module, which needs no casts and type-checks under `vp check`. A copy with `model.count.toFixed(2)` is refused at `src/main.ts:103`.
+- **Next: step 3**, the generated page served natively against the pinned `renderPage` run through Vite with the plugin's build id, then hydration.
