@@ -220,6 +220,21 @@ test("mapped fragments shift authored ranges through composition", () => {
   // Off-by-one on multibyte text: ranges are UTF-8 byte offsets, not UTF-16.
   const utf8 = joinFragments(["\u00e9", mapFragment("o0", undefined, textFragment("z"))]);
   expect(utf8.ranges).toEqual([{ start: 2, end: 3, origin: "o0", role: "definition" }]);
+  // #32: lengths are counted without encoding, exactly as TextEncoder writes them, including a
+  // pair, a lone surrogate (its replacement character) and three-byte text.
+  for (const prefix of ["a߿ࠀ", "😀", "\ud800x", "x\udc00", "￿"]) {
+    const shifted = joinFragments([prefix, mapFragment("o0", undefined, textFragment("z"))]);
+    const start = new TextEncoder().encode(prefix).length;
+    expect(shifted.ranges, prefix).toEqual([
+      { start, end: start + 1, origin: "o0", role: "definition" },
+    ]);
+  }
+  // A fragment reused at two places is measured once and shifted to each.
+  const shared = mapFragment("s", undefined, textFragment("ab"));
+  expect(joinFragments([shared, "-", shared]).ranges).toEqual([
+    { start: 0, end: 2, origin: "s", role: "definition" },
+    { start: 3, end: 5, origin: "s", role: "definition" },
+  ]);
 
   // Range tracking off: text is written, no coordinates recorded, no encoding.
   const off = new SourceWriter("src/lib.rs", false);

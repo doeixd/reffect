@@ -317,7 +317,7 @@ The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHu
 Four parallel reviews (RPC server, Remote engine, SSR, compiler core), with the key claims re-verified. Recommended order: #16, #17, #18 (anyone can stall or crash the server), then #21, #22, #23, #24 (SSR security and parity), #19, #20, then correctness, performance and design. The native-only snapshot race is a comment on [#8](https://github.com/doeixd/reffect/issues/8).
 
 - [#30](https://github.com/doeixd/reffect/issues/30): 32-bit hashes in type ids
-- [#32](https://github.com/doeixd/reffect/issues/32): source maps cost about 4×
+- [#32](https://github.com/doeixd/reffect/issues/32): source maps still cost about 3.5× (was 4.6×); 1.5× needs a cheaper artifact form, a format decision
 - [#35](https://github.com/doeixd/reffect/issues/35): per-table memory query cache versions
 - [#38](https://github.com/doeixd/reffect/issues/38): deduplicate runtime and compiler logic
 - [#39](https://github.com/doeixd/reffect/issues/39): process-wide registries

@@ -38,102 +38,115 @@ interface MutableOrigin {
   names: string[];
   definitions: string[];
   parents: string[];
+  /** The parents already listed: a shared node gains one per use, so a scan was quadratic. */
+  parentSet: Set<string>;
 }
 const identity = (value: Authored) =>
   value instanceof Fn || value instanceof EffectFn ? value.binder : value.node;
 const edge = (name: string, value: Authored): readonly [string, Authored] => [name, value];
-const children = (value: Authored): readonly (readonly [string, Authored])[] => {
-  if (value instanceof Fn || value instanceof EffectFn) return [["body", value.body]];
-  return Match.value(value.node).pipe(
-    Match.tagsExhaustive({
-      Parameter: () => [],
-      Literal: () => [],
-      Apply: (n) => n.args.map((arg, index) => [`args[${index}]`, arg] as const),
-      Match: (n) => [
-        edge("condition", n.condition),
-        edge("onTrue", n.onTrue),
-        edge("onFalse", n.onFalse),
-      ],
-      Make: (n) =>
-        n.fields.flatMap((field, index) =>
-          field === undefined ? [] : [[`fields[${index}]`, field] as const],
-        ),
-      Get: (n) => [edge("value", n.value)],
-      MatchUndefined: (n) => [
-        edge("value", n.value),
-        edge("onDefined", n.onDefined),
-        edge("onUndefined", n.onUndefined),
-      ],
-      Defined: (n) => [edge("value", n.value)],
-      Undefined: () => [],
-      RecordQuery: (n) =>
-        n.key ? [edge("value", n.value), edge("key", n.key)] : [edge("value", n.value)],
-      ArrayMake: (n) =>
-        n.elements.map((element, index) => [`elements[${index}]`, element] as const),
-      ArrayLength: (n) => [edge("value", n.value)],
-      ArrayLoop: (n) => [
-        edge("source", n.source),
-        ...Match.value(n.op).pipe(
-          Match.tag("Reduce", (reduce) => [edge("init", reduce.init)]),
-          Match.orElse(() => []),
-        ),
-        edge("body", n.body),
-      ],
-      ForEach: (n) => [edge("source", n.source), edge("body", n.body)],
-      MatchTags: (n) => [
-        edge("value", n.value),
-        ...n.cases.map((c, index) => [`cases[${index}]`, c.body] as const),
-      ],
-      Log: (n) => n.attributes.map(([, value], index) => [`attributes[${index}]`, value] as const),
-      Annotate: (n) => [edge("value", n.value), edge("body", n.body)],
-      CatchAll: (n) => [edge("source", n.source), edge("body", n.body)],
-      Scope: (n) => [edge("body", n.body)],
-      AddFinalizer: (n) => [edge("finalizer", n.finalizer)],
-      AcquireRelease: (n) => [edge("acquire", n.acquire), edge("release", n.release)],
-      RegisteredFile: (n) => [edge("body", n.body), edge("afterClose", n.afterClose)],
-      AcquireUseRelease: (n) => [
-        edge("acquire", n.acquire),
-        edge("use", n.use),
-        edge("release", n.release),
-      ],
-      FileScope: (n) => [edge("body", n.body), edge("afterClose", n.afterClose)],
-      DeferredMake: () => [],
-      DeferredScope: (n) => [edge("body", n.body)],
-      DeferredAwait: () => [],
-      DeferredComplete: (n) => [edge("value", n.value)],
-      DeferredIsDone: () => [],
-      RefMake: (n) => [edge("initial", n.initial)],
-      RefScope: (n) => [edge("initial", n.initial), edge("body", n.body)],
-      RefGet: () => [],
-      RefModify: (n) => [edge("result", n.result), edge("next", n.next)],
-      TaskGroup: (n) => n.children.map((child, index) => edge(`children[${index}]`, child)),
-      ClockReadMillis: () => [],
-      RandomDraw: () => [],
-      FileSize: () => [],
-      Sleep: () => [],
-      Launch: (n) => n.values.map((value, index) => edge(`values.${index}`, value)),
-      RemoteStore: (n) =>
-        n.values ? [edge("id", n.id), edge("values", n.values)] : [edge("id", n.id)],
-      Repeat: (n) => [edge("body", n.body)],
-      Retry: (n) => [edge("body", n.body)],
-      Ensuring: (n) => [edge("body", n.body), edge("finalizer", n.finalizer)],
-      Span: (n) => [edge("body", n.body)],
-      Succeed: (n) => [edge("value", n.value)],
-      StreamRunCollect: (n) =>
-        streamExpressions(n.stream)
-          .map(({ expr, path }) => edge(path, expr))
-          .concat(streamFinalizers(n.stream).map(({ finalizer, path }) => edge(path, finalizer))),
-      StreamEmit: (n) =>
-        streamExpressions(n.stream)
-          .map(({ expr, path }) => edge(path, expr))
-          .concat(streamFinalizers(n.stream).map(({ finalizer, path }) => edge(path, finalizer)))
-          .concat([edge("encoded", n.encoded)]),
-      Fail: (n) => [edge("error", n.error)],
-      Map: (n) => [edge("source", n.source), edge("body", n.body)],
-      FlatMap: (n) => [edge("source", n.source), edge("body", n.body)],
-    }),
-  );
-};
+type Edges = readonly (readonly [string, Authored])[];
+/**
+ * Built once with Match.type: a matcher made per node by Match.value was a measurable share of
+ * mapped emission (#32).
+ */
+const nodeChildren = Match.type<
+  Expr<unknown>["node"] | Computation<unknown, unknown>["node"]
+>().pipe(
+  Match.tagsExhaustive({
+    Parameter: () => [],
+    Literal: () => [],
+    Apply: (n) => n.args.map((arg, index) => [`args[${index}]`, arg] as const),
+    Match: (n) => [
+      edge("condition", n.condition),
+      edge("onTrue", n.onTrue),
+      edge("onFalse", n.onFalse),
+    ],
+    Make: (n) =>
+      n.fields.flatMap((field, index) =>
+        field === undefined ? [] : [[`fields[${index}]`, field] as const],
+      ),
+    Get: (n) => [edge("value", n.value)],
+    MatchUndefined: (n) => [
+      edge("value", n.value),
+      edge("onDefined", n.onDefined),
+      edge("onUndefined", n.onUndefined),
+    ],
+    Defined: (n) => [edge("value", n.value)],
+    Undefined: () => [],
+    RecordQuery: (n) =>
+      n.key ? [edge("value", n.value), edge("key", n.key)] : [edge("value", n.value)],
+    ArrayMake: (n) => n.elements.map((element, index) => [`elements[${index}]`, element] as const),
+    ArrayLength: (n) => [edge("value", n.value)],
+    ArrayLoop: (n) => [
+      edge("source", n.source),
+      ...Match.value(n.op).pipe(
+        Match.tag("Reduce", (reduce) => [edge("init", reduce.init)]),
+        Match.orElse(() => []),
+      ),
+      edge("body", n.body),
+    ],
+    ForEach: (n) => [edge("source", n.source), edge("body", n.body)],
+    MatchTags: (n) => [
+      edge("value", n.value),
+      ...n.cases.map((c, index) => [`cases[${index}]`, c.body] as const),
+    ],
+    Log: (n) => n.attributes.map(([, value], index) => [`attributes[${index}]`, value] as const),
+    Annotate: (n) => [edge("value", n.value), edge("body", n.body)],
+    CatchAll: (n) => [edge("source", n.source), edge("body", n.body)],
+    Scope: (n) => [edge("body", n.body)],
+    AddFinalizer: (n) => [edge("finalizer", n.finalizer)],
+    AcquireRelease: (n) => [edge("acquire", n.acquire), edge("release", n.release)],
+    RegisteredFile: (n) => [edge("body", n.body), edge("afterClose", n.afterClose)],
+    AcquireUseRelease: (n) => [
+      edge("acquire", n.acquire),
+      edge("use", n.use),
+      edge("release", n.release),
+    ],
+    FileScope: (n) => [edge("body", n.body), edge("afterClose", n.afterClose)],
+    DeferredMake: () => [],
+    DeferredScope: (n) => [edge("body", n.body)],
+    DeferredAwait: () => [],
+    DeferredComplete: (n) => [edge("value", n.value)],
+    DeferredIsDone: () => [],
+    RefMake: (n) => [edge("initial", n.initial)],
+    RefScope: (n) => [edge("initial", n.initial), edge("body", n.body)],
+    RefGet: () => [],
+    RefModify: (n) => [edge("result", n.result), edge("next", n.next)],
+    TaskGroup: (n) => n.children.map((child, index) => edge(`children[${index}]`, child)),
+    ClockReadMillis: () => [],
+    RandomDraw: () => [],
+    FileSize: () => [],
+    Sleep: () => [],
+    Launch: (n) => n.values.map((value, index) => edge(`values.${index}`, value)),
+    RemoteStore: (n) =>
+      n.values ? [edge("id", n.id), edge("values", n.values)] : [edge("id", n.id)],
+    Repeat: (n) => [edge("body", n.body)],
+    Retry: (n) => [edge("body", n.body)],
+    Ensuring: (n) => [edge("body", n.body), edge("finalizer", n.finalizer)],
+    Span: (n) => [edge("body", n.body)],
+    Succeed: (n) => [edge("value", n.value)],
+    StreamRunCollect: (n) =>
+      streamExpressions(n.stream)
+        .map(({ expr, path }) => edge(path, expr))
+        .concat(streamFinalizers(n.stream).map(({ finalizer, path }) => edge(path, finalizer))),
+    StreamEmit: (n) =>
+      streamExpressions(n.stream)
+        .map(({ expr, path }) => edge(path, expr))
+        .concat(streamFinalizers(n.stream).map(({ finalizer, path }) => edge(path, finalizer)))
+        .concat([edge("encoded", n.encoded)]),
+    Fail: (n) => [edge("error", n.error)],
+    Map: (n) => [edge("source", n.source), edge("body", n.body)],
+    FlatMap: (n) => [edge("source", n.source), edge("body", n.body)],
+  }),
+);
+const appliedOperation = Match.type<Expr<unknown>["node"]>().pipe(
+  Match.tag("Apply", (n): string | undefined => n.operation.id),
+  Match.orElse(() => undefined),
+);
+const children = (value: Authored): Edges =>
+  value instanceof Fn || value instanceof EffectFn
+    ? [["body", value.body]]
+    : nodeChildren(value.node);
 
 /** One origin per semantic node; one occurrence per retained graph edge, not per expanded DAG path. */
 export class Provenance {
@@ -170,21 +183,18 @@ export class Provenance {
       });
       this.occurrencesByPath.set(path, occurrence);
       if (parent) {
-        const parents = this.originValues[Number(origin.slice(1))].parents;
-        if (!parents.includes(parent.origin)) parents.push(parent.origin);
+        const owner = this.originValues[Number(origin.slice(1))];
+        if (!owner.parentSet.has(parent.origin)) {
+          owner.parentSet.add(parent.origin);
+          owner.parents.push(parent.origin);
+        }
       }
-      if (value instanceof Expr)
-        Match.value(value.node).pipe(
-          Match.tags({
-            Apply: (n) => {
-              const found =
-                this.semanticOrigins.get(`operation:${n.operation.id}`) ?? new Set<string>();
-              found.add(origin);
-              this.semanticOrigins.set(`operation:${n.operation.id}`, found);
-            },
-          }),
-          Match.orElse(() => {}),
-        );
+      const operation = value instanceof Expr ? appliedOperation(value.node) : undefined;
+      if (operation !== undefined) {
+        const found = this.semanticOrigins.get(`operation:${operation}`) ?? new Set<string>();
+        found.add(origin);
+        this.semanticOrigins.set(`operation:${operation}`, found);
+      }
       const types =
         value instanceof Expr
           ? [value.type]
@@ -246,6 +256,7 @@ export class Provenance {
         names: [],
         definitions: [],
         parents: [],
+        parentSet: new Set(),
       };
       this.originsByNode.set(key, origin);
       this.originValues.push(origin);
@@ -262,7 +273,7 @@ export class Provenance {
     return this.occurrencesByPath.get(path)?.id;
   }
   get origins(): readonly OriginRecord[] {
-    return this.originValues.map((origin) =>
+    return this.originValues.map(({ parentSet: _parentSet, ...origin }) =>
       Object.freeze({
         ...origin,
         names: Object.freeze([...origin.names]),

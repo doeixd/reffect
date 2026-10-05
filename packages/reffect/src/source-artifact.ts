@@ -80,19 +80,51 @@ const digest = (text: string) =>
     catch: (cause) =>
       new SourceMapError({ message: `Cannot hash source artifact: ${String(cause)}` }),
   });
-const canonical = (value: unknown): string => {
-  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
+/** Sorted-key JSON, the text the build digest covers. */
+const canonicalSlow = (value: unknown): string => {
+  if (Array.isArray(value)) return "[" + value.map(canonicalSlow).join(",") + "]";
   if (value !== null && typeof value === "object")
     return (
       "{" +
       Object.entries(value)
         .filter(([, item]) => item !== undefined)
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([key, item]) => JSON.stringify(key) + ":" + canonical(item))
+        .map(([key, item]) => JSON.stringify(key) + ":" + canonicalSlow(item))
         .join(",") +
       "}"
     );
   return JSON.stringify(value) ?? "null";
+};
+const integerLike = /^(?:0|[1-9][0-9]*)$/;
+class IntegerKey extends Error {}
+/**
+ * The same text through the native serializer, each object replaced by a key-sorted copy:
+ * building and joining a string per nested value was most of the cost of mapped emission (#32).
+ * Engines order integer-like keys first whatever their insertion order, so an object holding one
+ * takes the original path, and the digest text is unchanged either way.
+ */
+const canonical = (value: unknown): string => {
+  try {
+    return (
+      JSON.stringify(value, (_key, item: unknown) => {
+        if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
+        const keys = Object.keys(item);
+        let ordered = true;
+        for (let i = 0; i < keys.length; i++) {
+          if (integerLike.test(keys[i])) throw new IntegerKey();
+          if (i && keys[i - 1] > keys[i]) ordered = false;
+        }
+        // Records built in key order, as generated ranges are, serialize as they stand.
+        if (ordered) return item;
+        const sorted: Record<string, unknown> = {};
+        for (const key of keys.sort()) sorted[key] = Reflect.get(item, key);
+        return sorted;
+      }) ?? "null"
+    );
+  } catch (error) {
+    if (error instanceof IntegerKey) return canonicalSlow(value);
+    throw error;
+  }
 };
 const freeze = <A>(value: A): A => {
   if (value && typeof value === "object") {
@@ -286,7 +318,16 @@ const create = (
       passes: ["lower", "emit"],
     };
     const build = yield* digest(canonical(payload));
-    const table = yield* checked({ ...payload, build });
+    // Built here from typed records, so it is validated without the Schema decode a table read
+    // from elsewhere goes through (#32): every cross-reference and bound is still checked.
+    const payloadWithBuild: SourceMap = { ...payload, build };
+    const table = yield* Effect.try({
+      try: () => validate(payloadWithBuild),
+      catch: (cause) =>
+        cause instanceof SourceMapError
+          ? cause
+          : new SourceMapError({ message: `Invalid source map: ${String(cause)}` }),
+    });
     const json = JSON.stringify(table, null, 2) + "\n";
     if (new TextEncoder().encode(json).length > maxMapBytes)
       return yield* new SourceMapError({ message: "Source map exceeds size limit" });

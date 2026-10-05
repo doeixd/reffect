@@ -94,6 +94,24 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — Cheaper mapped emission (#32, part)
+
+- **Measured.** Benchmark: 40 functions of 40 nested `Match.bool` levels, about 38,000 generated ranges, best of three. Full source maps went from 4.6× to about 3.5× the cost of none (553 ms down to about 340 ms; none is 100 ms). The issue's acceptance of 1.5× is **not met**, and #32 stays open.
+- **Profile.** Fragment composition was not the main cost. Most of it was in `SourceMaps.create`:
+  - canonicalization: 111 ms;
+  - validation: 33 ms;
+  - the Schema decode of the table it had just built: 29 ms;
+  - JSON: 26 ms.
+- **Changes.**
+  - `canonical` uses the native serializer with a sorted-key replacer and returns records already in key order uncopied. Generated ranges are now built in that order. An integer-like key takes the original algorithm, so the digest text is unchanged.
+  - `create` validates its own table without the Schema decode; `decode` and `resolver` still decode.
+  - Fragments are a rope. Text, byte lengths and shifted ranges are computed once, and byte lengths are counted without `TextEncoder`.
+  - Provenance capture builds its `Match.type` matchers once and records origin parents through a `Set` instead of a linear scan.
+- **Remaining.** The rest grows with the number of records: one occurrence and one range per edge, each canonicalized, validated, serialized and hashed. Reaching 1.5× needs a cheaper artifact form, for example hashing the emitted JSON rather than a canonical copy, or a compact range table. That is a format decision ([open work](docs/open-work.md)).
+- **Validation.**
+  - `source`: new cases for byte lengths against `TextEncoder` (pair, lone surrogates, two- and three-byte text) and for a shared fragment shifted to two places.
+  - Passing suites: `artifact-policy`, `compiler`, `frame-policy`, `failure-frames`, `deferred-generated-profile`, `structured-concurrency`, `async-effect`, `resource-scope`, `rust-emission-output`, `string-profile`, `nesting`; `vp check` clean.
+
 ## 2026-10-05 — Each stage once per compile (#31)
 
 - **#31.** Every stage re-ran the stages before it, so one `Compile.run` checked 9 times (measured) and derived and planned repeatedly. Programs, analyses and plans are frozen, so each stage now remembers what it accepted, by identity:
