@@ -321,6 +321,7 @@ Results:
 **Prior decisions.** M9-3 planned build-time request templates with holes filled from the URL. The acceptance is that the client's replayed `satisfy` issues identical requests and plans nothing more. Replay matches requests by `stableStringify` of their encoded form (`remote-resume.ts`), so key order does not matter and values must.
 
 **Decisions.**
+
 - **URL operations.** `R.Url.pathname(url)` and `R.Url.searchParam(url, name)` mirror the Web URL API: `new URL(url).pathname`, and `new URL(url).searchParams.get(name) ?? undefined`, an `UndefinedOr<String>`.
   - The reference evaluates them with WHATWG `URL`. Natively they use the `url` crate already selected for pages: `Url::parse`, `path()`, and `query_pairs()` (form-urlencoded: `+` as space, percent-decoding, invalid UTF-8 as U+FFFD, the first pair named `name`).
   - A differential corpus checks the two agree, covering plus signs, `%20`, malformed escapes, invalid UTF-8, repeated names, missing names and fragments.
@@ -331,10 +332,12 @@ Results:
 - **Unchanged.** Recording, the views and authorization stay as they are. A templated read is still one exchange, and its view is still its query's `Page`.
 
 **Alternatives.**
-- *A route table in the compiler* (pattern to input): rejected for now. It duplicates Foldkit's own routing, and URL operations in R compose into any routing an app already writes.
-- *Passing the raw URL to the engine and parsing there:* rejected. The input's meaning belongs to the app's code, and would otherwise be duplicated in Rust.
+
+- _A route table in the compiler_ (pattern to input): rejected for now. It duplicates Foldkit's own routing, and URL operations in R compose into any routing an app already writes.
+- _Passing the raw URL to the engine and parsing there:_ rejected. The input's meaning belongs to the app's code, and would otherwise be duplicated in Rust.
 
 **Acceptance.**
+
 - `R.Url` agrees with WHATWG `URL` on the corpus, natively and in the reference.
 - A page whose view's query input comes from `?status=` renders natively byte-equal to upstream, whose `init` derives the same input from the request URL. Two URLs give two different lists.
 - The client's replay issues the recorded request and nothing more.
