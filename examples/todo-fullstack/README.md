@@ -16,7 +16,7 @@ vp exec node --experimental-transform-types examples/todo-fullstack/main.ts --po
 TODO_REMOTE_PORT=8787 vp dev examples/todo-remote/web
 ```
 
-Open the address Vite prints. Vite serves the client modules and forwards page navigations and `/rpc` to the native server. Pass `--database todos.db` to keep the data between runs; otherwise a seeded database is made in a temporary directory. The server reads its database URL from `REFFECT_DATABASE_URL` at run time, never from the compiled code.
+Open the address Vite prints. Vite serves the client modules and forwards page navigations and `/rpc` to the native server. Pass `--database todos.db` to keep the data between runs; otherwise a seeded database is made in a temporary directory. Pass `--postgres postgres://user:password@host/db` to run on Postgres instead: the todos table is made and seeded there when it does not exist yet. The server reads its database URL from `REFFECT_DATABASE_URL` at run time, never from the compiled code.
 
 ## Signed in (`--auth`)
 
@@ -34,7 +34,7 @@ Everything else is todo-remote's: the domain, the R sources, the R page and the 
 
 [todo-fullstack.test.ts](../../packages/reffect/tests/todo-fullstack.test.ts) builds this server and checks five things:
 
-1. **The first page matches upstream byte for byte.** The reference is upstream's `handleRequest` around `renderToString`, using the app's own `init` and `view`. Its data comes from upstream's own SQL server (`RemoteServer` over foldkit-remote-drizzle's sources) reading the same SQLite file.
+1. **The first page matches upstream byte for byte.** The reference is upstream's `handleRequest` around `renderToString`, using the app's own `init` and `view`. Its data comes from upstream's own SQL server (`RemoteServer` over foldkit-remote-drizzle's sources) reading the same database. The test runs on SQLite, and on Postgres 18 in a throwaway Docker container when Docker is available.
 2. **Hydration fetches nothing.** The stock runtime adopts the page and asks its Remote client for no read or query.
 3. **A toggle commits through SQL.**
 4. **The toggle reaches a fresh Live subscription** through the snapshot.
@@ -48,7 +48,6 @@ On 2026-10-04 headless Chrome, driven through the DevTools protocol, did the sam
 
 ## Limits
 
-- **SQLite only here.** The SQL backend also supports Postgres (milestone 5), but this showcase does not offer it.
-- **The view is written twice.** The R page mirrors the app's Foldkit view, and the test catches drift ([#14](https://github.com/doeixd/reffect/issues/14)).
-- **Pages are unauthenticated.** Pages on an authenticated server need a cookie session adapter ([#4](https://github.com/doeixd/reffect/issues/4)).
+- **The view is authored in R.** One R view serves the browser (through `R.Html.toFoldkitView`) and the server ([#14](https://github.com/doeixd/reffect/issues/14)); converting an ordinary Foldkit view to R is milestone 8B.
+- **One configured token.** `--auth` checks one token against the server's configured table; there is no user store, expiry or revocation beyond rotating it ([cookie sessions](../../docs/research/cookie-sessions.md)).
 - **Adds don't stream live.** A todo added in another tab appears only on reload, because the Live hub delivers entity changes, not list (connection) changes, as upstream's hub does.

@@ -94,6 +94,13 @@
 - Deferred preparation is recorded in [core](docs/research/deferred-core.md), [native](docs/research/deferred-native.md) and [conformance](docs/research/deferred-conformance.md) records. Fresh official probes establish registration-ordered synchronous waiter prefixes, including reentrant completion and producer/waiter interruption. [LCOORD-009/010](docs/research/lexical-coordination.md#deferred-completion-scheduling-gate-2026-10-03) reject simple Waker broadcast, a single producer yield and acknowledgement at Await.poll as sufficient adapters.
 - Next gate: a safe, bounded semantic continuation-turn protocol, distinguishing genuine Effect suspension from adapter-internal Pending, with static lifetimes and separate waiter/turn-stack cost bounds. Deferred and Semaphore feature source remains unadmitted; authoring/test drafts are outside the repository. Scalar payloads remain plain and no global scheduler/registry is approved.
 
+## 2026-10-05 — The showcase on Postgres
+
+- **Postgres.** `todo-fullstack` runs on Postgres too: `compileShowcase(..., { dialect: "postgres" })` with Drizzle Postgres bindings, and `main.ts --postgres <url>`, which creates and seeds the todos table only when it is missing.
+- **Shared test.** `todo-fullstack.test.ts` runs one scenario per dialect: render byte-equal to upstream's own SQL server over the same database, hydration with no fetch, a toggle committed through SQL, the snapshot to a fresh Live subscription, and the next render. Postgres 18 runs in a throwaway Docker container and is skipped without Docker.
+- **Docs.** The README's limits are updated: the view is single-source (#14), and the server signs in (#4).
+- **Validation.** `todo-fullstack`: 2 tests passed, SQLite and Postgres both run; `vp check` clean.
+
 ## 2026-10-05 — Session cookies for pages and RPC (#4)
 
 - **#4.** `NativeRpc.bearer(..., { credentialsEnv, session })` also accepts the configured token in a `__Host-` cookie (`HttpOnly; Secure; SameSite=Lax`). It is set by a native `POST /session` and cleared by `DELETE /session`. Details are in [cookie sessions research](docs/research/cookie-sessions.md#implemented-2026-10-05).
