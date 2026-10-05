@@ -305,7 +305,7 @@ All nine filed issues (#135–#143) are fixed in foldkit-plus 0.14.0, which reff
 
 The review of the SSR data path, LIVE-008, LIVE-012 and LIVE-015, filed on GitHub. Recommended order: security first (#3, #5), then #6, #12 with #9, #10 and #7, then #13, then #4 before any authenticated showcase, then M9-5 and #14.
 
-- [#4](https://github.com/doeixd/reffect/issues/4): a cookie session adapter, so authenticated pages work in browsers
+- [#4](https://github.com/doeixd/reffect/issues/4) follow-up: authenticate the `todo-fullstack` showcase with the session cookie (a login screen and middleware); the mechanism is done ([cookie sessions](research/cookie-sessions.md))
 
 ## Full-codebase review issues (2026-10-03)
 

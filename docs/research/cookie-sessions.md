@@ -146,4 +146,13 @@ A session needs `pages`, whose origin is the one `Origin` is compared with. Its 
 - **RPC:** a cookie read answers byte-equal to the same token as a bearer, and a cookie mutation runs as that principal. A cookie request is denied in seven cases: `cross-site`, `same-site` (sibling subdomain), a foreign `Origin`, no origin information, `text/plain`, no content type, or a wrong bearer beside it.
 - **Logout:** clears the cookie, and a cross-site logout is refused.
 
-**Remaining.** The end-to-end browser check (`todo-fullstack` with auth in headless Chrome) is step 4.
+**Browser check** (`session-browser.test.ts`, headless Chrome over CDP, skipped without Chrome):
+
+- a navigation with no cookie answers 401;
+- login from page script returns 204, and `document.cookie` stays empty (HttpOnly);
+- Chrome stores the `__Host-` Secure cookie on loopback, and the next navigation renders with it alone;
+- a same-origin `/rpc` read from page script is authenticated by the cookie;
+- a `no-cors` POST from another port of the same host gets the cookie from Chrome, since SameSite=Lax does not block a same-site request, with `Sec-Fetch-Site: same-site`. The server answers it `Unauthorized`, which CDP reads from the opaque response. Only the Fetch Metadata check stands between that page and the session;
+- logout clears the cookie, and the page is 401 again.
+
+**Remaining.** The `todo-fullstack` showcase itself is not authenticated: it has no login screen or middleware ([open work](../open-work.md)).
