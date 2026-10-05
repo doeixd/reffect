@@ -15,7 +15,8 @@ import { Rs } from "./rust-emit.ts";
 
 /**
  * A page render (#13): nothing, or one `PageRequest` Struct holding any of `url` (String),
- * `cookie` (String: the request's `Cookie` header without the session cookie), `now`
+ * `method` (String, normalized as Fetch normalizes it), `cookie` (String: the request's `Cookie`
+ * header without the session cookie), `now`
  * (`R.DateTime.Utc`: when the request is served), `remote` (Unknown: the exchanges a NativeRemote
  * page carries in its Flags) and `views` (a Struct of each planned view's `R.Remote.Page`). A page
  * declares only what it reads.
@@ -24,6 +25,7 @@ export type PageRender = Fn<readonly [], unknown> | Fn<readonly [IRType<unknown>
 /** The fields a page's request declares, checked against what a host can supply. */
 export interface PageRequestFields {
   readonly url: boolean;
+  readonly method: boolean;
   /** The page reads the request's cookies, so its response varies by them (8B). */
   readonly cookie: boolean;
   readonly now: boolean;
@@ -34,24 +36,34 @@ const refusePage = (message: string) => fail("INVALID_PAGE", "authoring", "pages
 /** What `render`'s request reads, refusing a request outside the PageRequest shape. */
 export const pageRequest = (render: Fn): PageRequestFields => {
   if (render.input.length === 0)
-    return { url: false, cookie: false, now: false, remote: false, views: undefined };
+    return {
+      url: false,
+      method: false,
+      cookie: false,
+      now: false,
+      remote: false,
+      views: undefined,
+    };
   const layout = render.input.length === 1 ? structLayout(render.input[0]!) : undefined;
   if (layout === undefined || layout.tag !== undefined)
     throw refusePage(
-      "A page takes nothing or one PageRequest Struct of url, cookie, now, remote and views",
+      "A page takes nothing or one PageRequest Struct of url, method, cookie, now, remote and views",
     );
   const fields = new Map(layout.fields.map((field) => [field.name, field] as const));
   for (const field of layout.fields) {
     if (field.optional)
       throw refusePage(`The page request's ${field.name} is required, not optional`);
-    if (!["url", "cookie", "now", "remote", "views"].includes(field.name))
+    if (!["url", "method", "cookie", "now", "remote", "views"].includes(field.name))
       throw refusePage(
-        `A page request holds url, cookie, now, remote and views, not ${field.name}`,
+        `A page request holds url, method, cookie, now, remote and views, not ${field.name}`,
       );
   }
   const url = fields.get("url");
   if (url && !IRType.same(url.type, StringType))
     throw refusePage("The page request's url is a String");
+  const method = fields.get("method");
+  if (method && !IRType.same(method.type, StringType))
+    throw refusePage("The page request's method is a String");
   const cookie = fields.get("cookie");
   if (cookie && !IRType.same(cookie.type, StringType))
     throw refusePage("The page request's cookie is a String");
@@ -63,6 +75,7 @@ export const pageRequest = (render: Fn): PageRequestFields => {
     throw refusePage("The page request's remote is an Unknown");
   return {
     url: url !== undefined,
+    method: method !== undefined,
     cookie: cookie !== undefined,
     now: now !== undefined,
     remote: remote !== undefined,
@@ -70,7 +83,7 @@ export const pageRequest = (render: Fn): PageRequestFields => {
   };
 };
 /**
- * The positional function a page host calls: `(url, cookie, now)`, with data then `remote` and,
+ * The positional function a page host calls: `(url, method, cookie, now)`, with data then `remote` and,
  * when the request reads views, `views`. It builds the request and applies `render` through
  * `R.flow`, so the generated host keeps one page call whatever the request holds.
  */
@@ -79,6 +92,7 @@ export const positionalPage = (render: Fn, data: boolean): Fn => {
   if (!data && (request.remote || request.views !== undefined))
     throw refusePage("Only a NativeRemote page with a remote plan reads remote and views");
   const inputs: IRType<unknown>[] = [
+    StringType,
     StringType,
     StringType,
     UtcType,
@@ -91,10 +105,11 @@ export const positionalPage = (render: Fn, data: boolean): Fn => {
   const adapter = Fn.make(inputs, witness, (...args) => {
     const by: { readonly [name: string]: Expr<unknown> | undefined } = {
       url: args[0],
-      cookie: args[1],
-      now: args[2],
-      remote: args[3],
-      views: args[4],
+      method: args[1],
+      cookie: args[2],
+      now: args[3],
+      remote: args[4],
+      views: args[5],
     };
     return Expr.make(
       witness,
@@ -118,6 +133,21 @@ export const PageSchema = Schema.Union([
       Schema.TaggedStruct("SerializationError", { message: Schema.String }),
       Schema.TaggedStruct("FlagsEncodeError", { message: Schema.String }),
     ]),
+  }),
+]);
+
+const HeadersSchema = Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String }));
+/** `R.Html.Entry` as the server encodes it: upstream's `Rendered` or `Responded` (8B). */
+export const EntrySchema = Schema.Union([
+  Schema.TaggedStruct("Rendered", {
+    page: PageSchema,
+    status: Schema.Number,
+    headers: HeadersSchema,
+  }),
+  Schema.TaggedStruct("Responded", {
+    status: Schema.Number,
+    headers: HeadersSchema,
+    body: Schema.NullOr(Schema.String),
   }),
 ]);
 
@@ -210,6 +240,8 @@ export const pageRuntime = (
   loginPage?: string,
   /** The session cookie a page's `cookie` never shows (#4). */
   sessionCookie?: string,
+  /** The page answers an `R.Html.Entry`, upstream's server entry, rather than its render (8B). */
+  entry = false,
 ): string => {
   const splice = parts
     .map((part) =>
@@ -234,6 +266,17 @@ export const pageRuntime = (
     "`toResponse`" +
     String.raw`: the page, an asset 404, a negotiated 404 or a refusal.
 async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap) -> Response {
+    // A response from validated parts (ssr_host::entry_parts checked the status and headers).
+    let respond = |status: u16, headers: Vec<(String, String)>, body: Option<String>| {
+        let mut response = Response::new(body.map(axum::body::Body::from).unwrap_or_else(axum::body::Body::empty));
+        *response.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        for (name, value) in headers {
+            if let (Ok(name), Ok(value)) = (axum::http::HeaderName::from_bytes(name.as_bytes()), axum::http::HeaderValue::from_str(&value)) {
+                response.headers_mut().append(name, value);
+            }
+        }
+        response
+    };
     let empty = |status: StatusCode, extra: &[(&'static str, String)]| {
         let mut response = Response::new(axum::body::Body::empty());
         *response.status_mut() = status;
@@ -264,6 +307,7 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     };
     #[allow(unused_variables)]
     let href: String = resolved.to_string();
+    let raw_method = method.as_str().to_string();
     let method = method.as_str().to_uppercase();
     if method == "CONNECT" || method == "TRACE" || method == "TRACK" {
         return empty(StatusCode::METHOD_NOT_ALLOWED, &[("allow", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS".to_string())]);
@@ -303,6 +347,12 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     // What the page reads of the request beside its URL (8B): its cookies, without the session
     // cookie a view could otherwise write into HTML, as latin1 text as a Web Request reads them,
     // and one clock reading, which its data shares.
+    // Fetch normalizes the six standard methods' case and keeps any other as sent.
+    #[allow(unused_variables)]
+    let page_method: String = match method.as_str() {
+        "DELETE" | "GET" | "HEAD" | "OPTIONS" | "POST" | "PUT" => method.clone(),
+        _ => raw_method.clone(),
+    };
     #[allow(unused_variables)]
     let page_cookie: String = ssr_host::page_cookie(&headers, ${sessionCookie === undefined ? "None" : `Some(${Rs.stringLiteral(sessionCookie).text})`});
     #[allow(unused_variables)]
@@ -328,7 +378,28 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     }`
     }
     // The page's own render failure, or a title the template cannot hold, is a server error.
-    let page: Value = ${render};
+    let page: Value = ${render};${
+      entry
+        ? `
+    // A page answering upstream's server entry (8B): a render with its status and headers, or a
+    // complete response, which passes through as toResponse passes it.
+    let (page, status, mut headers): (Value, u16, Vec<(String, String)>) = match ssr_host::entry_parts(&page) {
+        Ok(ssr_host::EntryParts::Rendered { page, status, headers }) => (page, status, headers),
+        Ok(ssr_host::EntryParts::Responded { status, mut headers, body }) => {
+            if negotiated {
+                let vary = headers.iter().find(|(name, _)| name == "vary").map(|(_, value)| value.clone());
+                ssr_host::set_header(&mut headers, "vary", ssr_host::vary_with(Some(&ssr_host::vary_with(vary.as_deref(), "Accept")), "Sec-Fetch-Dest"));
+            }
+            return respond(status, headers, if method == "HEAD" { None } else { body });
+        }
+        Err(message) => {
+            eprintln!("{}", json!({"schema":"reffect.ssr.page@1", "outcome":"entry-failure", "message":message}));
+            return refuse(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };`
+        : `
+    let (status, mut headers): (u16, Vec<(String, String)>) = (200, Vec::new());`
+    }
     let (Some(html), Some(raw_title)) = (page["success"]["html"].as_str(), page["success"]["title"].as_str()) else {
         eprintln!("{}", json!({"schema":"reffect.ssr.page@1", "outcome":"render-failure", "page":page}));
         return refuse(StatusCode::INTERNAL_SERVER_ERROR);
@@ -343,20 +414,28 @@ async fn ssr_page(State(state): State<RuntimeState>, method: axum::http::Method,
     // Sized once: the template's own text is known at build time (#34).
     let mut body = String::with_capacity(${templateBytes} + html.len() + title.len());
     ${splice}
-    let mut extra = vec![("content-type", "text/html; charset=utf-8".to_string())];${
+    // toResponse: the authored headers, with an HTML content type unless they name one.
+    if !headers.iter().any(|(name, _)| name == "content-type") {
+        headers.push(("content-type".to_string(), "text/html; charset=utf-8".to_string()));
+    }${
       data === undefined
         ? ""
         : `
     // The page carries data read for this request, its principal's when it has one: shared
-    // caches must not store it (#3; upstream's host sets no cache headers).
-    extra.push(("cache-control", "private, no-store".to_string()));`
+    // caches must not store it, whatever the page says (#3; upstream's host sets no cache headers).
+    ssr_host::set_header(&mut headers, "cache-control", "private, no-store".to_string());`
     }
-    if negotiated { extra.push(("vary", negotiated_vary())); }${
-      cookieVary ? ` else { extra.push(("vary", "Cookie".to_string())); }` : ""
+    // handleRequest merges the negotiated fields into the page's own Vary (#28); a page that
+    // reads cookies, or is authenticated by one, also varies by them (#4).
+    let vary = headers.iter().find(|(name, _)| name == "vary").map(|(_, value)| value.clone());
+    let vary = if negotiated { Some(ssr_host::vary_with(Some(&ssr_host::vary_with(vary.as_deref(), "Accept")), "Sec-Fetch-Dest")) } else { vary };${
+      cookieVary
+        ? `
+    let vary = Some(ssr_host::vary_with(vary.as_deref(), "Cookie"));`
+        : ""
     }
-    let mut response = empty(StatusCode::OK, &extra);
-    if method != "HEAD" { *response.body_mut() = axum::body::Body::from(body); }
-    response
+    if let Some(vary) = vary { ssr_host::set_header(&mut headers, "vary", vary); }
+    respond(status, headers, if method == "HEAD" { None } else { Some(body) })
 }
 `
   );

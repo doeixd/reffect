@@ -16,7 +16,7 @@ import { BoolType, EqString, Expr, IRType, NumberType, StringType, fail } from "
 import { ConcatString } from "./kernel.ts";
 import { SchemaIR } from "./schema-json.ts";
 import type { Fn } from "./kernel.ts";
-import { Struct, UndefinedOr } from "./records.ts";
+import { ArrayType, NullOr, Struct, TaggedUnion, UndefinedOr } from "./records.ts";
 import { OptionIR } from "./option.ts";
 import { ResultIR } from "./result.ts";
 import type { ResultValue } from "./result.ts";
@@ -648,6 +648,45 @@ const renderDocument = (
   );
 };
 
+/** What `renderToString` gives a page: its `RenderedApplication` fields or a render error. */
+const PageResultType = ResultIR(RenderedType, RenderErrorType);
+/** Response headers as `HeadersInit` pairs, in order; a repeated name combines as `Headers` does. */
+export const HeaderType = Struct({ name: StringType, value: StringType });
+const HeadersType = ArrayType.of(HeaderType);
+/**
+ * Upstream's server `EntryResult` (foldkit 0.165.0 `entry.js`), what a page answers: `Rendered`,
+ * a render with its status and headers, or `Responded`, a complete response.
+ */
+export const EntryType = TaggedUnion({
+  Rendered: { page: PageResultType, status: NumberType, headers: HeadersType },
+  Responded: { status: NumberType, headers: HeadersType, body: NullOr(StringType) },
+});
+const noHeaders = () => Expr.arrayMake(HeadersType, []);
+/** Upstream `Server.Rendered(application, { status, headers })`. */
+const rendered = (
+  page: Expr<ResultValue<unknown, unknown>>,
+  options: {
+    readonly status?: Expr<number>;
+    readonly headers?: Expr<ReadonlyArray<{ readonly name: string; readonly value: string }>>;
+  } = {},
+) =>
+  EntryType.cases.Rendered.make({
+    page: page as never,
+    status: options.status ?? NumberType.literal(200),
+    headers: options.headers ?? noHeaders(),
+  });
+/** Upstream `Server.Responded(new Response(body, { status, headers }))`; a null body is none. */
+const responded = (options: {
+  readonly status: Expr<number>;
+  readonly headers?: Expr<ReadonlyArray<{ readonly name: string; readonly value: string }>>;
+  readonly body?: Expr<string | null>;
+}) =>
+  EntryType.cases.Responded.make({
+    status: options.status,
+    headers: options.headers ?? noHeaders(),
+    body: options.body ?? Expr.undefined(NullOr(StringType)),
+  });
+
 export const HtmlIR = Object.freeze({
   ...(Object.fromEntries(ELEMENTS.map((tag) => [tag, element(tag, false)])) as Record<
     (typeof ELEMENTS)[number],
@@ -728,4 +767,9 @@ export const HtmlIR = Object.freeze({
   renderToString,
   Rendered: RenderedType,
   RenderError: RenderErrorType,
+  /** What a page answers, as upstream's server entry: `rendered(page)` or `responded(...)`. */
+  Entry: EntryType,
+  Header: HeaderType,
+  rendered,
+  responded,
 });

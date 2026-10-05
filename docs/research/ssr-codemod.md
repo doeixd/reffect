@@ -132,4 +132,15 @@ leading')`), byte-equal to the official server. `tests/html.test.ts` passes 12/1
   - `R.Record.get` (Effect `Record.get`, as an Option) is a `Get` record query.
   - The positional page is now `(url, cookie, now, [remote, [views]])`.
   - Evidence: `tests/page-request.test.ts` passes 1/1. A page reading the count cookie exactly as the pinned `cookie.ts` does (`parseHeader` → `Record.get` → `Number.parse` → `isSafeInteger` → 0), plus its instant as ISO, answers byte-equal to upstream `handleRequest` on ten cookie headers, latin1 included. The runtime test `a_page_never_reads_the_session_cookie` passes. Every page suite passes, as does `todo-fullstack` 2/2.
-- **Still needed for the example:** authored response headers on pages (`cache-control`, `vary`, `x-content-type-options`, as `Rendered(…, { headers })` sets them), and the `OPTIONS` preflight answer.
+- **1e (2026-10-05):**
+  - A page may answer `R.Html.Entry`, upstream's server entry: `R.Html.rendered(page, { status?, headers? })` or `R.Html.responded({ status, headers?, body? })`, with headers as `HeadersInit` pairs and a `NullOr` body.
+  - A page request may read `method`, normalized as Fetch normalizes it.
+  - The host follows `toResponse` and `handleRequest`:
+    - `Headers` semantics (lowercased names, trimmed values, repeated names combined);
+    - the `Response` status checks (200–599, no body on 204/205/304), or 500 with `entry-failure`;
+    - a default HTML content type;
+    - HEAD without a body;
+    - the negotiated fields merged into the authored `Vary`.
+  - On a data page the host's `private, no-store` still wins.
+  - Evidence: `tests/page-request.test.ts` passes 1/1. A page shaped as the pinned `renderPage` (an `OPTIONS` preflight answering 204 with `allow`, otherwise `Rendered` with the example's three headers) equals upstream `handleRequest` in status, body and headers on ten cookies, `OPTIONS` and `HEAD`. All page suites and `todo-fullstack` pass.
+- **Step 1 is complete:** every surface the pinned example reaches has an R form, differential against upstream. Next is step 2, the translator.

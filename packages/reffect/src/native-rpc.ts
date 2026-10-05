@@ -16,7 +16,15 @@ import type { StreamFn } from "./stream-ir.ts";
 import { Rpc, RpcSchema, type RpcGroup } from "effect/rpc";
 import { Compile, Rust, Target, type Plan } from "./compiler.ts";
 import { PortedRuntimes, verifyUpstream } from "./ported-runtime.ts";
-import { PageSchema, pageRequest, pageRuntime, positionalPage, splitTemplate } from "./ssr-page.ts";
+import {
+  EntrySchema,
+  PageSchema,
+  pageRequest,
+  pageRuntime,
+  positionalPage,
+  splitTemplate,
+} from "./ssr-page.ts";
+import { EntryType } from "./html.ts";
 import type { PageRender, TemplatePart } from "./ssr-page.ts";
 import type { PortedRuntime, UpstreamCheck } from "./ported-runtime.ts";
 import {
@@ -961,6 +969,7 @@ export const compileServer = (
               readonly kind: Codec;
               readonly parts: ReadonlyArray<TemplatePart>;
               readonly readsCookie: boolean;
+              readonly entry: boolean;
               readonly takesData: boolean;
               readonly views: Codec | undefined;
               readonly origin: string;
@@ -982,11 +991,20 @@ export const compileServer = (
           }
           if (base.origin === "null" || base.href !== `${base.origin}/`)
             throw unsupported("pages.origin", "The origin is a scheme, host and port only");
-          const kind = codec(PageSchema.ast, "pages.render", false, registry, false);
+          // A page answers its render, or upstream's server entry around one (8B); only the
+          // codec it answers with is generated.
+          const entry = IRType.same(render.output, EntryType);
+          const kind = codec(
+            (entry ? EntrySchema : PageSchema).ast,
+            "pages.render",
+            false,
+            registry,
+            false,
+          );
           if (!IRType.same(render.output, witnessOf(kind)))
             throw unsupported(
               "pages.render",
-              "The page returns R.Result(R.Html.Rendered, R.Html.RenderError)",
+              "The page returns R.Result(R.Html.Rendered, R.Html.RenderError) or an R.Html.Entry",
             );
           if (Object.hasOwn(functions, "ssr_page"))
             throw unsupported("pages.render", "ssr_page is reserved for the page");
@@ -996,11 +1014,12 @@ export const compileServer = (
             parts: splitTemplate(template, containerId),
             takesData,
             readsCookie: pageRequest(options.pages.render).cookie,
+            entry,
             views:
-              // (url, cookie, now, remote, views): the fifth input, when the page reads views.
-              render.input.length === 5
+              // (url, method, cookie, now, remote, views): the sixth, when the page reads views.
+              render.input.length === 6
                 ? codec(
-                    contractSchemaOf(render.input[4]!, "pages.render.views").ast,
+                    contractSchemaOf(render.input[5]!, "pages.render.views").ast,
                     "pages.render.views",
                     true,
                     registry,
@@ -1350,6 +1369,7 @@ ${
                     prepared.pages.kind,
                     Rs.pathCall([Rs.ident("reffect_generated")], Rs.ident("r_ssr_page"), [
                       Rs.verbatimExpr("href.clone()"),
+                      Rs.verbatimExpr("page_method.clone()"),
                       Rs.verbatimExpr("page_cookie.clone()"),
                       Rs.verbatimExpr("page_now as f64"),
                       ...(prepared.pages.takesData
@@ -1369,6 +1389,7 @@ ${
                   prepared.auth?.session !== undefined || prepared.pages.readsCookie,
                   prepared.auth?.session?.loginPage,
                   prepared.auth?.session?.cookie,
+                  prepared.pages.entry,
                 ),
               ),
             ]

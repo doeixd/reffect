@@ -330,3 +330,90 @@ pub fn page_cookie(headers: &axum::http::HeaderMap, session: Option<&str>) -> St
         .collect::<Vec<_>>()
         .join(";")
 }
+/// A page's server entry (foldkit 0.165.0 `entry.js`), decoded from its encoded `R.Html.Entry`.
+pub enum EntryParts {
+    Rendered {
+        page: serde_json::Value,
+        status: u16,
+        headers: Vec<(String, String)>,
+    },
+    Responded {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Option<String>,
+    },
+}
+/// HTTP whitespace, which `Headers` strips from both ends of a value.
+fn http_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
+}
+/// `new Headers(init)` over name/value pairs: names lowercased, values trimmed of HTTP
+/// whitespace, a repeated name combined with `", "` in first-seen order, and the TypeError an
+/// invalid name or value raises.
+fn entry_headers(pairs: &serde_json::Value) -> Result<Vec<(String, String)>, String> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    for pair in pairs.as_array().map(Vec::as_slice).unwrap_or_default() {
+        let name = pair["name"].as_str().unwrap_or_default();
+        let value = pair["value"]
+            .as_str()
+            .unwrap_or_default()
+            .trim_matches(http_space);
+        let token = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c);
+        if name.is_empty() || !name.chars().all(token) {
+            return Err(format!("Headers: invalid header name {:?}", name));
+        }
+        if value.contains(['\0', '\r', '\n']) {
+            return Err(format!("Headers: invalid header value for {:?}", name));
+        }
+        let name = name.to_ascii_lowercase();
+        match headers.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, known)) => {
+                known.push_str(", ");
+                known.push_str(value);
+            }
+            None => headers.push((name, value.to_string())),
+        }
+    }
+    Ok(headers)
+}
+/// A `Response` status as its constructor converts and checks it: 200 to 599, truncated, and
+/// none of the null-body statuses when the response has a body.
+fn entry_status(status: &serde_json::Value, has_body: bool) -> Result<u16, String> {
+    let status = status
+        .as_f64()
+        .filter(|s| s.is_finite())
+        .map(f64::trunc)
+        .unwrap_or(0.0);
+    if !(200.0..=599.0).contains(&status) {
+        return Err(format!("Response: status {} is outside 200 to 599", status));
+    }
+    let status = status as u16;
+    if has_body && matches!(status, 204 | 205 | 304) {
+        return Err(format!("Response: status {} cannot have a body", status));
+    }
+    Ok(status)
+}
+/// Splits an encoded entry into what the host answers, or why upstream's `toResponse` throws.
+pub fn entry_parts(entry: &serde_json::Value) -> Result<EntryParts, String> {
+    let headers = entry_headers(&entry["headers"])?;
+    if entry["_tag"] == "Responded" {
+        let body = entry["body"].as_str().map(str::to_string);
+        return Ok(EntryParts::Responded {
+            status: entry_status(&entry["status"], body.is_some())?,
+            headers,
+            body,
+        });
+    }
+    Ok(EntryParts::Rendered {
+        page: entry["page"].clone(),
+        status: entry_status(&entry["status"], true)?,
+        headers,
+    })
+}
+/// Sets `name` in `headers`, replacing an earlier value, as `Headers.set` does.
+pub fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: String) {
+    match headers.iter_mut().find(|(known, _)| known == name) {
+        Some((_, known)) => *known = value,
+        None => headers.push((name.to_string(), value)),
+    }
+}
