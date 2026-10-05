@@ -81,9 +81,11 @@ const tags = [
   "nav",
   "ol",
   "p",
+  "pre",
   "section",
   "span",
   "strong",
+  "textarea",
   "ul",
 ] as const;
 const voidTags = ["br", "hr", "input"] as const;
@@ -100,6 +102,10 @@ const everything = R.fn([R.String, R.Bool], Page, (value, flag) => {
     H.For(value),
     H.Checked(flag),
     H.Disabled(flag),
+    H.Selected(flag),
+    H.Autofocus(flag),
+    H.AriaDisabled(flag),
+    H.Tabindex(-1),
   ];
   return render(
     H.div(
@@ -129,6 +135,23 @@ const classes = R.fn([Strings], Page, (names) =>
     ),
   ),
 );
+// 8B: the HTML parser drops one newline after <pre> and <textarea>, so content starting with one
+// gets another; a textarea's Value is its content.
+const forms = R.fn([R.String], Page, (text) =>
+  render(
+    H.div(
+      [],
+      [
+        H.pre([], [text]),
+        H.pre([], [H.span([], []), text]),
+        H.pre([], ["", text]),
+        H.textarea([H.Value(text), H.Name("n")]),
+        H.textarea([], [text]),
+        H.textarea([H.Value(R.String.concat(R.String.literal("\n"), text))]),
+      ],
+    ),
+  ),
+);
 const nulInText = R.fn([R.String], Page, (text) => render(H.p([], [text])));
 const nulInAttribute = R.fn([R.String], Page, (text) =>
   render(H.p([H.Title(text)], [H.span([], [text])])),
@@ -147,6 +170,7 @@ const Group = RpcGroup.make(
   }),
   Rpc.make("Links", { payload: { hrefs: Schema.Array(Schema.String) }, success: PageSchema }),
   Rpc.make("Classes", { payload: { names: Schema.Array(Schema.String) }, success: PageSchema }),
+  Rpc.make("Forms", { payload: { text: Schema.String }, success: PageSchema }),
   Rpc.make("NulInText", { payload: { text: Schema.String }, success: PageSchema }),
   Rpc.make("NulInAttribute", { payload: { text: Schema.String }, success: PageSchema }),
   Rpc.make("TextBody", { payload: { text: Schema.String }, success: PageSchema }),
@@ -157,6 +181,7 @@ const bindings = {
   Everything: NativeRpc.bind(everything, ["value", "flag"]),
   Links: NativeRpc.bind(links, ["hrefs"]),
   Classes: NativeRpc.bind(classes, ["names"]),
+  Forms: NativeRpc.bind(forms, ["text"]),
   NulInText: NativeRpc.bind(nulInText, ["text"]),
   NulInAttribute: NativeRpc.bind(nulInAttribute, ["text"]),
   TextBody: NativeRpc.bind(textBody, ["text"]),
@@ -170,6 +195,7 @@ const oracle = Effect.gen(function* () {
     Everything: ({ value, flag }) => run(Reference.run(everything, [value, flag])),
     Links: ({ hrefs }) => run(Reference.run(links, [hrefs])),
     Classes: ({ names }) => run(Reference.run(classes, [names])),
+    Forms: ({ text }) => run(Reference.run(forms, [text])),
     NulInText: ({ text }) => run(Reference.run(nulInText, [text])),
     NulInAttribute: ({ text }) => run(Reference.run(nulInAttribute, [text])),
     TextBody: ({ text }) => run(Reference.run(textBody, [text])),
@@ -224,6 +250,9 @@ const corpus: ReadonlyArray<readonly [string, string]> = [
   ["everything escaped", request("Everything", { value: `x"<&>\r`, flag: true })],
   ["links", request("Links", { hrefs })],
   ["classes", request("Classes", { names: classNames })],
+  ...["plain", "\nleading", "\n\nboth", "", "\r\nx", "a\u0000b", "<&>"].map(
+    (text) => [`forms ${JSON.stringify(text)}`, request("Forms", { text })] as const,
+  ),
   ["nul in text", request("NulInText", { text: "a\u0000b" })],
   ["nul in attribute", request("NulInAttribute", { text: "a\u0000b" })],
   ["no nul", request("NulInText", { text: "fine" })],

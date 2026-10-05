@@ -50,3 +50,12 @@ Status: **research (2026-10-05)**, not implemented. 8B mechanically transforms t
 3. **Acceptance:**
    - The translated example served natively is byte-equal to upstream `handleRequest` with `renderPage` for the same request (cookie and clock pinned), and hydrates with the stock client.
    - Re-running the transform is stable, and unsupported constructs are refused with structured diagnostics.
+
+## Progress
+
+- **Step 1a (2026-10-05):**
+  - `pre` and `textarea`, plus `Selected`, `Autofocus`, `AriaDisabled` and `Tabindex`, were probed against upstream for every admitted element.
+  - `AriaDisabled` is a raw attribute (`"true"`/`"false"`). `Tabindex` is a literal integer in the browser's `long` range; upstream refuses others at render. `Autofocus` is global.
+  - A `textarea`'s `Value` is its content. Upstream's leading-newline rule for `pre` and `textarea` is ported (`leadingTextOf`).
+  - Refused while authoring, as upstream's builder refuses them: a `textarea` with both a `Value` and children, an element inside a `textarea`, and a non-integer `Tabindex`.
+  - Evidence: `tests/html-native.test.ts` passes 2/2. Its corpus covers the new elements and attributes, and seven texts through the newline rules, including NUL. `tests/html.test.ts` passes 10/10 with the refusals.

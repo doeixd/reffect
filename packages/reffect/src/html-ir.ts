@@ -10,6 +10,7 @@ import {
   BoolType,
   Expr,
   IRType,
+  NumberType,
   Operation,
   SemanticRef,
   StringType,
@@ -33,6 +34,7 @@ export type HtmlValue =
 export type AttributeValue =
   | { readonly name: StringAttribute; readonly value: string }
   | { readonly name: BooleanAttribute; readonly value: boolean }
+  | { readonly name: NumberAttribute; readonly value: number }
   | { readonly name: "DataAttribute"; readonly key: string; readonly value: string }
   | { readonly name: EventAttribute; readonly message: unknown }
   | { readonly name: ValueEventAttribute; readonly toMessage: (value: string) => unknown };
@@ -61,7 +63,21 @@ export const STRING_ATTRIBUTES = [
   "For",
   "Value",
 ] as const;
-export const BOOLEAN_ATTRIBUTES = ["Checked", "Disabled"] as const;
+export const BOOLEAN_ATTRIBUTES = [
+  "Checked",
+  "Disabled",
+  "Selected",
+  "Autofocus",
+  /** A raw `aria-disabled` attribute, written `"true"` or `"false"` (8B). */
+  "AriaDisabled",
+] as const;
+/** Number attributes; `Tabindex` is a literal integer in the browser's `long` range (8B). */
+export const NUMBER_ATTRIBUTES = ["Tabindex"] as const;
+export type NumberAttribute = (typeof NUMBER_ATTRIBUTES)[number];
+export const isBooleanAttribute = (name: string): name is BooleanAttribute =>
+  (BOOLEAN_ATTRIBUTES as ReadonlyArray<string>).includes(name);
+export const isNumberAttribute = (name: string): name is NumberAttribute =>
+  (NUMBER_ATTRIBUTES as ReadonlyArray<string>).includes(name);
 /** Event attributes take a Message; they leave no trace in server HTML (SSR-010). */
 export const EVENT_ATTRIBUTES = ["OnClick", "OnDoubleClick", "OnSubmit"] as const;
 export type StringAttribute = (typeof STRING_ATTRIBUTES)[number];
@@ -106,7 +122,7 @@ export const EmptyOperation = Operation.make(
 export interface ElementShape {
   readonly tag: string;
   readonly attributes: ReadonlyArray<
-    | { readonly name: StringAttribute | BooleanAttribute }
+    | { readonly name: StringAttribute | BooleanAttribute | NumberAttribute }
     | { readonly name: "DataAttribute"; readonly key: string }
     /** Its Message's field values are reference-only arguments: native rendering erases them. */
     | {
@@ -148,7 +164,13 @@ export const elementOperation = (shape: ElementShape): AnyOperation => {
   const inputs: IRType<unknown>[] = shape.attributes.flatMap((attribute) =>
     "variant" in attribute
       ? attribute.fields.map((field) => field.type)
-      : [attribute.name === "Checked" || attribute.name === "Disabled" ? BoolType : StringType],
+      : [
+          isBooleanAttribute(attribute.name)
+            ? BoolType
+            : isNumberAttribute(attribute.name)
+              ? NumberType
+              : StringType,
+        ],
   );
   inputs.push(HtmlArray);
   const operation = Operation.make(
@@ -177,8 +199,10 @@ export const elementOperation = (shape: ElementShape): AnyOperation => {
         const value = args[next++];
         if ("key" in attribute)
           return { name: "DataAttribute", key: attribute.key, value: String(value) };
-        if (attribute.name === "Checked" || attribute.name === "Disabled")
+        if (isBooleanAttribute(attribute.name))
           return { name: attribute.name, value: value === true };
+        if (isNumberAttribute(attribute.name))
+          return { name: attribute.name, value: Number(value) };
         return { name: attribute.name, value: String(value) };
       });
       return {
@@ -213,9 +237,11 @@ export const toFoldkit = <Message>(
         ? h[attribute.name](attribute.message as Message)
         : "key" in attribute
           ? h.DataAttribute(attribute.key, attribute.value)
-          : attribute.name === "Checked" || attribute.name === "Disabled"
+          : isBooleanAttribute(attribute.name)
             ? h[attribute.name](attribute.value === true)
-            : h[attribute.name](String(attribute.value)),
+            : isNumberAttribute(attribute.name)
+              ? h[attribute.name](Number(attribute.value))
+              : h[attribute.name](String(attribute.value)),
   );
   const build = Reflect.get(h, value.tag) as (
     attributes: ReadonlyArray<unknown>,

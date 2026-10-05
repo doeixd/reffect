@@ -13,6 +13,7 @@
 import { runtimeModule } from "./runtime-module.ts";
 import { ssrSerializeRuntime } from "./ssr-serialize.ts";
 import type { ElementShape } from "./html.ts";
+import { isBooleanAttribute } from "./html-ir.ts";
 
 /** The props each admitted element reflects, as `renderToString` keeps them (probed upstream). */
 const REFLECTED: Readonly<Record<string, ReadonlyArray<string> | "all">> = {
@@ -20,12 +21,16 @@ const REFLECTED: Readonly<Record<string, ReadonlyArray<string> | "all">> = {
   Title: "all",
   Href: ["a"],
   Type: ["a", "button", "li", "ol", "ul", "input"],
-  Name: ["a", "button", "form", "input"],
-  Placeholder: ["input"],
+  Name: ["a", "button", "form", "input", "textarea"],
+  Placeholder: ["input", "textarea"],
   For: ["label"],
+  // A textarea's Value is its content, written by `Prop::Content` rather than reflected.
   Value: ["button", "input"],
   Checked: ["input"],
-  Disabled: ["button", "input"],
+  Disabled: ["button", "input", "textarea"],
+  Selected: [],
+  Autofocus: "all",
+  Tabindex: "all",
 };
 const ATTRIBUTE_NAME: Readonly<Record<string, string>> = {
   Id: "id",
@@ -38,6 +43,9 @@ const ATTRIBUTE_NAME: Readonly<Record<string, string>> = {
   Value: "value",
   Checked: "checked",
   Disabled: "disabled",
+  Selected: "selected",
+  Autofocus: "autofocus",
+  Tabindex: "tabindex",
 };
 /** Whether `renderToString` writes this prop on this element. */
 export const reflects = (tag: string, attribute: string): boolean => {
@@ -68,10 +76,22 @@ export const elementCall = <T>(
     const arg = args[next++]!;
     if ("key" in attribute)
       data.push(`(${rustString(`data-${attribute.key}`)}, &(`, arg, ")[..]), ");
+    // A raw attribute, with the attrs in authored order: `true` or `false`, always written.
+    else if (attribute.name === "AriaDisabled")
+      data.push('("aria-disabled", if ', arg, ' { "true" } else { "false" }), ');
     else if (attribute.name === "Key") keyArg = arg;
     else if (attribute.name === "Class") classArg = arg;
+    else if (attribute.name === "Value" && shape.tag === "textarea")
+      props.push('("value", crate::foldkit_html::Prop::Content(&(', arg, ")[..])), ");
     else if (!reflects(shape.tag, attribute.name)) continue;
-    else if (attribute.name === "Checked" || attribute.name === "Disabled")
+    // Authoring admits only literal integers in the browser's long range, so the text is exact.
+    else if (attribute.name === "Tabindex")
+      props.push(
+        '("tabindex", crate::foldkit_html::Prop::Text(&((',
+        arg,
+        ") as i64).to_string()[..])), ",
+      );
+    else if (isBooleanAttribute(attribute.name))
       props.push(
         `(${rustString(ATTRIBUTE_NAME[attribute.name]!)}, crate::foldkit_html::Prop::Flag(matches!(`,
         arg,

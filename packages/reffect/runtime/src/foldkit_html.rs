@@ -50,6 +50,8 @@ pub enum Prop<'a> {
     Text(&'a str),
     Url(&'a str),
     Flag(bool),
+    /// A textarea's controlled `value`, serialized as its text content.
+    Content(&'a str),
 }
 
 pub fn empty() -> Html {
@@ -166,14 +168,19 @@ pub fn element(
     if let Some(value) = class.and_then(class_value) {
         attribute(&mut markup, "class", &value, &mut error);
     }
+    // A textarea's controlled value is its content, which replaces its (empty) children.
+    let mut content: Option<Html> = None;
     for (name, prop) in props {
         match prop {
             Prop::Text(value) => attribute(&mut markup, name, value, &mut error),
             Prop::Url(value) => attribute(&mut markup, name, sanitize_url(value), &mut error),
             Prop::Flag(true) => attribute(&mut markup, name, "", &mut error),
             Prop::Flag(false) => {}
+            Prop::Content(value) => content = Some(text(value)),
         }
     }
+    let content = content.map(|text| vec![text]);
+    let children = content.as_deref().unwrap_or(children);
     let own_end = markup.len();
     if let Some(key) = key {
         markup.push_str(" data-foldkit-key=\"");
@@ -181,6 +188,18 @@ pub fn element(
         markup.push('"');
     }
     markup.push('>');
+    // The HTML parser drops one newline right after `<pre>` or `<textarea>`, so content that
+    // starts with one gets another (serialize.js `leadingTextOf`): the first nonempty text,
+    // unless an element comes first.
+    if tag == "pre" || tag == "textarea" {
+        let leading = children
+            .iter()
+            .find(|child| child.0.kind == Kind::Element || !child.0.head.is_empty());
+        if leading.is_some_and(|child| child.0.kind == Kind::Text && child.0.head.starts_with('\n'))
+        {
+            markup.push('\n');
+        }
+    }
     let mut tail = String::new();
     let mut len = markup.len();
     let children = if is_void {

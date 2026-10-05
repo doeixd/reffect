@@ -44,6 +44,7 @@ import {
 } from "./html-ir.ts";
 import type {
   BooleanAttribute,
+  NumberAttribute,
   ElementShape,
   EventAttribute,
   ValueEventAttribute,
@@ -116,6 +117,7 @@ const messageOf = (
 export type Attribute =
   | { readonly name: StringAttribute; readonly value: Expr<string> }
   | { readonly name: BooleanAttribute; readonly value: Expr<boolean> }
+  | { readonly name: NumberAttribute; readonly value: Expr<number> }
   | { readonly name: "DataAttribute"; readonly key: string; readonly value: Expr<string> }
   | { readonly name: EventAttribute; readonly message: MessageExpr }
   | { readonly name: ValueEventAttribute; readonly message: MessageExpr; readonly value: string };
@@ -215,7 +217,22 @@ const element =
           "REFUSED_ATTRIBUTE",
           "authoring",
           at,
-          `${attribute.name} is admitted on button and input only: Foldkit writes or rejects it elsewhere`,
+          `${attribute.name} is admitted on button, input, option and textarea only: Foldkit writes or rejects it elsewhere`,
+        );
+    }
+    // A textarea's value is its content: upstream's builder refuses both owners, and an element
+    // inside one would read back as text.
+    if (tag === "textarea") {
+      const kids = childrenExpr(children, `${at}.children`);
+      if (treesOf(kids).length > 0)
+        throw fail("INVALID_NESTING", "authoring", at, "<textarea> holds text only");
+      const empty = !(children instanceof Expr) && children.length === 0;
+      if (seen.has("Value") && !empty)
+        throw fail(
+          "INVALID_CONTENT",
+          "authoring",
+          at,
+          "<textarea> was given both a controlled Value and children; keep one owner, as Foldkit does",
         );
     }
     const shape: ElementShape = Object.freeze({
@@ -295,6 +312,7 @@ const treesOf = (expr: Expr<unknown>): ReadonlyArray<HtmlTree> => {
 };
 /** Elements whose start tag closes an open `p` (HTML tree construction, "in body"). */
 const CLOSES_P = new Set([
+  "pre",
   "article",
   "aside",
   "div",
@@ -315,6 +333,8 @@ const CLOSES_P = new Set([
 const HEADINGS = new Set(["h1", "h2", "h3"]);
 /** The admitted elements of the parser's "special" category, which end an `li`'s search. */
 const SPECIAL = new Set([
+  "pre",
+  "textarea",
   "article",
   "aside",
   "br",
@@ -382,6 +402,8 @@ const misnested = (tag: string, beneath: ReadonlyArray<HtmlTree>): string | unde
 
 /** Elements of the 8A profile: ordinary HTML elements, and the void ones it needs. */
 const ELEMENTS = [
+  "pre",
+  "textarea",
   "a",
   "article",
   "aside",
@@ -614,6 +636,20 @@ export const HtmlIR = Object.freeze({
   ...(Object.fromEntries(
     BOOLEAN_ATTRIBUTES.map((name) => [name, booleanAttribute(name)]),
   ) as Record<BooleanAttribute, (value: Expr<boolean> | boolean) => Attribute>),
+  /**
+   * Foldkit's `Tabindex`: a literal integer the browser's `long` holds, which upstream's builder
+   * otherwise refuses at render time.
+   */
+  Tabindex: (value: number): Attribute => {
+    if (!Number.isInteger(value) || value < -(2 ** 31) || value > 2 ** 31 - 1)
+      throw fail(
+        "INVALID_ATTRIBUTE",
+        "authoring",
+        "Html.Tabindex",
+        "Tabindex is an integer in the browser's long range",
+      );
+    return { name: "Tabindex", value: Expr.literal(NumberType, value) };
+  },
   ...(Object.fromEntries(
     EVENT_ATTRIBUTES.map((name) => [
       name,

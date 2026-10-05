@@ -348,3 +348,32 @@ test("nesting the HTML parser would rearrange is refused exactly where upstream 
     H.li([], [R.Match.bool(R.Bool.literal(true), H.span([], []), H.li([], []))]),
   ).toThrow(CompileError);
 });
+
+test("textarea owns its content one way, and Tabindex is an integer the browser holds (8B)", async () => {
+  // Upstream's builder throws on both owners; the profile refuses while authoring.
+  const upstream = (body: (h: HtmlBuilder<never>) => ReturnType<HtmlBuilder<never>["div"]>) =>
+    Effect.runPromise(
+      renderToString(
+        {
+          init: () => ({ model: {} }),
+          view: (_model: object, h: HtmlBuilder<never>): Document => ({
+            title: "t",
+            body: body(h),
+          }),
+        },
+        { buildId: "b" },
+      ),
+    );
+  // @ts-expect-error Foldkit's types forbid it too
+  await expect(upstream((h) => h.textarea([h.Value("v")], ["child"]))).rejects.toThrow(
+    "controlled value and children",
+  );
+  expect(() => H.textarea([H.Value("v")], ["child"])).toThrow("one owner");
+  expect(() => H.textarea([], [H.span([], [])])).toThrow("text only");
+  expect(() => H.textarea([H.Value("v")])).not.toThrow();
+  // Upstream refuses a tabIndex the browser would read differently.
+  await expect(upstream((h) => h.div([h.Tabindex(1.5)], []))).rejects.toThrow("tabIndex");
+  for (const value of [1.5, Number.NaN, 2 ** 31, -(2 ** 31) - 1])
+    expect(() => H.Tabindex(value)).toThrow("long range");
+  expect(() => H.div([H.Tabindex(-(2 ** 31))], [])).not.toThrow();
+});
