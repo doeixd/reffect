@@ -8,7 +8,7 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Milestone 8B: SSR source to R](research/ssr-codemod.md)** identifies the pinned upstream `examples/ssr` source, the R surface it lacks, and the translator decisions (TypeScript 7 API, `@foldkit/ui` translated, `InnerHTML` supported).
 
-**[Milestone 10: SchemaBinary](research/schema-binary.md)** plans native `RpcSerialization.layerSchemaBinary`: generated transcoders, an exact canonical encoder and byte equality with the official server. The [wire format](research/schema-binary-format.md) is specified from Effect 4.0.0's source and probes.
+**[Milestone 10: SchemaBinary](research/schema-binary.md)** serves `RpcSerialization.layerSchemaBinary` natively (first slice delivered): generated transcoders, an exact canonical encoder and byte equality with the official server, and the upstream request-defect bug it works around. The [wire format](research/schema-binary-format.md) is specified from Effect 4.0.0's source and probes.
 
 **[Serving native RPC](research/rpc-serving.md)** covers connections, read timeouts and threading for generated servers ([#16](https://github.com/doeixd/reffect/issues/16), [#25](https://github.com/doeixd/reffect/issues/25)).
 
