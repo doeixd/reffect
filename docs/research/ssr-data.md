@@ -417,6 +417,7 @@ Validation:
 **Gap.** Page reads refused selections with relations ("Page reads select no relations yet"). M9-3 noted that relations need a port of upstream's `assemble`.
 
 **Upstream facts** (foldkit-remote 0.11.0 `index.mjs`, probed 2026-10-05 against `RemoteServer.memory`):
+
 - **One exchange.** A relation selection is answered in one exchange: the server returns the targets normalized beside the root.
   - A one-relation's value is a ref (`"User:u1"`).
   - A paged many-relation reads under its alias (`comments@first=2`) as `{ refs, hasNext, hasPrevious }`.
@@ -426,6 +427,7 @@ Validation:
 - **Encoding.** Requirements encode as `entity, id, fields, windows, relations`.
 
 **Decisions.**
+
 - The page engine holds a `PageStore`, which merges the page's answers so far. It records values, settled fields, and tombstones for Read roots that were neither answered nor settled. On that store it ports `plan`, `assemble` and `assembleRelation`.
 - Query items and get values are assembled through their selection. A planned Read is narrowed by `plan` and skipped when nothing is missing.
 - **Witnesses.** Views of required one-relations and of (paged) many-relations have witnesses.
@@ -433,10 +435,12 @@ Validation:
 - **Not followed:** reads a second `satisfy` pass would add (a Surface waiting on another's data), as before.
 
 **Acceptance.**
+
 - A memory page has a query view of projects with their owners, a get of a project the list already answered, a get of one it did not, and a post with a page of comments. It renders byte-equal to upstream, and its Flags hold upstream's exact exchanges.
 - Runtime tests pin assembly and the follow-a-held-ref plan against the probed upstream exchanges.
 
 **Implemented (2026-10-05).** `PageStore`, its `plan`/`assemble`/`assemble_relation` and `merge_requirements` are in `runtime/src/remote_engine.rs`, and the relation refusals are removed from `src/native-remote.ts`.
+
 - `tests/remote-page-relations.test.ts` passes. Its page has five views:
   - a query with owners;
   - a get the list already answered, which makes no Read;
@@ -445,6 +449,7 @@ Validation:
   - a post with a page of two of its three comments.
 
   The page is byte-equal to upstream, its exchanges are upstream's, and the replay resumes.
+
 - Runtime tests `page_views_assemble_relations_as_upstream` and `page_reads_follow_held_relations_as_upstream` pin the probed upstream exchanges.
 - **Fixed on the way.** `planPage` typed `data.prefetch` over the union of its views' projections. Upstream's generic `prefetch` rejected that as soon as two query views selected different shapes, so `prefetch` now takes each projection separately.
 - **Authoring gap.** `R.Match.valueTags` types its case values loosely, so the test annotates one `R.Array.map` parameter. This is recorded in open work.
