@@ -1,4 +1,5 @@
 import { SchemaIR } from "./schema-json.ts";
+import { UrlIR } from "./url.ts";
 import { StreamAuthoring } from "./stream.ts";
 import { LiveHubIR, RemoteStoreIR } from "./remote-store.ts";
 import { HtmlIR } from "./html.ts";
@@ -125,6 +126,8 @@ export const R = Object.freeze({
   Number: NumberType,
   Unknown: UnknownType,
   Schema: SchemaIR,
+  /** What a page reads of its URL: the Web URL API's pathname and search parameters. */
+  Url: UrlIR,
   RemoteStore: RemoteStoreIR,
   LiveHub: LiveHubIR,
   /** Foldkit Remote values an R page reads (M9-3). */

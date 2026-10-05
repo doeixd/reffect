@@ -313,3 +313,28 @@ Results:
 - A transform the native codecs do not support is refused when compiling, rather than rendered from the wire value.
 
 **Acceptance.** `remote-page-decode.test.ts`: a `U64Json` field renders natively byte-equal to upstream, its decoded value deciding the markup, and a view declaring the wire form is refused. The `todo-remote` example no longer writes its view witness.
+
+## Page inputs from the URL (2026-10-05)
+
+**Gap.** A page view's request is planned at compile time with constant inputs. A page whose query input depends on the request, such as `/?status=done` or a route segment, cannot be expressed, and R has no URL operations to derive it.
+
+**Prior decisions.** M9-3 planned build-time request templates with holes filled from the URL. The acceptance is that the client's replayed `satisfy` issues identical requests and plans nothing more. Replay matches requests by `stableStringify` of their encoded form (`remote-resume.ts`), so key order does not matter and values must.
+
+**Decisions.**
+- **URL operations.** `R.Url.pathname(url)` and `R.Url.searchParam(url, name)` mirror the Web URL API: `new URL(url).pathname`, and `new URL(url).searchParams.get(name) ?? undefined`, an `UndefinedOr<String>`.
+  - The reference evaluates them with WHATWG `URL`. Natively they use the `url` crate already selected for pages: `Url::parse`, `path()`, and `query_pairs()` (form-urlencoded: `+` as space, percent-decoding, invalid UTF-8 as U+FFFD, the first pair named `name`).
+  - A differential corpus checks the two agree, covering plus signs, `%20`, malformed escapes, invalid UTF-8, repeated names, missing names and fragments.
+  - A string that does not parse as a URL is refused like a failed decode. Page URLs are always absolute, since they are resolved against the page origin.
+- **Templated views.** A `planPage` view may be `{ input, projection }`, where `input` is a pure `R.fn([R.String], I, ...)` over the page URL, and `projection` is `(input) => Data.query(Q, input, options)`.
+  - The planner runs the projection on `input` evaluated by the reference at the page origin's root. The request's `input` is the hole, and its window and selection stay constant.
+  - The page host evaluates `input` natively on the request's resolved URL, and encodes it with the query's own Input codec (`R.Schema.toCodecJson`). `input`'s output witness must be the query Input's witness, or it is refused. The encoded value replaces the request's `input` before the engine runs it.
+- **Unchanged.** Recording, the views and authorization stay as they are. A templated read is still one exchange, and its view is still its query's `Page`.
+
+**Alternatives.**
+- *A route table in the compiler* (pattern to input): rejected for now. It duplicates Foldkit's own routing, and URL operations in R compose into any routing an app already writes.
+- *Passing the raw URL to the engine and parsing there:* rejected. The input's meaning belongs to the app's code, and would otherwise be duplicated in Rust.
+
+**Acceptance.**
+- `R.Url` agrees with WHATWG `URL` on the corpus, natively and in the reference.
+- A page whose view's query input comes from `?status=` renders natively byte-equal to upstream, whose `init` derives the same input from the request URL. Two URLs give two different lists.
+- The client's replay issues the recorded request and nothing more.

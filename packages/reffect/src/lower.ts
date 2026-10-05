@@ -1853,6 +1853,7 @@ export const emitFunctions = (
   let usesJson = false;
   // Set when a number is written as JS text (SSR-012).
   let usesRyu = false;
+  let usesUrl = false;
   // Set when an Html value is reachable, which brings the ported serializer (SSR-003).
   let usesHtml = false;
   // Set when JSON text is written as JSON.stringify does (M9-1).
@@ -2457,6 +2458,18 @@ export const emitFunctions = (
                   return Match.value(n.lowering).pipe(
                     Match.tagsExhaustive({
                       Not: () => joinFragments(["!(", arg(0), ")"]),
+                      Url: ({ kind }) => {
+                        usesUrl = true;
+                        return kind === "Pathname"
+                          ? joinFragments(["crate::reffect_url::pathname(&(", arg(0), ")[..])"])
+                          : joinFragments([
+                              "crate::reffect_url::search_param(&(",
+                              arg(0),
+                              ")[..], &(",
+                              arg(1),
+                              ")[..])",
+                            ]);
+                      },
                       // A chain of concatenations is one `[..].concat()`, a single allocation of
                       // the exact length, rather than a format! per link copying the prefix (#33).
                       // Each inner link keeps its own source range over its parts.
@@ -3895,15 +3908,16 @@ export const emitFunctions = (
   const files = Object.freeze({
     "Cargo.toml":
       '[package]\nname = "reffect_generated"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n' +
-      (hasAsync || usesJson || usesRyu ? "\n[dependencies]\n" : "") +
+      (hasAsync || usesJson || usesRyu || usesUrl ? "\n[dependencies]\n" : "") +
       (hasAsync
         ? 'tokio = { version = "=1.53.1", features = ["macros", "rt", "time", "sync"] }\n'
         : "") +
       (usesJson
         ? 'serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }\n'
         : "") +
-      (usesRyu ? 'ryu-js = { version = "=1.0.3", default-features = false }\n' : ""),
-    "src/lib.rs": `${writer.text}${usesHtml ? `\n${htmlRuntime}` : ""}${usesJsonText ? `\n${jsonTextRuntime}` : ""}`,
+      (usesRyu ? 'ryu-js = { version = "=1.0.3", default-features = false }\n' : "") +
+      (usesUrl ? 'url = "=2.5.8"\n' : ""),
+    "src/lib.rs": `${writer.text}${usesHtml ? `\n${htmlRuntime}` : ""}${usesJsonText ? `\n${jsonTextRuntime}` : ""}${usesUrl ? `\n${urlRuntime}` : ""}`,
     "src/main.rs": `${usesStrings ? stringBoundary : ""}${
       (hasAsync
         ? Rs.withAttributes(
@@ -3921,6 +3935,23 @@ export const emitFunctions = (
   });
   return Object.freeze({ files, ranges: writer.ranges });
 };
+
+/**
+ * `R.Url` natively (docs/research/ssr-data.md): the url crate's WHATWG parser. A string that is
+ * not a URL has the empty path and no parameters, as in the reference.
+ */
+const urlRuntime = `pub mod reffect_url {
+    pub fn pathname(url: &str) -> String {
+        url::Url::parse(url).map(|parsed| parsed.path().to_string()).unwrap_or_default()
+    }
+    /// URLSearchParams.get: the first pair named \`name\`, form-urlencoded.
+    pub fn search_param(url: &str, name: &str) -> Option<String> {
+        let parsed = url::Url::parse(url).ok()?;
+        let found = parsed.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
+        found
+    }
+}
+`;
 
 /** Runner boundary for strings: lowercase hex of UTF-8 bytes, so NUL and any text cross argv. */
 const stringBoundary = `fn hex(value: &str) -> String {

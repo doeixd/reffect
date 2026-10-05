@@ -1422,7 +1422,10 @@ ${
             ? 'http-body = "=1.0.1"\nfutures-util = { version = "=0.3.34", default-features = false, features = ["std"] }\n'
             : "") +
           (prepared.auth ? 'subtle = { version = "=2.6.1", default-features = false }\n' : "") +
-          (prepared.pages ? 'url = "=2.5.8"\n' : "") +
+          // Pages resolve their URL with it, and R.Url reads one (docs/research/ssr-data.md).
+          (prepared.pages || core.explanation.crates.includes("url@2.5.8")
+            ? 'url = "=2.5.8"\n'
+            : "") +
           (runtime?.dependencies ?? []).join("") +
           (ryuJs && !runtime?.crates.includes("ryu-js@1.0.3")
             ? 'ryu-js = { version = "=1.0.3", default-features = false }\n'

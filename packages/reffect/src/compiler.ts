@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
+import { UrlPathname, UrlSearchParam } from "./url.ts";
 import { NESTING_LIMIT, nestingDepth } from "./nesting.ts";
 import { streamExpressions, streamFinalizers, streamSources } from "./stream-ir.ts";
 import type { StreamIR } from "./stream-ir.ts";
@@ -118,7 +119,9 @@ export type Lowering =
   /** A NativeRpc host's verified JSON function in `crate::reffect_json` (RM-006). */
   | { readonly _tag: "HostJson"; readonly function: string }
   /** The ported Foldkit serializer (SSR-003). */
-  | { readonly _tag: "Html"; readonly kind: HtmlOperationKind };
+  | { readonly _tag: "Html"; readonly kind: HtmlOperationKind }
+  /** A WHATWG URL reading in `crate::reffect_url`, on the `url` crate. */
+  | { readonly _tag: "Url"; readonly kind: "Pathname" | "SearchParam" };
 export class Target extends Pipeable.Class {
   private constructor(
     readonly ref: SemanticRef<"target">,
@@ -210,6 +213,18 @@ const implementations = Object.freeze([
   implementation(AddNumber as AnyOperation, { _tag: "Infix", operator: "+" }),
   implementation(EqNumber as AnyOperation, { _tag: "Infix", operator: "==" }),
   implementation(LtNumber as AnyOperation, { _tag: "Infix", operator: "<" }),
+  ...(
+    [
+      [UrlPathname, "Pathname"],
+      [UrlSearchParam, "SearchParam"],
+    ] as const
+  ).map(([operation, kind]) =>
+    Object.freeze({
+      ...implementation(operation as AnyOperation, { _tag: "Url", kind }),
+      crates: Object.freeze(["url@2.5.8"]),
+      rationale: "The url crate implements the WHATWG URL Standard the reference evaluates with",
+    }),
+  ),
   Object.freeze({
     ...implementation(NumberToString as AnyOperation, { _tag: "NumberText" }),
     crates: Object.freeze(["ryu-js@1.0.3"]),
