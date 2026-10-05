@@ -1,6 +1,6 @@
 # Cookie sessions for authenticated pages (#4)
 
-Research record, 2026-10-05. Status: **proposed, awaiting decisions** (see [Decisions needed](#decisions-needed)).
+Research record, 2026-10-05. Status: **accepted 2026-10-05**: the three decisions below were taken as recommended.
 
 ## The gap
 
@@ -96,6 +96,12 @@ Paths and the cookie name are compile options, refused if they clash with page r
 1. **Session model:** A, B or C. The recommendation is A.
 2. **Whether RPC accepts the cookie at all.** The recommendation is yes, with the checks above. Otherwise the browser must hold the token in script.
 3. **Whether reffect owns the login exchange.** The alternative is that the application sets the cookie itself, for example from a separate service on the same origin. The recommendation is native endpoints, so the showcase works end to end.
+
+**Decided (user, 2026-10-05):**
+
+1. **Option A:** the configured credential in a cookie.
+2. **RPC and Live accept the cookie,** with the Fetch Metadata, Origin and Content-Type checks.
+3. **Native login and logout endpoints.**
 
 ## Acceptance (from #4, refined)
 
