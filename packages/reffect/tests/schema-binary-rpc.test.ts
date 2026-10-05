@@ -335,9 +335,11 @@ test("SchemaBinary options outside the first slice are refused while compiling",
   );
   const only = R.fn([R.Array(R.Record(R.String, R.Number))], R.Bool, () => R.Bool.literal(true));
   const tables = await Effect.runPromise(
-    NativeRpc.compile(Tables, { Only: NativeRpc.bind(only) }, { serialization: "schema-binary" }).pipe(
-      Effect.flip,
-    ),
+    NativeRpc.compile(
+      Tables,
+      { Only: NativeRpc.bind(only) },
+      { serialization: "schema-binary" },
+    ).pipe(Effect.flip),
   );
   expect(tables.message).toContain("Arrays of records under SchemaBinary");
 });
