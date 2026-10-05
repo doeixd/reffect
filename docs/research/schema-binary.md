@@ -75,7 +75,7 @@ The wire format itself is specified separately in [SchemaBinary wire format](sch
 
 ## Decisions
 
-- **SB-001. The option.** `NativeRpc.compile(group, handlers, { serialization: "schema-binary", maxFrameSize?, fingerprintPayloads? })` mirrors `layerSchemaBinary`.
+- **SB-001. The option.** `NativeRpc.compile(group, handlers, { serialization: "schema-binary", schemaBinary?: { maxFrameSize?, fingerprintPayloads? } })` mirrors `layerSchemaBinary` and its options. The options sit in their own object because they mean nothing under JSON; giving them without `serialization: "schema-binary"` is refused.
   - The defaults are 16 MiB and `false`.
   - `maxFrameSize: "unbounded"` is accepted, as upstream accepts it.
   - `fingerprintPayloads: true` is refused with an unsupported diagnostic in the first slice.
@@ -173,6 +173,19 @@ Later, recorded in [open work](../open-work.md):
 | Request id                                                                                                                                      | A number or string, echoed in the kind it arrived in; fractional numbers accepted                                                                                                                                                                                  | Same                                                                                                                                                                                                                                      |
 
 The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its body is concatenated frames.
+
+- **Step 3, done (2026-10-05): a native SchemaBinary server.**
+  - **Runtime.** `rpc_wire.rs` keeps exits, defects and batch validation. The JSON/NDJSON body moved to `rpc_json.rs`, and `rpc_binary.rs` is the SchemaBinary body: frames in, the same JSON-shaped envelopes for dispatch, frames out, written as each answer is ready. Envelope failures carry Effect's issue and path. The check crate's `rpc_binary_host` answers the official server's recorded bad bodies, and two Echo calls, byte for byte.
+  - **Generator** (`src/schema-binary.ts`). Layouts come from `SchemaAST.toEncoded` of the payload schema and of `Rpc.exitSchema(rpc)`'s type parameters, so the error union collapses as Effect's does. Each layout gets one `sbr_`/`sbw_` pair between its bytes and the JSON-shaped value the verified codecs read and write.
+    - Admitted: strings, u64, numbers (`isInt` ones as `int`, filter groups included), booleans, `null`/`undefined`, literals, structs with `optional`/`optionalKey` fields, and unions told apart by kind (`NullOr`, `UndefinedOr`).
+    - Refused while compiling: tagged unions, arrays, records, `Unknown`, `fieldId` annotations, streams, authentication, runtime-served (NativeRemote) procedures, `fingerprintPayloads`.
+  - **`-0`.** The JSON path writes `-0` as `0`, as `JSON.stringify` does. Under SchemaBinary the server's own codecs keep it (`jsNumberKeepingSign`), because the wire carries it. The library's `reffect_json` encoders are unchanged.
+  - **A present `undefined`** in an `optional` field is `null` in the JSON-shaped value, as `toCodecJson` writes it, and is written back as kind 3.
+  - **Evidence** (`tests/schema-binary-rpc.test.ts`). Against the official server running the same R handlers through `Reference.run`:
+    - the native answers equal the official bytes for 22 requests: Echo over struct values with `-0`, NaN and the infinities, decimals, f64s, Unicode, and absent, present and `undefined` optionals; Count with an `isInt` payload; Check success and typed failure; Ping; two requests in one body;
+    - payloads the official server mishandles are answered with the request's `Die`, whose text equals the official JSON server's for the equivalent JSON payload;
+    - the stock client under `layerSchemaBinary` round-trips every value, `-0` included, and keeps working after a procedure the server lacks fails;
+    - disabling `-0` preservation makes the byte comparison fail at the `-0` case (mutation check).
 
 ## Acceptance (milestone 10, first slice)
 

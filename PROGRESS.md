@@ -1,5 +1,19 @@
 # Progress
 
+## 2026-10-05 — Milestone 10 step 3: a native SchemaBinary RPC server
+
+- [Design record](docs/research/schema-binary.md#progress). `NativeRpc.compile(..., { serialization: "schema-binary" })` serves `RpcSerialization.layerSchemaBinary`. Generated transcoders, derived from the schemas' encoded ASTs and `Rpc.exitSchema`, sit between frames and the verified JSON codecs.
+- **Evidence.** The native answers equal the official server's bytes over a 22-request corpus, and the stock client round-trips every value, `-0` included. Requests the official server mishandles (#8826) get their own `Die`, with the official JSON server's text.
+- **Not yet supported**, refused while compiling and listed in [open work](docs/open-work.md): tagged unions, arrays, records, `Unknown`, streams, authentication, NativeRemote, `fingerprintPayloads`.
+- Validation:
+  - `vp run runtime:check` passes: 43/43 cargo tests.
+  - These suites pass:
+    - `schema-binary-rpc` 2/2;
+    - `schema-binary-fixtures` 1/1;
+    - `runtime-sources` 1/1;
+    - the JSON regressions `rpc-ndjson` 2/2 and `optional-rpc` 2/2.
+  - `vp check` and the strict `tsc` pass.
+
 ## 2026-10-05 — Milestone 10 step 2: how the official SchemaBinary server answers
 
 - [Probe results](docs/research/schema-binary.md#progress). Over HTTP, the first undecodable frame gets a `Defect` carrying the `SchemaError` text and path. A failure after a message is ignored. A body without a complete frame gets an empty `500`.

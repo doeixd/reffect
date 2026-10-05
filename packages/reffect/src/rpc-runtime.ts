@@ -16,7 +16,7 @@ export const rpcRuntime = (
   frameCleanup?: RsStmt,
   asynchronous = false,
   layered = false,
-  ndjson = false,
+  serialization: "json" | "ndjson" | "schema-binary" = "json",
   pages = false,
   boot?: string,
   session = false,
@@ -26,9 +26,10 @@ use axum::response::{Response, IntoResponse};
 use serde_json::{json, Value};
 
 /// The configured RpcSerialization (STREAM-001): \`layerJson\` reads one value, an array being a
-/// batch; \`layerNdjson\` reads one message per complete line.
-const NDJSON: bool = ${ndjson};
-${RuntimeSources.rpc_wire}${RuntimeSources.rpc_json}
+/// batch; \`layerNdjson\` reads one message per complete line; \`layerSchemaBinary\` reads frames.
+#[allow(dead_code)]
+const NDJSON: bool = ${serialization === "ndjson"};
+${RuntimeSources.rpc_wire}${serialization === "schema-binary" ? RuntimeSources.rpc_binary : RuntimeSources.rpc_json}
 ${decodeArgs()}${
   asynchronous
     ? String.raw`${RuntimeSources.rpc_stream}
@@ -50,13 +51,19 @@ ${asynchronous ? "async " : ""}fn request(message: &Value, headers: &HeaderMap, 
     for name in ["traceId", "spanId"] {
         if object.get(name).map(|v| !v.is_string()).unwrap_or(false) { return invalid("Invalid trace context") }
     }
-    if object.get("sampled").map(|v| !v.is_boolean()).unwrap_or(false) { return invalid("Invalid trace context") }
+    if object.get("sampled").map(|v| !v.is_boolean()).unwrap_or(false) { return invalid("Invalid trace context") }${
+      serialization === "schema-binary"
+        ? `
+    // A payload that does not transcode fails its own request, as under JSON (SB-REQUEST-DEFECT).
+    if let Some(message) = object.get("~payloadError").and_then(Value::as_str) { return tagged(die(id, message.to_string()), tag) }`
+        : ""
+    }
     // TLS cleanup applies to synchronous calls; suspended handlers own their diagnostic state.
     ${frameCleanup?.text ?? ""}
     let mut context = RequestContext { id, tag, principal: None${asynchronous ? ", out" : ""} };
     let result = dispatch(tag, payload, headers, message, state, &mut context${asynchronous ? ", cancellation).await" : ")"};
     ${frameCleanup?.text ?? ""}
-    match result { Ok(value) => exit(id, value), Err(error) => die(id, error) }
+    ${serialization === "schema-binary" ? "tagged(match result { Ok(value) => exit(id, value), Err(error) => die(id, error) }, tag)" : "match result { Ok(value) => exit(id, value), Err(error) => die(id, error) }"}
 }
 ${
   asynchronous

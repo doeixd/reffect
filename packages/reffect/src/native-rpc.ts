@@ -75,6 +75,8 @@ import { u64RangeOf } from "./rpc-codecs.ts";
 import { RpcBearer } from "./rpc-auth.ts";
 import { rpcAuthRuntime } from "./rpc-auth-runtime.ts";
 import { decodeArgs, rpcRuntime } from "./rpc-runtime.ts";
+import { runtimeModule } from "./runtime-module.ts";
+import { schemaBinaryCodecs } from "./schema-binary.ts";
 import { analyzeTaskGroups } from "./structured-concurrency.ts";
 
 export interface RpcBinding<F extends AnyFn = AnyFn> {
@@ -285,10 +287,19 @@ export type CompileOptions = {
     readonly connections?: number;
   };
   /**
-   * The wire serialization, chosen as `RpcSerialization.layerJson`/`layerNdjson` is (STREAM-001):
-   * one JSON value per body, or one message per line. Defaults to JSON.
+   * The wire serialization, chosen as `RpcSerialization.layerJson`/`layerNdjson`/
+   * `layerSchemaBinary` is (STREAM-001, SB-001): one JSON value per body, one message per line,
+   * or SchemaBinary frames. Defaults to JSON.
    */
-  readonly serialization?: "json" | "ndjson";
+  readonly serialization?: "json" | "ndjson" | "schema-binary";
+  /**
+   * `layerSchemaBinary`'s options, under `serialization: "schema-binary"`. `maxFrameSize`
+   * defaults to 16 MiB. Payload fingerprints are not supported yet.
+   */
+  readonly schemaBinary?: {
+    readonly maxFrameSize?: number | "unbounded";
+    readonly fingerprintPayloads?: boolean;
+  };
   /**
    * Server-rendered pages beside the RPC path (SSR-007), as foldkit's `handleRequest` serves them:
    * `render` is a pure R function returning `R.Result(R.Html.Rendered, R.Html.RenderError)`, and
@@ -480,6 +491,23 @@ export const compileServer = (
           );
         const entries = Array.from(group.requests.values());
         if (entries.length === 0) throw unsupported("group", "RPC group must contain a procedure");
+        const binary =
+          options.serialization === "schema-binary" ? schemaBinaryOf(options) : undefined;
+        if (binary && runtime)
+          throw unsupported(
+            "serialization",
+            "Runtime-served procedures over SchemaBinary are not supported yet",
+          );
+        if (binary && options.auth)
+          throw unsupported(
+            "serialization",
+            "Authentication over SchemaBinary is not supported yet",
+          );
+        if (!binary && options.schemaBinary)
+          throw unsupported(
+            "schemaBinary",
+            'schemaBinary options need serialization: "schema-binary"',
+          );
         const served = Object.keys(runtime?.procedures ?? {});
         if (
           Reflect.ownKeys(bindings).length + served.length !== entries.length ||
@@ -1062,6 +1090,21 @@ export const compileServer = (
           ),
           arms,
           pages,
+          // The transcoders are generated here so their refusals are compile errors.
+          binary:
+            binary &&
+            schemaBinaryCodecs(
+              entries.filter(Rpc.isRpc).map((definition) => {
+                const rpc: Rpc.AnyWithProps = definition;
+                if (RpcSchema.isStreamSchema(rpc.successSchema))
+                  throw unsupported(
+                    `rpc.${rpc._tag}`,
+                    "Streams over SchemaBinary are not supported yet",
+                  );
+                return { tag: rpc._tag, rpc };
+              }),
+              binary.maxFrameSize,
+            ),
           layered: layer !== undefined,
           services: serverServices.map((service) => service.id),
           runtimeFunctions,
@@ -1354,7 +1397,19 @@ ${
           : []),
         dispatch,
         ...(prepared.composites.length
-          ? [Rs.verbatimItem(compositeCodecs(prepared.composites))]
+          ? [
+              Rs.verbatimItem(
+                compositeCodecs(prepared.composites, undefined, [], {
+                  negativeZero: prepared.binary !== undefined,
+                }),
+              ),
+            ]
+          : []),
+        ...(prepared.binary
+          ? [
+              Rs.verbatimItem(runtimeModule("schema_binary", "crate-private")),
+              Rs.verbatimItem(prepared.binary),
+            ]
           : []),
         Rs.verbatimItem(contextRuntime),
         ...(executionRuntime ? [Rs.verbatimItem(executionRuntime)] : []),
@@ -1402,7 +1457,7 @@ ${
             clear.length ? Rs.stmt(callLocal("clear_frames")) : undefined,
             prepared.asynchronous,
             prepared.layered,
-            options.serialization === "ndjson",
+            options.serialization ?? "json",
             prepared.pages !== undefined,
             runtime?.boot,
             prepared.auth?.session !== undefined,
@@ -1510,6 +1565,25 @@ const jsNumber = `fn js_number(x: f64) -> Value {
     Value::from(x)
 }
 `;
+const jsNumberKeepingSign = jsNumber.replace(
+  "if x == 0.0 { return Value::from(0u64); }",
+  "if x == 0.0 { return if x.is_sign_negative() { Value::from(-0.0) } else { Value::from(0u64) }; }",
+);
+if (jsNumberKeepingSign === jsNumber) throw new Error("js_number no longer has its -0 branch");
+/** `layerSchemaBinary`'s options, checked (SB-001). */
+const schemaBinaryOf = (options: CompileOptions): { readonly maxFrameSize: number | undefined } => {
+  const { maxFrameSize = 16 * 1024 * 1024, fingerprintPayloads = false } =
+    options.schemaBinary ?? {};
+  if (fingerprintPayloads)
+    throw unsupported(
+      "schemaBinary.fingerprintPayloads",
+      "Payload fingerprints are not supported yet",
+    );
+  if (maxFrameSize === "unbounded") return { maxFrameSize: undefined };
+  if (!Number.isSafeInteger(maxFrameSize) || maxFrameSize < 1)
+    throw unsupported("schemaBinary.maxFrameSize", 'A positive safe integer, or "unbounded"');
+  return { maxFrameSize };
+};
 /** A host encoder for one `Schema.toCodecJson` witness (RM-006). */
 interface JsonEncoder {
   readonly name: string;
@@ -1524,6 +1598,10 @@ const compositeCodecs = (
   composites: readonly Composite[],
   encoders?: readonly JsonEncoder[],
   decoders: readonly JsonEncoder[] = [],
+  options: {
+    /** SchemaBinary carries `-0`, which the server's JSON-shaped values then keep (SB-003). */
+    readonly negativeZero?: boolean;
+  } = {},
 ): string => {
   const rustType = (type: IRType<unknown>): string => {
     const item = arrayItem(type);
@@ -1745,8 +1823,13 @@ fn at(message: &str, path: Option<&Path>) -> String {
     let segments: String = names.iter().map(|segment| if segment.index { format!("[{}]", segment.name) } else { format!("[{}]", serde_json::to_string(segment.name).unwrap()) }).collect();
     format!("{}\\n  at {}", message, segments)
 }
-/// JSON.stringify-compatible doubles: non-finite as strings, -0 as 0, safe integers unfractioned.
-${jsNumber}
+${
+  options.negativeZero
+    ? `/// Doubles as the SchemaBinary wire reads them: non-finite as strings, -0 kept.
+${jsNumberKeepingSign}`
+    : `/// JSON.stringify-compatible doubles: non-finite as strings, -0 as 0, safe integers unfractioned.
+${jsNumber}`
+}
 fn u64_in(value: &Value, path: Option<&Path>) -> Result<u64, String> { u64_arg(value, None).map_err(|message| at(&message, path)) }
 fn bool_in(value: &Value, path: Option<&Path>) -> Result<bool, String> { bool_arg(value, None).map_err(|message| at(&message, path)) }
 fn string_in(value: &Value, path: Option<&Path>) -> Result<String, String> { string_arg(value, None).map_err(|message| at(&message, path)) }
