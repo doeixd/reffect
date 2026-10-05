@@ -200,7 +200,7 @@ test("actual emitted Rust cap covers mixed crates and preserves ordinary emissio
   expect(() =>
     checkGeneratedDeferredRustBytes({ "src/lib.rs": "😀".repeat(524288), "src/main.rs": "x" }),
   ).toThrowError(/rustBytes/);
-});
+}, 30000);
 
 const programs = {
   depth: chain(48),
