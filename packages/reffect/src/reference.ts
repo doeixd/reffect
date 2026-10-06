@@ -1,3 +1,4 @@
+import { containsQueue, usesQueueExpression } from "./queue-model.ts";
 import { containsLatch, usesLatchExpression } from "./latch-model.ts";
 import { containsSemaphore, usesSemaphoreExpression } from "./semaphore-model.ts";
 import { Fn, NeverType, PureReference, UnitType, evaluateExpression, fail } from "./kernel.ts";
@@ -27,27 +28,31 @@ const refusal = (f: Fn | EffectFn): CompileError | undefined => {
         containsRef(type) ||
         containsDeferred(type) ||
         containsSemaphore(type) ||
-        containsLatch(type),
+        containsLatch(type) ||
+        containsQueue(type),
     ) ||
     containsRef(f.output) ||
     containsDeferred(f.output) ||
     containsLatch(f.output) ||
+    containsQueue(f.output) ||
     containsSemaphore(f.output) ||
     (f instanceof EffectFn &&
       (containsRef(f.error) ||
         containsDeferred(f.error) ||
         containsSemaphore(f.error) ||
-        containsLatch(f.error))) ||
+        containsLatch(f.error) ||
+        containsQueue(f.error))) ||
     (f instanceof Fn &&
       (usesDeferredExpression(f.body) ||
         usesSemaphoreExpression(f.body) ||
-        usesLatchExpression(f.body)))
+        usesLatchExpression(f.body) ||
+        usesQueueExpression(f.body)))
   )
     return fail(
       "RESOURCE_ESCAPE",
       "check",
       "function",
-      "Public channels cannot contain lexical Ref, Deferred, Semaphore or Latch handles",
+      "Public channels cannot contain lexical Ref, Deferred, Semaphore, Latch or Queue handles",
     );
   return undefined;
 };

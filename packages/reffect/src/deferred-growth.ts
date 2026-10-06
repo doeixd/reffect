@@ -173,6 +173,9 @@ export const analyzeGeneratedDeferredGrowth = (
     };
     Match.value(value.node).pipe(
       Match.tags({
+        QueueMake: () => unaccounted(path),
+        QueueScope: () => unaccounted(path),
+        QueueOperation: () => unaccounted(path),
         LatchScope: (n) => {
           if (coordination !== "Latch") return unaccounted(path);
           child(n.body, "body");

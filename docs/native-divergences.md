@@ -52,7 +52,7 @@ The injected millis driver also admits only signed safe-integer readings, while 
 
 ## Private Queue protocol difference
 
-[QBF-UPSTREAM-001](research/queue-bounded-foundation.md#upstream-reentrant-shutdown-defect--qbf-upstream-001): in Effect4.0.0, a pending producer resumed during capacity release can synchronously shut down with another offer pending, causing the original take to defect with a TypeError. The private bounded protocol stops after rechecking Done and returns the already-consumed value safely. This is adapter-local research, not an accepted public artifact divergence: Queue has no generated/public admission. Resolving or refusing this topology is a required gate before admission.
+[QBF-UPSTREAM-001](research/queue-bounded-foundation.md#upstream-reentrant-shutdown-defect--qbf-upstream-001): in Effect4.0.0, a pending producer resumed during capacity release can synchronously shut down with another offer pending, causing the original take to defect with a TypeError. The private bounded protocol stops after rechecking Done and returns the already-consumed value safely. This is adapter-local research, not an accepted public artifact divergence: Queue has no generated/public admission. Upstream has already fixed it in [PR #8785](https://github.com/Effect-TS/effect/pull/8785); pinned4.0.0 and published4.0.1 still reproduce it. Resolve the pinned version boundary or refuse this topology before admission; do not file another report.
 
 ## Closed
 

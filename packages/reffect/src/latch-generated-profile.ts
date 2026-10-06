@@ -103,6 +103,12 @@ export const analyzeGeneratedLatchProfile = (
         refuse("LATCH_STRUCTURAL_PROFILE", at, "Computation channels must be scalar/Never");
       Match.value(body.node).pipe(
         Match.tags({
+          QueueMake: () =>
+            refuse("LATCH_STRUCTURAL_PROFILE", at, "Queue is outside the generated Latch profile"),
+          QueueScope: () =>
+            refuse("LATCH_STRUCTURAL_PROFILE", at, "Queue is outside the generated Latch profile"),
+          QueueOperation: () =>
+            refuse("LATCH_STRUCTURAL_PROFILE", at, "Queue is outside the generated Latch profile"),
           LatchOperation: (node) => {
             if (node.binder !== root.binder)
               refuse("RESOURCE_ESCAPE", at, "Latch operation requires the root lexical owner");

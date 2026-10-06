@@ -187,6 +187,9 @@ export const analyzeSemaphoreStructure = (
       profile(at, `${value.node._tag} is outside the private structural profile`);
     const inner = Match.value(value.node).pipe(
       Match.tagsExhaustive({
+        QueueMake: unsupported,
+        QueueScope: unsupported,
+        QueueOperation: unsupported,
         LatchMake: unsupported,
         LatchScope: unsupported,
         LatchOperation: unsupported,

@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-06 — Private Queue lexical IR and reference
+
+- Recorded [QIR-001–007](docs/research/queue-lexical-ir.md) before implementation/refinement. Private QueueIR supports lexical Bool/U64/Unit owners, capacity 1..3 suspend make/bounded, dual offer, take, explicit unit Done end and shutdown. No public exports or generated admission are introduced.
+- Channel metadata lives on interned compiler witnesses, not payload values. Owner escape, foreign binders, counterfeit channels and malformed operations are checked; direct flatMap consumes make into QueueScope. Substitution, source/provenance, async classification, lifetime/task passes and ordinary/framed official reference interpretation cover Queue nodes.
+- Shared native marker audit rejects Queue graphs and hidden pure Queue/Done operation signatures before emission. Generic/compiler entry points and all existing coordinator profiles/budgets fail closed. Kernel marker checks avoid witness initialization cycles. Independent audit found no blocker.
+- Recovery tests caught an overly conservative retained-failure assumption. Queue waits precede failure selection and QueueScope has no asynchronous finalization, so sequential and simple child Done recovery now work in the private reference. Changing Done after fallible groups or asynchronous cleanup still has explicit refusal tests.
+- Across 15 selected suites, 108 tests pass: 11 source/reference suites (88), plus native Queue protocol/public Latch/Semaphore/Deferred suites (20), native builds serial. Full vp check, strict reffect TypeScript and workspace build pass (reffect rebuilt, 3/4 outputs cached). Decision, coverage/open-work and [handoff](docs/effect-v4-workstream.md#queue-lexical-ir-continuation--2026-10-06) records are updated.
+- Upstream shutdown bug is already fixed in PR8785; pinned 4.0.0 and published 4.0.1 still reproduce it. The duplicate issue is closed; no further report is needed. Next: private generated Queue driver, cancellation/Drop routing, default-context receipts, actual future/layout costs, then owned/public execution.
+
 ## 2026-10-06 — Private bounded Queue protocol
 
 - Recorded [QBF-001–007](docs/research/queue-bounded-foundation.md) against byte-identical installed/published Effect4.0.0 Queue source before feature implementation. Queue retry wakeups, live scans, pending-offer draining and terminal callback ordering need their own adapter; Latch cohorts and Tokio mpsc are unsuitable substitutes.

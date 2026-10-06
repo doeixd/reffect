@@ -1,6 +1,7 @@
 import type { DeferredInterruptionBoundary } from "./deferred-interruption-frames.ts";
 import {
   Deferred,
+  Queue,
   Semaphore,
   Latch,
   Duration,
@@ -87,6 +88,17 @@ import {
 
 import { LatchType, containsLatch, usesLatchExpression } from "./latch-model.ts";
 
+import {
+  QueueDoneType,
+  containsQueue,
+  queueChannels,
+  queueError,
+  queueScalar,
+  queueType,
+  usesQueueExpression,
+  validQueueCapacity,
+} from "./queue-model.ts";
+
 export const SyncEffects = Object.freeze({
   ClockReadMillis: SemanticRef.effect("reffect/clock/current-time-millis@1"),
   RandomDraw: SemanticRef.effect("reffect/random/next@1"),
@@ -96,6 +108,9 @@ export const SyncEffects = Object.freeze({
   LatchRelease: SemanticRef.effect("reffect/latch/release@1"),
   LatchIsOpen: SemanticRef.effect("reffect/latch/is-open@1"),
   SemaphoreMake: SemanticRef.effect("reffect/semaphore/make@1"),
+  QueueMake: SemanticRef.effect("reffect/queue/make@1"),
+  QueueEnd: SemanticRef.effect("reffect/queue/end@1"),
+  QueueShutdown: SemanticRef.effect("reffect/queue/shutdown@1"),
   DeferredMake: SemanticRef.effect("reffect/deferred/make@1"),
   DeferredIsDone: SemanticRef.effect("reffect/deferred/is-done@1"),
   RefMake: SemanticRef.effect("reffect/ref/make@1"),
@@ -116,6 +131,8 @@ export const SyncEffects = Object.freeze({
 export const AsyncEffects = Object.freeze({
   LatchAwait: SemanticRef.effect("reffect/latch/await@1"),
   SemaphoreWithPermits: SemanticRef.effect("reffect/semaphore/with-permits@1"),
+  QueueOffer: SemanticRef.effect("reffect/queue/offer@1"),
+  QueueTake: SemanticRef.effect("reffect/queue/take@1"),
   DeferredAwait: SemanticRef.effect("reffect/deferred/await@1"),
   DeferredComplete: SemanticRef.effect("reffect/deferred/complete@1"),
   All: SemanticRef.effect("reffect/effect/all-unbounded-discard@1"),
@@ -171,6 +188,35 @@ export type ComputationNode =
       readonly _tag: "TaskGroup";
       readonly mode: "All" | "Race";
       readonly children: readonly Computation<void, unknown>[];
+    }
+  | {
+      readonly _tag: "QueueMake";
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+      readonly capacity: number;
+    }
+  | {
+      readonly _tag: "QueueScope";
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+      readonly capacity: number;
+      readonly binder: symbol;
+      readonly body: Computation<unknown, unknown>;
+    }
+  | {
+      readonly _tag: "QueueOperation";
+      readonly operation: "Offer";
+      readonly value: Expr<unknown>;
+      readonly binder: symbol;
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
+    }
+  | {
+      readonly _tag: "QueueOperation";
+      readonly operation: "Take" | "End" | "Shutdown";
+      readonly binder: symbol;
+      readonly success: IRType<unknown>;
+      readonly error: IRType<unknown>;
     }
   | { readonly _tag: "LatchMake"; readonly open: boolean }
   | {
@@ -484,6 +530,16 @@ export const substituteComputation = (
           return params.every((param, index) => param === n.params[index])
             ? self
             : rebuild({ ...n, params });
+        },
+        QueueMake: () => self,
+        QueueScope: (n) => {
+          const body = walk(n.body);
+          return body === n.body ? self : rebuild({ ...n, body });
+        },
+        QueueOperation: (n) => {
+          if (n.operation !== "Offer") return self;
+          const value = substituting(n.value);
+          return value === n.value ? self : rebuild({ ...n, value });
         },
         LatchMake: () => self,
         LatchOperation: () => self,
@@ -932,6 +988,9 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         AcquireRelease: () => true,
         RegisteredFile: () => true,
         FileScope: () => true,
+        QueueMake: () => false,
+        QueueScope: (n) => walk(n.body),
+        QueueOperation: (n) => n.operation === "Offer" || n.operation === "Take",
         LatchMake: () => false,
         LatchScope: (n) => walk(n.body),
         LatchOperation: (n) => n.operation === "Await",
@@ -1001,6 +1060,14 @@ const flatMap: {
     const body = build(Expr.parameter(self.output, binder, 0));
     const error = joinType(self.error, body.error) as IRType<E | E2>;
     const node = Match.value(self.node).pipe(
+      Match.tag("QueueMake", (allocation): ComputationNode => ({
+        _tag: "QueueScope",
+        success: allocation.success,
+        error: allocation.error,
+        capacity: allocation.capacity,
+        binder,
+        body,
+      })),
       Match.tag("LatchMake", (allocation): ComputationNode => ({
         _tag: "LatchScope",
         open: allocation.open,
@@ -1030,6 +1097,7 @@ const flatMap: {
     );
     const computation = Computation.make(body.output, error, node);
     return Match.value(self.node).pipe(
+      Match.tag("QueueMake", () => computation.withSource(self.source)),
       Match.tag("LatchMake", () => computation.withSource(self.source)),
       Match.tag("SemaphoreMake", () => computation.withSource(self.source)),
       Match.tag("DeferredMake", () => computation.withSource(self.source)),
@@ -1127,6 +1195,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
     active.add(c);
     if (
       !Match.value(c.node).pipe(
+        Match.tag("QueueMake", () => true),
         Match.tag("LatchMake", () => true),
         Match.tag("SemaphoreMake", () => true),
         Match.tag("DeferredMake", () => true),
@@ -1140,7 +1209,9 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         containsSemaphore(c.output) ||
         containsSemaphore(c.error) ||
         containsLatch(c.output) ||
-        containsLatch(c.error))
+        containsLatch(c.error) ||
+        containsQueue(c.output) ||
+        containsQueue(c.error))
     )
       issues.push({
         code: "RESOURCE_ESCAPE",
@@ -1149,7 +1220,12 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         message: "Lexical handles cannot escape as computation values",
       });
     const expression = (e: Expr<unknown>, step: string, environment: Bindings = bindings) => {
-      if (usesDeferredExpression(e) || usesSemaphoreExpression(e) || usesLatchExpression(e))
+      if (
+        usesQueueExpression(e) ||
+        usesDeferredExpression(e) ||
+        usesSemaphoreExpression(e) ||
+        usesLatchExpression(e)
+      )
         issues.push({
           code: "RESOURCE_ESCAPE",
           stage: "check",
@@ -1184,7 +1260,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         TaskGroup: (n) => {
           const childErrors = n.children.map((child) => child.error);
           const scalarError = (type: IRType<unknown>) =>
-            [NeverType, BoolType, U64Type, UnitType].some((candidate) =>
+            [NeverType, BoolType, U64Type, UnitType, QueueDoneType].some((candidate) =>
               IRType.same(type, candidate),
             );
           const represented =
@@ -1204,7 +1280,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           )
             add(
               at,
-              "Task groups require two/three All children or two Race children, Unit/Never success and one common Bool/U64/Unit error witness (Never ignored)",
+              "Task groups require two/three All children or two Race children, Unit/Never success and one common Bool/U64/Unit/unit Done error witness (Never ignored)",
             );
           // Child-local regions reintroduce their own handles. Removing outer regions
           // prevents borrowed files and mutable cells from crossing this boundary.
@@ -1285,6 +1361,67 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           nested.set(n.binder, [FileHandleType]);
           walk(n.body, nested, `${at}.body`);
           walk(n.afterClose, bindings, `${at}.afterClose`);
+        },
+        QueueMake: (n) => {
+          if (
+            !queueScalar(n.success) ||
+            !queueError(n.error) ||
+            !validQueueCapacity(n.capacity) ||
+            !IRType.same(c.output, queueType(n.success, n.error)) ||
+            !IRType.same(c.error, NeverType)
+          )
+            add(at, "Queue.make requires bounded scalar channels and matching handle output");
+          issues.push({
+            code: "RESOURCE_ESCAPE",
+            stage: "check",
+            path: at,
+            message: "Consume Queue.make directly through Effect.flatMap",
+          });
+        },
+        QueueScope: (n) => {
+          if (
+            !queueScalar(n.success) ||
+            !queueError(n.error) ||
+            !validQueueCapacity(n.capacity) ||
+            !IRType.same(c.output, n.body.output) ||
+            !IRType.same(c.error, n.body.error)
+          )
+            add(
+              at,
+              "Queue owner requires capacity 1..3, scalar payload, Never/unit Done error and preserves body channels",
+            );
+          const nested = new Map(bindings);
+          nested.set(n.binder, [queueType(n.success, n.error)]);
+          walk(n.body, nested, `${at}.body`);
+        },
+        QueueOperation: (n) => {
+          const owner = bindings.get(n.binder)?.[0];
+          const channels = owner && queueChannels(owner);
+          if (
+            !queueScalar(n.success) ||
+            !queueError(n.error) ||
+            !channels ||
+            !IRType.same(channels.success, n.success) ||
+            !IRType.same(channels.error, n.error)
+          )
+            issues.push({
+              code: "RESOURCE_ESCAPE",
+              stage: "check",
+              path: at,
+              message: "Queue operation requires a live matching lexical owner",
+            });
+          if (
+            !["Offer", "Take", "End", "Shutdown"].includes(n.operation) ||
+            !IRType.same(c.output, n.operation === "Take" ? n.success : BoolType) ||
+            !IRType.same(c.error, n.operation === "Take" ? n.error : NeverType) ||
+            (n.operation === "End" && !IRType.same(n.error, QueueDoneType))
+          )
+            add(at, "Queue operation requires matching channels and explicit Done for end");
+          if (n.operation === "Offer") {
+            if (!IRType.same(n.value.type, n.success))
+              add(at, "Queue.offer requires matching payload");
+            expression(n.value, "value");
+          }
         },
         LatchMake: () => {
           issues.push({
@@ -1757,7 +1894,8 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         containsRef(type) ||
         containsDeferred(type) ||
         containsSemaphore(type) ||
-        containsLatch(type),
+        containsLatch(type) ||
+        containsQueue(type),
     ) ||
     containsRef(f.output) ||
     containsRef(f.error) ||
@@ -1766,7 +1904,9 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
     containsSemaphore(f.output) ||
     containsSemaphore(f.error) ||
     containsLatch(f.output) ||
-    containsLatch(f.error)
+    containsLatch(f.error) ||
+    containsQueue(f.output) ||
+    containsQueue(f.error)
   )
     issues.push({
       code: "RESOURCE_ESCAPE",
@@ -1861,6 +2001,27 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
                   Effect.orDie,
                 ),
             ),
+          QueueMake: (n) => Queue.bounded<unknown, unknown>(n.capacity),
+          QueueScope: (n) =>
+            Queue.bounded<unknown, unknown>(n.capacity).pipe(
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return evaluate(n.body, nested);
+              }),
+            ),
+          QueueOperation: (n) => {
+            const cell = bindings.get(n.binder)![0] as Queue.Queue<unknown, unknown>;
+            return Match.value(n).pipe(
+              Match.when({ operation: "Offer" }, (op) =>
+                expression(op.value).pipe(Effect.flatMap((value) => Queue.offer(cell, value))),
+              ),
+              Match.when({ operation: "Take" }, () => Queue.take(cell)),
+              Match.when({ operation: "End" }, () => Queue.end(cell)),
+              Match.when({ operation: "Shutdown" }, () => Queue.shutdown(cell)),
+              Match.exhaustive,
+            );
+          },
           LatchMake: (n) => Latch.make(n.open),
           LatchScope: (n) =>
             Latch.make(n.open).pipe(
@@ -2130,6 +2291,9 @@ export interface LogicalFrame {
     | "registeredFile"
     | "acquireUseRelease"
     | "fileScope"
+    | "queueScope"
+    | "queueOffer"
+    | "queueTake"
     | "latchAwait"
     | "latchScope"
     | "semaphoreScope"
@@ -2226,6 +2390,9 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.afterClose, `${path}.afterClose`);
         },
+        QueueMake: () => {},
+        QueueOperation: () => {},
+        QueueScope: (n) => adaptNode(n.body, `${path}.body`),
         LatchMake: () => {},
         LatchOperation: () => {},
         LatchScope: (n) => adaptNode(n.body, `${path}.body`),
@@ -2398,6 +2565,37 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   Effect.orDie,
                 ),
             ).pipe(mapFramedError((failure) => outward(failure, "fileScope"))),
+          QueueMake: (n) => Queue.bounded<unknown, unknown>(n.capacity),
+          QueueScope: (n) =>
+            Queue.bounded<unknown, unknown>(n.capacity).pipe(
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return child(n.body, nested);
+              }),
+              mapFramedError((failure) => outward(failure, "queueScope")),
+            ),
+          QueueOperation: (n) => {
+            const cell = bindings.get(n.binder)![0] as Queue.Queue<unknown, unknown>;
+            return Match.value(n).pipe(
+              Match.when({ operation: "Offer" }, (op) =>
+                expression(op.value, `${path}.value`).pipe(
+                  Effect.flatMap((value) => Queue.offer(cell, value)),
+                ),
+              ),
+              Match.when({ operation: "Take" }, () =>
+                Queue.take(cell).pipe(
+                  mapFramedError(
+                    (payload): FramedFailure =>
+                      new FramedDomain(payload, [frame(path, "queueTake")], 0),
+                  ),
+                ),
+              ),
+              Match.when({ operation: "End" }, () => Queue.end(cell)),
+              Match.when({ operation: "Shutdown" }, () => Queue.shutdown(cell)),
+              Match.exhaustive,
+            );
+          },
           LatchMake: (n) => Latch.make(n.open),
           LatchScope: (n) =>
             Latch.make(n.open).pipe(
@@ -2915,7 +3113,9 @@ const taskGroup = (
   children: readonly Computation<void, unknown>[],
 ): Computation<void, unknown> => {
   const scalarError = (type: IRType<unknown>) =>
-    [NeverType, BoolType, U64Type, UnitType].some((candidate) => IRType.same(type, candidate));
+    [NeverType, BoolType, U64Type, UnitType, QueueDoneType].some((candidate) =>
+      IRType.same(type, candidate),
+    );
   if (
     !Array.isArray(children) ||
     (mode === "All" ? ![2, 3].includes(children.length) : children.length !== 2) ||
@@ -2930,7 +3130,7 @@ const taskGroup = (
       "UNSUPPORTED_TASK_GROUP",
       "authoring",
       mode === "All" ? "all" : "race",
-      "Task groups require two/three All children or two Race children, Unit/Never success and Bool/U64/Unit errors (Never ignored)",
+      "Task groups require two/three All children or two Race children, Unit/Never success and Bool/U64/Unit/unit Done errors (Never ignored)",
     );
   const error = children.reduce<IRType<unknown>>(
     (joined, child) => joinType(joined, child.error),
@@ -2942,7 +3142,7 @@ const taskGroup = (
     children: Object.freeze(Array.from(children)),
   });
 };
-/** Bounded concurrent, discarded Effect.all with one common represented scalar error channel. */
+/** Bounded concurrent, discarded Effect.all with one common represented scalar or private unit Done error channel. */
 const all = <const Children extends TaskChildren<unknown>>(
   children: Children,
   options: AllTaskOptions,

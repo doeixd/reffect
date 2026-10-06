@@ -1,3 +1,5 @@
+import { containsQueue, containsQueueDone } from "./queue-model.ts";
+import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { containsLatch, usesLatchExpression } from "./latch-model.ts";
 import { analyzeGeneratedLatchProfile } from "./latch-generated-profile.ts";
 import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
@@ -629,6 +631,7 @@ const checkedLatchProfiles = (program: Program) => {
   latchProfiles.set(program, profiles);
   return profiles;
 };
+
 const checkedPrograms = new WeakSet<Program>();
 const derivedPrograms = new WeakMap<Program, Analysis>();
 const verifiedPlans = new WeakSet<Plan>();
@@ -652,6 +655,22 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         message: `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
       })),
     });
+  for (const [name, fn] of Object.entries(program.functions)) {
+    if (
+      fn.input.some((type) => containsQueue(type) || containsQueueDone(type)) ||
+      containsQueue(fn.output) ||
+      containsQueueDone(fn.output) ||
+      (fn instanceof EffectFn &&
+        (hasQueueComputation(fn.body) || containsQueue(fn.error) || containsQueueDone(fn.error))) ||
+      usesQueueNativeType(fn.body)
+    )
+      return yield* fail(
+        "QUEUE_NATIVE_UNSUPPORTED",
+        "check",
+        `functions.${name}`,
+        "Queue native ownership and generated coordinator integration are not admitted",
+      );
+  }
   yield* Effect.try({
     try: () => checkedLatchProfiles(program),
     catch: (cause) =>
@@ -860,6 +879,19 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
           walkComputation(n.body);
           walkComputation(n.afterClose);
         },
+        QueueMake: () => effectRefs.add(SyncEffects.QueueMake),
+        QueueScope: (n) => {
+          effectRefs.add(SyncEffects.QueueMake);
+          walkComputation(n.body);
+        },
+        QueueOperation: (n) => {
+          if (n.operation === "Offer") {
+            effectRefs.add(AsyncEffects.QueueOffer);
+            walk(n.value);
+          } else if (n.operation === "Take") effectRefs.add(AsyncEffects.QueueTake);
+          else if (n.operation === "End") effectRefs.add(SyncEffects.QueueEnd);
+          else effectRefs.add(SyncEffects.QueueShutdown);
+        },
         LatchMake: () => effectRefs.add(SyncEffects.LatchMake),
         LatchOperation: (n) =>
           effectRefs.add(
@@ -1066,7 +1098,8 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
       ),
       ...(Array.from(types).some(reachesUnknown) ? [Capabilities.Json] : []),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
-      ...(effectRefs.has(SyncEffects.LatchMake) ||
+      ...(effectRefs.has(SyncEffects.QueueMake) ||
+      effectRefs.has(SyncEffects.LatchMake) ||
       effectRefs.has(SyncEffects.DeferredMake) ||
       effectRefs.has(SyncEffects.SemaphoreMake) ||
       Array.from(effectRefs).some((ref) =>

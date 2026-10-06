@@ -1251,6 +1251,25 @@ export const ReplaceAllString = Operation.make(
   Operation.withLiteralArguments({ positions: [1, 2], check: replacementProblem }),
 );
 
+const containsPrivateQueueMarker = (type: IRType<unknown>): boolean => {
+  if (
+    type.native.type === "__reffect_lexical_queue" ||
+    type.native.type === "__reffect_queue_done_unit"
+  )
+    return true;
+  if (!type.layout) return false;
+  return Match.value(type.layout).pipe(
+    Match.tagsExhaustive({
+      Struct: (layout) => layout.fields.some((field) => containsPrivateQueueMarker(field.type)),
+      Union: (layout) => layout.cases.some(containsPrivateQueueMarker),
+      Array: (layout) => containsPrivateQueueMarker(layout.item),
+      UndefinedOr: (layout) => containsPrivateQueueMarker(layout.item),
+      Record: (layout) => containsPrivateQueueMarker(layout.value),
+      Literals: () => false,
+    }),
+  );
+};
+
 export const checkExpression = (
   root: Expr<unknown>,
   bindings: ReadonlyMap<symbol, readonly IRType<unknown>[]>,
@@ -1269,6 +1288,12 @@ export const checkExpression = (
     }
     if (done.has(e)) return;
     active.add(e);
+    if (containsPrivateQueueMarker(e.type))
+      add(
+        "RESOURCE_ESCAPE",
+        at,
+        "Queue handles and private Done markers cannot appear in pure expressions",
+      );
     Match.value(e.node).pipe(
       Match.tagsExhaustive({
         Parameter: (n) => {
@@ -1445,6 +1470,12 @@ export const checkExpression = (
         },
         Apply: (n) => {
           const op = n.operation;
+          if (op.input.some(containsPrivateQueueMarker) || containsPrivateQueueMarker(op.output))
+            add(
+              "RESOURCE_ESCAPE",
+              at,
+              "Pure operations cannot accept Queue handles or private Done markers",
+            );
           if (ops.has(op.id) && ops.get(op.id) !== op)
             add("IDENTITY_COLLISION", at, `Distinct operations share ${op.id}`);
           ops.set(op.id, op);
@@ -1497,6 +1528,16 @@ export const checkExpression = (
   return issues;
 };
 export const checkFunction = (f: Fn, path: string): readonly Diagnostic[] => [
+  ...(f.input.some(containsPrivateQueueMarker) || containsPrivateQueueMarker(f.output)
+    ? [
+        {
+          code: "RESOURCE_ESCAPE",
+          stage: "check",
+          path,
+          message: "Pure function channels cannot contain Queue handles or private Done markers",
+        },
+      ]
+    : []),
   ...(!IRType.same(f.body.type, f.output)
     ? [
         {

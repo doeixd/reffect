@@ -41,6 +41,9 @@ const planFrames = (root: Computation<unknown, unknown>, basePath: string): Fram
     Match.value(computation.node).pipe(
       Match.tags({
         DeferredScope: (node) => child(node.body, "body", true),
+        QueueScope: (node) => child(node.body, "body", true),
+        QueueMake: () => {},
+        QueueOperation: () => {},
         LatchScope: (node) => child(node.body, "body", true),
         LatchOperation: () => {},
         LatchMake: () => {},
@@ -156,6 +159,14 @@ export class DeferredInterruptionBoundary {
     const kind: LogicalFrame["kind"] | undefined = Match.value(computation.node).pipe(
       Match.tags({
         DeferredScope: () => "deferredScope" as const,
+        QueueScope: () => "queueScope" as const,
+        QueueMake: () => undefined,
+        QueueOperation: (node) =>
+          node.operation === "Offer"
+            ? ("queueOffer" as const)
+            : node.operation === "Take"
+              ? ("queueTake" as const)
+              : undefined,
         LatchScope: () => "latchScope" as const,
         LatchOperation: (node) =>
           node.operation === "Await" ? ("latchAwait" as const) : undefined,

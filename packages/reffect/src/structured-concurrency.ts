@@ -56,6 +56,11 @@ export const analyzeTaskGroups = (
         AcquireRelease: () => true,
         RegisteredFile: () => true,
         FileScope: () => true,
+        // Queue suspension completes before its success/failure is selected. The lexical
+        // owner performs no asynchronous finalization after a Done failure.
+        QueueMake: () => false,
+        QueueScope: (n) => maySuspendAfterFailure(n.body),
+        QueueOperation: () => false,
         LatchMake: () => true,
         LatchScope: () => true,
         LatchOperation: () => true,
@@ -191,6 +196,9 @@ export const analyzeTaskGroups = (
           body(n.body, "body");
           finalizer(n.finalizer, "finalizer");
         },
+        QueueMake: () => {},
+        QueueScope: (n) => body(n.body, "body"),
+        QueueOperation: () => {},
         LatchMake: () => {},
         LatchOperation: () => {},
         LatchScope: (n) => body(n.body, "body"),
@@ -389,6 +397,12 @@ export const analyzeDeferredTopology = (
             resumes: children.some((value) => value.resumes),
           };
         },
+        QueueMake: () => quiet,
+        QueueScope: (n) => child(n.body, "body"),
+        QueueOperation: (n) => ({
+          ...quiet,
+          resumes: n.operation === "Offer" || n.operation === "Take",
+        }),
         LatchMake: () => quiet,
         LatchOperation: () => quiet,
         LatchScope: (n) => child(n.body, "body"),

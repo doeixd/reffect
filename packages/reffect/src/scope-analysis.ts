@@ -168,6 +168,17 @@ export const analyzeScopes = (
           finalizer(n.afterClose, "afterClose", false);
           return child(n.body, "body");
         },
+        QueueMake: () => 0,
+        QueueScope: (n) => child(n.body, "body"),
+        QueueOperation: () => {
+          if (delayed)
+            diagnostic(
+              "RESOURCE_ESCAPE",
+              at,
+              "Queue handles cannot escape into registered cleanup",
+            );
+          return 0;
+        },
         LatchMake: () => 0,
         LatchOperation: () => {
           if (delayed)

@@ -86,6 +86,9 @@ export const analyzeGeneratedDeferredProfile = (
         refuse(at, "Operation is outside the bounded generated Deferred profile");
       Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          QueueMake: unsupported,
+          QueueScope: unsupported,
+          QueueOperation: unsupported,
           LatchMake: unsupported,
           LatchScope: unsupported,
           LatchOperation: unsupported,

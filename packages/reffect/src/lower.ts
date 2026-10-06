@@ -4,6 +4,8 @@ import {
 } from "./latch-generated-profile.ts";
 import { latchCohortRuntime } from "./latch-cohort-runtime.ts";
 import { latchAllRuntime } from "./latch-all-runtime.ts";
+import { containsQueue, containsQueueDone } from "./queue-model.ts";
+import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { containsLatch } from "./latch-model.ts";
 import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
 import type { GeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
@@ -77,7 +79,7 @@ import {
   streamEmit,
   streamRunCollect,
 } from "./effect-ir.ts";
-import type { Computation, RemoteOp } from "./effect-ir.ts";
+import { Computation, type RemoteOp } from "./effect-ir.ts";
 import type { Implementation, Lowering } from "./compiler.ts";
 import type { GeneratedFiles } from "./cargo.ts";
 import { Rs, escapeJsonContent } from "./rust-emit.ts";
@@ -583,6 +585,15 @@ interface Scope {
   readonly input: readonly Parameter[];
 }
 
+const rejectQueueNative = (): never => {
+  throw fail(
+    "QUEUE_NATIVE_UNSUPPORTED",
+    "lower",
+    "Queue",
+    "Queue native ownership and generated coordinator integration are not admitted",
+  );
+};
+
 const rejectLatchNative = (): never => {
   throw fail(
     "LATCH_NATIVE_UNSUPPORTED",
@@ -716,6 +727,16 @@ function lowerFunctionsInternal(
   semaphoreProfiles?: ReadonlyMap<EffectFn, GeneratedSemaphoreProfile>,
   latchProfiles?: ReadonlyMap<EffectFn, GeneratedLatchProfile>,
 ): LoweredModule {
+  for (const fn of Object.values(program.functions))
+    if (
+      fn.input.some((type) => containsQueue(type) || containsQueueDone(type)) ||
+      containsQueue(fn.output) ||
+      containsQueueDone(fn.output) ||
+      (fn instanceof EffectFn &&
+        (hasQueueComputation(fn.body) || containsQueue(fn.error) || containsQueueDone(fn.error))) ||
+      usesQueueNativeType(fn.body)
+    )
+      rejectQueueNative();
   const coordinationGrowth = Object.entries(program.functions).flatMap(([name, fn]) => {
     if (!(fn instanceof EffectFn)) return [];
     const coordination = latchProfiles?.has(fn)
@@ -871,6 +892,9 @@ function lowerFunctionsInternal(
           computations.add(value.node);
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
+              QueueMake: rejectQueueNative,
+              QueueScope: rejectQueueNative,
+              QueueOperation: rejectQueueNative,
               LatchMake: rejectLatchNative,
               LatchScope: (n) => {
                 if (!latchProfile) rejectLatchNative();
@@ -1060,6 +1084,7 @@ function lowerFunctionsInternal(
         const bindings: RustBinding[] = [];
         const memo = new Map<Expr<unknown>["node"], RustExpr>();
         const expression = (e: Expr<unknown>, path: string): RustExpr => {
+          if (containsQueue(e.type) || containsQueueDone(e.type)) rejectQueueNative();
           if (containsLatch(e.type)) rejectLatchNative();
           if (containsSemaphore(e.type)) rejectSemaphoreNative();
           const source = provenance
@@ -1367,6 +1392,9 @@ function lowerFunctionsInternal(
           );
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            QueueMake: rejectQueueNative,
+            QueueScope: rejectQueueNative,
+            QueueOperation: rejectQueueNative,
             LatchMake: rejectLatchNative,
             LatchScope: (n): HelperBody => {
               if (!latchProfile) return rejectLatchNative();
