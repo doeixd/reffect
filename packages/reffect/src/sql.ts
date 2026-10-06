@@ -145,7 +145,7 @@ const decoded = <A>(
 const firstRow = (rows: Expr<ReadonlyArray<unknown>>): Expr<OptionValue<unknown>> =>
   ArrayCombinators.findFirst(rows, () => Expr.literal(BoolType, true));
 
-interface Options<Req, Res> {
+export interface SqlSchemaOptions<Req, Res> {
   readonly Request: IRType<Req>;
   readonly Result: IRType<Res>;
   readonly execute: (request: Expr<Req>) => Computation<ReadonlyArray<unknown>, SqlSchemaError>;
@@ -153,7 +153,7 @@ interface Options<Req, Res> {
 
 /** `SqlSchema.findAll`: every row, decoded with `Schema.Array(Result)`. */
 const findAll =
-  <Req, Res>(options: Options<Req, Res>) =>
+  <Req, Res>(options: SqlSchemaOptions<Req, Res>) =>
   (request: Expr<Req>): Computation<ReadonlyArray<Res>, SqlSchemaError> => {
     checkedWitness(options.Request, "SqlSchema.findAll.Request");
     checkedWitness(options.Result, "SqlSchema.findAll.Result");
@@ -165,7 +165,7 @@ const findAll =
   };
 /** `SqlSchema.findOne`: the first row, decoded, or `NoSuchElementError` when there is none. */
 const findOne =
-  <Req, Res>(options: Options<Req, Res>) =>
+  <Req, Res>(options: SqlSchemaOptions<Req, Res>) =>
   (request: Expr<Req>): Computation<Res, SqlSchemaError> => {
     checkedWitness(options.Request, "SqlSchema.findOne.Request");
     checkedWitness(options.Result, "SqlSchema.findOne.Result");
@@ -180,7 +180,7 @@ const findOne =
   };
 /** `SqlSchema.findOneOption`: the first row, decoded, as an Option. */
 const findOneOption =
-  <Req, Res>(options: Options<Req, Res>) =>
+  <Req, Res>(options: SqlSchemaOptions<Req, Res>) =>
   (request: Expr<Req>): Computation<OptionValue<Res>, SqlSchemaError> => {
     checkedWitness(options.Request, "SqlSchema.findOneOption.Request");
     checkedWitness(options.Result, "SqlSchema.findOneOption.Result");
