@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-06 — Semaphore real-future driver and awaited cleanup
+
+- Recorded [SNAT-009–011](docs/research/semaphore-native.md#bounded-real-future-driver-2026-10-06-preparation) before implementation. Separate private two/three-child driver borrows pinned futures, marks authored suspension, runs protocol retries through synchronous tails and dispatches one live observer at a time. Parent interruption broadcasts cancellation and awaits every child's cleanup.
+- Six controlled official workloads match 120 debug/release traces: suspended contention in reversed static/registration order, holder barging, reentrant waiter release, queued cancellation, held-permit cleanup and parent interruption during masked cleanup. Native gates assert occupancy/registration counts and eventual permit return. Separate selected-acquisition cancellation and pre-start interruption probes pass.
+- Quiet two-child driver measurements: zero allocations over 1,000 invocations per mode; driver/simple child/marker bank are 144/176/12 bytes on this 64-bit Rust target. Watch/context construction, logging and richer cleanup future storage are excluded. Admitted Deferred machinery and package exports are unchanged.
+- Independent review corrected driver-owned futures to borrowed pinned references and clarified interruptible-parent, semantic-marker and outcome-collection boundaries. Generated profile/budgets, All failure/sibling cancellation, synchronous callback parent cancellation, masked parents, mixed Deferred dispatch and complete generated/frame layout remain open. Native/public Semaphore stays refused.
+- Pinned Effect runs a synchronous root before checking RunOptions.signal; the pre-start oracle uses explicit interruption, matching reffect's owned boundary, rather than claiming bare upstream AbortSignal equivalence.
+- Validation: six Semaphore suites 15/15, full `vp check` (515 formatted/318 lint/type files) and strict TypeScript pass. Protocol-Pending mutation fails the native assertion; correct code is restored. Native builds ran sequentially. Public Deferred regression 4/4 and workspace builds also pass (reffect rebuilt; other outputs cached).
+
 ## 2026-10-06 — Milestone 11 researched and planned
 
 - [Design record](docs/research/websocket-rpc.md). Effect 4.0.0's socket protocol, read from source:
