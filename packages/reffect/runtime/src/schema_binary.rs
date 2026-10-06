@@ -179,6 +179,8 @@ pub fn put_number(out: &mut Vec<u8>, x: f64) {
 pub enum Tag<'a> {
     Id(u32),
     Key(&'a str),
+    /// An extra key in a row-run record field: interned against the field's table (`KEYS`).
+    Interned(&'a str, &'a std::cell::RefCell<InternWrite>),
 }
 /// A field's tag: `uv(id*8+wire)`, or for an extra key `uv(keyLen*8+wire)` and the key.
 pub fn put_field_tag(out: &mut Vec<u8>, tag: Tag, wire: u8) {
@@ -188,6 +190,7 @@ pub fn put_field_tag(out: &mut Vec<u8>, tag: Tag, wire: u8) {
             put_uv(out, key.len() as u64 * 8 + u64::from(wire));
             out.extend_from_slice(key.as_bytes());
         }
+        Tag::Interned(key, table) => table.borrow_mut().put_key(out, key, wire),
     }
 }
 /// A `number` field, tagged with the wire kind its value selects (`valueWireCode`).
@@ -639,21 +642,56 @@ pub struct InternWrite {
     disabled: bool,
 }
 impl InternWrite {
+    /// The value's back-reference, or none after adding it (`internRef`, then `internAdd`).
+    fn intern(&mut self, value: &str) -> Option<usize> {
+        if self.disabled {
+            return None;
+        }
+        if let Some(index) = self.values.iter().position(|seen| seen == value) {
+            self.hits += 1;
+            return Some(index);
+        }
+        if self.hits == 0 && self.values.len() >= INTERN_DISABLE_AT {
+            self.disabled = true;
+        } else {
+            self.values.push(value.to_string());
+        }
+        None
+    }
     pub fn put(&mut self, out: &mut Vec<u8>, value: &str) {
-        if !self.disabled {
-            if let Some(index) = self.values.iter().position(|seen| seen == value) {
-                self.hits += 1;
-                put_uv(out, index as u64 * 2 + 1);
-                return;
-            }
-            if self.hits == 0 && self.values.len() >= INTERN_DISABLE_AT {
-                self.disabled = true;
-            } else {
-                self.values.push(value.to_string());
+        match self.intern(value) {
+            Some(index) => put_uv(out, index as u64 * 2 + 1),
+            None => put_region(out, value.as_bytes()),
+        }
+    }
+    /// An extra pair's key code: `ref*16+wire*2+1`, or `keyLen*16+wire*2` and the key
+    /// (`encodeExtraPairs`).
+    pub fn put_key(&mut self, out: &mut Vec<u8>, key: &str, wire: u8) {
+        match self.intern(key) {
+            Some(index) => put_uv(out, index as u64 * 16 + u64::from(wire) * 2 + 1),
+            None => {
+                put_uv(out, key.len() as u64 * 16 + u64::from(wire) * 2);
+                out.extend_from_slice(key.as_bytes());
             }
         }
-        put_region(out, value.as_bytes());
     }
+}
+/// An interned extra pair's key and wire kind; the reader keeps every literal key
+/// (`decodeExtraKey`).
+pub fn read_interned_key(r: &mut Reader, table: &mut Vec<String>) -> Decoded<(String, u8)> {
+    let code = r.uv()?;
+    let wire = ((code % 16) / 2) as u8;
+    let key_code = usize::try_from(code / 16).map_err(|_| Invalid("complete value"))?;
+    if code % 2 == 1 {
+        let key = table
+            .get(key_code)
+            .cloned()
+            .ok_or(Invalid("a known back-reference"))?;
+        return Ok((key, wire));
+    }
+    let key = Reader::new(r.take(key_code)?).string()?;
+    table.push(key.clone());
+    Ok((key, wire))
 }
 /// A string region or a back-reference into the field's table; the reader keeps every literal.
 pub fn read_interned(r: &mut Reader, table: &mut Vec<String>) -> Decoded<String> {

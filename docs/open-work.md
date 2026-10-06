@@ -83,7 +83,8 @@ These block many items below.
 - SchemaBinary beyond the first slice ([schema-binary](research/schema-binary.md#progress)):
   - tuples and `NonEmptyArray`, tagged tuples, records inside row runs (`KEYS` interning) and arrays of records;
   - a session-cookie test over SchemaBinary (the media-type check is in place, untested);
-  - NativeRemote procedures (Live streams included) and `fingerprintPayloads`.
+  - `fingerprintPayloads`;
+  - `examples/todo-fullstack` on SchemaBinary: the client and the page resume would need a binary option.
 - SchemaBinary: re-probe request-level defects when [Effect-TS/effect#8826](https://github.com/Effect-TS/effect/issues/8826) is fixed, and drop SB-REQUEST-DEFECT if the fixed bytes match ([schema-binary](research/schema-binary.md#progress))
 - Showcase sequence: streaming `WatchTodos` over NDJSON with auth, Scope, SQLx and cancellation, then WebSocket + SchemaBinary ([rpc-protocol](rpc-protocol.md#how-i-would-sequence-these-features))
 

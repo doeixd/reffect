@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-06 — NativeRemote over SchemaBinary
+
+- [Design record](docs/research/schema-binary.md#progress). `NativeRemote.compile(..., { serialization: "schema-binary" })` serves Read, Query, Mutate and Live, byte-equal to foldkit-remote-server's handlers under `layerSchemaBinary`. This adds `KEYS` interning (record keys inside row runs) and `-0` in the engine's own numbers on the binary wire.
+- The Read corpus moved to `tests/remote-read-corpus.ts`, shared by the JSON and binary suites.
+- Validation:
+  - `schema-binary-remote` 2/2 passes.
+  - The JSON regressions `remote-read` and `remote-live` were rerun, along with `vp run runtime:check`.
+
 ## 2026-10-06 — Public bounded Deferred and Effect v4 handoff
 
 - [Resume guide](docs/effect-v4-workstream.md) explains the module workstream, source ownership, preparation/decision records, supported/private boundaries, sequential native validation and next priorities. Next: scoped bounded Semaphore, then Latch cohorts and Queue/PubSub.

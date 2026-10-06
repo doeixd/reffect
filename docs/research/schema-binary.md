@@ -213,6 +213,16 @@ The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its
   - **Evidence** (`tests/schema-binary-stream.test.ts`, the streaming corpus of `stream-rpc` plus a struct stream). The native bytes equal the official server's for chunked number, string and struct streams (row runs with back-references inside a chunk), a typed stream failure, an empty stream, and a stream beside a unary call (compared per request). The stock client collects each stream.
   - Runtime-served streams (NativeRemote Live) remain refused with NativeRemote.
 
+- **NativeRemote, done (2026-10-06).** `NativeRemote.compile(..., { serialization: "schema-binary" })` serves Read, Query, Mutate and Live over SchemaBinary.
+  - **Live** streams incrementally, because SchemaBinary frames every message. It now needs `"ndjson"` or `"schema-binary"`.
+  - **`KEYS` interning.** The Remote contract's row runs hold records (`NormalizedEntity.values`). Effect interns those records' keys per field: `ref*16+wire*2+1`, or `keyLen*16+wire*2` and the key. Keyed variants of the record reader and writer (`sbrk_`/`sbwk_`) now carry it.
+    - Only a field whose layout is directly a record interns. `optional(Record)` is a union, so `ReadRequest.windows` and `relations` do not, matching `internKind`.
+  - **`-0` on the wire.** The remote engine's own numbers (a protocol error's `received`) keep `-0` under SchemaBinary. The emitted crate-root `NEGATIVE_ZERO_ON_WIRE` tells it whether to; JSON is unchanged.
+  - **Evidence** (`tests/schema-binary-remote.test.ts`):
+    - the whole `remote-read` corpus (now shared, `tests/remote-read-corpus.ts`) gives native bytes equal to foldkit-remote-server's handlers under `layerSchemaBinary`, including relation trees, the 900-request batch, the id limit and the version edge cases;
+    - a mutation that never back-references a key fails at the first relation case;
+    - over a stock binary client, live events from the native hub equal upstream `liveHub`'s while R mutations land, the mutation answers (an unknown mutation included) are byte-equal, and a read after them matches.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.

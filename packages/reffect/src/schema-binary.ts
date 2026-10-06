@@ -275,13 +275,15 @@ const rustString = (text: string) => JSON.stringify(text);
 const SB = "schema_binary";
 const FAILURE = `${SB}::Failure`;
 /** A layout's intern kind inside a row run (`internKind`). */
-type Intern = "self" | "elements" | "none";
+type Intern = "self" | "elements" | "keys" | "none";
 const internOf = (layout: Layout): Intern =>
   layout._ === "string"
     ? "self"
     : layout._ === "array" && layout.item._ === "string"
       ? "elements"
-      : "none";
+      : layout._ === "struct" && layout.extra
+        ? "keys"
+        : "none";
 const literalMatch = (value: string, literal: LiteralValue) =>
   typeof literal === "string"
     ? `${value}.and_then(Value::as_str) == Some(${rustString(literal)})`
@@ -363,7 +365,7 @@ class Emitter {
       }
     }
   }
-  private readStruct(layout: StructLayout, head: string): string {
+  private readStruct(layout: StructLayout, head: string, keyed = false): string {
     const names = layout.fields.map((field) => rustString(field.name)).join(", ");
     const arms = layout.fields
       .map(
@@ -377,13 +379,18 @@ class Emitter {
                 let mut map = r.sized()?;
                 let mut keys: Vec<String> = Vec::new();
                 while !map.is_empty() {
-                    let code = map.uv()?;
+                    ${
+                      keyed
+                        ? `let (key, pair_wire) = ${SB}::read_interned_key(&mut map, table)?;`
+                        : `let code = map.uv()?;
                     let len = usize::try_from(code / 8).map_err(|_| ${SB}::Invalid("complete value"))?;
                     let key = ${SB}::Reader::new(map.take(len)?).string()?;
+                    let pair_wire = (code % 8) as u8;`
+                    }
                     if [${names}].contains(&key.as_str()) { return Err(${SB}::Invalid("an extra key distinct from declared fields").into()); }
                     if keys.contains(&key) { return Err(${SB}::Invalid("unique extra keys").into()); }
                     keys.push(key.clone());
-                    if let Some(value) = sbf_${this.name(layout.extra)}(&mut map, (code % 8) as u8).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
+                    if let Some(value) = sbf_${this.name(layout.extra)}(&mut map, pair_wire).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
                 }
             }`
       : `${SB}::skip_extras(r, wire, &[${names}])?`;
@@ -462,32 +469,8 @@ class Emitter {
         return `${head}    out.extend_from_slice(foldkit_json::json_text(value).as_bytes());\n    Ok(())\n}\n`;
       case "literal":
         return this.write({ _: layout.leaf }, name);
-      case "struct": {
-        const object = `    let object = value.as_object().ok_or("an object")?;\n`;
-        const names = layout.fields.map((field) => rustString(field.name)).join(", ");
-        // The extra pairs come first, sorted by their keys' UTF-8 bytes.
-        const extras = layout.extra
-          ? `    let mut extras: Vec<(&String, &Value)> = object.iter().filter(|(key, _)| ![${names}].contains(&key.as_str())).collect();
-    extras.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    if !extras.is_empty() {
-        let mut map = Vec::new();
-        for (key, item) in extras { sbt_${this.name(layout.extra)}(item, &mut map, ${SB}::Tag::Key(key))?; }
-        ${SB}::put_field_tag(out, ${SB}::Tag::Id(0), ${SB}::FIELD_WIRE_SIZED);
-        ${SB}::put_sized(out, &map);
-    }
-`
-          : "";
-        const fields = layout.fields
-          .map((field) => {
-            const key = rustString(field.name);
-            const missing = field.optional
-              ? ""
-              : ` else { return Err(format!("Missing key {}", ${key})); }`;
-            return `    if let Some(item) = object.get(${key}) { sbt_${this.name(field.layout)}(item, out, ${SB}::Tag::Id(${field.id}))?; }${missing}\n`;
-          })
-          .join("");
-        return `${head}${object}${extras}${fields}    let _ = out;\n    Ok(())\n}\n`;
-      }
+      case "struct":
+        return this.writeStruct(layout, head);
       case "array":
         return this.writeArray(layout.item, head);
       case "union": {
@@ -522,6 +505,54 @@ class Emitter {
         return `${head}${variants}    match value {\n${arms}        _ => ${json ?? `Err("a union member".into())`},\n    }\n}\n`;
       }
     }
+  }
+  private writeStruct(layout: StructLayout, head: string, keyed = false): string {
+    const object = `    let object = value.as_object().ok_or("an object")?;\n`;
+    const names = layout.fields.map((field) => rustString(field.name)).join(", ");
+    const tag = keyed ? `${SB}::Tag::Interned(key, table)` : `${SB}::Tag::Key(key)`;
+    // The extra pairs come first, sorted by their keys' UTF-8 bytes.
+    const extras = layout.extra
+      ? `    let mut extras: Vec<(&String, &Value)> = object.iter().filter(|(key, _)| ![${names}].contains(&key.as_str())).collect();
+    extras.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    if !extras.is_empty() {
+        let mut map = Vec::new();
+        for (key, item) in extras { sbt_${this.name(layout.extra)}(item, &mut map, ${tag})?; }
+        ${SB}::put_field_tag(out, ${SB}::Tag::Id(0), ${SB}::FIELD_WIRE_SIZED);
+        ${SB}::put_sized(out, &map);
+    }
+`
+      : "";
+    const fields = layout.fields
+      .map((field) => {
+        const key = rustString(field.name);
+        const missing = field.optional
+          ? ""
+          : ` else { return Err(format!("Missing key {}", ${key})); }`;
+        return `    if let Some(item) = object.get(${key}) { sbt_${this.name(field.layout)}(item, out, ${SB}::Tag::Id(${field.id}))?; }${missing}\n`;
+      })
+      .join("");
+    return `${head}${object}${extras}${fields}    let _ = out;\n    Ok(())\n}\n`;
+  }
+  /** A record read and written with its keys interned against a row-run field's table (KEYS). */
+  private keyed(layout: StructLayout): string {
+    const name = `k_${namingDigest(JSON.stringify(layout))}`;
+    if (this.items.has(name)) return name.slice(2);
+    this.items.set(name, "");
+    const digest = name.slice(2);
+    this.items.set(
+      name,
+      this.readStruct(
+        layout,
+        `fn sbrk_${digest}(r: &mut ${SB}::Reader, table: &mut Vec<String>) -> Result<Option<Value>, ${FAILURE}> {\n`,
+        true,
+      ) +
+        this.writeStruct(
+          layout,
+          `fn sbwk_${digest}(value: &Value, out: &mut Vec<u8>, table: &std::cell::RefCell<${SB}::InternWrite>) -> Result<(), String> {\n`,
+          true,
+        ),
+    );
+    return digest;
   }
   private writeArray(item: Layout, head: string): string {
     const items = `    let items = value.as_array().ok_or("an array")?;\n    ${SB}::put_uv(out, items.len() as u64);\n`;
@@ -578,18 +609,18 @@ class Emitter {
     this.items.set(name, "");
     const fields = layout.fields;
     const wide = fields.length > 30;
-    const kinds = fields.map((field) => {
-      if (field.layout._ === "struct" && field.layout.extra)
-        throw new Error("Records inside SchemaBinary row runs are not supported yet");
-      return internOf(field.layout);
-    });
+    const kinds = fields.map((field) => internOf(field.layout));
     const digest = name.slice(4);
     const tables = fields
       .map((_, i) => (kinds[i] === "none" ? "" : `    t${i}: Vec<String>,\n`))
       .join("");
     const writeTables = fields
       .map((_, i) =>
-        kinds[i] === "none" ? "" : `    let mut t${i} = ${SB}::InternWrite::default();\n`,
+        kinds[i] === "none"
+          ? ""
+          : kinds[i] === "keys"
+            ? `    let t${i} = std::cell::RefCell::new(${SB}::InternWrite::default());\n`
+            : `    let mut t${i} = ${SB}::InternWrite::default();\n`,
       )
       .join("");
     const names = fields.map((field) => rustString(field.name)).join(", ");
@@ -610,7 +641,9 @@ class Emitter {
             ? `t${i}.put(&mut row, item.as_str().ok_or("a string")?);`
             : kinds[i] === "elements"
               ? `let strings = item.as_array().ok_or("an array")?; let mut region = Vec::new(); ${SB}::put_uv(&mut region, strings.len() as u64); for string in strings { t${i}.put(&mut region, string.as_str().ok_or("a string")?); } ${SB}::put_region(&mut row, &region);`
-              : `let mut region = Vec::new(); sbw_${this.name(field.layout)}(item, &mut region)?; ${SB}::put_region(&mut row, &region);`;
+              : kinds[i] === "keys" && field.layout._ === "struct"
+                ? `let mut region = Vec::new(); sbwk_${this.keyed(field.layout)}(item, &mut region, &t${i})?; ${SB}::put_region(&mut row, &region);`
+                : `let mut region = Vec::new(); sbw_${this.name(field.layout)}(item, &mut region)?; ${SB}::put_region(&mut row, &region);`;
         return `        if let Some(item) = object.get(${rustString(field.name)}) { if declare { ${SB}::put_uv(&mut row, ${field.id}); } ${region} }\n`;
       })
       .join("");
@@ -641,7 +674,9 @@ ${regions}        ${SB}::put_sized(out, &row);
             ? `let value = region.string().map_err(${FAILURE}::from)${at}; state.t${i}.push(value.clone()); object.insert(${key}.into(), Value::String(value));`
             : kinds[i] === "elements"
               ? `let value = (|| -> Result<Value, ${FAILURE}> { let count = ${SB}::read_count(&mut region, false)?; let mut strings = Vec::new(); for index in 0..count { strings.push(Value::String(${SB}::read_interned(&mut region, &mut state.t${i}).map_err(|invalid| ${FAILURE}::from(invalid).at_index(index))?)); } region.finish()?; Ok(Value::Array(strings)) })()${at}; object.insert(${key}.into(), value);`
-              : `let value = (|| -> Result<Option<Value>, ${FAILURE}> { let value = sbr_${this.name(field.layout)}(&mut region)?; if value.is_some() { region.finish()?; } Ok(value) })()${at}; if let Some(value) = value { object.insert(${key}.into(), value); }`;
+              : kinds[i] === "keys" && field.layout._ === "struct"
+                ? `let value = (|| -> Result<Option<Value>, ${FAILURE}> { let value = sbrk_${this.keyed(field.layout)}(&mut region, &mut state.t${i})?; if value.is_some() { region.finish()?; } Ok(value) })()${at}; if let Some(value) = value { object.insert(${key}.into(), value); }`
+                : `let value = (|| -> Result<Option<Value>, ${FAILURE}> { let value = sbr_${this.name(field.layout)}(&mut region)?; if value.is_some() { region.finish()?; } Ok(value) })()${at}; if let Some(value) = value { object.insert(${key}.into(), value); }`;
         return `        ${i} => { ${body} }\n`;
       })
       .join("");

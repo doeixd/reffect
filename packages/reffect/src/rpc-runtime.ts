@@ -29,6 +29,9 @@ use serde_json::{json, Value};
 /// batch; \`layerNdjson\` reads one message per complete line; \`layerSchemaBinary\` reads frames.
 #[allow(dead_code)]
 const NDJSON: bool = ${serialization === "ndjson"};
+/// Whether the wire carries \`-0\`: SchemaBinary does, \`JSON.stringify\` writes it as \`0\`.
+#[allow(dead_code)]
+const NEGATIVE_ZERO_ON_WIRE: bool = ${serialization === "schema-binary"};
 ${RuntimeSources.rpc_wire}${serialization === "schema-binary" ? RuntimeSources.rpc_binary : RuntimeSources.rpc_json}
 ${decodeArgs()}${
   asynchronous

@@ -18,6 +18,10 @@ pub mod schema_binary;
 #[allow(dead_code)]
 pub mod ssr_host;
 
+/// Whether the server's wire carries `-0` (SchemaBinary); generated `main.rs` files set it from
+/// their serialization. The check crate builds the JSON servers' modules.
+const NEGATIVE_ZERO_ON_WIRE: bool = false;
+
 /// The RPC server's static items (#37). Generated `main.rs` files inline these lists at their
 /// root, where the imports below and the constants (generated from the server's options) live;
 /// here they are included into a host module that provides the same names.

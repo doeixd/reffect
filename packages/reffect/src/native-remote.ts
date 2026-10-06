@@ -108,8 +108,13 @@ export interface NativeRemoteOptions {
     readonly subscriptions?: number;
     readonly perPrincipal?: number;
   };
-  /** The RPC serialization; Live streams incrementally only under NDJSON, as officially. */
-  readonly serialization?: "json" | "ndjson";
+  /**
+   * The RPC serialization. Live streams incrementally only under a framed one, NDJSON or
+   * SchemaBinary, as officially.
+   */
+  readonly serialization?: "json" | "ndjson" | "schema-binary";
+  /** `layerSchemaBinary`'s options, under `serialization: "schema-binary"`. */
+  readonly schemaBinary?: CompileOptions["schemaBinary"];
   /**
    * Server-rendered pages (8A) whose first screen holds Remote data (M9-3 step 2). `remote` is the
    * page's plan, usually `planPage(...)` (#13): each planned request runs against this server's
@@ -752,8 +757,12 @@ const compile = <Rpcs extends Rpc.Any>(
           if (tag !== READ && tag !== QUERY && tag !== MUTATE && tag !== LIVE)
             throw unsupported(`rpc.${tag}`, "Only the Remote contract's procedures are served");
         // A Live stream never ends, so a JSON body would buffer it forever and never answer (LR-4).
-        if (options.live && options.serialization !== "ndjson")
-          throw unsupported("live", 'A live hub needs serialization: "ndjson"');
+        if (
+          options.live &&
+          options.serialization !== "ndjson" &&
+          options.serialization !== "schema-binary"
+        )
+          throw unsupported("live", 'A live hub needs serialization: "ndjson" or "schema-binary"');
         if (options.liveSnapshot && !options.live)
           throw unsupported("liveSnapshot", "A snapshot needs the live hub (live: true)");
         if (options.liveLimits !== undefined) {
@@ -1045,6 +1054,7 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
         limits: { bodyBytes: 4 * 1024 * 1024, ...options.limits },
         ...(options.auth ? { auth: options.auth } : {}),
         ...(options.serialization ? { serialization: options.serialization } : {}),
+        ...(options.schemaBinary ? { schemaBinary: options.schemaBinary } : {}),
       },
       {
         procedures,

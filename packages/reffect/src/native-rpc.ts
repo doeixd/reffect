@@ -494,11 +494,6 @@ export const compileServer = (
         if (entries.length === 0) throw unsupported("group", "RPC group must contain a procedure");
         const binary =
           options.serialization === "schema-binary" ? schemaBinaryOf(options) : undefined;
-        if (binary && runtime)
-          throw unsupported(
-            "serialization",
-            "Runtime-served procedures over SchemaBinary are not supported yet",
-          );
         if (!binary && options.schemaBinary)
           throw unsupported(
             "schemaBinary",

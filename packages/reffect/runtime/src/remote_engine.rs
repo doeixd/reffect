@@ -1334,8 +1334,12 @@ pub async fn read<S: Source>(
 }
 // ---- Live (LIVE-002): a port of liveHub. Subscribers keep upstream's Set order.
 /// A JS number as the wire's JSON codec writes it: integers plainly, non-finite as text.
+/// A number as the server's wire writes it: JSON's `JSON.stringify` spellings, and `-0` only where
+/// the wire carries it (SchemaBinary; the host's `NEGATIVE_ZERO_ON_WIRE`).
 fn js_number(x: f64) -> Value {
-    if x.is_nan() {
+    if x == 0.0 && x.is_sign_negative() && super::NEGATIVE_ZERO_ON_WIRE {
+        json!(-0.0)
+    } else if x.is_nan() {
         json!("NaN")
     } else if x.is_infinite() {
         json!(if x > 0.0 { "Infinity" } else { "-Infinity" })
