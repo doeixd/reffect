@@ -103,6 +103,9 @@ const nodeChildren = Match.type<
       edge("release", n.release),
     ],
     FileScope: (n) => [edge("body", n.body), edge("afterClose", n.afterClose)],
+    LatchMake: () => [],
+    LatchOperation: () => [],
+    LatchScope: (n) => [edge("body", n.body)],
     SemaphoreMake: () => [],
     SemaphoreScope: (n) => [edge("body", n.body)],
     SemaphoreWithPermits: (n) => [edge("body", n.body)],
@@ -147,7 +150,7 @@ const appliedOperation = Match.type<Expr<unknown>["node"]>().pipe(
   Match.tag("Apply", (n): string | undefined => n.operation.id),
   Match.orElse(() => undefined),
 );
-const children = (value: Authored): Edges =>
+export const authoredChildren = (value: Authored): Edges =>
   value instanceof Fn || value instanceof EffectFn
     ? [["body", value.body]]
     : nodeChildren(value.node);
@@ -215,7 +218,8 @@ export class Provenance {
       const key = identity(value);
       if (seen.has(key)) return;
       seen.add(key);
-      for (const [edge, child] of children(value)) walk(child, `${path}.${edge}`, occurrence);
+      for (const [edge, child] of authoredChildren(value))
+        walk(child, `${path}.${edge}`, occurrence);
     };
     for (const [name, value] of Object.entries(program.functions)) {
       seen.clear();

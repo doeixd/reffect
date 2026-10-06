@@ -1,3 +1,5 @@
+import { containsLatch, usesLatchExpression } from "./latch-model.ts";
+import { hasLatchComputation } from "./latch-profile.ts";
 import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
 import { containsSemaphore, usesSemaphoreExpression } from "./semaphore-model.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
@@ -641,6 +643,19 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         message: `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
       })),
     });
+  const latchEntries = Object.entries(program.functions).filter(
+    ([, f]) => f instanceof EffectFn && hasLatchComputation(f.body),
+  );
+  if (latchEntries.length)
+    return yield* new CompileError({
+      message: "Latch native execution is not admitted",
+      diagnostics: latchEntries.map(([name]) => ({
+        code: "LATCH_NATIVE_UNSUPPORTED",
+        stage: "check",
+        path: `functions.${name}`,
+        message: "Private Latch IR requires checked cohort scheduling before native admission",
+      })),
+    });
   yield* Effect.try({
     try: () => checkedSemaphoreProfiles(program),
     catch: (cause) =>
@@ -667,21 +682,30 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         ]
       : []),
     ...(f.input.some(
-      (type) => containsRef(type) || containsDeferred(type) || containsSemaphore(type),
+      (type) =>
+        containsRef(type) ||
+        containsDeferred(type) ||
+        containsSemaphore(type) ||
+        containsLatch(type),
     ) ||
     containsRef(f.output) ||
     containsDeferred(f.output) ||
+    containsLatch(f.output) ||
+    (f instanceof EffectFn && containsLatch(f.error)) ||
     containsSemaphore(f.output) ||
     (f instanceof EffectFn &&
       (containsRef(f.error) || containsDeferred(f.error) || containsSemaphore(f.error))) ||
     (!(f instanceof EffectFn) &&
-      (usesDeferredExpression(f.body) || usesSemaphoreExpression(f.body)))
+      (usesDeferredExpression(f.body) ||
+        usesSemaphoreExpression(f.body) ||
+        usesLatchExpression(f.body)))
       ? [
           {
             code: "RESOURCE_ESCAPE",
             stage: "check",
             path: `functions.${name}`,
-            message: "Public channels cannot contain lexical Ref, Deferred or Semaphore handles",
+            message:
+              "Public channels cannot contain lexical Ref, Deferred, Semaphore or Latch handles",
           },
         ]
       : []),
@@ -832,6 +856,22 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
           effectRefs.add(AsyncEffects.FileScope);
           walkComputation(n.body);
           walkComputation(n.afterClose);
+        },
+        LatchMake: () => effectRefs.add(SyncEffects.LatchMake),
+        LatchOperation: (n) =>
+          effectRefs.add(
+            Match.value(n.operation).pipe(
+              Match.when("Await", () => AsyncEffects.LatchAwait),
+              Match.when("Open", () => SyncEffects.LatchOpen),
+              Match.when("Close", () => SyncEffects.LatchClose),
+              Match.when("Release", () => SyncEffects.LatchRelease),
+              Match.when("IsOpen", () => SyncEffects.LatchIsOpen),
+              Match.exhaustive,
+            ),
+          ),
+        LatchScope: (n) => {
+          effectRefs.add(SyncEffects.LatchMake);
+          walkComputation(n.body);
         },
         SemaphoreMake: () => effectRefs.add(SyncEffects.SemaphoreMake),
         SemaphoreScope: (n) => {

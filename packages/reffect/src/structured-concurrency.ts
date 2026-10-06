@@ -56,6 +56,9 @@ export const analyzeTaskGroups = (
         AcquireRelease: () => true,
         RegisteredFile: () => true,
         FileScope: () => true,
+        LatchMake: () => true,
+        LatchScope: () => true,
+        LatchOperation: () => true,
         SemaphoreMake: () => true,
         SemaphoreScope: () => true,
         SemaphoreWithPermits: () => true,
@@ -188,6 +191,9 @@ export const analyzeTaskGroups = (
           body(n.body, "body");
           finalizer(n.finalizer, "finalizer");
         },
+        LatchMake: () => {},
+        LatchOperation: () => {},
+        LatchScope: (n) => body(n.body, "body"),
         SemaphoreMake: () => {},
         SemaphoreScope: (n) => body(n.body, "body"),
         SemaphoreWithPermits: (n) => body(n.body, "body"),
@@ -383,6 +389,9 @@ export const analyzeDeferredTopology = (
             resumes: children.some((value) => value.resumes),
           };
         },
+        LatchMake: () => quiet,
+        LatchOperation: () => quiet,
+        LatchScope: (n) => child(n.body, "body"),
         SemaphoreMake: () => quiet,
         SemaphoreScope: (n) => child(n.body, "body"),
         SemaphoreWithPermits: (n) => child(n.body, "body"),

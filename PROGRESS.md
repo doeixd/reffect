@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-06 — Private Latch cohorts and lexical reference
+
+- Recorded [LAT-001–006](docs/research/latch-cohorts.md), with primary-source preparation against byte-identical installed/online Effect4.0.0 before implementation. Private builders provide make/await/open/close/release, effectful isOpen and data-first/data-last whenOpen; both official references preserve lexical owners and typed failure frames. Public channels and delayed registered cleanup cannot retain the handle.
+- Inline native adapter uses removable ticketed await leases and fixed Waiting/Scheduled/Detached/Granted cohorts. Signal preserves grants across close and dispatch snapshots registration order before callbacks; reentrant release schedules a later cohort. Neither a Boolean watch channel nor Semaphore's live scans implements this protocol.
+- Ten controlled scenarios match official default-scheduler traces in native debug/release, repeated ten times each. Additional probes cover empty pulses, capacities1..4, granted-before-poll cancellation, scheduled reopen and stale slots. One thousand cycles on the same owner allocate zero times; on this 64-bit host owner/await/cohort sizes are 120/40/96 bytes. Context/logging/metadata and generated-root costs are outside this adapter measurement.
+- Independent review found no adapter blocker. Tests reject stale task-slot selection and reversed ticket ordering mutations; restored source is rerun. IR review corrected whenOpen argument order and replaced reflective node detection with the shared exhaustive authored-child visitor.
+- Compile explicitly refuses Latch with LATCH_NATIVE_UNSUPPORTED; private builder modules and the cohort adapter are not public or selected by native lowering. Next checked borrowed All/cohort scheduling, cancellation/cleanup, reference operation receipts, finite growth/driver budgets and root layout/cost gates before public admission. [Resume guide](docs/effect-v4-workstream.md#latch-cohort-continuation--2026-10-06), module coverage and open work identify the current boundary.
+- Validation: 14 selected suites / 86 tests pass, including public Semaphore/Deferred compiler-to-native regressions run serially. Full `vp check`, strict TypeScript and workspace builds pass (reffect rebuilt; other workspaces cached). Final review also added a real captured-log assertion that compilation refusal executes no authored effects.
+
 ## 2026-10-06 — Uniform concurrent Semaphore timers
 
 - Recorded [STIM-001–006](docs/research/semaphore-timer-ordering.md) before implementation against Effect4.0.0, Node24.19.0 and Tokio1.53.1. Primary source and controlled official probes show due timer callbacks precede release-created scans; mixed-duration Node lists are not general deadline order, and sleep0 is scheduler yield.

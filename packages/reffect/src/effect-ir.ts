@@ -2,6 +2,7 @@ import type { DeferredInterruptionBoundary } from "./deferred-interruption-frame
 import {
   Deferred,
   Semaphore,
+  Latch,
   Duration,
   Effect,
   Exit,
@@ -84,9 +85,16 @@ import {
   validSemaphorePermits,
 } from "./semaphore-model.ts";
 
+import { LatchType, containsLatch, usesLatchExpression } from "./latch-model.ts";
+
 export const SyncEffects = Object.freeze({
   ClockReadMillis: SemanticRef.effect("reffect/clock/current-time-millis@1"),
   RandomDraw: SemanticRef.effect("reffect/random/next@1"),
+  LatchMake: SemanticRef.effect("reffect/latch/make@1"),
+  LatchOpen: SemanticRef.effect("reffect/latch/open@1"),
+  LatchClose: SemanticRef.effect("reffect/latch/close@1"),
+  LatchRelease: SemanticRef.effect("reffect/latch/release@1"),
+  LatchIsOpen: SemanticRef.effect("reffect/latch/is-open@1"),
   SemaphoreMake: SemanticRef.effect("reffect/semaphore/make@1"),
   DeferredMake: SemanticRef.effect("reffect/deferred/make@1"),
   DeferredIsDone: SemanticRef.effect("reffect/deferred/is-done@1"),
@@ -106,6 +114,7 @@ export const SyncEffects = Object.freeze({
   Span: SemanticRef.effect("reffect/effect/span@1"),
 });
 export const AsyncEffects = Object.freeze({
+  LatchAwait: SemanticRef.effect("reffect/latch/await@1"),
   SemaphoreWithPermits: SemanticRef.effect("reffect/semaphore/with-permits@1"),
   DeferredAwait: SemanticRef.effect("reffect/deferred/await@1"),
   DeferredComplete: SemanticRef.effect("reffect/deferred/complete@1"),
@@ -162,6 +171,18 @@ export type ComputationNode =
       readonly _tag: "TaskGroup";
       readonly mode: "All" | "Race";
       readonly children: readonly Computation<void, unknown>[];
+    }
+  | { readonly _tag: "LatchMake"; readonly open: boolean }
+  | {
+      readonly _tag: "LatchScope";
+      readonly open: boolean;
+      readonly binder: symbol;
+      readonly body: Computation<unknown, unknown>;
+    }
+  | {
+      readonly _tag: "LatchOperation";
+      readonly binder: symbol;
+      readonly operation: "Await" | "Open" | "Close" | "Release" | "IsOpen";
     }
   | { readonly _tag: "SemaphoreMake"; readonly capacity: number }
   | {
@@ -463,6 +484,12 @@ export const substituteComputation = (
           return params.every((param, index) => param === n.params[index])
             ? self
             : rebuild({ ...n, params });
+        },
+        LatchMake: () => self,
+        LatchOperation: () => self,
+        LatchScope: (n) => {
+          const body = walk(n.body);
+          return body === n.body ? self : rebuild({ ...n, body });
         },
         SemaphoreMake: () => self,
         SemaphoreScope: (n) => {
@@ -905,6 +932,9 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         AcquireRelease: () => true,
         RegisteredFile: () => true,
         FileScope: () => true,
+        LatchMake: () => false,
+        LatchScope: (n) => walk(n.body),
+        LatchOperation: (n) => n.operation === "Await",
         SemaphoreMake: () => false,
         SemaphoreScope: (n) => walk(n.body),
         SemaphoreWithPermits: () => true,
@@ -971,6 +1001,12 @@ const flatMap: {
     const body = build(Expr.parameter(self.output, binder, 0));
     const error = joinType(self.error, body.error) as IRType<E | E2>;
     const node = Match.value(self.node).pipe(
+      Match.tag("LatchMake", (allocation): ComputationNode => ({
+        _tag: "LatchScope",
+        open: allocation.open,
+        binder,
+        body,
+      })),
       Match.tag("SemaphoreMake", (allocation): ComputationNode => ({
         _tag: "SemaphoreScope",
         capacity: allocation.capacity,
@@ -994,6 +1030,7 @@ const flatMap: {
     );
     const computation = Computation.make(body.output, error, node);
     return Match.value(self.node).pipe(
+      Match.tag("LatchMake", () => computation.withSource(self.source)),
       Match.tag("SemaphoreMake", () => computation.withSource(self.source)),
       Match.tag("DeferredMake", () => computation.withSource(self.source)),
       Match.tag("RefMake", () => computation.withSource(self.source)),
@@ -1090,6 +1127,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
     active.add(c);
     if (
       !Match.value(c.node).pipe(
+        Match.tag("LatchMake", () => true),
         Match.tag("SemaphoreMake", () => true),
         Match.tag("DeferredMake", () => true),
         Match.tag("RefMake", () => true),
@@ -1100,7 +1138,9 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         containsDeferred(c.output) ||
         containsDeferred(c.error) ||
         containsSemaphore(c.output) ||
-        containsSemaphore(c.error))
+        containsSemaphore(c.error) ||
+        containsLatch(c.output) ||
+        containsLatch(c.error))
     )
       issues.push({
         code: "RESOURCE_ESCAPE",
@@ -1109,7 +1149,7 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
         message: "Lexical handles cannot escape as computation values",
       });
     const expression = (e: Expr<unknown>, step: string, environment: Bindings = bindings) => {
-      if (usesDeferredExpression(e) || usesSemaphoreExpression(e))
+      if (usesDeferredExpression(e) || usesSemaphoreExpression(e) || usesLatchExpression(e))
         issues.push({
           code: "RESOURCE_ESCAPE",
           stage: "check",
@@ -1245,6 +1285,40 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           nested.set(n.binder, [FileHandleType]);
           walk(n.body, nested, `${at}.body`);
           walk(n.afterClose, bindings, `${at}.afterClose`);
+        },
+        LatchMake: () => {
+          issues.push({
+            code: "RESOURCE_ESCAPE",
+            stage: "check",
+            path: at,
+            message: "Consume Latch.make directly through Effect.flatMap",
+          });
+        },
+        LatchScope: (n) => {
+          if (
+            typeof n.open !== "boolean" ||
+            !IRType.same(c.output, n.body.output) ||
+            !IRType.same(c.error, n.body.error)
+          )
+            add(at, "Latch scope requires a literal Boolean and preserves body channels");
+          const nested = new Map(bindings);
+          nested.set(n.binder, [LatchType]);
+          walk(n.body, nested, `${at}.body`);
+        },
+        LatchOperation: (n) => {
+          if (bindings.get(n.binder)?.[0] !== LatchType)
+            issues.push({
+              code: "RESOURCE_ESCAPE",
+              stage: "check",
+              path: at,
+              message: "Latch operation requires a live lexical owner",
+            });
+          if (
+            !["Await", "Open", "Close", "Release", "IsOpen"].includes(n.operation) ||
+            !IRType.same(c.output, n.operation === "Await" ? UnitType : BoolType) ||
+            !IRType.same(c.error, NeverType)
+          )
+            add(at, "Latch operation requires its fixed output and Never error");
         },
         SemaphoreMake: () => {
           issues.push({
@@ -1679,14 +1753,20 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
     add(path, "Effect function body differs from declared success/error witnesses");
   if (
     f.input.some(
-      (type) => containsRef(type) || containsDeferred(type) || containsSemaphore(type),
+      (type) =>
+        containsRef(type) ||
+        containsDeferred(type) ||
+        containsSemaphore(type) ||
+        containsLatch(type),
     ) ||
     containsRef(f.output) ||
     containsRef(f.error) ||
     containsDeferred(f.output) ||
     containsDeferred(f.error) ||
     containsSemaphore(f.output) ||
-    containsSemaphore(f.error)
+    containsSemaphore(f.error) ||
+    containsLatch(f.output) ||
+    containsLatch(f.error)
   )
     issues.push({
       code: "RESOURCE_ESCAPE",
@@ -1781,6 +1861,26 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
                   Effect.orDie,
                 ),
             ),
+          LatchMake: (n) => Latch.make(n.open),
+          LatchScope: (n) =>
+            Latch.make(n.open).pipe(
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return evaluate(n.body, nested);
+              }),
+            ),
+          LatchOperation: (n) => {
+            const cell = bindings.get(n.binder)![0] as Latch.Latch;
+            return Match.value(n.operation).pipe(
+              Match.when("Await", () => cell.await),
+              Match.when("Open", () => cell.open),
+              Match.when("Close", () => cell.close),
+              Match.when("Release", () => cell.release),
+              Match.when("IsOpen", () => Effect.sync(() => cell.isOpen())),
+              Match.exhaustive,
+            );
+          },
           SemaphoreMake: (n) => Semaphore.make(n.capacity),
           SemaphoreScope: (n) =>
             Semaphore.make(n.capacity).pipe(
@@ -2030,6 +2130,8 @@ export interface LogicalFrame {
     | "registeredFile"
     | "acquireUseRelease"
     | "fileScope"
+    | "latchAwait"
+    | "latchScope"
     | "semaphoreScope"
     | "semaphoreWithPermits"
     | "deferredScope"
@@ -2124,6 +2226,9 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
           adaptNode(n.body, `${path}.body`);
           adaptNode(n.afterClose, `${path}.afterClose`);
         },
+        LatchMake: () => {},
+        LatchOperation: () => {},
+        LatchScope: (n) => adaptNode(n.body, `${path}.body`),
         SemaphoreMake: () => {},
         SemaphoreScope: (n) => adaptNode(n.body, `${path}.body`),
         SemaphoreWithPermits: (n) => adaptNode(n.body, `${path}.body`),
@@ -2293,6 +2398,27 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   Effect.orDie,
                 ),
             ).pipe(mapFramedError((failure) => outward(failure, "fileScope"))),
+          LatchMake: (n) => Latch.make(n.open),
+          LatchScope: (n) =>
+            Latch.make(n.open).pipe(
+              Effect.flatMap((cell) => {
+                const nested = new Map(bindings);
+                nested.set(n.binder, [cell]);
+                return child(n.body, nested);
+              }),
+              mapFramedError((failure) => outward(failure, "latchScope")),
+            ),
+          LatchOperation: (n) => {
+            const cell = bindings.get(n.binder)![0] as Latch.Latch;
+            return Match.value(n.operation).pipe(
+              Match.when("Await", () => cell.await),
+              Match.when("Open", () => cell.open),
+              Match.when("Close", () => cell.close),
+              Match.when("Release", () => cell.release),
+              Match.when("IsOpen", () => Effect.sync(() => cell.isOpen())),
+              Match.exhaustive,
+            );
+          },
           SemaphoreMake: (n) => Semaphore.make(n.capacity),
           SemaphoreScope: (n) =>
             Semaphore.make(n.capacity).pipe(

@@ -166,3 +166,13 @@ const artifact = await Effect.runPromise(
 );
 // Build with CargoApi before claiming native layout admission.
 ```
+
+## Latch cohort continuation — 2026-10-06
+
+The next module now has a private foundation, recorded in [LAT-001–006](research/latch-cohorts.md). `latch.ts`/`latch-model.ts` construct opaque lexical IR; make is consumed directly by flatMap into LatchScope. LatchOperation groups Await/Open/Close/Release/IsOpen; whenOpen composes await then body. Both reference evaluators use official Effect4.0.0. isOpen is an effectful projection because compiled mutable state cannot become a build-time Boolean. The namespace is private, and Compile returns LATCH_NATIVE_UNSUPPORTED before native lowering.
+
+`latch-cohort-runtime.ts` supplies the separately verified borrowed adapter. Await leases use monotonically increasing tickets and Waiting/Scheduled/Detached/Granted phases. Signal detaches current waiters logically; dispatch snapshots tickets before any callback, grants still-live tickets in registration order and polls a selected child through its semantic continuation. Drop removes only the matching ticket, so canceled slots may be reused without old callbacks granting new awaits. Close does not revoke grants. Reentrant release produces a later cohort; unlike Semaphore's live scans, it must never extend the current dispatch.
+
+Resume with `tests/latch-{ir,cohort-runtime}.test.ts`. The native adapter suite compiles std-only Rust using rustc in debug/release and compares controlled traces with the official default scheduler. Source-tree IR tests include structured compiler refusal and fail-closed Deferred/Semaphore admission. Do not export R.Latch or select the adapter merely because these pass.
+
+Next implement the checked generated borrowed All driver: coordinator owner counts and task slots, exact pulse/cohort dispatch phase versus timer waves and queued yields, parent cancellation and awaited masked cleanup, reference operation receipts, finite scheduling/growth limits, and generated-root layout/allocation gates. Follow Semaphore's task/context ownership without copying its live-scan arbitration. Keep manual/unsafe host APIs, dynamic tasks and RPC refused until separately admitted.

@@ -168,6 +168,18 @@ export const analyzeScopes = (
           finalizer(n.afterClose, "afterClose", false);
           return child(n.body, "body");
         },
+        LatchMake: () => 0,
+        LatchOperation: () => {
+          if (delayed)
+            diagnostics.push({
+              code: "RESOURCE_ESCAPE",
+              stage: "check",
+              path: at,
+              message: "Latch handles cannot escape into registered cleanup",
+            });
+          return 0;
+        },
+        LatchScope: (n) => child(n.body, "body"),
         SemaphoreMake: () => 0,
         SemaphoreScope: (n) => child(n.body, "body"),
         SemaphoreWithPermits: (n) => {

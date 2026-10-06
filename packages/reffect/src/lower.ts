@@ -1,3 +1,4 @@
+import { containsLatch } from "./latch-model.ts";
 import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
 import type { GeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
 import { semaphoreDispatchRuntime } from "./semaphore-dispatch-runtime.ts";
@@ -553,6 +554,14 @@ interface Scope {
   readonly input: readonly Parameter[];
 }
 
+const rejectLatchNative = (): never => {
+  throw fail(
+    "LATCH_NATIVE_UNSUPPORTED",
+    "lower",
+    "Latch",
+    "Latch cohort scheduling and checked borrowed ownership are not admitted",
+  );
+};
 const rejectSemaphoreNative = (): never => {
   throw fail(
     "SEMAPHORE_NATIVE_INTEGRATION",
@@ -665,6 +674,12 @@ function lowerFunctionsInternal(
   const functions = Object.freeze(
     Object.entries(program.functions).map(([name, f]): RustFunction => {
       const path = `functions.${name}`;
+      if (
+        f.input.some(containsLatch) ||
+        containsLatch(f.output) ||
+        (f instanceof EffectFn && containsLatch(f.error))
+      )
+        rejectLatchNative();
       if (
         f.input.some(containsSemaphore) ||
         containsSemaphore(f.output) ||
@@ -787,6 +802,9 @@ function lowerFunctionsInternal(
           computations.add(value.node);
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
+              LatchMake: rejectLatchNative,
+              LatchScope: rejectLatchNative,
+              LatchOperation: rejectLatchNative,
               SemaphoreMake: rejectSemaphoreNative,
               SemaphoreScope: (n) => {
                 if (!semaphoreProfile) rejectSemaphoreNative();
@@ -960,6 +978,7 @@ function lowerFunctionsInternal(
         const bindings: RustBinding[] = [];
         const memo = new Map<Expr<unknown>["node"], RustExpr>();
         const expression = (e: Expr<unknown>, path: string): RustExpr => {
+          if (containsLatch(e.type)) rejectLatchNative();
           if (containsSemaphore(e.type)) rejectSemaphoreNative();
           const source = provenance
             ? { origin: provenance.origin(e), occurrence: provenance.use(path) }
@@ -1266,6 +1285,9 @@ function lowerFunctionsInternal(
           );
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            LatchMake: rejectLatchNative,
+            LatchScope: rejectLatchNative,
+            LatchOperation: rejectLatchNative,
             SemaphoreMake: rejectSemaphoreNative,
             SemaphoreScope: (n): HelperBody => {
               if (!semaphoreProfile) return rejectSemaphoreNative();
