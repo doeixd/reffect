@@ -50,6 +50,10 @@ The native SQL server matches the official server over the same SQL database ([S
 
 The injected millis driver also admits only signed safe-integer readings, while a custom official Clock can return arbitrary Numbers. This is an explicit host-driver profile restriction; native setters refuse invalid readings, and the reffect reference validates the same subset. It is not a general Clock-service substitution claim.
 
+## Private Queue protocol difference
+
+[QBF-UPSTREAM-001](research/queue-bounded-foundation.md#upstream-reentrant-shutdown-defect--qbf-upstream-001): in Effect4.0.0, a pending producer resumed during capacity release can synchronously shut down with another offer pending, causing the original take to defect with a TypeError. The private bounded protocol stops after rechecking Done and returns the already-consumed value safely. This is adapter-local research, not an accepted public artifact divergence: Queue has no generated/public admission. Resolving or refusing this topology is a required gate before admission.
+
 ## Closed
 
 | ID                                                                          | Area         | Was                                                                                                       | Closed by                                                                                                                                                                       |

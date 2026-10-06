@@ -233,3 +233,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 - [Bounded public Semaphore admission](research/semaphore-public-admission.md): owned execution, operation budgets, generated scan routing and public admission gates.
 
 - [Semaphore timer ordering](research/semaphore-timer-ordering.md): primary timer/yield evidence, bounded uniform-duration widening and phase/ownership obligations.
+
+[Bounded Queue foundation](research/queue-bounded-foundation.md) records pinned lifecycle, retry wakeups, pending-offer draining, terminal ordering and the private protocol boundary before generated/public admission.

@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-06 — Private bounded Queue protocol
+
+- Recorded [QBF-001–007](docs/research/queue-bounded-foundation.md) against byte-identical installed/published Effect4.0.0 Queue source before feature implementation. Queue retry wakeups, live scans, pending-offer draining and terminal callback ordering need their own adapter; Latch cohorts and Tokio mpsc are unsuitable substitutes.
+- Delivered a private std-only inline ring/fixed registration bank with explicit synchronous callback/cancellation routing. Seven official differential scenarios and native ticket/reentry/terminal-order probes pass in debug/release. Independent review caught and corrected cancellation suppressing outstanding Done callbacks. Deliberate cancellation-guard, terminal-overwrite and detached-scan mutations fail; correct source is restored.
+- Quiet construction plus1,000 registration/cancel/admission/dispatch cycles allocate0 times. Bool/Unit/U64 capacity1 owners measure136/136/184 bytes, capacity3 owners136/136/216; u64 registration bank128 bytes. These are adapter-local costs, not generated future or host-context measurements.
+- Found and recorded pinned upstream [QBF-UPSTREAM-001](docs/research/queue-bounded-foundation.md#upstream-reentrant-shutdown-defect--qbf-upstream-001): resumed producer shutdown with another pending offer defects in official Queue.take. Native protocol safely stops after shutdown; this difference needs refusal/resolution before admission.
+- Validation: `vp test` Queue/Latch protocol suites pass3 tests across2 suites (native builds serial); Queue rerun after explicit oracle Done typing passes. Full `vp check`, strict reffect TypeScript and workspace build pass (reffect rebuilt,3/4 outputs cached).
+- Typed lexical IR/Done witness, generated async ownership/scheduler/frame/layout gates, owned execution and public admission remain next. Coverage, open-work and [resume guide](docs/effect-v4-workstream.md#queue-protocol-continuation--2026-10-06) are updated.
+
 ## 2026-10-06 — Bounded public Latch admission
 
 - Recorded [LPUB-001–004](docs/research/latch-public-admission.md) before implementation against byte-identical installed/published Effect4.0.0 source. Independent audit establishes whole-invocation plain/framed operation receipts below 2048; structural bounds alone never authorize automatic-yield parity. Actual long-graph probes trigger official automatic yields in both modes.
