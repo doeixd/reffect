@@ -133,6 +133,8 @@ export const checkDeferredExecutionReferences = (
           if (!trustedTypes.has(n.success) || !trustedTypes.has(n.error)) unsupported();
           computation(n.body);
         },
+        LatchScope: (n) => computation(n.body),
+        LatchOperation: () => {},
         SemaphoreScope: (n) => computation(n.body),
         SemaphoreWithPermits: (n) => computation(n.body),
         DeferredComplete: (n) => expression(n.value),

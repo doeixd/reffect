@@ -36,7 +36,7 @@ Mutation checks reject both reverse ticket ordering (native ordering assertion) 
 
 ## Private IR delivery
 
-`tests/latch-ir.test.ts` covers both reference paths, transition results, release-pulse cancellation cleanup, data-first/data-last whenOpen, typed failure and private suspended-await interruption frames, substitution, independent invocation state, lexical/public channel escape, provenance/async/scope traversal, and structured native refusal. Deferred/Semaphore receipts explicitly refuse the new nodes. Private source modules are intentionally absent from package exports and R. The generated adapter is not selected by lower.ts; its conformance proves the local protocol, not full compiled Latch semantics.
+`tests/latch-ir.test.ts` covers both reference paths, transition results, release-pulse cancellation cleanup, data-first/data-last whenOpen, typed failure and private suspended-await interruption frames, substitution, independent invocation state, lexical/public channel escape, provenance/async/scope traversal, and structured native refusal. Deferred/Semaphore receipts explicitly refuse the new nodes. Private source modules are intentionally absent from package exports and R. Public Compile/lowerFunctions do not select the adapter. The [private generated path](latch-generated.md) now selects it through lowerLatchFunctions, with separate checked ownership/driver/layout evidence; public default-context admission remains gated.
 
 ## Verification commands
 

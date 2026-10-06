@@ -58,6 +58,8 @@ The module records cover [Option](research/option-module.md), [Result](research/
 
 [**R language direction**](r-language.md) defines the tiny semantic core: TypeScript is the macro/metaprogramming language; R keeps Match as its branch primitive, ordinary callable functions as statically resolved calls, compiler-discovered recursion/proper-tail lowering, and Effect semantics. Loop/use/let/if-like ergonomics stay in user land; richer native types and extensions remain orthogonal.
 
+[Private generated Latch execution](research/latch-generated.md) records checked lowering and the detached-cohort driver gates.
+
 [Bounded Latch cohorts](research/latch-cohorts.md) records detached pulse grants, lexical IR boundaries and the native admission gates.
 
 ## Revised design and implementation references

@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-06 — Private generated Latch execution
+
+- Recorded [LGEN-001–007](docs/research/latch-generated.md), including primary-source preparation before implementation. Private checked lowering supports a root lexical Latch, scalar/Never channels, bounded All2/3, uniform positive timers, captures, provenance and interruption frames. Mixed independent coordinator exports share task machinery and a combined source-growth gate.
+- Dedicated All scheduling preserves detached cohorts after due-timer waves and settles cancellation before final draining. Independent review found and fixed idle child cancellation routing; native probes distinguish parent cancellation from child cleanup-before-peer-interruption. Public Compile/lowerFunctions still refuse Latch and no namespace is exported.
+- Selected source/reference and native regressions pass: 16 suites, 91 tests, native builds serial. None/Bounded generated roots pass in debug/release; measured construction/scalar costs are zero, quiet All2 costs two allocations, and blocked root interruption costs zero/one by frame policy. Full vp check, strict TypeScript and workspace build pass (reffect fresh; three tasks cached).
+- [Resume guide](docs/effect-v4-workstream.md#latch-generated-continuation--2026-10-06) maps source files, sequential native validation and next work: reference-operation/automatic-yield receipts, owned LatchExecution and public admission. Structural bounds alone do not certify default-scheduler parity for every private graph.
+
 ## 2026-10-06 — Private Latch cohorts and lexical reference
 
 - Recorded [LAT-001–006](docs/research/latch-cohorts.md), with primary-source preparation against byte-identical installed/online Effect4.0.0 before implementation. Private builders provide make/await/open/close/release, effectful isOpen and data-first/data-last whenOpen; both official references preserve lexical owners and typed failure frames. Public channels and delayed registered cleanup cannot retain the handle.

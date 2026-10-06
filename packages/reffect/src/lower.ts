@@ -1,3 +1,9 @@
+import {
+  analyzeGeneratedLatchProfile,
+  type GeneratedLatchProfile,
+} from "./latch-generated-profile.ts";
+import { latchCohortRuntime } from "./latch-cohort-runtime.ts";
+import { latchAllRuntime } from "./latch-all-runtime.ts";
 import { containsLatch } from "./latch-model.ts";
 import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
 import type { GeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
@@ -33,7 +39,11 @@ import {
   literalsOf,
 } from "./kernel.ts";
 import { refContent, refType } from "./ref-model.ts";
-import { checkGeneratedDeferredRustBytes } from "./deferred-growth.ts";
+import {
+  analyzeGeneratedDeferredGrowth,
+  checkGeneratedDeferredModuleGrowth,
+  checkGeneratedDeferredRustBytes,
+} from "./deferred-growth.ts";
 import { generatedDeferredFutureLayoutPrelude } from "./deferred-layout.ts";
 import { normalizeRuntimeServicesSelection } from "./runtime-service-model.ts";
 import type {
@@ -309,7 +319,21 @@ interface DeferredCapture {
 interface SemaphoreCapture {
   readonly name: string;
 }
+interface LatchCapture {
+  readonly name: string;
+}
 type HelperBody =
+  | {
+      readonly _tag: "LatchScope";
+      readonly owner: LatchCapture;
+      readonly open: boolean;
+      readonly body: number;
+    }
+  | {
+      readonly _tag: "LatchOperation";
+      readonly owner: string;
+      readonly operation: "Await" | "Open" | "Close" | "Release" | "IsOpen";
+    }
   | {
       readonly _tag: "SemaphoreScope";
       readonly owner: SemaphoreCapture;
@@ -327,6 +351,7 @@ type HelperBody =
       readonly _tag: "TaskGroup";
       readonly mode: "All" | "Race";
       readonly children: readonly number[];
+      readonly latchRoute?: { readonly slots: readonly number[]; readonly owner: string };
       readonly semaphoreRoute?: { readonly slots: readonly number[]; readonly owner: string };
       readonly deferredRoute?: {
         readonly parent: number;
@@ -493,6 +518,7 @@ type HelperBody =
       readonly body: number;
     };
 interface Helper {
+  readonly latchOwners?: readonly LatchCapture[];
   readonly semaphoreOwners?: readonly SemaphoreCapture[];
   readonly deferredOwners?: readonly DeferredCapture[];
   /** Build-owned outcome flags; never carried by authored values. */
@@ -509,6 +535,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
+  readonly latchProfile?: GeneratedLatchProfile;
   readonly semaphoreProfile?: GeneratedSemaphoreProfile;
   readonly deferredProfile?: { readonly taskCapacity: number; readonly ownerCount: number };
   readonly richErrors: boolean;
@@ -544,6 +571,8 @@ export const hasFallibleTaskGroups = (module: LoweredModule): boolean =>
   module.functions.some((f) => f.richErrors);
 
 interface Scope {
+  readonly latchTask?: number;
+  readonly latchOwners?: ReadonlyMap<symbol, LatchCapture>;
   readonly semaphoreTask?: number;
   readonly semaphoreOwners?: ReadonlyMap<symbol, SemaphoreCapture>;
   readonly deferredTask?: number;
@@ -651,6 +680,25 @@ export function lowerSemaphoreFunctions(
   );
 }
 
+export function lowerLatchFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.Bounded,
+  servicesSelection: RuntimeServicesSelection = {},
+): LoweredModule {
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
+    analyzeGeneratedLatchProfile(program),
+  );
+}
+
 function lowerFunctionsInternal(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
@@ -666,7 +714,22 @@ function lowerFunctionsInternal(
     }
   >,
   semaphoreProfiles?: ReadonlyMap<EffectFn, GeneratedSemaphoreProfile>,
+  latchProfiles?: ReadonlyMap<EffectFn, GeneratedLatchProfile>,
 ): LoweredModule {
+  const coordinationGrowth = Object.entries(program.functions).flatMap(([name, fn]) => {
+    if (!(fn instanceof EffectFn)) return [];
+    const coordination = latchProfiles?.has(fn)
+      ? "Latch"
+      : semaphoreProfiles?.has(fn)
+        ? "Semaphore"
+        : deferredProfiles?.has(fn)
+          ? "Deferred"
+          : undefined;
+    return coordination
+      ? [analyzeGeneratedDeferredGrowth(fn, `functions.${name}.body`, coordination)]
+      : [];
+  });
+  if (coordinationGrowth.length) checkGeneratedDeferredModuleGrowth(coordinationGrowth);
   const runtimeServices = normalizeRuntimeServicesSelection(servicesSelection);
   checkArtifactPolicy(policy);
   checkFailureFramePolicy(failureFrames);
@@ -686,6 +749,7 @@ function lowerFunctionsInternal(
         (f instanceof EffectFn && containsSemaphore(f.error))
       )
         rejectSemaphoreNative();
+      const latchProfile = f instanceof EffectFn ? latchProfiles?.get(f) : undefined;
       const semaphoreProfile = f instanceof EffectFn ? semaphoreProfiles?.get(f) : undefined;
       const deferredProfile = f instanceof EffectFn ? deferredProfiles?.get(f) : undefined;
       const outcomes =
@@ -701,6 +765,7 @@ function lowerFunctionsInternal(
       const rootScope: Scope = {
         ...(deferredProfile ? { deferredTask: 0 } : {}),
         ...(semaphoreProfile ? { semaphoreTask: 0 } : {}),
+        ...(latchProfile ? { latchTask: 0 } : {}),
         bindings: new Map([[f.binder, input]]),
         input,
         files: new Map(),
@@ -722,6 +787,8 @@ function lowerFunctionsInternal(
           fileInputs: scope.fileInputs,
           deferredOwners: scope.deferredOwners,
           deferredTask: scope.deferredTask,
+          latchTask: scope.latchTask,
+          latchOwners: scope.latchOwners,
           semaphoreTask: scope.semaphoreTask,
           semaphoreOwners: scope.semaphoreOwners,
         };
@@ -738,6 +805,8 @@ function lowerFunctionsInternal(
           fileInputs: scope.fileInputs,
           deferredOwners: scope.deferredOwners,
           deferredTask: scope.deferredTask,
+          latchTask: scope.latchTask,
+          latchOwners: scope.latchOwners,
           semaphoreTask: scope.semaphoreTask,
           semaphoreOwners: scope.semaphoreOwners,
         };
@@ -803,8 +872,14 @@ function lowerFunctionsInternal(
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
               LatchMake: rejectLatchNative,
-              LatchScope: rejectLatchNative,
-              LatchOperation: rejectLatchNative,
+              LatchScope: (n) => {
+                if (!latchProfile) rejectLatchNative();
+                computation(n.body);
+              },
+              LatchOperation: (n) => {
+                if (!latchProfile) rejectLatchNative();
+                owners.add(n.binder);
+              },
               SemaphoreMake: rejectSemaphoreNative,
               SemaphoreScope: (n) => {
                 if (!semaphoreProfile) rejectSemaphoreNative();
@@ -834,6 +909,7 @@ function lowerFunctionsInternal(
                 owners.add(n.binder);
               },
               TaskGroup: (n) => {
+                if (latchProfile) scope.latchOwners?.forEach((_, binder) => owners.add(binder));
                 if (semaphoreProfile)
                   scope.semaphoreOwners?.forEach((_, binder) => owners.add(binder));
                 n.children.forEach(computation);
@@ -933,6 +1009,10 @@ function lowerFunctionsInternal(
         return {
           bindings: scope.bindings,
           deferredTask: scope.deferredTask,
+          latchTask: scope.latchTask,
+          latchOwners: scope.latchOwners
+            ? new Map(Array.from(scope.latchOwners).filter(([binder]) => owners.has(binder)))
+            : undefined,
           semaphoreTask: scope.semaphoreTask,
           semaphoreOwners: scope.semaphoreOwners
             ? new Map(Array.from(scope.semaphoreOwners).filter(([binder]) => owners.has(binder)))
@@ -965,7 +1045,9 @@ function lowerFunctionsInternal(
             index,
             files: [],
             input:
-              deferredProfile || semaphoreProfile ? capturedScope(scope, e).input : scope.input,
+              deferredProfile || semaphoreProfile || latchProfile
+                ? capturedScope(scope, e).input
+                : scope.input,
             output: e.type,
             body,
             origin: provenance?.origin(e),
@@ -1286,8 +1368,31 @@ function lowerFunctionsInternal(
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
             LatchMake: rejectLatchNative,
-            LatchScope: rejectLatchNative,
-            LatchOperation: rejectLatchNative,
+            LatchScope: (n): HelperBody => {
+              if (!latchProfile) return rejectLatchNative();
+              const owner = Object.freeze({ name: `latch${index}` });
+              const owners = new Map(scope.latchOwners);
+              owners.set(n.binder, owner);
+              return {
+                _tag: "LatchScope",
+                owner,
+                open: n.open,
+                body: effectHelper(
+                  n.body,
+                  { ...scope, latchOwners: owners },
+                  error,
+                  `${path}.body`,
+                ),
+              };
+            },
+            LatchOperation: (n): HelperBody => {
+              if (!latchProfile) return rejectLatchNative();
+              return {
+                _tag: "LatchOperation",
+                owner: scope.latchOwners!.get(n.binder)!.name,
+                operation: n.operation,
+              };
+            },
             SemaphoreMake: rejectSemaphoreNative,
             SemaphoreScope: (n): HelperBody => {
               if (!semaphoreProfile) return rejectSemaphoreNative();
@@ -1365,9 +1470,11 @@ function lowerFunctionsInternal(
                   child,
                   deferredProfile
                     ? { ...childScope, deferredTask: slots[i] }
-                    : semaphoreProfile
-                      ? { ...childScope, semaphoreTask: i + 1 }
-                      : childScope,
+                    : latchProfile
+                      ? { ...childScope, latchTask: i + 1 }
+                      : semaphoreProfile
+                        ? { ...childScope, semaphoreTask: i + 1 }
+                        : childScope,
                   child.error,
                   `${path}.children[${i}]`,
                 );
@@ -1378,6 +1485,14 @@ function lowerFunctionsInternal(
                 _tag: "TaskGroup",
                 mode: n.mode,
                 children,
+                ...(latchProfile
+                  ? {
+                      latchRoute: {
+                        slots: n.children.map((_, i) => i + 1),
+                        owner: Array.from(scope.latchOwners!.values())[0].name,
+                      },
+                    }
+                  : {}),
                 ...(semaphoreProfile
                   ? {
                       semaphoreRoute: {
@@ -1731,12 +1846,16 @@ function lowerFunctionsInternal(
             }),
           }),
         );
-        const captures = deferredProfile || semaphoreProfile ? capturedScope(scope, c) : scope;
+        const captures =
+          deferredProfile || semaphoreProfile || latchProfile ? capturedScope(scope, c) : scope;
         helpers.set(
           index,
           Object.freeze({
             index,
             files: scope.fileInputs,
+            ...(latchProfile
+              ? { latchOwners: Object.freeze(Array.from(captures.latchOwners?.values() ?? [])) }
+              : {}),
             ...(semaphoreProfile
               ? {
                   semaphoreOwners: Object.freeze(
@@ -1753,6 +1872,8 @@ function lowerFunctionsInternal(
               : {}),
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
+                LatchScope: () => true,
+                LatchOperation: (n) => n.operation === "Await",
                 SemaphoreScope: () => true,
                 SemaphoreWithPermits: () => true,
                 DeferredScope: (n) => helpers.get(n.body)?.asynchronous ?? false,
@@ -1838,12 +1959,14 @@ function lowerFunctionsInternal(
             }
           : {}),
         ...(semaphoreProfile ? { semaphoreProfile } : {}),
+        ...(latchProfile ? { latchProfile } : {}),
         richErrors: outcomes?.requiresRichErrors ?? false,
         services: Object.freeze({ clock, random }),
         name,
         asynchronous:
           !!deferredProfile ||
           !!semaphoreProfile ||
+          !!latchProfile ||
           Match.value(node).pipe(
             Match.tagsExhaustive({
               Pure: () => false,
@@ -2102,7 +2225,9 @@ export const emitFunctions = (
     writer.write(typeof text === "string" ? text : text.text);
   // DINT-007: inline private Deferred futures exceed rustc's default query depth
   // before a 32-frame diagnostic trail can overflow. Keep the allowance finite.
-  const queryAllowance = module.functions.some((f) => f.deferredProfile || f.semaphoreProfile)
+  const queryAllowance = module.functions.some(
+    (f) => f.deferredProfile || f.semaphoreProfile || f.latchProfile,
+  )
     ? '#![recursion_limit = "256"]\n\n'
     : "";
   write(queryAllowance);
@@ -2112,6 +2237,12 @@ export const emitFunctions = (
       generatedDeferredFutureLayoutPrelude
         .replaceAll("deferred", "semaphore")
         .replaceAll("DEFERRED", "SEMAPHORE"),
+    );
+  if (module.functions.some((f) => f.latchProfile))
+    write(
+      generatedDeferredFutureLayoutPrelude
+        .replaceAll("deferred", "latch")
+        .replaceAll("DEFERRED", "LATCH"),
     );
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   const captureFrames = !FailureFrames.isNone(module.failureFrames);
@@ -2180,6 +2311,8 @@ export const emitFunctions = (
         const child = (...children: number[]) => Math.max(0, ...children.map(depth));
         const result = Match.value(f.helpers[index].body).pipe(
           Match.tagsExhaustive({
+            LatchScope: (n) => depth(n.body),
+            LatchOperation: () => 0,
             SemaphoreScope: (n) => depth(n.body),
             SemaphoreWithPermits: (n) => depth(n.body),
             DeferredScope: (n) => depth(n.body),
@@ -2310,7 +2443,7 @@ export const emitFunctions = (
     ),
   );
   const infallibleArities = module.functions
-    .filter((f) => !f.deferredProfile && !f.semaphoreProfile)
+    .filter((f) => !f.deferredProfile && !f.semaphoreProfile && !f.latchProfile)
     .flatMap((f) =>
       f.helpers.flatMap((helper) =>
         Match.value(helper.body).pipe(
@@ -2356,16 +2489,40 @@ export const emitFunctions = (
   const semaphoreProfiles = module.functions.flatMap((f) =>
     f.semaphoreProfile ? [f.semaphoreProfile] : [],
   );
-  if (semaphoreProfiles.length) {
-    const protocolRetries = Math.max(...semaphoreProfiles.map((p) => p.driver.protocolRetries));
+  const latchProfiles = module.functions.flatMap((f) => (f.latchProfile ? [f.latchProfile] : []));
+  const coordinationProfiles = [...semaphoreProfiles, ...latchProfiles];
+  if (coordinationProfiles.length) {
+    const protocolRetries = Math.max(...coordinationProfiles.map((p) => p.driver.protocolRetries));
     const scans = Math.max(1, ...semaphoreProfiles.map((p) => p.driver.scans));
-    const settlementRounds = Math.max(...semaphoreProfiles.map((p) => p.driver.settlementRounds));
-    write(semaphoreDispatchRuntime());
     const timerRegistrations = Math.max(
-      ...semaphoreProfiles.map((p) => p.driver.timerRegistrations),
+      ...coordinationProfiles.map((p) => p.driver.timerRegistrations),
     );
-    write(semaphoreTaskRuntime({ protocolRetries, scans, timerRegistrations }, true));
-    write(semaphoreAllRuntime({ scans, settlementRounds }, true));
+    if (semaphoreProfiles.length) write(semaphoreDispatchRuntime());
+    if (latchProfiles.length) write(latchCohortRuntime());
+    write(
+      semaphoreTaskRuntime(
+        { protocolRetries, scans, timerRegistrations },
+        true,
+        semaphoreProfiles.length ? (latchProfiles.length ? "both" : "semaphore") : "latch",
+      ),
+    );
+    if (semaphoreProfiles.length)
+      write(
+        semaphoreAllRuntime(
+          {
+            scans,
+            settlementRounds: Math.max(...semaphoreProfiles.map((p) => p.driver.settlementRounds)),
+          },
+          true,
+        ),
+      );
+    if (latchProfiles.length)
+      write(
+        latchAllRuntime({
+          cohorts: Math.max(1, ...latchProfiles.map((p) => p.driver.cohorts)),
+          settlementRounds: Math.max(...latchProfiles.map((p) => p.driver.settlementRounds)),
+        }),
+      );
   }
   if (fallibleGroups) write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
@@ -2392,6 +2549,12 @@ export const emitFunctions = (
             ? [
                 identExpr("turn"),
                 ...(helper.deferredOwners ?? []).map((owner) => identExpr(owner.name)),
+              ]
+            : []),
+          ...(f.latchProfile && helper.error
+            ? [
+                identExpr("task"),
+                ...(helper.latchOwners ?? []).map((owner) => identExpr(owner.name)),
               ]
             : []),
           ...(f.semaphoreProfile && helper.error
@@ -2835,6 +2998,8 @@ export const emitFunctions = (
     const entryFrameKind = (body: HelperBody): string =>
       Match.value(body).pipe(
         Match.tags({
+          LatchScope: () => "latchScope",
+          LatchOperation: (n) => `latch${n.operation}`,
           SemaphoreScope: () => "semaphoreScope",
           SemaphoreWithPermits: () => "semaphoreWithPermits",
           DeferredScope: () => "deferredScope",
@@ -2886,6 +3051,21 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          LatchScope: (n) =>
+            joinFragments([
+              `{ let ${n.owner.name} = CohortLatch::<${f.latchProfile!.taskCapacity}>::new(${n.open}); let ${n.owner.name} = &${n.owner.name}; match `,
+              adaptFrag(n.body, helper.output, use("body")),
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "latchScope")} } }`,
+            ]),
+          LatchOperation: (n) => {
+            if (n.operation !== "Await")
+              return textFragment(
+                `{ Ok(${n.owner}.${n.operation === "IsOpen" ? "is_open" : n.operation.toLowerCase()}()) }`,
+              );
+            return textFragment(
+              `{ match task.await_latch(${n.owner}, ctx).await { Ok(()) => Ok(()), ${captureFrames ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "latchAwait").text})))` : "Err(error) => Err(error)"} } }`,
+            );
+          },
           SemaphoreScope: (n) =>
             joinFragments([
               `{ let ${n.owner.name} = ScanSemaphore::<${f.semaphoreProfile!.taskCapacity}>::new(${n.capacity}); let ${n.owner.name} = &${n.owner.name}; match `,
@@ -2954,6 +3134,12 @@ export const emitFunctions = (
                 Rs.identExpr(Rs.ident(`h_${f.name}_${child.index}`)),
                 [Rs.mutRefExpr(identExpr(`child${i}`))].concat(
                   child.input.map((parameter) => Rs.verbatimExpr(helperArgument(parameter))),
+                  ...(f.latchProfile
+                    ? [
+                        identExpr(`task${i}`),
+                        ...(child.latchOwners ?? []).map((owner) => identExpr(owner.name)),
+                      ]
+                    : []),
                   ...(f.semaphoreProfile
                     ? [
                         identExpr(`task${i}`),
@@ -2968,6 +3154,8 @@ export const emitFunctions = (
                     : []),
                 ),
               );
+              if (f.latchProfile)
+                parts.push(`let task${i} = ScanTask::new(task.bank, ${n.latchRoute!.slots[i]}); `);
               if (f.semaphoreProfile)
                 parts.push(
                   `let task${i} = ScanTask::new(task.bank, ${n.semaphoreRoute!.slots[i]}); `,
@@ -2990,42 +3178,55 @@ export const emitFunctions = (
                     : ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible child produced combined cause")' : ""} } }${f.deferredProfile ? ")" : ""}; `,
               );
             });
-            if (f.deferredProfile || f.semaphoreProfile)
+            if (f.deferredProfile || f.semaphoreProfile || f.latchProfile)
               parts.push(`tokio::pin!(${n.children.map((_, i) => `future${i}`).join(", ")}); `);
-            const groupArguments = f.semaphoreProfile
+            const groupArguments = f.latchProfile
               ? [
-                  identExpr(n.semaphoreRoute!.owner),
+                  identExpr(n.latchRoute!.owner),
                   Rs.verbatimExpr("task.bank"),
-                  Rs.verbatimExpr(`[${n.semaphoreRoute!.slots.join(", ")}]`),
+                  Rs.verbatimExpr(`[${n.latchRoute!.slots.join(", ")}]`),
                   ...n.children.map((_, i) =>
                     Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), []),
                   ),
                   Rs.verbatimExpr(`[${n.children.map((_, i) => `cancel${i}`).join(", ")}]`),
                   identExpr("parent_cancellation"),
                 ]
-              : (f.deferredProfile
-                  ? [
-                      Rs.verbatimExpr("turn.bank"),
-                      Rs.verbatimExpr(`[${n.deferredRoute!.slots.join(", ")}]`),
-                      Rs.verbatimExpr(`[${n.deferredRoute!.ends.join(", ")}]`),
-                      Rs.verbatimExpr(`${n.deferredRoute!.parent}`),
-                    ]
-                  : []
-                ).concat(
-                  n.children.flatMap((_, i) => [
-                    f.deferredProfile
-                      ? Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), [])
-                      : identExpr(`future${i}`),
-                    identExpr(`cancel${i}`),
-                  ]),
-                  [identExpr("parent_cancellation"), identExpr("parent_interruptible"), race],
-                );
+              : f.semaphoreProfile
+                ? [
+                    identExpr(n.semaphoreRoute!.owner),
+                    Rs.verbatimExpr("task.bank"),
+                    Rs.verbatimExpr(`[${n.semaphoreRoute!.slots.join(", ")}]`),
+                    ...n.children.map((_, i) =>
+                      Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), []),
+                    ),
+                    Rs.verbatimExpr(`[${n.children.map((_, i) => `cancel${i}`).join(", ")}]`),
+                    identExpr("parent_cancellation"),
+                  ]
+                : (f.deferredProfile
+                    ? [
+                        Rs.verbatimExpr("turn.bank"),
+                        Rs.verbatimExpr(`[${n.deferredRoute!.slots.join(", ")}]`),
+                        Rs.verbatimExpr(`[${n.deferredRoute!.ends.join(", ")}]`),
+                        Rs.verbatimExpr(`${n.deferredRoute!.parent}`),
+                      ]
+                    : []
+                  ).concat(
+                    n.children.flatMap((_, i) => [
+                      f.deferredProfile
+                        ? Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), [])
+                        : identExpr(`future${i}`),
+                      identExpr(`cancel${i}`),
+                    ]),
+                    [identExpr("parent_cancellation"), identExpr("parent_interruptible"), race],
+                  );
             const joined = Rs.await(
               Rs.call(
                 identExpr(
-                  f.semaphoreProfile
-                    ? `scan_all${n.children.length}`
-                    : `${f.deferredProfile ? "coordinated_" : fallible ? "fallible_" : ""}task_group${n.children.length}`,
+                  f.latchProfile
+                    ? `latch_all${n.children.length}`
+                    : f.semaphoreProfile
+                      ? `scan_all${n.children.length}`
+                      : `${f.deferredProfile ? "coordinated_" : fallible ? "fallible_" : ""}task_group${n.children.length}`,
                 ),
                 groupArguments,
               ),
@@ -3253,7 +3454,7 @@ export const emitFunctions = (
           },
           Sleep: (n) =>
             joinFragments([
-              `{ match ${f.semaphoreProfile ? "task.sleep(ctx, " : f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
+              `{ match ${f.semaphoreProfile || f.latchProfile ? "task.sleep(ctx, " : f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
               captureFrames
                 ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
                 : "Err(error) => Err(error)",
@@ -3868,6 +4069,14 @@ export const emitFunctions = (
                     ),
                   ]
                 : []),
+              ...(f.latchProfile && helper.error
+                ? [
+                    `task: ScanTask<'_, ${f.latchProfile.taskCapacity}>`,
+                    ...(helper.latchOwners ?? []).map(
+                      (owner) => `${owner.name}: &CohortLatch<${f.latchProfile!.taskCapacity}>`,
+                    ),
+                  ]
+                : []),
               ...(f.semaphoreProfile && helper.error
                 ? [
                     `task: ScanTask<'_, ${f.semaphoreProfile.taskCapacity}>`,
@@ -3899,9 +4108,10 @@ export const emitFunctions = (
     const deferredEntry = f.deferredProfile
       ? `let bank = DeferredTurns::<${f.deferredProfile.taskCapacity}>::new(); let turn = DeferredTurnHandle::new(&bank, 0); `
       : "";
-    const semaphoreEntry = f.semaphoreProfile
-      ? `let bank = ScanTasks::<${f.semaphoreProfile.taskCapacity}>::new(); let task = ScanTask::new(&bank, 0); `
-      : "";
+    const semaphoreEntry =
+      f.semaphoreProfile || f.latchProfile
+        ? `let bank = ScanTasks::<${(f.semaphoreProfile ?? f.latchProfile)!.taskCapacity}>::new(); let task = ScanTask::new(&bank, 0); `
+        : "";
     const entryCancellation = f.asynchronous
       ? `if ctx.is_cancelled() { ${captureFrames ? `ctx.frames = Some(FrameTrail::new(${frameLiteral(f.name, f.path, "function", f.origin).text}));` : ""} return Err(AsyncError::Interrupted); } `
       : "";
@@ -3937,7 +4147,7 @@ export const emitFunctions = (
     );
     writer.writeFragment(
       joinFragments([
-        `\npub ${f.asynchronous && !f.deferredProfile && !f.semaphoreProfile ? "async " : ""}fn `,
+        `\npub ${f.asynchronous && !f.deferredProfile && !f.semaphoreProfile && !f.latchProfile ? "async " : ""}fn `,
         mapFragment(
           f.origin,
           useAt(f.path),
@@ -3949,7 +4159,7 @@ export const emitFunctions = (
           f.origin,
           useAt(f.path),
           textFragment(
-            f.deferredProfile || f.semaphoreProfile
+            f.deferredProfile || f.semaphoreProfile || f.latchProfile
               ? `impl std::future::Future<Output = ${resultType(f.output, NeverType)}> + '_`
               : Match.value(f.node).pipe(
                   Match.tagsExhaustive({
@@ -3961,7 +4171,7 @@ export const emitFunctions = (
           "definition",
         ),
         " ",
-        f.deferredProfile || f.semaphoreProfile
+        f.deferredProfile || f.semaphoreProfile || f.latchProfile
           ? joinFragments([
               "{ let future = async move ",
               entryBody,
@@ -3970,7 +4180,7 @@ export const emitFunctions = (
                 f.origin,
                 useAt(f.path),
                 textFragment(
-                  `let _layout = assert_${f.semaphoreProfile ? "semaphore" : "deferred"}_future_layout(&future);`,
+                  `let _layout = assert_${f.latchProfile ? "latch" : f.semaphoreProfile ? "semaphore" : "deferred"}_future_layout(&future);`,
                 ),
                 "use",
               ),
@@ -4012,6 +4222,26 @@ export const emitFunctions = (
             useAt(f.path),
             textFragment(
               `{ let future = ${Rs.ident(`r_${f.name}`).text}(ctx); assert_semaphore_future_layout(&future) }`,
+            ),
+            "use",
+          ),
+          ",\n",
+        ]),
+        "] }\n\n",
+      ]),
+    );
+  }
+  const latchRoots = module.functions.filter((f) => f.latchProfile);
+  if (latchRoots.length) {
+    writer.writeFragment(
+      joinFragments([
+        `#[doc(hidden)]\n#[cold]\n#[inline(never)]\npub fn reffect_latch_future_layouts(ctx: &mut AsyncContext) -> [usize; ${latchRoots.length}] { [\n`,
+        ...latchRoots.flatMap((f) => [
+          mapFragment(
+            f.origin,
+            useAt(f.path),
+            textFragment(
+              `{ let future = ${Rs.ident(`r_${f.name}`).text}(ctx); assert_latch_future_layout(&future) }`,
             ),
             "use",
           ),
@@ -4318,10 +4548,13 @@ export const emitFunctions = (
   if (queryAllowance)
     checkGeneratedDeferredRustBytes(
       files,
-      module.functions.some((f) => f.semaphoreProfile) &&
-        !module.functions.some((f) => f.deferredProfile)
-        ? "Semaphore"
-        : "Deferred",
+      module.functions.some((f) => f.latchProfile) &&
+        !module.functions.some((f) => f.deferredProfile || f.semaphoreProfile)
+        ? "Latch"
+        : module.functions.some((f) => f.semaphoreProfile) &&
+            !module.functions.some((f) => f.deferredProfile || f.latchProfile)
+          ? "Semaphore"
+          : "Deferred",
     );
   return Object.freeze({ files, ranges: writer.ranges });
 };

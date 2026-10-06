@@ -11,6 +11,7 @@ export const semaphoreTaskRuntime = (
     scans: 64,
   },
   orderedTimers = false,
+  coordinator: "semaphore" | "latch" | "both" = "semaphore",
 ): string => `
 ${orderedTimers ? semaphoreTimerRuntime(limits.timerRegistrations ?? 64) : ""}
 struct ScanTasks<const N: usize> {
@@ -84,7 +85,9 @@ impl<'a, const N: usize> ScanTask<'a, N> {
     }`
         : ""
     }
-    async fn acquire<'b>(self, owner: &'b ScanSemaphore<N>, ctx: &mut AsyncContext)
+    ${
+      coordinator !== "latch"
+        ? `async fn acquire<'b>(self, owner: &'b ScanSemaphore<N>, ctx: &mut AsyncContext)
         -> Result<ScanPermit<'b, N>, AsyncError<std::convert::Infallible>> {
         if ctx.is_cancelled() { return Err(AsyncError::Interrupted); }
         let permit = if ctx.interruptible {
@@ -98,6 +101,27 @@ impl<'a, const N: usize> ScanTask<'a, N> {
         } else { self.semantic(owner.acquire(self.task)).await };
         // Ownership is established before restoring body interruption, with no await gap.
         if ctx.is_cancelled() { drop(permit); Err(AsyncError::Interrupted) } else { Ok(permit) }
+    }`
+        : ""
+    }
+    ${
+      coordinator !== "semaphore"
+        ? `async fn await_latch(self, owner: &CohortLatch<N>, ctx: &mut AsyncContext)
+        -> Result<(), AsyncError<std::convert::Infallible>> {
+        if ctx.is_cancelled() { return Err(AsyncError::Interrupted); }
+        if ctx.interruptible {
+            self.semantic(async {
+                tokio::select! {
+                    biased;
+                    _ = ctx.cancellation.changed() => Err(AsyncError::Interrupted),
+                    _ = owner.wait(self.task) => Ok(()),
+                }
+            }).await?;
+        } else { self.semantic(owner.wait(self.task)).await; }
+        // A granted lease is consumed before restoring body interruption.
+        if ctx.is_cancelled() { Err(AsyncError::Interrupted) } else { Ok(()) }
+    }`
+        : ""
     }
 }
 async fn scan_with_parent<F: std::future::Future, const K: usize>(
@@ -143,7 +167,7 @@ fn scan_poll<F: std::future::Future, const N: usize>(
     }
     panic!("Checked scan protocol retry bound");
 }
-${[2, 3]
+${(coordinator === "latch" ? [] : [2, 3])
   .map((arity) => {
     const indices = Array.from({ length: arity }, (_, i) => i);
     return `

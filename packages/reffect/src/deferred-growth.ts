@@ -59,7 +59,7 @@ const textBytes = (text: string, limit: number): number => {
 export const analyzeGeneratedDeferredGrowth = (
   fn: EffectFn,
   basePath = "functions.work.body",
-  coordination: "Deferred" | "Semaphore" = "Deferred",
+  coordination: "Deferred" | "Semaphore" | "Latch" = "Deferred",
 ): GeneratedDeferredGrowth => {
   const limits = generatedDeferredGrowthLimits;
   const dimensions = [
@@ -173,6 +173,13 @@ export const analyzeGeneratedDeferredGrowth = (
     };
     Match.value(value.node).pipe(
       Match.tags({
+        LatchScope: (n) => {
+          if (coordination !== "Latch") return unaccounted(path);
+          child(n.body, "body");
+        },
+        LatchOperation: () => {
+          if (coordination !== "Latch") return unaccounted(path);
+        },
         SemaphoreScope: (n) => {
           if (coordination !== "Semaphore") return unaccounted(path);
           child(n.body, "body");
@@ -258,7 +265,7 @@ export const checkGeneratedDeferredModuleGrowth = (
 /** Actual Rust output includes registry templates and escaping not visible in IR counts. */
 export const checkGeneratedDeferredRustBytes = (
   files: Readonly<Record<string, string>>,
-  coordination: "Deferred" | "Semaphore" = "Deferred",
+  coordination: "Deferred" | "Semaphore" | "Latch" = "Deferred",
 ): void => {
   let total = 0;
   const limit = generatedDeferredGrowthLimits.rustBytes;
