@@ -319,9 +319,6 @@ test("SchemaBinary options outside the first slice are refused while compiling",
       (error) => error.message,
     );
   expect(
-    await refusal({ serialization: "schema-binary", schemaBinary: { fingerprintPayloads: true } }),
-  ).toContain("Payload fingerprints");
-  expect(
     await refusal({ serialization: "schema-binary", schemaBinary: { maxFrameSize: 0 } }),
   ).toContain("positive safe integer");
   expect(await refusal({ schemaBinary: { maxFrameSize: 1024 } })).toContain(

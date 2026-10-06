@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-06 — SchemaBinary payload fingerprints
+
+- [Design record](docs/research/schema-binary.md#progress). `schemaBinary: { fingerprintPayloads: true }` is supported: positional structs, union positions and row-run presence masks. Fingerprints are derived at build time from the installed Effect, not ported.
+- The composites and Remote read suites run in both modes, byte-equal to the official server. A union-position mutation is caught.
+
 ## 2026-10-06 — SchemaBinary arrays of records
 
 - [Design record](docs/research/schema-binary.md#progress). Row runs carry record rows (the extras block, bit 30), byte-equal to the official server. A presence-bit mutation is caught.

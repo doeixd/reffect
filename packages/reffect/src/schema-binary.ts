@@ -5,7 +5,8 @@
  * write. Layouts come from the schema's encoded AST, as `SchemaBinary` compiles them; each one is
  * emitted once as straight-line code, so no schema tree is interpreted at run time.
  */
-import { Effect, Match, SchemaAST } from "effect";
+import { Effect, Exit, Match, Schema, SchemaAST } from "effect";
+import { SchemaBinary } from "effect/encoding";
 import { Rpc, RpcSchema, RpcSerialization } from "effect/rpc";
 import { unsupported } from "./contract-codec.ts";
 import { namingDigest } from "./naming.ts";
@@ -297,9 +298,25 @@ const literalValue = (literal: LiteralValue) =>
       ? `number_value(${literal === Math.trunc(literal) ? `${literal}.0` : literal})`
       : `Value::Bool(${literal})`;
 
+/** A union member's position in fingerprint mode: variants by tag ascending, then rows by kind. */
+const positionsOf = (layout: Extract<Layout, { readonly _: "union" }>) => {
+  const variants = [...layout.variants].sort((a, b) => a.tag - b.tag);
+  return {
+    variant: (tag: number) => variants.findIndex((variant) => variant.tag === tag),
+    row: (k: number) => variants.length + layout.rows.findIndex((row) => row.k === k),
+  };
+};
+
 /** The functions of every layout reached, each emitted once under a digest of its layout. */
 class Emitter {
   readonly items = new Map<string, string>();
+  /** Generated names' prefix: one function set per mode, `sb` (default) or `sp` (fingerprint). */
+  readonly p: string;
+  readonly P: string;
+  constructor(readonly positional: boolean) {
+    this.p = positional ? "sp" : "sb";
+    this.P = positional ? "Sp" : "Sb";
+  }
   json = false;
   name(layout: Layout): string {
     const name = namingDigest(JSON.stringify(layout));
@@ -317,7 +334,7 @@ class Emitter {
   }
   /** Reads the whole extent; `None` is an unknown union member, which reads as absent. */
   private read(layout: Layout, name: string): string {
-    const head = `fn sbr_${name}(r: &mut ${SB}::Reader) -> Result<Option<Value>, ${FAILURE}> {\n`;
+    const head = `fn ${this.p}r_${name}(r: &mut ${SB}::Reader) -> Result<Option<Value>, ${FAILURE}> {\n`;
     switch (layout._) {
       case "string":
         return `${head}    Ok(Some(Value::String(r.string()?)))\n}\n`;
@@ -343,6 +360,7 @@ class Emitter {
       case "array":
         return this.readArray(layout.item, head);
       case "union": {
+        if (this.positional) return this.readUnionPositional(layout, head);
         const variants = layout.variants
           .map((variant) => {
             const sentinels = variant.sentinels
@@ -351,7 +369,7 @@ class Emitter {
                   `object.insert(${rustString(key)}.into(), ${literalValue(literal)}); `,
               )
               .join("");
-            return `            ${variant.tag} => { let Some(Value::Object(mut object)) = sbr_${this.name(variant.payload)}(r)? else { return Ok(None) }; ${sentinels}Ok(Some(Value::Object(object))) }\n`;
+            return `            ${variant.tag} => { let Some(Value::Object(mut object)) = ${this.p}r_${this.name(variant.payload)}(r)? else { return Ok(None) }; ${sentinels}Ok(Some(Value::Object(object))) }\n`;
           })
           .join("");
         const variantArm = layout.variants.length
@@ -359,18 +377,19 @@ class Emitter {
           : "";
         // A present `undefined` reads as `null`, as `toCodecJson` writes it.
         const arms = layout.rows
-          .map(({ k, layout: member }) => `        ${k} => sbr_${this.name(member)}(r),\n`)
+          .map(({ k, layout: member }) => `        ${k} => ${this.p}r_${this.name(member)}(r),\n`)
           .join("");
         return `${head}    match r.byte()? {\n${variantArm}${arms}        _ => { r.rest(); Ok(None) }\n    }\n}\n`;
       }
     }
   }
   private readStruct(layout: StructLayout, head: string, keyed = false): string {
+    if (this.positional) return this.readStructPositional(layout, head, keyed);
     const names = layout.fields.map((field) => rustString(field.name)).join(", ");
     const arms = layout.fields
       .map(
         (field) =>
-          `            ${field.id} => if let Some(value) = sbf_${this.name(field.layout)}(r, wire).map_err(|failure: ${FAILURE}| failure.at_key(${rustString(field.name)}))? { object.insert(${rustString(field.name)}.into(), value); },\n`,
+          `            ${field.id} => if let Some(value) = ${this.p}f_${this.name(field.layout)}(r, wire).map_err(|failure: ${FAILURE}| failure.at_key(${rustString(field.name)}))? { object.insert(${rustString(field.name)}.into(), value); },\n`,
       )
       .join("");
     const extras = layout.extra
@@ -390,7 +409,7 @@ class Emitter {
                     if [${names}].contains(&key.as_str()) { return Err(${SB}::Invalid("an extra key distinct from declared fields").into()); }
                     if keys.contains(&key) { return Err(${SB}::Invalid("unique extra keys").into()); }
                     keys.push(key.clone());
-                    if let Some(value) = sbf_${this.name(layout.extra)}(&mut map, pair_wire).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
+                    if let Some(value) = ${this.p}f_${this.name(layout.extra)}(&mut map, pair_wire).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
                 }
             }`
       : `${SB}::skip_extras(r, wire, &[${names}])?`;
@@ -403,13 +422,125 @@ class Emitter {
       `            _ => ${SB}::skip_field(r, wire)?,\n        }\n    }\n    Ok(Some(Value::Object(object)))\n}\n`
     );
   }
+  /** `decodeUnionPositional`: a position, then the member; an unknown position is an error. */
+  private readUnionPositional(
+    layout: Extract<Layout, { readonly _: "union" }>,
+    head: string,
+  ): string {
+    const positions = positionsOf(layout);
+    const variants = layout.variants
+      .map((variant) => {
+        const sentinels = variant.sentinels
+          .map(
+            ({ key, literal }) =>
+              `object.insert(${rustString(key)}.into(), ${literalValue(literal)}); `,
+          )
+          .join("");
+        return `        ${positions.variant(variant.tag)} => { let Some(Value::Object(mut object)) = ${this.p}r_${this.name(variant.payload)}(r)? else { return Ok(None) }; ${sentinels}Ok(Some(Value::Object(object))) }\n`;
+      })
+      .join("");
+    const rows = layout.rows
+      .map(
+        ({ k, layout: member }) =>
+          `        ${positions.row(k)} => ${this.p}r_${this.name(member)}(r),\n`,
+      )
+      .join("");
+    return `${head}    match r.uv()? {\n${variants}${rows}        _ => Err(${SB}::Invalid("known union member").into()),\n    }\n}\n`;
+  }
+  /**
+   * `decodeStructPositional`: a bitmap of the optional fields, the fields in id order (inline
+   * slots raw, others sized), then the extra pairs' count and pairs.
+   */
+  private readStructPositional(layout: StructLayout, head: string, keyed: boolean): string {
+    const optional = layout.fields.filter((field) => field.optional).length;
+    const bitmapBytes = (optional + 7) >> 3;
+    let index = 0;
+    const fields = layout.fields
+      .map((field) => {
+        const key = rustString(field.name);
+        const read = `${this.p}r_${this.name(field.layout)}`;
+        const kind = field.layout._ === "literal" ? field.layout.leaf : field.layout._;
+        const value =
+          kind === "int"
+            ? `${read}(r)`
+            : kind === "bool"
+              ? `(|| { let mut slot = ${SB}::Reader::new(r.take(1)?); let value = ${read}(&mut slot)?; slot.finish()?; Ok(value) })()`
+              : kind === "null" || kind === "undefined"
+                ? `${read}(&mut ${SB}::Reader::new(&[]))`
+                : `(|| { let mut slot = r.sized()?; let value = ${read}(&mut slot)?; if value.is_some() { slot.finish()?; } Ok(value) })()`;
+        const body = `if let Some(value) = ${value}.map_err(|failure: ${FAILURE}| failure.at_key(${key}))? { object.insert(${key}.into(), value); }`;
+        if (!field.optional) return `    ${body}\n`;
+        const bit = index++;
+        return `    if bitmap[${bit >> 3}] & ${1 << (bit & 7)} != 0 { ${body} }\n`;
+      })
+      .join("");
+    const names = layout.fields.map((field) => rustString(field.name)).join(", ");
+    const extras = layout.extra
+      ? `    let count = r.uv()?;
+    if count > r.remaining() as u64 { return Err(${SB}::Invalid("complete value").into()); }
+    let mut keys: Vec<String> = Vec::new();
+    for _ in 0..count {
+        ${
+          keyed
+            ? `let (key, pair_wire) = ${SB}::read_interned_key(r, table)?;`
+            : `let code = r.uv()?;
+        let len = usize::try_from(code / 8).map_err(|_| ${SB}::Invalid("complete value"))?;
+        let key = ${SB}::Reader::new(r.take(len)?).string()?;
+        let pair_wire = (code % 8) as u8;`
+        }
+        if [${names}].contains(&key.as_str()) { return Err(${SB}::Invalid("an extra key distinct from declared fields").into()); }
+        if keys.contains(&key) { return Err(${SB}::Invalid("unique extra keys").into()); }
+        keys.push(key.clone());
+        if let Some(value) = ${this.p}f_${this.name(layout.extra)}(r, pair_wire).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
+    }
+`
+      : "";
+    const bitmap = bitmapBytes ? `    let bitmap = r.take(${bitmapBytes})?;\n` : "";
+    return `${head}    let mut object = serde_json::Map::new();\n${bitmap}${fields}${extras}    Ok(Some(Value::Object(object)))\n}\n`;
+  }
+  /** `encodeStructPositional`, with the extra pairs sorted by their keys' UTF-8 bytes. */
+  private writeStructPositional(layout: StructLayout, head: string, keyed: boolean): string {
+    const optional = layout.fields.filter((field) => field.optional);
+    const bitmapBytes = (optional.length + 7) >> 3;
+    const bits = optional
+      .map(
+        (field, i) =>
+          `    if object.contains_key(${rustString(field.name)}) { bitmap[${i >> 3}] |= ${1 << (i & 7)}; }\n`,
+      )
+      .join("");
+    const bitmap = bitmapBytes
+      ? `    let mut bitmap = [0u8; ${bitmapBytes}];\n${bits}    out.extend_from_slice(&bitmap);\n`
+      : "";
+    const fields = layout.fields
+      .map((field) => {
+        const key = rustString(field.name);
+        const write = inline(field.layout)
+          ? `${this.p}w_${this.name(field.layout)}(item, out)?;`
+          : `let mut slot = Vec::new(); ${this.p}w_${this.name(field.layout)}(item, &mut slot)?; ${SB}::put_sized(out, &slot);`;
+        const missing = field.optional
+          ? ""
+          : ` else { return Err(format!("Missing key {}", ${key})); }`;
+        return `    if let Some(item) = object.get(${key}) { ${write} }${missing}\n`;
+      })
+      .join("");
+    const names = layout.fields.map((field) => rustString(field.name)).join(", ");
+    const tag = keyed ? `${SB}::Tag::Interned(key, table)` : `${SB}::Tag::Key(key)`;
+    const extras = layout.extra
+      ? `    let mut extras: Vec<(&String, &Value)> = object.iter().filter(|(key, _)| ![${names}].contains(&key.as_str())).collect();
+    extras.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    ${SB}::put_uv(out, extras.len() as u64);
+    for (key, item) in extras { ${this.p}t_${this.name(layout.extra)}(item, out, ${tag})?; }
+`
+      : "";
+    return `${head}    let object = value.as_object().ok_or("an object")?;\n${bitmap}${fields}${extras}    Ok(())\n}\n`;
+  }
   private readArray(item: Layout, head: string): string {
     const zeroWidth = item._ === "null" || item._ === "undefined";
     const count = `    let count = ${SB}::read_count(r, ${zeroWidth})?;\n`;
     const each = (read: string) =>
       `${head}${count}    let mut items = Vec::with_capacity(count.min(r.remaining()));\n    for index in 0..count {\n        items.push((|| -> Result<Value, ${FAILURE}> { ${read} })().map_err(|failure| failure.at_index(index))?);\n    }\n    Ok(Some(Value::Array(items)))\n}\n`;
     if (item._ === "struct") {
-      return `${head}${count}    if count > 0 { return sbrun_r_${this.run(item)}(r, count); }\n    Ok(Some(Value::Array(Vec::new())))\n}\n`;
+      return `${head}${count}    if count > 0 { return ${this.p}run_r_${this.run(item)}(r, count); }\n    Ok(Some(Value::Array(Vec::new())))\n}\n`;
     }
     if (item._ === "number")
       return `${head}${count}    Ok(Some(Value::Array(${SB}::read_number_run(r, count)?.into_iter().map(number_value).collect())))\n}\n`;
@@ -418,7 +549,7 @@ class Emitter {
       return each(
         `let len = usize::try_from(r.uv()?).map_err(|_| ${SB}::Invalid("complete value"))?; Ok(Value::String(${SB}::Reader::new(r.take(len)?).string()?))`,
       );
-    const read = `sbr_${this.name(item)}`;
+    const read = `${this.p}r_${this.name(item)}`;
     const missing = `.ok_or(${FAILURE}::new(${SB}::Issue::MissingKey))?`;
     if (inline(item)) {
       const width = zeroWidth ? 0 : 1;
@@ -432,7 +563,7 @@ class Emitter {
   }
   /** A struct field's payload by wire kind; an incompatible kind is skipped as absent. */
   private readField(layout: Layout, name: string): string {
-    const head = `fn sbf_${name}(r: &mut ${SB}::Reader, wire: u8) -> Result<Option<Value>, ${FAILURE}> {\n`;
+    const head = `fn ${this.p}f_${name}(r: &mut ${SB}::Reader, wire: u8) -> Result<Option<Value>, ${FAILURE}> {\n`;
     const skip = `{ ${SB}::skip_field(r, wire)?; Ok(None) }`;
     const kind = layout._ === "literal" ? layout.leaf : layout._;
     switch (kind) {
@@ -443,12 +574,12 @@ class Emitter {
       case "int":
         return `${head}    match wire { ${SB}::FIELD_WIRE_VARINT => Ok(Some(number_value(r.sm()?))), _ => ${skip} }\n}\n`;
       default:
-        return `${head}    if wire != ${SB}::FIELD_WIRE_SIZED ${skip} else {\n        let mut slot = r.sized()?;\n        let value = sbr_${name}(&mut slot)?;\n        if value.is_some() { slot.finish()?; }\n        Ok(value)\n    }\n}\n`;
+        return `${head}    if wire != ${SB}::FIELD_WIRE_SIZED ${skip} else {\n        let mut slot = r.sized()?;\n        let value = ${this.p}r_${name}(&mut slot)?;\n        if value.is_some() { slot.finish()?; }\n        Ok(value)\n    }\n}\n`;
     }
   }
   /** Writes a value the server's own encoders produced into its extent. */
   private write(layout: Layout, name: string): string {
-    const head = `fn sbw_${name}(value: &Value, out: &mut Vec<u8>) -> Result<(), String> {\n`;
+    const head = `fn ${this.p}w_${name}(value: &Value, out: &mut Vec<u8>) -> Result<(), String> {\n`;
     switch (layout._) {
       case "string":
         return `${head}    out.extend_from_slice(value.as_str().ok_or("a string")?.as_bytes());\n    Ok(())\n}\n`;
@@ -474,20 +605,25 @@ class Emitter {
         return this.writeArray(layout.item, head);
       case "union": {
         // The member a JSON value can only be, as Effect's member selection finds it: the first
-        // variant whose sentinels all match, then a member of the value's kind.
+        // variant whose sentinels all match, then a member of the value's kind. Default mode tags
+        // a member by kind (a variant also by its hash), fingerprint mode by position.
+        const positions = positionsOf(layout);
         const variants = layout.variants
           .map((variant) => {
             const guard = variant.sentinels
               .map(({ key, literal }) => literalMatch(`object.get(${rustString(key)})`, literal))
               .join(" && ");
-            return `    if let Value::Object(object) = value { if ${guard} { ${SB}::put_variant(out, ${variant.tag}); return sbw_${this.name(variant.payload)}(value, out); } }\n`;
+            const tag = this.positional
+              ? `${SB}::put_uv(out, ${positions.variant(variant.tag)});`
+              : `${SB}::put_variant(out, ${variant.tag});`;
+            return `    if let Value::Object(object) = value { if ${guard} { ${tag} return ${this.p}w_${this.name(variant.payload)}(value, out); } }\n`;
           })
           .join("");
         const pick = (k: number) => {
           const member = layout.rows.find((row) => row.k === k);
           return member === undefined
             ? undefined
-            : `{ out.push(${k}); sbw_${this.name(member.layout)}(value, out) }`;
+            : `{ ${this.positional ? `${SB}::put_uv(out, ${positions.row(k)});` : `out.push(${k});`} ${this.p}w_${this.name(member.layout)}(value, out) }`;
         };
         const json = pick(17);
         const arms = [
@@ -506,6 +642,7 @@ class Emitter {
     }
   }
   private writeStruct(layout: StructLayout, head: string, keyed = false): string {
+    if (this.positional) return this.writeStructPositional(layout, head, keyed);
     const object = `    let object = value.as_object().ok_or("an object")?;\n`;
     const names = layout.fields.map((field) => rustString(field.name)).join(", ");
     const tag = keyed ? `${SB}::Tag::Interned(key, table)` : `${SB}::Tag::Key(key)`;
@@ -515,7 +652,7 @@ class Emitter {
     extras.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
     if !extras.is_empty() {
         let mut map = Vec::new();
-        for (key, item) in extras { sbt_${this.name(layout.extra)}(item, &mut map, ${tag})?; }
+        for (key, item) in extras { ${this.p}t_${this.name(layout.extra)}(item, &mut map, ${tag})?; }
         ${SB}::put_field_tag(out, ${SB}::Tag::Id(0), ${SB}::FIELD_WIRE_SIZED);
         ${SB}::put_sized(out, &map);
     }
@@ -527,7 +664,7 @@ class Emitter {
         const missing = field.optional
           ? ""
           : ` else { return Err(format!("Missing key {}", ${key})); }`;
-        return `    if let Some(item) = object.get(${key}) { sbt_${this.name(field.layout)}(item, out, ${SB}::Tag::Id(${field.id}))?; }${missing}\n`;
+        return `    if let Some(item) = object.get(${key}) { ${this.p}t_${this.name(field.layout)}(item, out, ${SB}::Tag::Id(${field.id}))?; }${missing}\n`;
       })
       .join("");
     return `${head}${object}${extras}${fields}    let _ = out;\n    Ok(())\n}\n`;
@@ -542,12 +679,12 @@ class Emitter {
       name,
       this.readStruct(
         layout,
-        `fn sbrk_${digest}(r: &mut ${SB}::Reader, table: &mut Vec<String>) -> Result<Option<Value>, ${FAILURE}> {\n`,
+        `fn ${this.p}rk_${digest}(r: &mut ${SB}::Reader, table: &mut Vec<String>) -> Result<Option<Value>, ${FAILURE}> {\n`,
         true,
       ) +
         this.writeStruct(
           layout,
-          `fn sbwk_${digest}(value: &Value, out: &mut Vec<u8>, table: &std::cell::RefCell<${SB}::InternWrite>) -> Result<(), String> {\n`,
+          `fn ${this.p}wk_${digest}(value: &Value, out: &mut Vec<u8>, table: &std::cell::RefCell<${SB}::InternWrite>) -> Result<(), String> {\n`,
           true,
         ),
     );
@@ -556,19 +693,19 @@ class Emitter {
   private writeArray(item: Layout, head: string): string {
     const items = `    let items = value.as_array().ok_or("an array")?;\n    ${SB}::put_uv(out, items.len() as u64);\n`;
     if (item._ === "struct")
-      return `${head}${items}    if !items.is_empty() { sbrun_w_${this.run(item)}(items, out)?; }\n    Ok(())\n}\n`;
+      return `${head}${items}    if !items.is_empty() { ${this.p}run_w_${this.run(item)}(items, out)?; }\n    Ok(())\n}\n`;
     if (item._ === "number")
       return `${head}${items}    let xs = items.iter().map(value_number).collect::<Result<Vec<f64>, String>>()?;\n    ${SB}::put_number_run(out, &xs);\n    Ok(())\n}\n`;
     if (item._ === "string")
       return `${head}${items}    for item in items { ${SB}::put_sized(out, item.as_str().ok_or("a string")?.as_bytes()); }\n    Ok(())\n}\n`;
-    const write = `sbw_${this.name(item)}`;
+    const write = `${this.p}w_${this.name(item)}`;
     if (inline(item))
       return `${head}${items}    for item in items { ${write}(item, out)?; }\n    Ok(())\n}\n`;
     return `${head}${items}    for item in items { let mut slot = Vec::new(); ${write}(item, &mut slot)?; ${SB}::put_sized(out, &slot); }\n    Ok(())\n}\n`;
   }
   /** A tagged struct field (or extra entry), with the wire kind its value selects. */
   private writeField(layout: Layout, name: string): string {
-    const head = `fn sbt_${name}(value: &Value, out: &mut Vec<u8>, tag: ${SB}::Tag) -> Result<(), String> {\n`;
+    const head = `fn ${this.p}t_${name}(value: &Value, out: &mut Vec<u8>, tag: ${SB}::Tag) -> Result<(), String> {\n`;
     const kind = layout._ === "literal" ? layout.leaf : layout._;
     switch (kind) {
       case "bool":
@@ -578,7 +715,7 @@ class Emitter {
       case "int":
         return `${head}    let x = int_number(value)?;\n    ${SB}::put_field_tag(out, tag, ${SB}::FIELD_WIRE_VARINT);\n    ${SB}::put_sm(out, x);\n    Ok(())\n}\n`;
       default:
-        return `${head}    let mut slot = Vec::new();\n    sbw_${name}(value, &mut slot)?;\n    ${SB}::put_field_tag(out, tag, ${SB}::FIELD_WIRE_SIZED);\n    ${SB}::put_sized(out, &slot);\n    Ok(())\n}\n`;
+        return `${head}    let mut slot = Vec::new();\n    ${this.p}w_${name}(value, &mut slot)?;\n    ${SB}::put_field_tag(out, tag, ${SB}::FIELD_WIRE_SIZED);\n    ${SB}::put_sized(out, &slot);\n    Ok(())\n}\n`;
     }
   }
   /**
@@ -589,13 +726,13 @@ class Emitter {
     const name = `ne_${namingDigest(JSON.stringify(item))}`;
     if (this.items.has(name)) return name;
     this.items.set(name, "");
-    const head = `fn sb${name}(items: &[Value], out: &mut Vec<u8>) -> Result<(), String> {\n    ${SB}::put_uv(out, items.len() as u64);\n`;
+    const head = `fn ${this.p}${name}(items: &[Value], out: &mut Vec<u8>) -> Result<(), String> {\n    ${SB}::put_uv(out, items.len() as u64);\n`;
     const body =
       item._ === "struct"
-        ? `    if !items.is_empty() { sbrun_w_${this.run(item)}(items, out)?; }\n`
+        ? `    if !items.is_empty() { ${this.p}run_w_${this.run(item)}(items, out)?; }\n`
         : inline(item)
-          ? `    for item in items { sbw_${this.name(item)}(item, out)?; }\n`
-          : `    for item in items { let mut slot = Vec::new(); sbw_${this.name(item)}(item, &mut slot)?; ${SB}::put_sized(out, &slot); }\n`;
+          ? `    for item in items { ${this.p}w_${this.name(item)}(item, out)?; }\n`
+          : `    for item in items { let mut slot = Vec::new(); ${this.p}w_${this.name(item)}(item, &mut slot)?; ${SB}::put_sized(out, &slot); }\n`;
     this.items.set(name, `${head}${body}    Ok(())\n}\n`);
     return name;
   }
@@ -639,8 +776,8 @@ class Emitter {
             : kinds[i] === "elements"
               ? `let strings = item.as_array().ok_or("an array")?; let mut region = Vec::new(); ${SB}::put_uv(&mut region, strings.len() as u64); for string in strings { t${i}.put(&mut region, string.as_str().ok_or("a string")?); } ${SB}::put_region(&mut row, &region);`
               : kinds[i] === "keys" && field.layout._ === "struct"
-                ? `let mut region = Vec::new(); sbwk_${this.keyed(field.layout)}(item, &mut region, &t${i})?; ${SB}::put_region(&mut row, &region);`
-                : `let mut region = Vec::new(); sbw_${this.name(field.layout)}(item, &mut region)?; ${SB}::put_region(&mut row, &region);`;
+                ? `let mut region = Vec::new(); ${this.p}wk_${this.keyed(field.layout)}(item, &mut region, &t${i})?; ${SB}::put_region(&mut row, &region);`
+                : `let mut region = Vec::new(); ${this.p}w_${this.name(field.layout)}(item, &mut region)?; ${SB}::put_region(&mut row, &region);`;
         return `        if let Some(item) = object.get(${rustString(field.name)}) { if declare { ${SB}::put_uv(&mut row, ${field.id}); } ${region} }\n`;
       })
       .join("");
@@ -656,12 +793,13 @@ class Emitter {
       ? `        if !extras.is_empty() {
             if declare { ${SB}::put_uv(&mut row, 0); }
             let mut region = Vec::new();
-            for (key, item) in extras { sbt_${this.name(layout.extra)}(item, &mut region, ${SB}::Tag::Key(key))?; }
+            for (key, item) in extras { ${this.p}t_${this.name(layout.extra)}(item, &mut region, ${SB}::Tag::Key(key))?; }
             ${SB}::put_region(&mut row, &region);
         }
 `
       : "";
-    const write = `fn sbrun_w_${digest}(items: &[Value], out: &mut Vec<u8>) -> Result<(), String> {
+    const positionalShape = this.positional && !wide;
+    const write = `fn ${this.p}run_w_${digest}(items: &[Value], out: &mut Vec<u8>) -> Result<(), String> {
     let mut shapes: Vec<u64> = Vec::new();
 ${writeTables}    for item in items {
         let object = item.as_object().ok_or("an object")?;
@@ -670,9 +808,10 @@ ${presence}${extrasMask}        let mut row = Vec::new();
         let shape = ${wide ? "None::<usize>" : "shapes.iter().position(|seen| *seen == mask)"};
         match shape {
             Some(index) => ${SB}::put_uv(&mut row, index as u64 + 1),
-            None => { ${SB}::put_uv(&mut row, 0); ${wide ? "let _ = &mut shapes;" : "shapes.push(mask);"} }
+            None => { ${SB}::put_uv(&mut row, 0); ${wide ? "let _ = &mut shapes;" : `${positionalShape ? `${SB}::put_uv(&mut row, mask); ` : ""}shapes.push(mask);`} }
         }
-        let declare = shape.is_none();
+        // A declared shape names its fields by id, unless it is a positional presence mask.
+        let declare = shape.is_none() && ${!positionalShape};
 ${extrasRegion}${regions}        ${SB}::put_sized(out, &row);
     }
     Ok(())
@@ -689,8 +828,8 @@ ${extrasRegion}${regions}        ${SB}::put_sized(out, &row);
             : kinds[i] === "elements"
               ? `let value = (|| -> Result<Value, ${FAILURE}> { let count = ${SB}::read_count(&mut region, false)?; let mut strings = Vec::new(); for index in 0..count { strings.push(Value::String(${SB}::read_interned(&mut region, &mut state.t${i}).map_err(|invalid| ${FAILURE}::from(invalid).at_index(index))?)); } region.finish()?; Ok(Value::Array(strings)) })()${at}; object.insert(${key}.into(), value);`
               : kinds[i] === "keys" && field.layout._ === "struct"
-                ? `let value = (|| -> Result<Option<Value>, ${FAILURE}> { let value = sbrk_${this.keyed(field.layout)}(&mut region, &mut state.t${i})?; if value.is_some() { region.finish()?; } Ok(value) })()${at}; if let Some(value) = value { object.insert(${key}.into(), value); }`
-                : `let value = (|| -> Result<Option<Value>, ${FAILURE}> { let value = sbr_${this.name(field.layout)}(&mut region)?; if value.is_some() { region.finish()?; } Ok(value) })()${at}; if let Some(value) = value { object.insert(${key}.into(), value); }`;
+                ? `let value = (|| -> Result<Option<Value>, ${FAILURE}> { let value = ${this.p}rk_${this.keyed(field.layout)}(&mut region, &mut state.t${i})?; if value.is_some() { region.finish()?; } Ok(value) })()${at}; if let Some(value) = value { object.insert(${key}.into(), value); }`
+                : `let value = (|| -> Result<Option<Value>, ${FAILURE}> { let value = ${this.p}r_${this.name(field.layout)}(&mut region)?; if value.is_some() { region.finish()?; } Ok(value) })()${at}; if let Some(value) = value { object.insert(${key}.into(), value); }`;
         return `        ${i} => { ${body} }\n`;
       })
       .join("");
@@ -703,10 +842,10 @@ ${extrasRegion}${regions}        ${SB}::put_sized(out, &row);
       .join("");
     const idArms = fields.map((field, i) => `                ${field.id} => ${i},\n`).join("");
     const read = `#[derive(Default)]
-struct SbRun${digest} {
+struct ${this.P}Run${digest} {
     shapes: Vec<Vec<usize>>,
 ${tables}}
-fn sbrun_slot_${digest}(state: &mut SbRun${digest}, slot: usize, row: &mut ${SB}::Reader, object: &mut serde_json::Map<String, Value>) -> Result<(), ${FAILURE}> {
+fn ${this.p}run_slot_${digest}(state: &mut ${this.P}Run${digest}, slot: usize, row: &mut ${SB}::Reader, object: &mut serde_json::Map<String, Value>) -> Result<(), ${FAILURE}> {
     let code = row.uv()?;
     if code % 2 == 1 {
         let index = usize::try_from((code - 1) / 2).map_err(|_| ${SB}::Invalid("a known back-reference"))?;
@@ -729,7 +868,7 @@ ${slotArms}        ${extras} => ${
                 if [${names}].contains(&key.as_str()) { return Err(${SB}::Invalid("an extra key distinct from declared fields").into()); }
                 if keys.contains(&key) { return Err(${SB}::Invalid("unique extra keys").into()); }
                 keys.push(key.clone());
-                if let Some(value) = sbf_${this.name(layout.extra)}(&mut region, (code % 8) as u8).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
+                if let Some(value) = ${this.p}f_${this.name(layout.extra)}(&mut region, (code % 8) as u8).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
             }
         }`
         : `${SB}::skip_extra_pairs(&mut region, &[${names}])?`
@@ -738,11 +877,21 @@ ${slotArms}        ${extras} => ${
     }
     Ok(())
 }
-fn sbrun_row_${digest}(state: &mut SbRun${digest}, r: &mut ${SB}::Reader) -> Result<Value, ${FAILURE}> {
+fn ${this.p}run_row_${digest}(state: &mut ${this.P}Run${digest}, r: &mut ${SB}::Reader) -> Result<Value, ${FAILURE}> {
     let mut row = r.sized()?;
     let mut object = serde_json::Map::new();
     let code = row.uv()?;
-    if code == 0 {
+    if code == 0 && ${positionalShape} {
+        let mask = row.uv()?;
+        let field_bits = mask & !(1u64 << ${SB}::RUN_MAX_FIELDS);
+        if mask > (1u64 << 31) - 1 || (field_bits >> ${fields.length}) != 0 { return Err(${SB}::Invalid("a known row shape").into()); }
+        let mut shape = Vec::new();
+        if mask & (1u64 << ${SB}::RUN_MAX_FIELDS) != 0 { shape.push(${extras}); }
+        for index in 0..${fields.length} { if field_bits & (1u64 << index) != 0 { shape.push(index); } }
+        state.shapes.push(shape.clone());
+        for slot in shape { ${this.p}run_slot_${digest}(state, slot, &mut row, &mut object)?; }
+        row.finish()?;
+    } else if code == 0 {
         let mut declared = Vec::new();
         let mut seen: Vec<u64> = Vec::new();
         while !row.is_empty() {
@@ -754,21 +903,21 @@ fn sbrun_row_${digest}(state: &mut SbRun${digest}, r: &mut ${SB}::Reader) -> Res
 ${idArms}                _ => ${unknown},
             };
             declared.push(slot);
-            sbrun_slot_${digest}(state, slot, &mut row, &mut object)?;
+            ${this.p}run_slot_${digest}(state, slot, &mut row, &mut object)?;
         }
         ${wide ? "let _ = declared;" : "state.shapes.push(declared);"}
     } else {
         let shape = usize::try_from(code - 1).ok().and_then(|index| state.shapes.get(index)).cloned().ok_or(${SB}::Invalid("a known row shape"))?;
-        for slot in shape { sbrun_slot_${digest}(state, slot, &mut row, &mut object)?; }
+        for slot in shape { ${this.p}run_slot_${digest}(state, slot, &mut row, &mut object)?; }
         row.finish()?;
     }
     Ok(Value::Object(object))
 }
-fn sbrun_r_${digest}(r: &mut ${SB}::Reader, count: usize) -> Result<Option<Value>, ${FAILURE}> {
-    let mut state = SbRun${digest}::default();
+fn ${this.p}run_r_${digest}(r: &mut ${SB}::Reader, count: usize) -> Result<Option<Value>, ${FAILURE}> {
+    let mut state = ${this.P}Run${digest}::default();
     let mut items = Vec::with_capacity(count.min(r.remaining()));
     for index in 0..count {
-        items.push(sbrun_row_${digest}(&mut state, r).map_err(|failure| failure.at_index(index))?);
+        items.push(${this.p}run_row_${digest}(&mut state, r).map_err(|failure| failure.at_index(index))?);
     }
     Ok(Some(Value::Array(items)))
 }
@@ -777,6 +926,59 @@ fn sbrun_r_${digest}(r: &mut ${SB}::Reader, count: usize) -> Result<Option<Value
     return digest;
   }
 }
+
+/** A schema over an AST's encoded side, whose binary layout (and fingerprint) is the AST's. */
+const encoded = (ast: SchemaAST.AST) => Schema.make<Schema.Top>(SchemaAST.toEncoded(ast));
+/** Whether an encoded-side value of the schema exists to encode (`Never` has none). */
+const hasSample = (ast: SchemaAST.AST): boolean => {
+  try {
+    sampleOf(ast);
+    return true;
+  } catch {
+    return false;
+  }
+};
+/** A smallest encoded-side value, encoded only to read its frame's fingerprint. */
+const sampleOf = (ast: SchemaAST.AST): unknown => {
+  const e = SchemaAST.toEncoded(ast);
+  if (SchemaAST.isString(e)) return "";
+  if (SchemaAST.isNumber(e)) return 0;
+  if (SchemaAST.isBoolean(e)) return false;
+  if (SchemaAST.isNull(e) || SchemaAST.isUnknown(e)) return null;
+  if (SchemaAST.isUndefined(e) || SchemaAST.isVoid(e)) return undefined;
+  if (SchemaAST.isLiteral(e)) return e.literal;
+  if (SchemaAST.isArrays(e)) return e.elements.map(sampleOf);
+  if (SchemaAST.isObjects(e))
+    return Object.fromEntries(
+      e.propertySignatures
+        .filter((property) => !SchemaAST.isOptional(property.type))
+        .map((property) => [property.name, sampleOf(property.type)]),
+    );
+  if (SchemaAST.isUnion(e))
+    for (const member of e.types) if (hasSample(member)) return sampleOf(member);
+  throw new Error(`No sample of a ${e._tag} schema`);
+};
+/**
+ * A fingerprint-mode layout hash, from the installed Effect: the frame of one sample (SB-002). It
+ * is not ported; the stock client's own frames check it at run time.
+ */
+const fingerprintOf = (schema: Schema.Top, sample: unknown): readonly number[] => {
+  const frame = Schema.encodeUnknownSync(
+    SchemaBinary.toCodec(schema, { fingerprint: true }) as unknown as Schema.Codec<
+      unknown,
+      Uint8Array
+    >,
+    { disableChecks: true },
+  )(sample);
+  let header = 0;
+  while (frame[header]! >= 0x80) header++;
+  if (frame[header + 1] !== 0x21) throw new Error("Not a fingerprint-mode frame");
+  return Array.from(frame.subarray(header + 2, header + 10));
+};
+const rustBytes = (bytes: readonly number[]) =>
+  `[${bytes.map((byte) => `0x${byte.toString(16).padStart(2, "0")}`).join(", ")}]`;
+const fingerprintCode = (bytes: string | undefined) =>
+  bytes === undefined ? "None" : `Some(${bytes})`;
 
 /** One procedure's transcoders: its payload, and its exit as `Rpc.exitSchema` writes it. */
 export interface BinaryProcedure {
@@ -791,8 +993,10 @@ export interface BinaryProcedure {
 export const schemaBinaryCodecs = (
   procedures: readonly BinaryProcedure[],
   maxFrameSize: number | undefined,
+  fingerprintPayloads = false,
 ): { readonly text: string; readonly json: boolean } => {
-  const emitter = new Emitter();
+  const emitter = new Emitter(fingerprintPayloads);
+  const p = emitter.p;
   const arms = procedures.map(({ tag, rpc }) => {
     const path = `rpc.${tag}`;
     const exit = Rpc.exitSchema(rpc).ast;
@@ -813,8 +1017,45 @@ export const schemaBinaryCodecs = (
     const stream = RpcSchema.isStreamSchema(rpc.successSchema)
       ? rpc.successSchema.success
       : undefined;
+    const fingerprints = fingerprintPayloads
+      ? {
+          payload: emitted(
+            () =>
+              rustBytes(
+                fingerprintOf(encoded(rpc.payloadSchema.ast), sampleOf(rpc.payloadSchema.ast)),
+              ),
+            `${path}.payload`,
+          ),
+          exit: emitted(
+            () =>
+              rustBytes(
+                fingerprintOf(
+                  Schema.Exit(
+                    encoded(exit.typeParameters[0]),
+                    encoded(exit.typeParameters[1]),
+                    Schema.Defect(),
+                  ),
+                  hasSample(exit.typeParameters[0])
+                    ? Exit.succeed(sampleOf(exit.typeParameters[0]))
+                    : Exit.die("sample"),
+                ),
+              ),
+            `${path}.exit`,
+          ),
+          chunk:
+            stream &&
+            emitted(
+              () =>
+                rustBytes(
+                  fingerprintOf(Schema.NonEmptyArray(encoded(stream.ast)), [sampleOf(stream.ast)]),
+                ),
+              `${path}.stream`,
+            ),
+        }
+      : undefined;
     return {
       tag,
+      fingerprints,
       chunk:
         stream &&
         emitted(() => emitter.nonEmpty(layoutOf(stream.ast, `${path}.stream`)), `${path}.stream`),
@@ -843,11 +1084,11 @@ fn int_number(value: &Value) -> Result<f64, String> {
 /// A request's payload frame as the JSON value its procedure's codec reads; an unknown tag reads
 /// nothing, and dispatch refuses it.
 fn sb_payload(tag: &str, bytes: &[u8]) -> Result<Value, String> {
-    let read: SbRead = match tag {
-${arms.map((arm) => `        ${rustString(arm.tag)} => sbr_${arm.payload},\n`).join("")}        _ => return Ok(Value::Null),
+    let (read, fingerprint): (SbRead, Option<[u8; 8]>) = match tag {
+${arms.map((arm) => `        ${rustString(arm.tag)} => (${p}r_${arm.payload}, ${fingerprintCode(arm.fingerprints?.payload)}),\n`).join("")}        _ => return Ok(Value::Null),
     };
     let decode = || -> Result<Value, ${FAILURE}> {
-        let mut r = ${SB}::Reader::new(${SB}::one_frame(bytes, None)?);
+        let mut r = ${SB}::Reader::new(${SB}::one_frame(bytes, fingerprint)?);
         let value = read(&mut r)?.ok_or(${FAILURE}::new(${SB}::Issue::MissingKey))?;
         r.finish()?;
         Ok(value)
@@ -857,21 +1098,25 @@ ${arms.map((arm) => `        ${rustString(arm.tag)} => sbr_${arm.payload},\n`).j
 /// A streamed chunk's elements, written as its procedure's \`NonEmptyArray\` frame.
 fn sb_chunk(tag: &str, values: &[Value]) -> Result<Vec<u8>, String> {
     let mut value = Vec::new();
-    match tag {
+    let fingerprint: Option<[u8; 8]> = match tag {
 ${arms
   .flatMap((arm) =>
-    arm.chunk ? [`        ${rustString(arm.tag)} => sb${arm.chunk}(values, &mut value)?,\n`] : [],
+    arm.chunk
+      ? [
+          `        ${rustString(arm.tag)} => { ${p}${arm.chunk}(values, &mut value)?; ${fingerprintCode(arm.fingerprints?.chunk)} }\n`,
+        ]
+      : [],
   )
   .join("")}        _ => return Err("a streaming procedure".into()),
-    }
+    };
     let mut frame = Vec::new();
-    ${SB}::put_frame(&mut frame, None, &value);
+    ${SB}::put_frame(&mut frame, fingerprint.as_ref(), &value);
     Ok(frame)
 }
 /// An answer's exit, as the JSON value the server builds, written as its procedure's frame.
 fn sb_exit(tag: &str, exit: &Value) -> Result<Vec<u8>, String> {
-    let (success, error): (SbWrite, SbWrite) = match tag {
-${arms.map((arm) => `        ${rustString(arm.tag)} => (sbw_${arm.success}, sbw_${arm.error}),\n`).join("")}        _ => (sbw_${never}, sbw_${never}),
+    let (success, error, fingerprint): (SbWrite, SbWrite, Option<[u8; 8]>) = match tag {
+${arms.map((arm) => `        ${rustString(arm.tag)} => (${p}w_${arm.success}, ${p}w_${arm.error}, ${fingerprintCode(arm.fingerprints?.exit)}),\n`).join("")}        _ => (${p}w_${never}, ${p}w_${never}, None),
     };
     let mut value = Vec::new();
     match exit.get("_tag").and_then(Value::as_str) {
@@ -899,7 +1144,7 @@ ${arms.map((arm) => `        ${rustString(arm.tag)} => (sbw_${arm.success}, sbw_
         _ => return Err("an Exit".into()),
     }
     let mut frame = Vec::new();
-    ${SB}::put_frame(&mut frame, None, &value);
+    ${SB}::put_frame(&mut frame, fingerprint.as_ref(), &value);
     Ok(frame)
 }
 ${[...emitter.items.values()].join("")}`;

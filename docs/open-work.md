@@ -26,7 +26,6 @@ Everything still to be done, collected from the design and research records on 2
 - M9 remaining:
   - Reads a second `satisfy` pass would add (a Surface waiting on another's data) are not planned for native pages ([M9-3](research/ssr-data.md#m9-3-plan-agreed-2026-10-03)).
 - Showcase: `examples/todo-fullstack`, one binary serving pages, assets, RPC, Remote live and SQLx/Postgres ([§29](implementation-milestones.md#29-first-major-showcase-application), [conformance](conformance-and-diagnostics.md#46-first-concrete-target))
-- M10: SchemaBinary generated codecs with bidirectional and byte-equality tests ([§30](implementation-milestones.md#30-milestone-10--schemabinary)); the first slice is delivered (unary; scalars, structs, tagged unions, arrays, records, `Unknown`, authentication; byte-equal to the official server). Remaining items are listed under [Protocol and transports](#protocol-and-transports)
 - M11: WebSocket sessions, server notifications, reverse RPC, two-way cancellation ([§31](implementation-milestones.md#31-milestone-11--websocket--bidirectional-rpc))
 - M12: broader concurrency — Fiber, fork/join, Semaphore, SynchronizedRef, SubscriptionRef, Deferred, Queue, PubSub, FiberRef ([§32](implementation-milestones.md#32-milestone-12--broader-effect-concurrency)); companions: ownership IR ([§33](implementation-milestones.md#33-structured-concurrency-ownership-pass)), Ref specialization ([§34](implementation-milestones.md#34-ref-specialization)), law-enabled optimization ([§35](implementation-milestones.md#35-laws-start-enabling-real-optimization-here))
 - M13: optional Cruster distributed profile ([§36](implementation-milestones.md#36-milestone-13--cruster-distributed-profile))
@@ -79,9 +78,7 @@ These block many items below.
 
 ### Protocol and transports
 
-- NDJSON HTTP streaming (M6), WebSocket sessions (M11), notifications and reverse RPC, SchemaBinary (M10), raw TCP, custom serializers with JS fallback (M14), one transport interface over HTTP/WebSocket/TCP/Worker/in-memory ([rpc-protocol](rpc-protocol.md#one-common-transport-interface))
-- SchemaBinary beyond the first slice ([schema-binary](research/schema-binary.md#progress)):
-  - `fingerprintPayloads`;
+- NDJSON HTTP streaming (M6), WebSocket sessions (M11), notifications and reverse RPC, SchemaBinary over WebSocket (M10 is delivered over HTTP), raw TCP, custom serializers with JS fallback (M14), one transport interface over HTTP/WebSocket/TCP/Worker/in-memory ([rpc-protocol](rpc-protocol.md#one-common-transport-interface))
 - SchemaBinary: re-probe request-level defects when [Effect-TS/effect#8826](https://github.com/Effect-TS/effect/issues/8826) is fixed, and drop SB-REQUEST-DEFECT if the fixed bytes match ([schema-binary](research/schema-binary.md#progress))
 - Showcase sequence: streaming `WatchTodos` over NDJSON with auth, Scope, SQLx and cancellation, then WebSocket + SchemaBinary ([rpc-protocol](rpc-protocol.md#how-i-would-sequence-these-features))
 

@@ -295,7 +295,8 @@ export type CompileOptions = {
   readonly serialization?: "json" | "ndjson" | "schema-binary";
   /**
    * `layerSchemaBinary`'s options, under `serialization: "schema-binary"`. `maxFrameSize`
-   * defaults to 16 MiB. Payload fingerprints are not supported yet.
+   * defaults to 16 MiB; `fingerprintPayloads` writes payloads, exits and chunks in fingerprint
+   * mode, as the client must too.
    */
   readonly schemaBinary?: {
     readonly maxFrameSize?: number | "unbounded";
@@ -1090,6 +1091,7 @@ export const compileServer = (
                 return { tag: rpc._tag, rpc };
               }),
               binary.maxFrameSize,
+              binary.fingerprintPayloads,
             ),
           layered: layer !== undefined,
           services: serverServices.map((service) => service.id),
@@ -1577,18 +1579,15 @@ const jsNumberKeepingSign = jsNumber.replace(
 );
 if (jsNumberKeepingSign === jsNumber) throw new Error("js_number no longer has its -0 branch");
 /** `layerSchemaBinary`'s options, checked (SB-001). */
-const schemaBinaryOf = (options: CompileOptions): { readonly maxFrameSize: number | undefined } => {
+const schemaBinaryOf = (
+  options: CompileOptions,
+): { readonly maxFrameSize: number | undefined; readonly fingerprintPayloads: boolean } => {
   const { maxFrameSize = 16 * 1024 * 1024, fingerprintPayloads = false } =
     options.schemaBinary ?? {};
-  if (fingerprintPayloads)
-    throw unsupported(
-      "schemaBinary.fingerprintPayloads",
-      "Payload fingerprints are not supported yet",
-    );
-  if (maxFrameSize === "unbounded") return { maxFrameSize: undefined };
+  if (maxFrameSize === "unbounded") return { maxFrameSize: undefined, fingerprintPayloads };
   if (!Number.isSafeInteger(maxFrameSize) || maxFrameSize < 1)
     throw unsupported("schemaBinary.maxFrameSize", 'A positive safe integer, or "unbounded"');
-  return { maxFrameSize };
+  return { maxFrameSize, fingerprintPayloads };
 };
 /** A host encoder for one `Schema.toCodecJson` witness (RM-006). */
 interface JsonEncoder {

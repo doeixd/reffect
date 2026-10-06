@@ -38,101 +38,107 @@ const binary = Effect.runSync(
   ),
 );
 /** The JSON corpus's payload, as the stock client would write it under SchemaBinary. */
-const body = (payload: unknown) =>
+const body = (payload: unknown, fingerprint = false) =>
   binary.makeUnsafe().encode({
     _tag: "Request",
     id: 1,
     tag: "FoldkitRemoteRead",
-    payload: Schema.encodeUnknownSync(SchemaBinary.toCodec(Read.payloadSchema))(
+    payload: Schema.encodeUnknownSync(SchemaBinary.toCodec(Read.payloadSchema, { fingerprint }))(
       Schema.decodeUnknownSync(Schema.toCodecJson(Read.payloadSchema))(payload),
     ),
     headers: [],
   }) as Uint8Array<ArrayBuffer>;
 
-const oracle = Effect.gen(function* () {
-  const handlers = RemoteServer.handlers(RemoteServer.memory({ domain, rows }).server, undefined);
-  const http = yield* RpcServer.toHttpEffect(ReadGroup, { disableTracing: true }).pipe(
-    Effect.provide([
-      ReadGroup.toLayer({ FoldkitRemoteRead: handlers.FoldkitRemoteRead }),
-      RpcSerialization.layerSchemaBinary(),
-    ]),
-  );
-  return HttpEffect.toWebHandler(http);
-});
-
-test(
-  "the native read engine matches foldkit-remote-server over SchemaBinary",
-  async () => {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const official = yield* oracle;
-          const fs = yield* FileSystem.FileSystem;
-          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sb-remote-" });
-          const artifact = yield* NativeRemote.compile(ReadGroup, {
-            domain,
-            rows,
-            serialization: "schema-binary",
-          });
-          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-          yield* CargoApi.fetch(directory);
-          yield* CargoApi.build(directory, "debug");
-          const child = yield* ChildProcess.make(
-            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-            ["--port", "0"],
-          );
-          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-          const ready = yield* Stream.runHead(
-            Stream.splitLines(Stream.decodeText(child.stdout)),
-          ).pipe(Effect.timeout("10 seconds"));
-          if (!Option.isSome(ready)) throw new Error("Missing ready record");
-          const { address } = Schema.decodeUnknownSync(
-            Schema.Struct({
-              schema: Schema.Literal("reffect.rpc.ready@1"),
-              address: Schema.String,
-            }),
-          )(JSON.parse(ready.value));
-          const url = `http://${address}/rpc`;
-          const hex = async (response: Response) =>
-            `${response.status} ${Buffer.from(await response.arrayBuffer()).toString("hex")}`;
-          for (const [label, payload] of corpus) {
-            const bytes = body(payload);
-            const native = yield* Effect.promise(() =>
-              fetch(url, { method: "POST", body: bytes }).then(hex),
-            );
-            const expected = yield* Effect.promise(() =>
-              official(
-                new Request("http://reffect.test/rpc", { method: "POST", body: bytes }),
-              ).then(hex),
-            );
-            expect(native, label).toBe(expected);
-          }
-
-          const client = yield* RpcClient.make(ReadGroup, { disableTracing: true }).pipe(
-            Effect.provide(
-              RpcClient.layerProtocolHttp({ url }).pipe(
-                Layer.provide([FetchHttpClient.layer, RpcSerialization.layerSchemaBinary()]),
-              ),
-            ),
-          );
-          const result = yield* client.FoldkitRemoteRead({
-            version: 4,
-            requests: [
-              {
-                entity: "Project",
-                id: "p3",
-                fields: ["owner"],
-                relations: { owner: { entity: "User", fields: ["name"] } },
-              },
-            ],
-          });
-          expect(result.entities.map((entity) => entity.id)).toEqual(["p3", "u2"]);
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
+const oracle = (fingerprintPayloads: boolean) =>
+  Effect.gen(function* () {
+    const handlers = RemoteServer.handlers(RemoteServer.memory({ domain, rows }).server, undefined);
+    const http = yield* RpcServer.toHttpEffect(ReadGroup, { disableTracing: true }).pipe(
+      Effect.provide([
+        ReadGroup.toLayer({ FoldkitRemoteRead: handlers.FoldkitRemoteRead }),
+        RpcSerialization.layerSchemaBinary({ fingerprintPayloads }),
+      ]),
     );
-  },
-  nativeTestBudget(0) + 240000,
-);
+    return HttpEffect.toWebHandler(http);
+  });
+
+for (const fingerprintPayloads of [false, true])
+  test(
+    `the native read engine matches foldkit-remote-server over SchemaBinary (fingerprintPayloads: ${fingerprintPayloads})`,
+    async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const official = yield* oracle(fingerprintPayloads);
+            const fs = yield* FileSystem.FileSystem;
+            const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sb-remote-" });
+            const artifact = yield* NativeRemote.compile(ReadGroup, {
+              domain,
+              rows,
+              serialization: "schema-binary",
+              schemaBinary: { fingerprintPayloads },
+            });
+            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+            yield* CargoApi.fetch(directory);
+            yield* CargoApi.build(directory, "debug");
+            const child = yield* ChildProcess.make(
+              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+              ["--port", "0"],
+            );
+            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+            const ready = yield* Stream.runHead(
+              Stream.splitLines(Stream.decodeText(child.stdout)),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (!Option.isSome(ready)) throw new Error("Missing ready record");
+            const { address } = Schema.decodeUnknownSync(
+              Schema.Struct({
+                schema: Schema.Literal("reffect.rpc.ready@1"),
+                address: Schema.String,
+              }),
+            )(JSON.parse(ready.value));
+            const url = `http://${address}/rpc`;
+            const hex = async (response: Response) =>
+              `${response.status} ${Buffer.from(await response.arrayBuffer()).toString("hex")}`;
+            for (const [label, payload] of corpus) {
+              const bytes = body(payload, fingerprintPayloads);
+              const native = yield* Effect.promise(() =>
+                fetch(url, { method: "POST", body: bytes }).then(hex),
+              );
+              const expected = yield* Effect.promise(() =>
+                official(
+                  new Request("http://reffect.test/rpc", { method: "POST", body: bytes }),
+                ).then(hex),
+              );
+              expect(native, label).toBe(expected);
+            }
+
+            const client = yield* RpcClient.make(ReadGroup, { disableTracing: true }).pipe(
+              Effect.provide(
+                RpcClient.layerProtocolHttp({ url }).pipe(
+                  Layer.provide([
+                    FetchHttpClient.layer,
+                    RpcSerialization.layerSchemaBinary({ fingerprintPayloads }),
+                  ]),
+                ),
+              ),
+            );
+            const result = yield* client.FoldkitRemoteRead({
+              version: 4,
+              requests: [
+                {
+                  entity: "Project",
+                  id: "p3",
+                  fields: ["owner"],
+                  relations: { owner: { entity: "User", fields: ["name"] } },
+                },
+              ],
+            });
+            expect(result.entities.map((entity) => entity.id)).toEqual(["p3", "u2"]);
+          }),
+        ).pipe(Effect.provide(NodeServices.layer)),
+      );
+    },
+    nativeTestBudget(0) + 240000,
+  );
 
 // Live and Mutate over SchemaBinary: the stock client subscribes while R mutations signal the
 // hub; the native hub sends what upstream's liveHub sends, and mutation answers are byte-equal.

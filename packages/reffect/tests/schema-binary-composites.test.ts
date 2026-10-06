@@ -1,7 +1,9 @@
 /**
  * Milestone 10 step 4 (docs/research/schema-binary.md): tagged unions, arrays (number runs,
  * struct row runs with interning), records and `Unknown` under `serialization: "schema-binary"`,
- * byte for byte as the official server running the same R handlers writes them.
+ * byte for byte as the official server running the same R handlers writes them; in default mode
+ * and with `fingerprintPayloads` (fingerprint mode: positional structs, union positions, row-run
+ * presence masks).
  */
 import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { SchemaBinary } from "effect/encoding";
@@ -69,32 +71,40 @@ const echo = R.fn([RBag], RBag, (bag) => bag);
 const reject = R.fn([RShape], R.Number, RShape, (shape) => R.Effect.fail(shape));
 const bindings = { Echo: NativeRpc.bind(echo), Reject: NativeRpc.bind(reject) };
 
-const official = Effect.gen(function* () {
-  const run = <A, E>(effect: Effect.Effect<A, E | { readonly _tag: "CompileError" }>) =>
-    effect.pipe(Effect.catchTag("CompileError", Effect.die));
-  const handlers = Group.toLayer({
-    Echo: (bag) => run(Reference.run(echo, [bag])),
-    Reject: (shape) => run(Reference.run(reject, [shape])),
+const official = (fingerprintPayloads: boolean) =>
+  Effect.gen(function* () {
+    const run = <A, E>(effect: Effect.Effect<A, E | { readonly _tag: "CompileError" }>) =>
+      effect.pipe(Effect.catchTag("CompileError", Effect.die));
+    const handlers = Group.toLayer({
+      Echo: (bag) => run(Reference.run(echo, [bag])),
+      Reject: (shape) => run(Reference.run(reject, [shape])),
+    });
+    const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
+      Effect.provide([handlers, RpcSerialization.layerSchemaBinary({ fingerprintPayloads })]),
+    );
+    return HttpEffect.toWebHandler(http);
   });
-  const http = yield* RpcServer.toHttpEffect(Group, { disableTracing: true }).pipe(
-    Effect.provide([handlers, RpcSerialization.layerSchemaBinary()]),
-  );
-  return HttpEffect.toWebHandler(http);
-});
 
 const binary = Effect.runSync(
   Effect.service(RpcSerialization.RpcSerialization).pipe(
     Effect.provide(RpcSerialization.layerSchemaBinary()),
   ),
 );
-const requestBody = (tag: "Echo" | "Reject", payload: unknown, id = 0) => {
+const requestBody = (
+  tag: "Echo" | "Reject",
+  payload: unknown,
+  id = 0,
+  fingerprintPayloads = false,
+) => {
   const rpc = Group.requests.get(tag);
   if (rpc === undefined) throw new Error(tag);
   return binary.makeUnsafe().encode({
     _tag: "Request",
     id,
     tag,
-    payload: Schema.encodeUnknownSync(SchemaBinary.toCodec(rpc.payloadSchema))(payload),
+    payload: Schema.encodeUnknownSync(
+      SchemaBinary.toCodec(rpc.payloadSchema, { fingerprint: fingerprintPayloads }),
+    )(payload),
     headers: [],
   }) as Uint8Array<ArrayBuffer>;
 };
@@ -169,82 +179,96 @@ const bags: ReadonlyArray<readonly [string, typeof Bag.Type]> = [
   ],
 ];
 
-test(
-  "composite SchemaBinary shapes answer byte for byte as the official server",
-  async () => {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const reference = yield* official;
-          const fs = yield* FileSystem.FileSystem;
-          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sb-composites-" });
-          const artifact = yield* NativeRpc.compile(Group, bindings, {
-            serialization: "schema-binary",
-          });
-          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
-          yield* CargoApi.fetch(directory);
-          yield* CargoApi.build(directory, "debug");
-          const child = yield* ChildProcess.make(
-            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
-            ["--port", "0"],
-          );
-          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
-          const ready = yield* Stream.runHead(
-            Stream.splitLines(Stream.decodeText(child.stdout)),
-          ).pipe(Effect.timeout("10 seconds"));
-          if (!Option.isSome(ready)) throw new Error("Missing ready record");
-          const { address } = Schema.decodeUnknownSync(
-            Schema.Struct({
-              schema: Schema.Literal("reffect.rpc.ready@1"),
-              address: Schema.String,
-            }),
-          )(JSON.parse(ready.value));
-          const url = `http://${address}/rpc`;
-          const answer =
-            (respond: (body: Uint8Array<ArrayBuffer>) => Promise<Response>) =>
-            (body: Uint8Array<ArrayBuffer>) =>
-              Effect.promise(async () => {
-                const response = await respond(body);
-                return `${response.status} ${Buffer.from(await response.arrayBuffer()).toString("hex")}`;
-              });
-          const native = answer((body) => fetch(url, { method: "POST", body }));
-          const officially = answer((body) =>
-            reference(new Request("http://reffect.test/rpc", { method: "POST", body })),
-          );
+for (const fingerprintPayloads of [false, true])
+  test(
+    `composite SchemaBinary shapes answer byte for byte as the official server (fingerprintPayloads: ${fingerprintPayloads})`,
+    async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const reference = yield* official(fingerprintPayloads);
+            const fs = yield* FileSystem.FileSystem;
+            const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-sb-composites-" });
+            const artifact = yield* NativeRpc.compile(Group, bindings, {
+              serialization: "schema-binary",
+              schemaBinary: { fingerprintPayloads },
+            });
+            const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+            yield* CargoApi.fetch(directory);
+            yield* CargoApi.build(directory, "debug");
+            const child = yield* ChildProcess.make(
+              `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+              ["--port", "0"],
+            );
+            yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+            const ready = yield* Stream.runHead(
+              Stream.splitLines(Stream.decodeText(child.stdout)),
+            ).pipe(Effect.timeout("10 seconds"));
+            if (!Option.isSome(ready)) throw new Error("Missing ready record");
+            const { address } = Schema.decodeUnknownSync(
+              Schema.Struct({
+                schema: Schema.Literal("reffect.rpc.ready@1"),
+                address: Schema.String,
+              }),
+            )(JSON.parse(ready.value));
+            const url = `http://${address}/rpc`;
+            const answer =
+              (respond: (body: Uint8Array<ArrayBuffer>) => Promise<Response>) =>
+              (body: Uint8Array<ArrayBuffer>) =>
+                Effect.promise(async () => {
+                  const response = await respond(body);
+                  return `${response.status} ${Buffer.from(await response.arrayBuffer()).toString("hex")}`;
+                });
+            const native = answer((body) => fetch(url, { method: "POST", body }));
+            const officially = answer((body) =>
+              reference(new Request("http://reffect.test/rpc", { method: "POST", body })),
+            );
 
-          const corpus = [
-            ...bags.map(([label, bag], i) => [label, requestBody("Echo", bag, i)] as const),
-            ...[
-              { _tag: "Circle", r: 2 },
-              { _tag: "Square", side: 0.5, label: "l" },
-              { _tag: "Empty" },
-            ].map((shape) => [`reject ${shape._tag}`, requestBody("Reject", shape)] as const),
-          ];
-          for (const [label, body] of corpus)
-            expect(yield* native(body), label).toBe(yield* officially(body));
-
-          const client = yield* RpcClient.make(Group, { disableTracing: true }).pipe(
-            Effect.provide(
-              RpcClient.layerProtocolHttp({ url }).pipe(
-                Layer.provide([FetchHttpClient.layer, RpcSerialization.layerSchemaBinary()]),
+            const corpus = [
+              ...bags.map(
+                ([label, bag], i) =>
+                  [label, requestBody("Echo", bag, i, fingerprintPayloads)] as const,
               ),
-            ),
-          );
-          // What the reference answers, through Effect's own SchemaBinary round trip: an
-          // `Unknown` is JSON text, where -0 is 0.
-          const BagCodec = SchemaBinary.toCodec(Bag);
-          for (const [label, bag] of bags)
-            expect(yield* client.Echo(bag), label).toStrictEqual(
-              Schema.decodeSync(BagCodec)(
-                Schema.encodeSync(BagCodec)(yield* Reference.run(echo, [bag]).pipe(Effect.orDie)),
+              ...[
+                { _tag: "Circle", r: 2 },
+                { _tag: "Square", side: 0.5, label: "l" },
+                { _tag: "Empty" },
+              ].map(
+                (shape) =>
+                  [
+                    `reject ${shape._tag}`,
+                    requestBody("Reject", shape, 0, fingerprintPayloads),
+                  ] as const,
+              ),
+            ];
+            for (const [label, body] of corpus)
+              expect(yield* native(body), label).toBe(yield* officially(body));
+
+            const client = yield* RpcClient.make(Group, { disableTracing: true }).pipe(
+              Effect.provide(
+                RpcClient.layerProtocolHttp({ url }).pipe(
+                  Layer.provide([
+                    FetchHttpClient.layer,
+                    RpcSerialization.layerSchemaBinary({ fingerprintPayloads }),
+                  ]),
+                ),
               ),
             );
-          expect(yield* Effect.flip(client.Reject({ _tag: "Empty" }))).toStrictEqual({
-            _tag: "Empty",
-          });
-        }),
-      ).pipe(Effect.provide(NodeServices.layer)),
-    );
-  },
-  nativeTestBudget(0) + 240000,
-);
+            // What the reference answers, through Effect's own SchemaBinary round trip: an
+            // `Unknown` is JSON text, where -0 is 0.
+            const BagCodec = SchemaBinary.toCodec(Bag);
+            for (const [label, bag] of bags)
+              expect(yield* client.Echo(bag), label).toStrictEqual(
+                Schema.decodeSync(BagCodec)(
+                  Schema.encodeSync(BagCodec)(yield* Reference.run(echo, [bag]).pipe(Effect.orDie)),
+                ),
+              );
+            expect(yield* Effect.flip(client.Reject({ _tag: "Empty" }))).toStrictEqual({
+              _tag: "Empty",
+            });
+          }),
+        ).pipe(Effect.provide(NodeServices.layer)),
+      );
+    },
+    nativeTestBudget(0) + 240000,
+  );

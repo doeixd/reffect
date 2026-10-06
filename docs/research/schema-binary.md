@@ -231,6 +231,13 @@ The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its
   - **Evidence:** the composites corpus gains a case alternating rows with and without keys, and it is byte-equal to the official server's. Dropping the presence bit makes that case fail.
   - Tuples and `NonEmptyArray` payloads are not a SchemaBinary gap: reffect's contract codecs admit neither under any serialization.
 
+- **`fingerprintPayloads`, done (2026-10-06).** `schemaBinary: { fingerprintPayloads: true }` writes payloads, exits and chunks in fingerprint mode, as `layerSchemaBinary({ fingerprintPayloads: true })` does. The generator emits a second function set (`sp*`) for it:
+  - **Structs** are positional: a bitmap of the optional fields, the fields in id order (inline slots raw, others sized), then the extra pairs' count and pairs (keys interned under `KEYS`).
+  - **Unions** write `uv(position)`, variants by sentinel hash and then other members by kind; an unknown position is an error.
+  - **Row runs** declare a shape by its presence mask (structs of up to 30 fields).
+  - **Fingerprints are not ported.** Each one (payload, `Rpc.exitSchema`, the stream's `NonEmptyArray`) is read at build time from the frame of a minimal encoded-side sample, encoded by the installed Effect's `toCodec(..., { fingerprint: true })`. The stock client then checks them on every frame it reads, and the native server checks the client's.
+  - **Evidence:** the composites suite and the Remote read corpus run in both modes, and each is byte-equal to the official server and round-trips through the stock client. Dropping the variant ordering of union positions fails only the fingerprint-mode run, at the tagged-union case.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.
