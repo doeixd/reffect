@@ -1,5 +1,5 @@
 import { containsLatch, usesLatchExpression } from "./latch-model.ts";
-import { hasLatchComputation } from "./latch-profile.ts";
+import { analyzeGeneratedLatchProfile } from "./latch-generated-profile.ts";
 import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
 import { containsSemaphore, usesSemaphoreExpression } from "./semaphore-model.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
@@ -53,6 +53,7 @@ import {
   lowerFunctions,
   lowerDeferredFunctions,
   lowerSemaphoreFunctions,
+  lowerLatchFunctions,
   emitFunctions,
 } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -620,6 +621,14 @@ const checkedSemaphoreProfiles = (program: Program) => {
   semaphoreProfiles.set(program, profiles);
   return profiles;
 };
+const latchProfiles = new WeakMap<Program, ReturnType<typeof analyzeGeneratedLatchProfile>>();
+const checkedLatchProfiles = (program: Program) => {
+  const previous = latchProfiles.get(program);
+  if (previous) return previous;
+  const profiles = analyzeGeneratedLatchProfile(program);
+  latchProfiles.set(program, profiles);
+  return profiles;
+};
 const checkedPrograms = new WeakSet<Program>();
 const derivedPrograms = new WeakMap<Program, Analysis>();
 const verifiedPlans = new WeakSet<Plan>();
@@ -643,19 +652,13 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         message: `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
       })),
     });
-  const latchEntries = Object.entries(program.functions).filter(
-    ([, f]) => f instanceof EffectFn && hasLatchComputation(f.body),
-  );
-  if (latchEntries.length)
-    return yield* new CompileError({
-      message: "Latch native execution is not admitted",
-      diagnostics: latchEntries.map(([name]) => ({
-        code: "LATCH_NATIVE_UNSUPPORTED",
-        stage: "check",
-        path: `functions.${name}`,
-        message: "Private Latch IR requires checked cohort scheduling before native admission",
-      })),
-    });
+  yield* Effect.try({
+    try: () => checkedLatchProfiles(program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("LATCH_GENERATED_PROFILE", "check", "functions", String(cause)),
+  });
   yield* Effect.try({
     try: () => checkedSemaphoreProfiles(program),
     catch: (cause) =>
@@ -1063,7 +1066,8 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
       ),
       ...(Array.from(types).some(reachesUnknown) ? [Capabilities.Json] : []),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
-      ...(effectRefs.has(SyncEffects.DeferredMake) ||
+      ...(effectRefs.has(SyncEffects.LatchMake) ||
+      effectRefs.has(SyncEffects.DeferredMake) ||
       effectRefs.has(SyncEffects.SemaphoreMake) ||
       Array.from(effectRefs).some((ref) =>
         Object.values(AsyncEffects).some((supported) => supported === ref),
@@ -1109,6 +1113,31 @@ const plan = Effect.fn("Compile.plan")(function* (
         ? cause
         : fail("SEMAPHORE_GENERATED_PROFILE", "plan", "functions", String(cause)),
   });
+  const latch = yield* Effect.try({
+    try: () => checkedLatchProfiles(analysis.program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("LATCH_GENERATED_PROFILE", "plan", "functions", String(cause)),
+  });
+  if (
+    !latch.size &&
+    analysis.effects.some(
+      (ref) =>
+        ref === SyncEffects.LatchMake ||
+        ref === AsyncEffects.LatchAwait ||
+        ref === SyncEffects.LatchOpen ||
+        ref === SyncEffects.LatchClose ||
+        ref === SyncEffects.LatchRelease ||
+        ref === SyncEffects.LatchIsOpen,
+    )
+  )
+    return yield* fail(
+      "LATCH_NATIVE_INTEGRATION",
+      "plan",
+      "effects",
+      "Latch requires the checked standalone generated profile",
+    );
   if (
     !semaphore.size &&
     analysis.effects.some(
@@ -1345,11 +1374,13 @@ const lower = Effect.fn("Compile.lower")(function* (
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
   return yield* Effect.try({
     try: () =>
-      (checkedSemaphoreProfiles(p.analysis.program).size
-        ? lowerSemaphoreFunctions
-        : checkedDeferredProfiles(p.analysis.program).size
-          ? lowerDeferredFunctions
-          : lowerFunctions)(
+      (checkedLatchProfiles(p.analysis.program).size
+        ? lowerLatchFunctions
+        : checkedSemaphoreProfiles(p.analysis.program).size
+          ? lowerSemaphoreFunctions
+          : checkedDeferredProfiles(p.analysis.program).size
+            ? lowerDeferredFunctions
+            : lowerFunctions)(
         p.analysis.program,
         new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
         policy,

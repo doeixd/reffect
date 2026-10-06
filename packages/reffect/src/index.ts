@@ -215,3 +215,6 @@ export type { DeferredExecutionOptions, DeferredObservation } from "./deferred-e
 export { SemaphoreIR } from "./semaphore.ts";
 export { SemaphoreExecution } from "./semaphore-execution.ts";
 export type { SemaphoreExecutionOptions, SemaphoreObservation } from "./semaphore-execution.ts";
+export { LatchIR } from "./latch.ts";
+export { LatchExecution } from "./latch-execution.ts";
+export type { LatchExecutionOptions, LatchObservation } from "./latch-execution.ts";

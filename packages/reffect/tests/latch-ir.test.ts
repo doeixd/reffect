@@ -100,7 +100,7 @@ test("private Latch builders mirror state transitions through both official refe
     scoped((owner) => L.release(owner).pipe(R.Effect.andThen(L.isOpen(owner)))),
   );
   expect(await Effect.runPromise(EffectReference.run(pulse, []))).toBe(false);
-  expect("Latch" in R).toBe(false);
+  expect(R.Latch).toBe(L);
 });
 
 test("whenOpen supports data-first/data-last and is await-then-body", async () => {
@@ -254,9 +254,9 @@ test("Latch exhaustive traversals retain provenance and registered cleanup diagn
   expect(analyzeScopes(lexicalCleanup).diagnostics).toEqual([]);
 });
 
-test("native compilation and other coordination receipts refuse Latch without executing authored logs", async () => {
+test("native compilation and other coordination receipts refuse unsupported Latch without executing authored logs", async () => {
   const work = R.fn([], R.Unit, R.Never, () =>
-    scoped((owner) => R.Log.info("must not run").pipe(R.Effect.andThen(L.await(owner)))),
+    scoped((owner) => R.Log.info("must not run").pipe(R.Effect.ensuring(L.await(owner)))),
   );
   const observed = capture(
     Compile.make(R.program({ work })).pipe(
@@ -273,7 +273,7 @@ test("native compilation and other coordination receipts refuse Latch without ex
       result.cause.reasons.flatMap((reason) =>
         reason._tag === "Fail" ? reason.error.diagnostics.map((d) => d.code) : [],
       ),
-    ).toContain("LATCH_NATIVE_UNSUPPORTED");
+    ).toContain("LATCH_CLEANUP_AWAIT");
   expect(analyzeDeferredBudget(work).diagnostics.map((d) => d.code)).toContain(
     "DEFERRED_BUDGET_UNACCOUNTED",
   );

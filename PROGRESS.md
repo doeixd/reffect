@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-06 — Bounded public Latch admission
+
+- Recorded [LPUB-001–004](docs/research/latch-public-admission.md) before implementation against byte-identical installed/published Effect4.0.0 source. Independent audit establishes whole-invocation plain/framed operation receipts below 2048; structural bounds alone never authorize automatic-yield parity. Actual long-graph probes trigger official automatic yields in both modes.
+- R.Latch, LatchIR and LatchExecution are public. Owned run/runWithFrames captures logs and returns Exit/framed Exit in a fresh default context, brand-checks closed AbortSignal options, leaves pre-aborted work unopened and awaits masked cleanup before recording root interruption trails. Scalars retain no metadata fields.
+- Compile selects checked Latch lowering, caches immutable profile results, reports AsyncResult/Tokio even for scalar-only owners and combines independent coordinator exports. Generic lowering, forged plans and RPC refuse unchecked embedding. Independent admission review found no compiler blocker; copied refusal diagnostics and test expectations were corrected before delivery.
+- Fourteen selected suites pass 102 tests, native builds serial: ten source/reference suites (80), public compiler/Cargo (8), generated Latch and public Semaphore/Deferred regressions (14). Final generated debug/release rerun uses the default 2048 threshold and matches exact frame paths/kinds; construction/scalar allocations remain zero, quiet All2 costs two and root interruption costs zero/one under None/Bounded. Full vp check, strict TypeScript and workspace build pass (reffect fresh; three tasks cached). [Resume guide](docs/effect-v4-workstream.md#latch-generated-continuation--2026-10-06) and coverage/open work now identify bounded Queue waiter/lifecycle proofs as the next module priority; broader Latch ownership/timers/yields/errors/hosts remain refused.
+
 ## 2026-10-06 — Private generated Latch execution
 
 - Recorded [LGEN-001–007](docs/research/latch-generated.md), including primary-source preparation before implementation. Private checked lowering supports a root lexical Latch, scalar/Never channels, bounded All2/3, uniform positive timers, captures, provenance and interruption frames. Mixed independent coordinator exports share task machinery and a combined source-growth gate.

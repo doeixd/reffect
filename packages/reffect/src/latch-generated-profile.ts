@@ -5,6 +5,7 @@ import { BoolType, CompileError, IRType, NeverType, U64Type, UnitType, fail } fr
 import { hasLatchComputation } from "./latch-profile.ts";
 import { authoredChildren } from "./provenance.ts";
 import { checkDeferredExecutionReferences } from "./deferred-execution.ts";
+import { analyzeLatchBudget } from "./latch-budget.ts";
 import {
   analyzeGeneratedDeferredGrowth,
   checkGeneratedDeferredModuleGrowth,
@@ -57,7 +58,7 @@ const sleepLiterals = (body: Computation<unknown, unknown>): readonly number[] =
     Match.orElse(() => children(body).flatMap(([, child]) => sleepLiterals(child))),
   );
 
-/** Private generated ownership receipts; these do not certify reference evaluator operation budgets. */
+/** Checked generated ownership and default-context reference operation receipts. */
 export const analyzeGeneratedLatchProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedLatchProfile> => {
@@ -200,6 +201,12 @@ export const analyzeGeneratedLatchProfile = (
     checkDeferredExecutionReferences(fn, (at, message) =>
       fail("LATCH_REFERENCE_CONTEXT", "check", at, message),
     );
+    const budget = analyzeLatchBudget(fn, path);
+    if (!budget.admitted)
+      throw new CompileError({
+        message: "Unsupported generated Latch budget",
+        diagnostics: budget.diagnostics,
+      });
     profiles.set(
       fn,
       Object.freeze({

@@ -9,6 +9,7 @@ import { FailureFrames, R, Rust, SourceArtifacts } from "../src/index.ts";
 import { LatchIR as L } from "../src/latch.ts";
 import { DeferredIR as D } from "../src/deferred.ts";
 import { SemaphoreIR as S } from "../src/semaphore.ts";
+import { latchBudgetLimit } from "../src/latch-budget.ts";
 import { DeferredInterruptionFrames } from "../src/deferred-interruption-frames.ts";
 import { PrivateEffectReference } from "../src/effect-ir.ts";
 import type { EffectFn } from "../src/effect-ir.ts";
@@ -230,7 +231,7 @@ const observe = async (name: string, fn: EffectFn, interrupt = false) => {
       return yield* Fiber.await(fiber);
     }).pipe(
       Effect.provideService(Scheduler.Scheduler, new Scheduler.MixedScheduler()),
-      Effect.provideService(Scheduler.MaxOpsBeforeYield, 100000),
+      Effect.provideService(Scheduler.MaxOpsBeforeYield, latchBudgetLimit),
       Effect.provideService(
         Logger.CurrentLoggers,
         new Set([Logger.make((entry) => logs.push(String(entry.message)))]),
@@ -312,7 +313,7 @@ test.each([FailureFrames.None, FailureFrames.Bounded])(
           : `
  let (frames,omitted)=ctx.take_frames(); assert_eq!(omitted,0);
  assert_eq!(frames.len(),${observations[index].frames.frames.length});
- ${observations[index].frames.frames.map((frame, i) => `assert!(frames[${i}].contains(${JSON.stringify(`"kind":"${frame.kind}"`)}), "${name} frame kind: {:?}",frames);`).join("\n")}
+ ${observations[index].frames.frames.map((frame, i) => `assert!(frames[${i}].contains(${JSON.stringify(`"kind":"${frame.kind}"`)}), "${name} frame kind: {:?}",frames); assert!(frames[${i}].contains(${JSON.stringify(`"path":"${frame.path}"`)}), "${name} frame path: {:?}",frames);`).join("\n")}
 `;
       await writeFile(
         join(root, "src/main.rs"),

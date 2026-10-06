@@ -49,7 +49,7 @@ function whenOpen<A, E>(
     return <B, E2>(body: Computation<B, E2>) => EffectIR.flatMap(awaitLatch(self), () => body);
   return EffectIR.flatMap(awaitLatch(self), () => body);
 }
-/** Private lexical Latch surface; native execution remains refused. */
+/** Lexical Effect v4 Latch builders; native execution uses the checked standalone profile. */
 export const LatchIR = Object.freeze({
   make,
   await: awaitLatch,

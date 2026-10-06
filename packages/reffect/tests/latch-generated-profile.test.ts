@@ -173,7 +173,7 @@ test("source, expression, text and cyclic growth refuse rather than recurse fore
   );
 });
 
-test("private selection leaves public Compile refusal and authored work untouched", async () => {
+test("public selection compiles bounded Latch without executing authored work", async () => {
   const work = unit((owner) => R.Log.info("unreachable").pipe(R.Effect.andThen(L.await(owner))));
   expect(analyze(work).taskCapacity).toBe(1);
   const result = await Effect.runPromise(
@@ -183,11 +183,5 @@ test("private selection leaves public Compile refusal and authored work untouche
       Effect.exit,
     ),
   );
-  expect(Exit.isFailure(result)).toBe(true);
-  if (Exit.isFailure(result))
-    expect(
-      result.cause.reasons.flatMap((reason) =>
-        reason._tag === "Fail" ? reason.error.diagnostics.map((d) => d.code) : [],
-      ),
-    ).toContain("LATCH_NATIVE_UNSUPPORTED");
+  expect(Exit.isSuccess(result)).toBe(true);
 });

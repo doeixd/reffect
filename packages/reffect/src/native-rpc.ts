@@ -1,4 +1,5 @@
 import { hasSemaphoreComputation } from "./semaphore-generated-profile.ts";
+import { hasLatchComputation } from "./latch-profile.ts";
 import { analyzeDeferredTopology } from "./structured-concurrency.ts";
 import { Effect, Match, Schema, SchemaAST } from "effect";
 import { wellFormed } from "./contract-codec.ts";
@@ -1145,6 +1146,15 @@ export const compileServer = (
       return yield* unsupported(
         "handlers",
         "Semaphore is admitted only for standalone exports; RPC request-context integration remains unverified",
+      );
+    if (
+      Object.values(prepared.program.functions).some(
+        (fn) => fn instanceof EffectFn && hasLatchComputation(fn.body),
+      )
+    )
+      return yield* unsupported(
+        "handlers",
+        "Latch is admitted only for standalone exports; RPC request-context integration remains unverified",
       );
     const core = yield* Compile.run(
       Compile.make(prepared.program).pipe(
