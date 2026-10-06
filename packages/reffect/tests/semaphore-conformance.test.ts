@@ -104,9 +104,20 @@ test("parent interruption cancels queued children and awaits held permit cleanup
   expect(oracle.logs).not.toContain("3:enter");
   expect(oracle.logs.at(-1)).toBe("1:cleanup-done");
 });
-test("reference support and raw experiments cannot bypass native admission", async () => {
+test("bounded reference conformance work is admitted through selected native lowering", async () => {
+  const artifact = await Effect.runPromise(
+    Compile.make(R.program({ work })).pipe(Compile.withTarget(Rust.tokio), Compile.run),
+  );
+  expect(artifact.files["src/lib.rs"]).toContain("scan_all3(");
+  expect(artifact.files["src/lib.rs"]).toContain("assert_semaphore_future_layout");
+  expect(() => lowerFunctions(R.program({ work }), new Map())).toThrowError(/Semaphore/);
+});
+test("reference support cannot bypass unsupported native capacity", async () => {
+  const unsupported = R.fn([], R.Unit, R.Never, () =>
+    S.make(4).pipe(R.Effect.flatMap((owner) => S.withPermit(owner)(R.Effect.void))),
+  );
   const refused = await Effect.runPromise(
-    Compile.make(R.program({ work })).pipe(
+    Compile.make(R.program({ unsupported })).pipe(
       Compile.withTarget(Rust.tokio),
       Compile.run,
       Effect.exit,
@@ -118,12 +129,11 @@ test("reference support and raw experiments cannot bypass native admission", asy
         {
           error: {
             diagnostics: [
-              expect.objectContaining({ code: "SEMAPHORE_NATIVE_INTEGRATION", stage: "plan" }),
+              expect.objectContaining({ code: "SEMAPHORE_STRUCTURAL_PROFILE", stage: "check" }),
             ],
           },
         },
       ],
     },
   });
-  expect(() => lowerFunctions(R.program({ work }), new Map())).toThrowError(/Semaphore/);
 });

@@ -41,6 +41,8 @@ const planFrames = (root: Computation<unknown, unknown>, basePath: string): Fram
     Match.value(computation.node).pipe(
       Match.tags({
         DeferredScope: (node) => child(node.body, "body", true),
+        SemaphoreScope: (node) => child(node.body, "body", true),
+        SemaphoreWithPermits: (node) => child(node.body, "body"),
         Map: (node) => child(node.source, "source"),
         FlatMap: (node) => {
           child(node.source, "source");
@@ -151,6 +153,8 @@ export class DeferredInterruptionBoundary {
     const kind: LogicalFrame["kind"] | undefined = Match.value(computation.node).pipe(
       Match.tags({
         DeferredScope: () => "deferredScope" as const,
+        SemaphoreScope: () => "semaphoreScope" as const,
+        SemaphoreWithPermits: () => "semaphoreWithPermits" as const,
         DeferredAwait: () => "deferredAwait" as const,
         DeferredComplete: () => "deferredComplete" as const,
         DeferredIsDone: () => undefined,

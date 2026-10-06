@@ -1,3 +1,4 @@
+import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
 import { containsSemaphore, usesSemaphoreExpression } from "./semaphore-model.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
 import { checkDeferredExecutionReferences } from "./deferred-execution.ts";
@@ -46,7 +47,12 @@ import { hostFunctionOf } from "./schema-json.ts";
 import { HtmlCapability, HtmlType, htmlOperationKind } from "./html-ir.ts";
 import type { HtmlOperationKind } from "./html-ir.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
-import { lowerFunctions, lowerDeferredFunctions, emitFunctions } from "./lower.ts";
+import {
+  lowerFunctions,
+  lowerDeferredFunctions,
+  lowerSemaphoreFunctions,
+  emitFunctions,
+} from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -601,6 +607,17 @@ const checkedDeferredProfiles = (program: Program) => {
   deferredProfiles.set(program, profiles);
   return profiles;
 };
+const semaphoreProfiles = new WeakMap<
+  Program,
+  ReturnType<typeof analyzeGeneratedSemaphoreProfile>
+>();
+const checkedSemaphoreProfiles = (program: Program) => {
+  const previous = semaphoreProfiles.get(program);
+  if (previous) return previous;
+  const profiles = analyzeGeneratedSemaphoreProfile(program);
+  semaphoreProfiles.set(program, profiles);
+  return profiles;
+};
 const checkedPrograms = new WeakSet<Program>();
 const derivedPrograms = new WeakMap<Program, Analysis>();
 const verifiedPlans = new WeakSet<Plan>();
@@ -624,6 +641,13 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         message: `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
       })),
     });
+  yield* Effect.try({
+    try: () => checkedSemaphoreProfiles(program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("SEMAPHORE_GENERATED_PROFILE", "check", "functions", String(cause)),
+  });
   const profiles = yield* Effect.try({
     try: () => checkedDeferredProfiles(program),
     catch: (cause) =>
@@ -1000,6 +1024,7 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
       ...(Array.from(types).some(reachesUnknown) ? [Capabilities.Json] : []),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
       ...(effectRefs.has(SyncEffects.DeferredMake) ||
+      effectRefs.has(SyncEffects.SemaphoreMake) ||
       Array.from(effectRefs).some((ref) =>
         Object.values(AsyncEffects).some((supported) => supported === ref),
       )
@@ -1037,7 +1062,15 @@ const plan = Effect.fn("Compile.plan")(function* (
       target.id,
       "No verified lowering registered for this target",
     );
+  const semaphore = yield* Effect.try({
+    try: () => checkedSemaphoreProfiles(analysis.program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("SEMAPHORE_GENERATED_PROFILE", "plan", "functions", String(cause)),
+  });
   if (
+    !semaphore.size &&
     analysis.effects.some(
       (ref) => ref === SyncEffects.SemaphoreMake || ref === AsyncEffects.SemaphoreWithPermits,
     )
@@ -1046,7 +1079,7 @@ const plan = Effect.fn("Compile.plan")(function* (
       "SEMAPHORE_NATIVE_INTEGRATION",
       "plan",
       "effects",
-      "Semaphore scheduled wake scans, ownership and owned execution budgets require native conformance before admission",
+      "Semaphore requires the checked standalone generated profile",
     );
   yield* Effect.try({
     try: () => checkedDeferredProfiles(analysis.program),
@@ -1272,7 +1305,11 @@ const lower = Effect.fn("Compile.lower")(function* (
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
   return yield* Effect.try({
     try: () =>
-      (checkedDeferredProfiles(p.analysis.program).size ? lowerDeferredFunctions : lowerFunctions)(
+      (checkedSemaphoreProfiles(p.analysis.program).size
+        ? lowerSemaphoreFunctions
+        : checkedDeferredProfiles(p.analysis.program).size
+          ? lowerDeferredFunctions
+          : lowerFunctions)(
         p.analysis.program,
         new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
         policy,

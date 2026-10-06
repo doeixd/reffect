@@ -1,5 +1,10 @@
-/** Private Never-error All experiment with an interruptible parent; compiler admission remains refused. */
-export const semaphoreAllRuntime = (): string => `
+/** Never-error All driver for an interruptible parent; generated limits come from checked profile receipts. */
+export const semaphoreAllRuntime = (
+  limits: { readonly scans: number; readonly settlementRounds: number } = {
+    scans: 64,
+    settlementRounds: 64,
+  },
+): string => `
 struct ScanAllState<const K: usize> {
     started: [bool; K], done: [bool; K], terminal: bool,
     parent_cancelled: bool, settle_requested: bool,
@@ -77,7 +82,7 @@ async fn scan_all${arity}<${indices.map((i) => `F${i}: std::future::Future<Outpu
                     // Cleanup prefixes follow eager startup order. Never dispatch recursively.
                     ${indices.map((i) => `if state.started[${i}] && !state.done[${i}] { ${turn(i)} check_parent!(); }`).join("\n                    ")}
                     rounds += 1;
-                    assert!(rounds <= 64, "Private All settlement ceiling; budgets remain unproved");
+                    assert!(rounds <= ${limits.settlementRounds}, "Checked All settlement bound");
                 }
             }}; }
             check_parent!(); settle!();
@@ -96,7 +101,7 @@ async fn scan_all${arity}<${indices.map((i) => `F${i}: std::future::Future<Outpu
             }) {
                 check_parent!(); settle!();
                 scans += 1;
-                assert!(scans <= 64, "Private All scan ceiling; budgets remain unproved");
+                assert!(scans <= ${limits.scans}, "Checked All scan bound");
             }`,
               )
               .join("\n            ")}

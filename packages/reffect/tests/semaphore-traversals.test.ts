@@ -72,9 +72,10 @@ test("public bounded Deferred proofs refuse Semaphore before authored logs execu
   ).toBe(true);
   expect(() => analyzeGeneratedDeferredGrowth(work)).toThrow();
   expect(() => analyzeGeneratedDeferredProfile(R.program({ work }))).toThrow();
+  // The shared frame visitor accepts Semaphore; the Deferred admission boundary does not.
   expect(() =>
     new DeferredInterruptionFrames().prepare(work.body, "functions.work.body"),
-  ).toThrow();
+  ).not.toThrow();
   const observation = await DeferredExecution.run(work);
   expect(observation.logs).toEqual([]);
   expect(observation.exit._tag).toBe("Failure");

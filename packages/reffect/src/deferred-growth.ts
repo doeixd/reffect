@@ -59,6 +59,7 @@ const textBytes = (text: string, limit: number): number => {
 export const analyzeGeneratedDeferredGrowth = (
   fn: EffectFn,
   basePath = "functions.work.body",
+  coordination: "Deferred" | "Semaphore" = "Deferred",
 ): GeneratedDeferredGrowth => {
   const limits = generatedDeferredGrowthLimits;
   const dimensions = [
@@ -172,6 +173,14 @@ export const analyzeGeneratedDeferredGrowth = (
     };
     Match.value(value.node).pipe(
       Match.tags({
+        SemaphoreScope: (n) => {
+          if (coordination !== "Semaphore") return unaccounted(path);
+          child(n.body, "body");
+        },
+        SemaphoreWithPermits: (n) => {
+          if (coordination !== "Semaphore") return unaccounted(path);
+          child(n.body, "body");
+        },
         DeferredScope: (n) => child(n.body, "body"),
         DeferredAwait: () => {},
         DeferredComplete: (n) => pure(n.value, "value"),
@@ -247,12 +256,21 @@ export const checkGeneratedDeferredModuleGrowth = (
 };
 
 /** Actual Rust output includes registry templates and escaping not visible in IR counts. */
-export const checkGeneratedDeferredRustBytes = (files: Readonly<Record<string, string>>): void => {
+export const checkGeneratedDeferredRustBytes = (
+  files: Readonly<Record<string, string>>,
+  coordination: "Deferred" | "Semaphore" = "Deferred",
+): void => {
   let total = 0;
   const limit = generatedDeferredGrowthLimits.rustBytes;
   for (const [path, contents] of Object.entries(files)) {
     if (!path.endsWith(".rs")) continue;
     total += textBytes(contents, limit - total);
-    if (total > limit) refuse(`files.${path}`, "rustBytes", limit, "emit");
+    if (total > limit)
+      throw fail(
+        `${coordination.toUpperCase()}_GENERATED_GROWTH`,
+        "emit",
+        `files.${path}`,
+        `Generated ${coordination} Rust bytes must not exceed ${limit}`,
+      );
   }
 };

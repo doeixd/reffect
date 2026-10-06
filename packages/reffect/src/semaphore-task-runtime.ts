@@ -1,5 +1,10 @@
-/** Private unnested future driver; compiler admission remains refused. */
-export const semaphoreTaskRuntime = (): string => `
+/** Semantic-marker driver; generated limits require checked profile receipts. Defaults retain private experiments. */
+export const semaphoreTaskRuntime = (
+  limits: { readonly protocolRetries: number; readonly scans: number } = {
+    protocolRetries: 64,
+    scans: 64,
+  },
+): string => `
 struct ScanTasks<const N: usize> { semantic: std::sync::Mutex<[bool; N]> }
 impl<const N: usize> ScanTasks<N> {
     fn new() -> Self {
@@ -74,7 +79,7 @@ fn scan_poll<F: std::future::Future, const N: usize>(
     out: &mut Option<F::Output>, cx: &mut std::task::Context<'_>,
 ) {
     assert!(out.is_none(), "A completed scan task cannot be polled again");
-    for _ in 0..64 {
+    for _ in 0..${limits.protocolRetries} {
         bank.before_poll(task);
         match std::future::Future::poll(future.as_mut(), cx) {
             std::task::Poll::Ready(value) => { *out = Some(value); return; }
@@ -83,7 +88,7 @@ fn scan_poll<F: std::future::Future, const N: usize>(
             std::task::Poll::Pending => {},
         }
     }
-    panic!("Private scan protocol retry ceiling; generated budgets remain unproved");
+    panic!("Checked scan protocol retry bound");
 }
 ${[2, 3]
   .map((arity) => {
@@ -115,7 +120,7 @@ async fn scan_join${arity}<${indices.map((i) => `F${i}: std::future::Future`).jo
             else { panic!("Scan selected a task outside this private static group"); }
         }) {
             scans += 1;
-            assert!(scans <= 64, "Private scan dispatch ceiling; generated budgets remain unproved");
+            assert!(scans <= ${limits.scans}, "Checked scan dispatch bound");
         }`,
           )
           .join("\n        ")}

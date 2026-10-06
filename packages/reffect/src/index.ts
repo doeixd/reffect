@@ -211,3 +211,7 @@ export type {
 export { DeferredPublic as DeferredIR } from "./deferred.ts";
 export { DeferredExecution } from "./deferred-execution.ts";
 export type { DeferredExecutionOptions, DeferredObservation } from "./deferred-execution.ts";
+
+export { SemaphoreIR } from "./semaphore.ts";
+export { SemaphoreExecution } from "./semaphore-execution.ts";
+export type { SemaphoreExecutionOptions, SemaphoreObservation } from "./semaphore-execution.ts";

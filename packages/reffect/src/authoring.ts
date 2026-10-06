@@ -1,3 +1,4 @@
+import { SemaphoreIR } from "./semaphore.ts";
 import { DeferredPublic } from "./deferred.ts";
 import { CookiesIR, DateTimeIR } from "./js-std.ts";
 import { SchemaIR } from "./schema-json.ts";
@@ -197,6 +198,7 @@ export const R = Object.freeze({
   Duration: DurationIR,
   Ref: RefIR,
   Deferred: DeferredPublic,
+  Semaphore: SemaphoreIR,
   Clock: ClockIR,
   Random: RandomIR,
   Boolean: Object.freeze({ not: BoolType.not, ...BooleanCombinators }),

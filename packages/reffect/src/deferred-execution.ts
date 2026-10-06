@@ -71,11 +71,14 @@ const trustedOperations = new Set<AnyOperation>([
   NumberToString,
 ] as AnyOperation[]);
 /** Internal shared identity audit for native admission and owned execution. */
-export const checkDeferredExecutionReferences = (fn: EffectFn): void => {
+export const checkDeferredExecutionReferences = (
+  fn: EffectFn,
+  reject: (path: string, message: string) => CompileError = refusal,
+): void => {
   const expressions = new Set<Expr<unknown>>();
   const computations = new Set<Computation<unknown, unknown>>();
   const unsupported = () => {
-    throw refusal(
+    throw reject(
       "function.reference",
       "Only audited builtin scalar expressions can execute in the owned context",
     );
@@ -130,6 +133,8 @@ export const checkDeferredExecutionReferences = (fn: EffectFn): void => {
           if (!trustedTypes.has(n.success) || !trustedTypes.has(n.error)) unsupported();
           computation(n.body);
         },
+        SemaphoreScope: (n) => computation(n.body),
+        SemaphoreWithPermits: (n) => computation(n.body),
         DeferredComplete: (n) => expression(n.value),
         DeferredAwait: () => {},
         DeferredIsDone: () => {},

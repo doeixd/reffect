@@ -46,7 +46,7 @@ const withPermits = (self: Expr<Semaphore.Semaphore>, permits: number) => {
       body,
     });
 };
-/** Private lexical preparation; native/public admission requires scheduled-release conformance. */
+/** Lexical scoped Semaphore builders; native execution admits only the checked bounded profile. */
 export const SemaphoreIR = Object.freeze({
   make,
   withPermits,

@@ -1,3 +1,8 @@
+import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
+import type { GeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
+import { semaphoreDispatchRuntime } from "./semaphore-dispatch-runtime.ts";
+import { semaphoreTaskRuntime } from "./semaphore-task-runtime.ts";
+import { semaphoreAllRuntime } from "./semaphore-all-runtime.ts";
 import { containsSemaphore } from "./semaphore-model.ts";
 import { runtimeModule } from "./runtime-module.ts";
 import { UtcType } from "./js-std.ts";
@@ -300,7 +305,17 @@ interface DeferredCapture {
   readonly name: string;
   readonly success: IRType<unknown>;
 }
+interface SemaphoreCapture {
+  readonly name: string;
+}
 type HelperBody =
+  | {
+      readonly _tag: "SemaphoreScope";
+      readonly owner: SemaphoreCapture;
+      readonly capacity: number;
+      readonly body: number;
+    }
+  | { readonly _tag: "SemaphoreWithPermits"; readonly owner: string; readonly body: number }
   | { readonly _tag: "DeferredScope"; readonly owner: DeferredCapture; readonly body: number }
   | { readonly _tag: "DeferredAwait"; readonly owner: string }
   | { readonly _tag: "DeferredComplete"; readonly owner: string; readonly value: RustBlock }
@@ -311,6 +326,7 @@ type HelperBody =
       readonly _tag: "TaskGroup";
       readonly mode: "All" | "Race";
       readonly children: readonly number[];
+      readonly semaphoreRoute?: { readonly slots: readonly number[]; readonly owner: string };
       readonly deferredRoute?: {
         readonly parent: number;
         readonly slots: readonly number[];
@@ -476,6 +492,7 @@ type HelperBody =
       readonly body: number;
     };
 interface Helper {
+  readonly semaphoreOwners?: readonly SemaphoreCapture[];
   readonly deferredOwners?: readonly DeferredCapture[];
   /** Build-owned outcome flags; never carried by authored values. */
   readonly richOutcome?: boolean;
@@ -491,6 +508,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
+  readonly semaphoreProfile?: GeneratedSemaphoreProfile;
   readonly deferredProfile?: { readonly taskCapacity: number; readonly ownerCount: number };
   readonly richErrors: boolean;
   readonly services: RuntimeServiceUsage;
@@ -525,6 +543,8 @@ export const hasFallibleTaskGroups = (module: LoweredModule): boolean =>
   module.functions.some((f) => f.richErrors);
 
 interface Scope {
+  readonly semaphoreTask?: number;
+  readonly semaphoreOwners?: ReadonlyMap<symbol, SemaphoreCapture>;
   readonly deferredTask?: number;
   readonly deferredOwners?: ReadonlyMap<symbol, DeferredCapture>;
   readonly files: ReadonlyMap<symbol, string>;
@@ -600,6 +620,25 @@ export function lowerDeferredFunctions(
     failureFrames,
     servicesSelection,
     analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
+  );
+}
+
+export function lowerSemaphoreFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.Bounded,
+  servicesSelection: RuntimeServicesSelection = {},
+): LoweredModule {
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
   );
 }
 
@@ -617,6 +656,7 @@ function lowerFunctionsInternal(
       readonly taskCapacities: ReadonlyMap<Computation<unknown, unknown>, number>;
     }
   >,
+  semaphoreProfiles?: ReadonlyMap<EffectFn, GeneratedSemaphoreProfile>,
 ): LoweredModule {
   const runtimeServices = normalizeRuntimeServicesSelection(servicesSelection);
   checkArtifactPolicy(policy);
@@ -631,6 +671,7 @@ function lowerFunctionsInternal(
         (f instanceof EffectFn && containsSemaphore(f.error))
       )
         rejectSemaphoreNative();
+      const semaphoreProfile = f instanceof EffectFn ? semaphoreProfiles?.get(f) : undefined;
       const deferredProfile = f instanceof EffectFn ? deferredProfiles?.get(f) : undefined;
       const outcomes =
         f instanceof EffectFn ? analyzeTaskGroups(f.body, `${path}.body`) : undefined;
@@ -644,6 +685,7 @@ function lowerFunctionsInternal(
       const input = Object.freeze(f.input.map((type, i) => Object.freeze({ name: `p${i}`, type })));
       const rootScope: Scope = {
         ...(deferredProfile ? { deferredTask: 0 } : {}),
+        ...(semaphoreProfile ? { semaphoreTask: 0 } : {}),
         bindings: new Map([[f.binder, input]]),
         input,
         files: new Map(),
@@ -665,6 +707,8 @@ function lowerFunctionsInternal(
           fileInputs: scope.fileInputs,
           deferredOwners: scope.deferredOwners,
           deferredTask: scope.deferredTask,
+          semaphoreTask: scope.semaphoreTask,
+          semaphoreOwners: scope.semaphoreOwners,
         };
       };
       let caseBinders = 0;
@@ -679,6 +723,8 @@ function lowerFunctionsInternal(
           fileInputs: scope.fileInputs,
           deferredOwners: scope.deferredOwners,
           deferredTask: scope.deferredTask,
+          semaphoreTask: scope.semaphoreTask,
+          semaphoreOwners: scope.semaphoreOwners,
         };
       };
       // Select signatures without pruning the bindings used to lower nested bodies.
@@ -742,8 +788,15 @@ function lowerFunctionsInternal(
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
               SemaphoreMake: rejectSemaphoreNative,
-              SemaphoreScope: rejectSemaphoreNative,
-              SemaphoreWithPermits: rejectSemaphoreNative,
+              SemaphoreScope: (n) => {
+                if (!semaphoreProfile) rejectSemaphoreNative();
+                computation(n.body);
+              },
+              SemaphoreWithPermits: (n) => {
+                if (!semaphoreProfile) rejectSemaphoreNative();
+                owners.add(n.binder);
+                computation(n.body);
+              },
               DeferredMake: rejectDeferredNative,
               DeferredScope: (n) => {
                 if (!deferredProfile) rejectDeferredNative();
@@ -762,7 +815,11 @@ function lowerFunctionsInternal(
                 if (!deferredProfile) rejectDeferredNative();
                 owners.add(n.binder);
               },
-              TaskGroup: (n) => n.children.forEach(computation),
+              TaskGroup: (n) => {
+                if (semaphoreProfile)
+                  scope.semaphoreOwners?.forEach((_, binder) => owners.add(binder));
+                n.children.forEach(computation);
+              },
               Scope: (n) => computation(n.body),
               AddFinalizer: (n) => computation(n.finalizer),
               AcquireRelease: (n) => {
@@ -858,6 +915,10 @@ function lowerFunctionsInternal(
         return {
           bindings: scope.bindings,
           deferredTask: scope.deferredTask,
+          semaphoreTask: scope.semaphoreTask,
+          semaphoreOwners: scope.semaphoreOwners
+            ? new Map(Array.from(scope.semaphoreOwners).filter(([binder]) => owners.has(binder)))
+            : undefined,
           input: Object.freeze(scope.input.filter((parameter) => captures.has(parameter))),
           deferredOwners: scope.deferredOwners
             ? new Map(Array.from(scope.deferredOwners).filter(([binder]) => owners.has(binder)))
@@ -885,7 +946,8 @@ function lowerFunctionsInternal(
           Object.freeze({
             index,
             files: [],
-            input: deferredProfile ? capturedScope(scope, e).input : scope.input,
+            input:
+              deferredProfile || semaphoreProfile ? capturedScope(scope, e).input : scope.input,
             output: e.type,
             body,
             origin: provenance?.origin(e),
@@ -1205,8 +1267,31 @@ function lowerFunctionsInternal(
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
             SemaphoreMake: rejectSemaphoreNative,
-            SemaphoreScope: rejectSemaphoreNative,
-            SemaphoreWithPermits: rejectSemaphoreNative,
+            SemaphoreScope: (n): HelperBody => {
+              if (!semaphoreProfile) return rejectSemaphoreNative();
+              const owner = Object.freeze({ name: `semaphore${index}` });
+              const owners = new Map(scope.semaphoreOwners);
+              owners.set(n.binder, owner);
+              return {
+                _tag: "SemaphoreScope",
+                owner,
+                capacity: n.capacity,
+                body: effectHelper(
+                  n.body,
+                  { ...scope, semaphoreOwners: owners },
+                  error,
+                  `${path}.body`,
+                ),
+              };
+            },
+            SemaphoreWithPermits: (n): HelperBody => {
+              if (!semaphoreProfile) return rejectSemaphoreNative();
+              return {
+                _tag: "SemaphoreWithPermits",
+                owner: scope.semaphoreOwners!.get(n.binder)!.name,
+                body: effectHelper(n.body, scope, error, `${path}.body`),
+              };
+            },
             DeferredMake: rejectDeferredNative,
             DeferredScope: (n): HelperBody => {
               if (!deferredProfile) return rejectDeferredNative();
@@ -1256,7 +1341,11 @@ function lowerFunctionsInternal(
                 }
                 return effectHelper(
                   child,
-                  deferredProfile ? { ...childScope, deferredTask: slots[i] } : childScope,
+                  deferredProfile
+                    ? { ...childScope, deferredTask: slots[i] }
+                    : semaphoreProfile
+                      ? { ...childScope, semaphoreTask: i + 1 }
+                      : childScope,
                   child.error,
                   `${path}.children[${i}]`,
                 );
@@ -1267,6 +1356,14 @@ function lowerFunctionsInternal(
                 _tag: "TaskGroup",
                 mode: n.mode,
                 children,
+                ...(semaphoreProfile
+                  ? {
+                      semaphoreRoute: {
+                        slots: n.children.map((_, i) => i + 1),
+                        owner: Array.from(scope.semaphoreOwners!.values())[0].name,
+                      },
+                    }
+                  : {}),
                 ...(deferredProfile
                   ? {
                       deferredRoute: Object.freeze({
@@ -1612,12 +1709,19 @@ function lowerFunctionsInternal(
             }),
           }),
         );
-        const captures = deferredProfile ? capturedScope(scope, c) : scope;
+        const captures = deferredProfile || semaphoreProfile ? capturedScope(scope, c) : scope;
         helpers.set(
           index,
           Object.freeze({
             index,
             files: scope.fileInputs,
+            ...(semaphoreProfile
+              ? {
+                  semaphoreOwners: Object.freeze(
+                    Array.from(captures.semaphoreOwners?.values() ?? []),
+                  ),
+                }
+              : {}),
             ...(deferredProfile
               ? {
                   deferredOwners: Object.freeze(
@@ -1627,6 +1731,8 @@ function lowerFunctionsInternal(
               : {}),
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
+                SemaphoreScope: () => true,
+                SemaphoreWithPermits: () => true,
                 DeferredScope: (n) => helpers.get(n.body)?.asynchronous ?? false,
                 DeferredAwait: () => true,
                 DeferredComplete: () => true,
@@ -1709,11 +1815,13 @@ function lowerFunctionsInternal(
               }),
             }
           : {}),
+        ...(semaphoreProfile ? { semaphoreProfile } : {}),
         richErrors: outcomes?.requiresRichErrors ?? false,
         services: Object.freeze({ clock, random }),
         name,
         asynchronous:
           !!deferredProfile ||
+          !!semaphoreProfile ||
           Match.value(node).pipe(
             Match.tagsExhaustive({
               Pure: () => false,
@@ -1972,11 +2080,17 @@ export const emitFunctions = (
     writer.write(typeof text === "string" ? text : text.text);
   // DINT-007: inline private Deferred futures exceed rustc's default query depth
   // before a 32-frame diagnostic trail can overflow. Keep the allowance finite.
-  const queryAllowance = module.functions.some((f) => f.deferredProfile)
+  const queryAllowance = module.functions.some((f) => f.deferredProfile || f.semaphoreProfile)
     ? '#![recursion_limit = "256"]\n\n'
     : "";
   write(queryAllowance);
-  if (queryAllowance) write(generatedDeferredFutureLayoutPrelude);
+  if (module.functions.some((f) => f.deferredProfile)) write(generatedDeferredFutureLayoutPrelude);
+  if (module.functions.some((f) => f.semaphoreProfile))
+    write(
+      generatedDeferredFutureLayoutPrelude
+        .replaceAll("deferred", "semaphore")
+        .replaceAll("DEFERRED", "SEMAPHORE"),
+    );
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   const captureFrames = !FailureFrames.isNone(module.failureFrames);
   if (hasEffect && captureFrames)
@@ -2044,6 +2158,8 @@ export const emitFunctions = (
         const child = (...children: number[]) => Math.max(0, ...children.map(depth));
         const result = Match.value(f.helpers[index].body).pipe(
           Match.tagsExhaustive({
+            SemaphoreScope: (n) => depth(n.body),
+            SemaphoreWithPermits: (n) => depth(n.body),
             DeferredScope: (n) => depth(n.body),
             DeferredAwait: () => 0,
             DeferredComplete: () => 0,
@@ -2172,7 +2288,7 @@ export const emitFunctions = (
     ),
   );
   const infallibleArities = module.functions
-    .filter((f) => !f.deferredProfile)
+    .filter((f) => !f.deferredProfile && !f.semaphoreProfile)
     .flatMap((f) =>
       f.helpers.flatMap((helper) =>
         Match.value(helper.body).pipe(
@@ -2215,6 +2331,17 @@ export const emitFunctions = (
           ),
       ),
     );
+  const semaphoreProfiles = module.functions.flatMap((f) =>
+    f.semaphoreProfile ? [f.semaphoreProfile] : [],
+  );
+  if (semaphoreProfiles.length) {
+    const protocolRetries = Math.max(...semaphoreProfiles.map((p) => p.driver.protocolRetries));
+    const scans = Math.max(1, ...semaphoreProfiles.map((p) => p.driver.scans));
+    const settlementRounds = Math.max(...semaphoreProfiles.map((p) => p.driver.settlementRounds));
+    write(semaphoreDispatchRuntime());
+    write(semaphoreTaskRuntime({ protocolRetries, scans }));
+    write(semaphoreAllRuntime({ scans, settlementRounds }));
+  }
   if (fallibleGroups) write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
@@ -2240,6 +2367,12 @@ export const emitFunctions = (
             ? [
                 identExpr("turn"),
                 ...(helper.deferredOwners ?? []).map((owner) => identExpr(owner.name)),
+              ]
+            : []),
+          ...(f.semaphoreProfile && helper.error
+            ? [
+                identExpr("task"),
+                ...(helper.semaphoreOwners ?? []).map((owner) => identExpr(owner.name)),
               ]
             : []),
           helper.files.map((name) => Rs.refExpr(identExpr(name))),
@@ -2677,6 +2810,8 @@ export const emitFunctions = (
     const entryFrameKind = (body: HelperBody): string =>
       Match.value(body).pipe(
         Match.tags({
+          SemaphoreScope: () => "semaphoreScope",
+          SemaphoreWithPermits: () => "semaphoreWithPermits",
           DeferredScope: () => "deferredScope",
           DeferredAwait: () => "deferredAwait",
           TaskGroup: (n) => (n.mode === "All" ? "all" : "race"),
@@ -2726,6 +2861,26 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          SemaphoreScope: (n) =>
+            joinFragments([
+              `{ let ${n.owner.name} = ScanSemaphore::<${f.semaphoreProfile!.taskCapacity}>::new(${n.capacity}); let ${n.owner.name} = &${n.owner.name}; match `,
+              adaptFrag(n.body, helper.output, use("body")),
+              ` { Ok(value) => Ok(value), ${failureArm(helper, "semaphoreScope")} } }`,
+            ]),
+          SemaphoreWithPermits: (n) =>
+            joinFragments([
+              `{ match task.acquire(${n.owner}, ctx).await { Ok(permit) => { let result = `,
+              adaptFrag(n.body, helper.output, use("body")),
+              `; drop(permit); match result { Ok(value) => { if ctx.is_cancelled() { `,
+              captureFrames
+                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "semaphoreWithPermits").text})))`
+                : "Err(AsyncError::Interrupted)",
+              ` } else { Ok(value) } }, ${failureArm(helper, "semaphoreWithPermits")} } }, `,
+              captureFrames
+                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "semaphoreWithPermits").text})))`
+                : "Err(error) => Err(error)",
+              " } }",
+            ]),
           DeferredScope: (n) =>
             joinFragments([
               `{ let ${n.owner.name}: DeferredState<${typeName(n.owner.success)}, std::convert::Infallible, ${f.deferredProfile!.taskCapacity}> = DeferredState::new(); let ${n.owner.name} = &${n.owner.name}; match `,
@@ -2774,6 +2929,12 @@ export const emitFunctions = (
                 Rs.identExpr(Rs.ident(`h_${f.name}_${child.index}`)),
                 [Rs.mutRefExpr(identExpr(`child${i}`))].concat(
                   child.input.map((parameter) => Rs.verbatimExpr(helperArgument(parameter))),
+                  ...(f.semaphoreProfile
+                    ? [
+                        identExpr(`task${i}`),
+                        ...(child.semaphoreOwners ?? []).map((owner) => identExpr(owner.name)),
+                      ]
+                    : []),
                   ...(f.deferredProfile
                     ? [
                         identExpr(`turn${i}`),
@@ -2782,6 +2943,10 @@ export const emitFunctions = (
                     : []),
                 ),
               );
+              if (f.semaphoreProfile)
+                parts.push(
+                  `let task${i} = ScanTask::new(task.bank, ${n.semaphoreRoute!.slots[i]}); `,
+                );
               if (f.deferredProfile)
                 parts.push(
                   `let turn${i} = DeferredTurnHandle::new(turn.bank, ${n.deferredRoute!.slots[i]}); `,
@@ -2800,14 +2965,20 @@ export const emitFunctions = (
                     : ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible child produced combined cause")' : ""} } }${f.deferredProfile ? ")" : ""}; `,
               );
             });
-            if (f.deferredProfile)
+            if (f.deferredProfile || f.semaphoreProfile)
               parts.push(`tokio::pin!(${n.children.map((_, i) => `future${i}`).join(", ")}); `);
-            const joined = Rs.await(
-              Rs.call(
-                identExpr(
-                  `${f.deferredProfile ? "coordinated_" : fallible ? "fallible_" : ""}task_group${n.children.length}`,
-                ),
-                (f.deferredProfile
+            const groupArguments = f.semaphoreProfile
+              ? [
+                  identExpr(n.semaphoreRoute!.owner),
+                  Rs.verbatimExpr("task.bank"),
+                  Rs.verbatimExpr(`[${n.semaphoreRoute!.slots.join(", ")}]`),
+                  ...n.children.map((_, i) =>
+                    Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), []),
+                  ),
+                  Rs.verbatimExpr(`[${n.children.map((_, i) => `cancel${i}`).join(", ")}]`),
+                  identExpr("parent_cancellation"),
+                ]
+              : (f.deferredProfile
                   ? [
                       Rs.verbatimExpr("turn.bank"),
                       Rs.verbatimExpr(`[${n.deferredRoute!.slots.join(", ")}]`),
@@ -2816,19 +2987,22 @@ export const emitFunctions = (
                     ]
                   : []
                 ).concat(
-                  n.children
-                    .flatMap((_, i) => [
-                      f.deferredProfile
-                        ? Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), [])
-                        : identExpr(`future${i}`),
-                      identExpr(`cancel${i}`),
-                    ])
-                    .concat([
-                      identExpr("parent_cancellation"),
-                      identExpr("parent_interruptible"),
-                      race,
-                    ]),
+                  n.children.flatMap((_, i) => [
+                    f.deferredProfile
+                      ? Rs.dotCall(identExpr(`future${i}`), Rs.ident("as_mut"), [])
+                      : identExpr(`future${i}`),
+                    identExpr(`cancel${i}`),
+                  ]),
+                  [identExpr("parent_cancellation"), identExpr("parent_interruptible"), race],
+                );
+            const joined = Rs.await(
+              Rs.call(
+                identExpr(
+                  f.semaphoreProfile
+                    ? `scan_all${n.children.length}`
+                    : `${f.deferredProfile ? "coordinated_" : fallible ? "fallible_" : ""}task_group${n.children.length}`,
                 ),
+                groupArguments,
               ),
             );
             if (fallible) {
@@ -3054,7 +3228,7 @@ export const emitFunctions = (
           },
           Sleep: (n) =>
             joinFragments([
-              `{ match ${f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
+              `{ match ${f.semaphoreProfile ? "task.semantic(" : ""}${f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text})${f.semaphoreProfile ? ")" : ""}.await { Ok(()) => Ok(()), `,
               captureFrames
                 ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
                 : "Err(error) => Err(error)",
@@ -3669,6 +3843,15 @@ export const emitFunctions = (
                     ),
                   ]
                 : []),
+              ...(f.semaphoreProfile && helper.error
+                ? [
+                    `task: ScanTask<'_, ${f.semaphoreProfile.taskCapacity}>`,
+                    ...(helper.semaphoreOwners ?? []).map(
+                      (owner) =>
+                        `${owner.name}: &ScanSemaphore<${f.semaphoreProfile!.taskCapacity}>`,
+                    ),
+                  ]
+                : []),
               helper.files.map(
                 (name) =>
                   `${Rs.ident(name).text}: ${Rs.refType(Rs.pathType(rsSegments("std", "fs", "File"))).text}`,
@@ -3691,6 +3874,9 @@ export const emitFunctions = (
     const deferredEntry = f.deferredProfile
       ? `let bank = DeferredTurns::<${f.deferredProfile.taskCapacity}>::new(); let turn = DeferredTurnHandle::new(&bank, 0); `
       : "";
+    const semaphoreEntry = f.semaphoreProfile
+      ? `let bank = ScanTasks::<${f.semaphoreProfile.taskCapacity}>::new(); let task = ScanTask::new(&bank, 0); `
+      : "";
     const entryCancellation = f.asynchronous
       ? `if ctx.is_cancelled() { ${captureFrames ? `ctx.frames = Some(FrameTrail::new(${frameLiteral(f.name, f.path, "function", f.origin).text}));` : ""} return Err(AsyncError::Interrupted); } `
       : "";
@@ -3712,13 +3898,13 @@ export const emitFunctions = (
           captureFrames
             ? joinFragments([
                 f.asynchronous
-                  ? `{ ctx.frames = None; ${entryCancellation}${deferredEntry}match `
+                  ? `{ ctx.frames = None; ${entryCancellation}${deferredEntry}${semaphoreEntry}match `
                   : "{ match ",
                 adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
                 ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); ${f.asynchronous ? "ctx.frames = Some(frames)" : "store_frames(frames)"}; Err(error) } } }`,
               ])
             : joinFragments([
-                `{ ${entryCancellation}${deferredEntry}`,
+                `{ ${entryCancellation}${deferredEntry}${semaphoreEntry}`,
                 adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
                 " }",
               ]),
@@ -3726,7 +3912,7 @@ export const emitFunctions = (
     );
     writer.writeFragment(
       joinFragments([
-        `\npub ${f.asynchronous && !f.deferredProfile ? "async " : ""}fn `,
+        `\npub ${f.asynchronous && !f.deferredProfile && !f.semaphoreProfile ? "async " : ""}fn `,
         mapFragment(
           f.origin,
           useAt(f.path),
@@ -3738,7 +3924,7 @@ export const emitFunctions = (
           f.origin,
           useAt(f.path),
           textFragment(
-            f.deferredProfile
+            f.deferredProfile || f.semaphoreProfile
               ? `impl std::future::Future<Output = ${resultType(f.output, NeverType)}> + '_`
               : Match.value(f.node).pipe(
                   Match.tagsExhaustive({
@@ -3750,7 +3936,7 @@ export const emitFunctions = (
           "definition",
         ),
         " ",
-        f.deferredProfile
+        f.deferredProfile || f.semaphoreProfile
           ? joinFragments([
               "{ let future = async move ",
               entryBody,
@@ -3758,7 +3944,9 @@ export const emitFunctions = (
               mapFragment(
                 f.origin,
                 useAt(f.path),
-                textFragment("let _layout = assert_deferred_future_layout(&future);"),
+                textFragment(
+                  `let _layout = assert_${f.semaphoreProfile ? "semaphore" : "deferred"}_future_layout(&future);`,
+                ),
                 "use",
               ),
               " future }",
@@ -3779,6 +3967,26 @@ export const emitFunctions = (
             useAt(f.path),
             textFragment(
               `{ let future = ${Rs.ident(`r_${f.name}`).text}(ctx); assert_deferred_future_layout(&future) }`,
+            ),
+            "use",
+          ),
+          ",\n",
+        ]),
+        "] }\n\n",
+      ]),
+    );
+  }
+  const semaphoreRoots = module.functions.filter((f) => f.semaphoreProfile);
+  if (semaphoreRoots.length) {
+    writer.writeFragment(
+      joinFragments([
+        `#[doc(hidden)]\n#[cold]\n#[inline(never)]\npub fn reffect_semaphore_future_layouts(ctx: &mut AsyncContext) -> [usize; ${semaphoreRoots.length}] { [\n`,
+        ...semaphoreRoots.flatMap((f) => [
+          mapFragment(
+            f.origin,
+            useAt(f.path),
+            textFragment(
+              `{ let future = ${Rs.ident(`r_${f.name}`).text}(ctx); assert_semaphore_future_layout(&future) }`,
             ),
             "use",
           ),
@@ -4082,7 +4290,14 @@ export const emitFunctions = (
       ).text
     }\n`,
   });
-  if (queryAllowance) checkGeneratedDeferredRustBytes(files);
+  if (queryAllowance)
+    checkGeneratedDeferredRustBytes(
+      files,
+      module.functions.some((f) => f.semaphoreProfile) &&
+        !module.functions.some((f) => f.deferredProfile)
+        ? "Semaphore"
+        : "Deferred",
+    );
   return Object.freeze({ files, ranges: writer.ranges });
 };
 
