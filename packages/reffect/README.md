@@ -98,6 +98,10 @@ Random requires explicit driver selection. A trusted native host installs prepar
 - `SemanticRef` factories create typed type, operation, target, capability, effect, requirement and trait references. Semantic lookups use these objects; strings are their serialized/display identities. `Native.U64`, `Capabilities.U64`, `Targets.RustStd` and `Traits` expose the builtin objects. The initial Rust target accepts only verified built-in operations and representations.
 - `Law.associative/commutative` name typed operation references and receive evidence from `Evidence.claim/tested/proven/builtin`. Evidence policies are named constants. Built-in algebraic registrations are **claims**; no optimization uses them. Traits for the builtin u64 representation are checked from its registered witness, not arbitrary declarations.
 
+## Command line
+
+`reffect check|build|run <entry>` takes a module whose default export is its compile effect, for example `export default NativeRpc.compile(Group, bindings)`. `check` reports diagnostics without Cargo and exits 1 on refusal. `build` writes the crate to `.reffect/<entry>` beside the entry (`--crate`), builds it (`--release` for the release profile) and copies the binary to `./<entry>` (`--out`). `run` builds, then runs the server with the arguments after `--`. The commands use only the public API; run them with `node packages/reffect/bin/reffect.js` ([design](../../docs/research/cli.md)).
+
 ## Compiler API
 
 `Compile.check`, `derive`, `normalize`, `plan`, `verify`, `optimize`, `analyzeOwnership`, `lower`, `emit`, `run`, `explain`, and `build` are public Effects. `Compiler.layer` exposes the same API as a service. Diagnostics include a stable code, stage, IR path and message in a typed `CompileError`.
@@ -121,7 +125,7 @@ Default calls infer `MappedArtifact`; None requests infer `UnmappedArtifact` wit
 
 Normalization and optimization are identity stages for this subset. Ownership uses primitive copies. Lowering produces structured Rust expressions; emission produces files as data. Planning records chosen implementations, rejected candidates, rationales and reachable crates. `Compile.run` completes through emission, while `Compile.build(program, output)` continues through Cargo with `Cargo.layer` and platform services supplied.
 
-`CargoApi`/`Cargo.layer` expose exclusive-output `write`, offline `build`, evaluator `run`, and scoped `validate`. Validation creates a fresh temporary crate and compares supplied expected results in debug and release. Filesystem/process failures use official platform errors; unsuccessful Cargo commands return `CargoError` with command, status, stdout and stderr. Child processes and temporary validation directories are scoped.
+`CargoApi`/`Cargo.layer` expose exclusive-output `write`, owned incremental `sync` (it records the files it wrote in `reffect-files.json`, rewrites only changed ones, deletes stale ones and refuses a non-empty directory it did not write), offline `build`, evaluator `run`, and scoped `validate`. Validation creates a fresh temporary crate and compares supplied expected results in debug and release. Filesystem/process failures use official platform errors; unsuccessful Cargo commands return `CargoError` with command, status, stdout and stderr. Child processes and temporary validation directories are scoped.
 
 ## Run
 

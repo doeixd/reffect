@@ -41,3 +41,6 @@ examples/heartbeat/generated/
 
 # Scoped native build directories left behind when a test is interrupted.
 packages/reffect/reffect-async-*/
+
+# Generated crates kept by `reffect build` for incremental rebuilds.
+.reffect/

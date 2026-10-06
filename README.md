@@ -36,6 +36,7 @@ export const Arithmetic = RpcGroup.make(
 ```ts
 // server.ts
 import { NativeRpc, R } from "reffect";
+import { Arithmetic } from "./contract.ts";
 
 const bindings = {
   // u64 arithmetic wraps exactly as the reference does.
@@ -51,21 +52,20 @@ const bindings = {
     ["allowed"],
   ),
 };
+
+// The entry's default export is its compile effect.
+export default NativeRpc.compile(Arithmetic, bindings);
 ```
 
-**3. Compile, build and run it.** `NativeRpc.compile` returns a Cargo crate. `CargoApi` writes it, fetches its pinned dependencies and builds it.
-
-```ts
-const artifact = yield * NativeRpc.compile(Arithmetic, bindings);
-const directory = yield * CargoApi.write(artifact, "./server");
-yield * CargoApi.fetch(directory);
-yield * CargoApi.build(directory, "release");
-```
+**3. Build it into a binary and run it.** `reffect build` compiles the entry to a Rust crate, builds it with Cargo and copies the binary next to you. Rebuilds are incremental.
 
 ```sh
-./server/target/release/reffect_generated --port 3000
+reffect build server.ts --release
+./server --port 3000
 # {"schema":"reffect.rpc.ready@1","address":"127.0.0.1:3000"}
 ```
+
+`reffect check server.ts` reports diagnostics without building, and `reffect run server.ts -- --port 3000` builds and runs in one step. Every command is a thin wrapper over the library: `NativeRpc.compile` returns the crate, and `CargoApi` writes, fetches and builds it, if you'd rather drive the build from your own Effect program.
 
 **4. Call it with the stock Effect client.**
 
@@ -83,10 +83,11 @@ const sum = yield * client.Add({ left: 18446744073709551615n, right: 1n }); // 0
 const rejected = yield * client.Guard({ allowed: false }).pipe(Effect.flip); // false
 ```
 
-The whole program is in [examples/rpc](examples/rpc). Run it with:
+The whole program is in [examples/rpc](examples/rpc). From this repository, the CLI is `node packages/reffect/bin/reffect.js`:
 
 ```sh
-vp exec node --experimental-transform-types examples/rpc/main.ts
+vp exec node packages/reffect/bin/reffect.js build examples/rpc/server.ts
+vp exec node --experimental-transform-types examples/rpc/main.ts  # builds, starts and calls it
 # stock client → native Rust: sum=0, typed failure=false
 ```
 

@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-06 — The reffect CLI: check, build and run
+
+- [Design record](docs/research/cli.md) (CLI-001..007):
+  - `reffect check|build|run <entry>` on `effect/cli`, where the entry's default export is its compile effect;
+  - `CargoApi.sync`, an owned incremental crate directory (`.reffect/<entry>` by default);
+  - a launcher `packages/reffect/bin/reffect.js` that adds Node's `--experimental-transform-types`;
+  - `examples/rpc/server.ts` is now such an entry, and `main.ts` imports it.
+- Validation:
+  - `tests/cli.test.ts` 3/3 passes: sync ownership, staleness and unchanged timestamps; `check` exit codes and diagnostics; `build` producing a binary the stock client calls, and `run` forwarding arguments and the exit code. A mutation that rewrites unchanged files fails it.
+  - A rebuild of an unchanged entry takes 2.7 s against 18 s for the first build.
+  - `examples/rpc/main.ts` prints `sum=0, typed failure=false`; the strict `tsc` passes.
+
 ## 2026-10-06 — Milestone 11: NativeRemote and the showcase over WebSocket
 
 - [Design record](docs/research/websocket-rpc.md):

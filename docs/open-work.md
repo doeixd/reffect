@@ -61,7 +61,7 @@ These block many items below.
 - Concurrent dispatch of a batch within one HTTP request ([async-rpc](research/async-rpc.md#chosen-boundary-and-alternatives))
 - Cleanup on process crash, panic or task abort; interruption-frame oracle ([async-rpc](research/async-rpc.md#implementation-and-observed-conformance))
 - Heartbeat: console/stdout compilation, per-loop allocation measurement, a real OS Ctrl-C test ([heartbeat](research/heartbeat.md#delivered-evidence))
-- Demos not yet built: concurrent handlers (`Effect.all`, Ref/Semaphore), a general RPC handler over a compiled SQL service, a `build server.ts` CLI producing a server binary ([rpc-mvp](rpc-mvp.md#id-make-rpc-the-driver-for-the-whole-roadmap))
+- Demos not yet built: concurrent handlers (`Effect.all`, Ref/Semaphore), a general RPC handler over a compiled SQL service ([rpc-mvp](rpc-mvp.md#id-make-rpc-the-driver-for-the-whole-roadmap))
 
 ### Auth and middleware
 
@@ -252,7 +252,7 @@ Per-module scope and refusals are in the [module decision index](effect-modules.
 ## Compiler API, editor and migration tooling
 
 - **Compiler API:** declarative `Compile.make` with targets, presets and options; `Native.program`; the compiler as Services and Layers; target data (`Rust.binary`, `Node.hybrid`, `Wasm.module`); a rich `CompileResult`; `Compile.watch`/`devServer`; a queryable support registry; `Compile.explain` support reporting with selected/rejected candidates and crates ([compiler-api](compiler-api.md#compile-options-should-be-composable), [runtime-lowering](runtime-lowering.md#planning-support-reporting-and-acceptance))
-- **CLI:** `build/run/dev/check/emit/inspect/support` ([compiler-api](compiler-api.md#the-cli-is-then-almost-trivial))
+- **CLI:** `check`, `build` and `run` are delivered ([cli](research/cli.md)); `dev`, `emit`, `inspect`, `support`, a JSON diagnostic report, and flags for entries whose compile needs configuration remain ([compiler-api](compiler-api.md#the-cli-is-then-almost-trivial))
 - **Diagnostics:** pretty/JSON/LSP renderings and semantic codes ([conformance](conformance-and-diagnostics.md#42-diagnostics-are-first-class-output))
 - **Implementation registries:** operation/service/semantic registries with `Native.Service.implement` ([runtime-lowering](runtime-lowering.md#three-implementation-registries))
 - **Editor:** LSP adapter for compiler diagnostics, read-only Rust preview, Volar virtual documents, UTF-16 position mapping, rust-analyzer bridge; Volar proof of concept vs a direct adapter ([editor-tooling](editor-tooling.md#first-useful-editor-slice))

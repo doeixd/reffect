@@ -3,27 +3,16 @@ import { ChildProcess } from "effect/process";
 import { FetchHttpClient } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { NodeServices } from "@effect/platform-node";
-import { CargoApi, NativeRpc, R } from "../../packages/reffect/src/index.ts";
+import { CargoApi } from "../../packages/reffect/src/index.ts";
 import { Arithmetic } from "./contract.ts";
+import compile from "./server.ts";
 
-const bindings = {
-  Add: NativeRpc.bind(
-    R.fn([R.U64, R.U64], R.U64, (a, b) => a.pipe(R.U64.add(b))),
-    ["left", "right"],
-  ),
-  Guard: NativeRpc.bind(
-    R.fn([R.Bool], R.Bool, R.Bool, (allowed) =>
-      R.Match.bool(allowed, R.Effect.succeed(allowed), R.Effect.fail(allowed)),
-    ),
-    ["allowed"],
-  ),
-};
 await Effect.runPromise(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-rpc-example-" });
-      const artifact = yield* NativeRpc.compile(Arithmetic, bindings);
+      const artifact = yield* compile;
       const directory = yield* CargoApi.write(artifact, `${parent}/server`);
       yield* CargoApi.fetch(directory);
       yield* CargoApi.build(directory);

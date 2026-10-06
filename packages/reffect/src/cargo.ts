@@ -1,4 +1,14 @@
-import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema, Stream } from "effect";
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+  Stream,
+} from "effect";
 import { safeRelativePath } from "./source.ts";
 import { NativeDiagnostic, readBuildDiagnostics } from "./cargo-diagnostics.ts";
 import { ChildProcess } from "effect/process";
@@ -114,6 +124,64 @@ const write = Effect.fn("Cargo.write")(function* (artifact: GeneratedFiles, outp
   // Exclusive directory creation refuses existing output, including concurrent writers.
   yield* fs.makeDirectory(directory);
   return yield* writeFiles(artifact, directory);
+});
+const CRATE_RECORD = "reffect-files.json";
+const CrateRecord = Schema.Struct({
+  schema: Schema.Literal("reffect.crate@1"),
+  files: Schema.Array(Schema.String),
+});
+const syncError = (message: string) =>
+  new CargoError({ message, command: ["sync"], exitCode: -1, stdout: "", stderr: "" });
+/**
+ * Writes `artifact` into a crate directory this function owns, for repeated builds: unchanged
+ * files keep their timestamps and Cargo's `target/` survives, so only the generated crate
+ * recompiles. Paths the previous artifact wrote and this one lacks are deleted. A non-empty
+ * directory without the record of an earlier sync is refused rather than overwritten.
+ */
+const sync = Effect.fn("Cargo.sync")(function* (artifact: GeneratedFiles, output: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const entries = yield* artifactEntries(artifact);
+  const directory = path.resolve(output);
+  const record = path.join(directory, CRATE_RECORD);
+  const fail = (error: { readonly message: string }) => syncError(error.message);
+  let previous: readonly string[] = [];
+  if (yield* fs.exists(record).pipe(Effect.mapError(fail))) {
+    const text = yield* fs.readFileString(record).pipe(Effect.mapError(fail));
+    const decoded = yield* Effect.try({
+      try: () => Schema.decodeUnknownSync(CrateRecord)(JSON.parse(text)),
+      catch: () => syncError(`${record} is not a reffect crate record`),
+    });
+    if (!decoded.files.every((name) => safeRelativePath(name)))
+      return yield* syncError(`${record} names a path outside the crate`);
+    previous = decoded.files;
+  } else if (yield* fs.exists(directory).pipe(Effect.mapError(fail))) {
+    if ((yield* fs.readDirectory(directory).pipe(Effect.mapError(fail))).length)
+      return yield* syncError(
+        `${directory} is not empty and was not written by reffect; choose another crate directory`,
+      );
+  }
+  yield* fs.makeDirectory(directory, { recursive: true }).pipe(Effect.mapError(fail));
+  const writeRecord = (files: readonly string[]) =>
+    fs
+      .writeFileString(record, `${JSON.stringify({ schema: "reffect.crate@1", files })}\n`)
+      .pipe(Effect.mapError(fail));
+  const files = entries.map(([name]) => name);
+  // Both sets are recorded until the files are written, so an interrupted sync still owns them.
+  yield* writeRecord([...new Set([...previous, ...files])]);
+  const current = new Set(files);
+  for (const name of previous)
+    if (!current.has(name))
+      yield* fs.remove(path.join(directory, name), { force: true }).pipe(Effect.mapError(fail));
+  for (const [name, text] of entries) {
+    const file = path.join(directory, name);
+    const existing = yield* fs.readFileString(file).pipe(Effect.option);
+    if (Option.isSome(existing) && existing.value === text) continue;
+    yield* fs.makeDirectory(path.dirname(file), { recursive: true }).pipe(Effect.mapError(fail));
+    yield* fs.writeFileString(file, text).pipe(Effect.mapError(fail));
+  }
+  yield* writeRecord(files);
+  return directory;
 });
 /** A lock's registry packages, keyed `name@version`, each with its source and checksum. */
 const lockedPackages = (lock: string): ReadonlyMap<string, string> => {
@@ -261,7 +329,7 @@ const runInput = Effect.fn("Cargo.runInput")(function* (
 const fetch = Effect.fn("Cargo.fetch")(function* (directory: string) {
   return yield* execute(["fetch"], directory);
 });
-export const CargoApi = { write, fetch, build, run, runInput, validate };
+export const CargoApi = { write, sync, fetch, build, run, runInput, validate };
 export class Cargo extends Context.Service<Cargo, typeof CargoApi>()("reffect/Cargo") {
   static readonly layer = Layer.succeed(Cargo, CargoApi);
 }

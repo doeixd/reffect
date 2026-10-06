@@ -2,6 +2,9 @@
   "name": "reffect",
   "version": "0.0.0",
   "private": true,
+  "bin": {
+    "reffect": "./bin/reffect.js"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
