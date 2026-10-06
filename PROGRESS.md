@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-06 — SQL in RPC handlers researched and planned
+
+- [Design record](docs/research/sql-service.md) (SQL-001..008):
+  - `R.sql` and `R.SqlSchema` mirror `effect/sql`;
+  - one `SqlExecute` node, with SQLite classification ported from `@effect/sql-sqlite-node` 4.0.0;
+  - rows decoded on the type side with Effect's error text;
+  - served through `NativeRpc.compile(..., { sql })` on the existing SQLx pool.
+- A probe of the official client is recorded there. It shows that a duplicate key is a `ConstraintError`, not a `UniqueViolation`; prepare and execute failures carry fixed messages; numbers bind as REAL; and integers beyond ±2^53−1 fail.
+- `@effect/sql-sqlite-node` 4.0.0 is pinned as a dev dependency: it is the reference oracle.
+
 ## 2026-10-06 — The reffect CLI: check, build and run
 
 - [Design record](docs/research/cli.md) (CLI-001..007):

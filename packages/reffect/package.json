@@ -23,6 +23,7 @@
     "foldkit-entity": "0.7.0"
   },
   "devDependencies": {
+    "@effect/sql-sqlite-node": "4.0.0",
     "@types/node": "26.1.1",
     "@types/pg": "8.23.1",
     "drizzle-orm": "1.0.0-rc.4",

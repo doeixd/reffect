@@ -10,6 +10,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Milestone 10: SchemaBinary](research/schema-binary.md)** serves `RpcSerialization.layerSchemaBinary` natively (first slice delivered): generated transcoders, an exact canonical encoder and byte equality with the official server, and the upstream request-defect bug it works around. The [wire format](research/schema-binary-format.md) is specified from Effect 4.0.0's source and probes.
 
+**[SQL in RPC handlers](research/sql-service.md)** records `R.sql` and `R.SqlSchema` over SQLx: the official SQLite client's observed behaviour, error classification, row decoding and serving.
+
 **[The reffect CLI](research/cli.md)** records `reffect check|build|run`: the entry contract, the owned incremental crate directory, diagnostics and the launcher.
 
 **[Milestone 11: RPC over WebSocket](research/websocket-rpc.md)** records Effect 4.0.0's socket protocol (sessions, acked streams, ping, interruption) and the plan for a native WebSocket transport. Server push and reverse RPC are deferred: 4.0.0's stock client cannot receive them.

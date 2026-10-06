@@ -61,7 +61,7 @@ These block many items below.
 - Concurrent dispatch of a batch within one HTTP request ([async-rpc](research/async-rpc.md#chosen-boundary-and-alternatives))
 - Cleanup on process crash, panic or task abort; interruption-frame oracle ([async-rpc](research/async-rpc.md#implementation-and-observed-conformance))
 - Heartbeat: console/stdout compilation, per-loop allocation measurement, a real OS Ctrl-C test ([heartbeat](research/heartbeat.md#delivered-evidence))
-- Demos not yet built: concurrent handlers (`Effect.all`, Ref/Semaphore), a general RPC handler over a compiled SQL service ([rpc-mvp](rpc-mvp.md#id-make-rpc-the-driver-for-the-whole-roadmap))
+- Demos not yet built: concurrent handlers (`Effect.all`, Ref/Semaphore), a general RPC handler over a compiled SQL service (designed in [sql-service](research/sql-service.md#order-of-work-and-acceptance); Postgres, transactions and statement helpers follow) ([rpc-mvp](rpc-mvp.md#id-make-rpc-the-driver-for-the-whole-roadmap))
 
 ### Auth and middleware
 
