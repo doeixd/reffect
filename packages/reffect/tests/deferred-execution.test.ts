@@ -11,9 +11,8 @@ import {
   Tracer,
 } from "effect";
 import { expect, test, vi } from "vite-plus/test";
-import { R } from "../src/index.ts";
+import { R, Compile, DeferredExecution } from "../src/index.ts";
 import { DeferredIR as D } from "../src/deferred.ts";
-import { DeferredExecution } from "../src/deferred-execution.ts";
 import type { DeferredExecutionOptions } from "../src/deferred-execution.ts";
 import type { FramedExit } from "../src/effect-ir.ts";
 import { EqU64, Expr, Operation, SemanticRef } from "../src/kernel.ts";
@@ -117,6 +116,18 @@ test("custom reference callbacks and semantic-ref aliases are refused before inv
         ),
       ),
     );
+    const native = await Effect.runPromise(Compile.run(R.program({ work })).pipe(Effect.exit));
+    expect(native).toMatchObject({
+      cause: {
+        reasons: [
+          {
+            error: {
+              diagnostics: [expect.objectContaining({ code: "DEFERRED_EXECUTION_CONTEXT" })],
+            },
+          },
+        ],
+      },
+    });
     const result = await DeferredExecution.run(work);
     expect(result.logs).toEqual([]);
     expect(result.exit).toMatchObject({

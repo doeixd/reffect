@@ -1,3 +1,4 @@
+import { analyzeDeferredTopology } from "./structured-concurrency.ts";
 import { Effect, Match, Schema, SchemaAST } from "effect";
 import { wellFormed } from "./contract-codec.ts";
 import {
@@ -1125,6 +1126,15 @@ export const compileServer = (
       return yield* unsupported(
         "handlers",
         "Cancellation-retained failures and fallible task groups require a verified compound RPC Cause wire adapter",
+      );
+    if (
+      Object.values(prepared.program.functions).some(
+        (fn) => fn instanceof EffectFn && analyzeDeferredTopology(fn.body).hasDeferred,
+      )
+    )
+      return yield* unsupported(
+        "handlers",
+        "Deferred is admitted only for standalone exports; RPC request-context integration remains unverified",
       );
     const core = yield* Compile.run(
       Compile.make(prepared.program).pipe(

@@ -15,7 +15,7 @@ const work = R.fn([], R.U64, R.Never, () =>
   ),
 );
 
-test("private reference Deferred works while native planning refuses before emission", async () => {
+test("public compiler admits bounded Deferred while retaining effect analysis", async () => {
   expect(await Effect.runPromise(Reference.run(work, []))).toBe(7n);
   const analysis = await Effect.runPromise(Compile.derive(R.program({ work })));
   expect(analysis.effects.map((ref) => ref.id)).toEqual(
@@ -25,18 +25,11 @@ test("private reference Deferred works while native planning refuses before emis
       "reffect/deferred/await@1",
     ]),
   );
-  const exit = await Effect.runPromise(
-    Compile.make(R.program({ work })).pipe(
-      Compile.withTarget(Rust.tokio),
-      Compile.run,
-      Effect.exit,
-    ),
+  const artifact = await Effect.runPromise(
+    Compile.make(R.program({ work })).pipe(Compile.withTarget(Rust.tokio), Compile.run),
   );
-  expect(Exit.isFailure(exit)).toBe(true);
-  if (Exit.isFailure(exit))
-    expect(Cause.findErrorOption(exit.cause)).toMatchObject({
-      value: { diagnostics: [{ code: "DEFERRED_NATIVE_INTEGRATION", stage: "plan" }] },
-    });
+  expect(artifact.files["src/lib.rs"]).toContain("assert_deferred_future_layout");
+  expect(artifact.files["src/lib.rs"]).toContain("pub fn r_work");
 });
 
 test("Deferred provenance retains the lexical body and completion payload edges", () => {

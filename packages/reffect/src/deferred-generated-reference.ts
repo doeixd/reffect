@@ -15,7 +15,7 @@ const check = (fn: EffectFn, path: string, requireDeferred = false): readonly Di
               code: "DEFERRED_GENERATED_PROFILE",
               stage: "check",
               path,
-              message: "Interrupted diagnostics require the private Deferred profile",
+              message: "Interrupted diagnostics require the bounded Deferred profile",
             },
           ]
         : checkEffectFunction(fn, path);
@@ -25,7 +25,7 @@ const check = (fn: EffectFn, path: string, requireDeferred = false): readonly Di
   }
 };
 
-/** Private checked experiment, absent from package exports; uses the ordinary interpreters. */
+/** Internal Effect-valued adapter; public parity uses the owned DeferredExecution boundary. */
 export const GeneratedDeferredReference = Object.freeze({
   run: <I extends readonly IRType<unknown>[], A, E>(
     fn: EffectFn<I, A, E>,

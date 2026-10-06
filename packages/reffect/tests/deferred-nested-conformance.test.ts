@@ -434,26 +434,16 @@ test("ordinary reference still refuses private nested topology", async () => {
       },
     });
 });
-test("public native compilation still refuses private nested Deferred", async () => {
-  const exit = await Effect.runPromise(
+test("public native compilation admits verified initial nested Deferred", async () => {
+  const artifact = await Effect.runPromise(
     Compile.make(R.program({ isolated: programs.isolated })).pipe(
       Compile.withTarget(Rust.tokio),
       Compile.run,
-      Effect.exit,
     ),
   );
-  expect(Exit.isFailure(exit)).toBe(true);
-  if (Exit.isFailure(exit))
-    expect(Cause.findErrorOption(exit.cause)).toMatchObject({
-      value: {
-        diagnostics: expect.arrayContaining([
-          expect.objectContaining({
-            code: expect.stringMatching(/^(NESTED_TASK_GROUP|DEFERRED_NATIVE_INTEGRATION)$/),
-          }),
-        ]),
-      },
-    });
+  expect(artifact.files["src/lib.rs"]).toContain("reffect_deferred_future_layouts");
 });
+
 test(
   "actual generated nested Race drains independent and parent cancellation",
   async () => {

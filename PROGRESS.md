@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-10-06 — Public bounded Deferred and Effect v4 handoff
+
+- [Resume guide](docs/effect-v4-workstream.md) explains the module workstream, source ownership, preparation/decision records, supported/private boundaries, sequential native validation and next priorities. Next: scoped bounded Semaphore, then Latch cohorts and Queue/PubSub.
+- [Execution decisions](docs/research/deferred-public-execution.md) and [admission decisions](docs/research/deferred-public-admission.md) were recorded before implementation. `R.Deferred` and the named `DeferredIR` export provide make/await/succeed/isDone; `DeferredExecution.run`/runWithFrames expose the owned official Effect reference boundary and cancellation/observation types.
+- Public Compile checks topology, budget, structural growth and trusted builtin identities, then selects the existing generated backend. Only verified Deferred functions waive the ordinary nested-task diagnostic; mixed ordinary exports retain their lowering. Even isDone-only owners require the asynchronous backend/capability. NativeRpc explicitly refuses Deferred embedding pending request-context evidence.
+- Scalar Bool/U64/Unit, Never errors, zero authored inputs and the bounded All/initial Race topology remain the admitted profile. Typed failure completion stays internal. Native future layout still requires a successful Rust code-generation build; emitting source or cargo check cannot establish it. No new native state, heap fields or Cargo dependencies were introduced beyond the existing reachable Tokio adapter.
+- Validation: 66 selected tests pass across twelve suites: reference/admission 38/38, native regression 25/25, and public acceptance 3/3. Native tests ran sequentially; first-completion results, both frame modes, ordinary mixed exports, interrupted frames, growth/layout refusals and previous future sizes remain verified. Full vp check, strict TypeScript and workspace builds pass.
+- Independent read-only review found no blocking correctness/type/security issues. Trusted identity checks, selective nested admission, isDone-only async capability and explicit RPC refusal were inspected. Initial topology analysis adds compile-time work for ordinary Effect functions; successful immutable Program receipts are cached, with no demonstrated material regression.
+
 ## 2026-10-05 — Milestone 10 step 5: authentication over SchemaBinary
 
 - [Design record](docs/research/schema-binary.md#progress). `NativeRpc.compile(..., { auth, serialization: "schema-binary" })` is admitted: denials are written in `Rpc.exitSchema`'s failure union, byte-equal to the official middleware's answers.

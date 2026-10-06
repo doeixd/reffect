@@ -70,7 +70,8 @@ const trustedOperations = new Set<AnyOperation>([
   LtNumber,
   NumberToString,
 ] as AnyOperation[]);
-const checkReferences = (fn: EffectFn): void => {
+/** Internal shared identity audit for native admission and owned execution. */
+export const checkDeferredExecutionReferences = (fn: EffectFn): void => {
   const expressions = new Set<Expr<unknown>>();
   const computations = new Set<Computation<unknown, unknown>>();
   const unsupported = () => {
@@ -177,9 +178,9 @@ const execute = <A, Out>(
   try {
     signal = cancellation(options);
     checkGeneratedDeferredNesting(fn, "function");
-    checkReferences(fn);
+    checkDeferredExecutionReferences(fn);
     if (!analyzeGeneratedDeferredProfile(Program.make({ work: fn })).has(fn))
-      throw refusal("function", "This runner requires the checked private Deferred profile");
+      throw refusal("function", "This runner requires the checked bounded Deferred profile");
   } catch (error) {
     if (!(error instanceof CompileError)) throw error;
     return Promise.resolve(Object.freeze({ exit: Exit.fail(error), logs: Object.freeze([]) }));
@@ -201,7 +202,11 @@ const execute = <A, Out>(
   );
 };
 
-/** Internal standalone host boundary; absent from package exports and public admission. */
+/**
+ * Execute the bounded Deferred profile in an owned official Effect context.
+ * Observes Exit and captured logs; accepts only an optional AbortSignal.
+ * Native parity requires the same admitted profile and a successful Rust build.
+ */
 export const DeferredExecution = Object.freeze({
   run: <A>(fn: EffectFn<readonly [], A, never>, options?: DeferredExecutionOptions) =>
     execute(fn, options, () => GeneratedDeferredReference.run(fn, [])),

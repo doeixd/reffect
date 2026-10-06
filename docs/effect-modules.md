@@ -2,6 +2,8 @@
 
 The 2026-10-02 implementation batch follows the user's request to develop important Effect modules in parallel and retain decisions for later review. The shared oracle was Effect 4.0.0-rc.118; it moved to 4.0.0 stable on 2026-10-02 with the full suite passing (see PROGRESS). Each track admits a bounded semantic profile; an implemented subset never establishes complete support for an upstream module.
 
+See the [Effect v4 workstream handoff](effect-v4-workstream.md) for resume commands, source ownership, validation and the next coordination gates. Public bounded Deferred is described in [execution](research/deferred-public-execution.md) and [admission](research/deferred-public-admission.md); upstream module completeness is not implied.
+
 ## Priorities and integration
 
 | Track                                | Immediate workload                                                             | Ownership during implementation                                                      | Decision record                                 |

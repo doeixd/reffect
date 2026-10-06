@@ -1,3 +1,4 @@
+import { DeferredPublic } from "./deferred.ts";
 import { CookiesIR, DateTimeIR } from "./js-std.ts";
 import { SchemaIR } from "./schema-json.ts";
 import { UrlIR } from "./url.ts";
@@ -191,6 +192,7 @@ export const R = Object.freeze({
   Exit: ExitIR,
   Duration: DurationIR,
   Ref: RefIR,
+  Deferred: DeferredPublic,
   Clock: ClockIR,
   Random: RandomIR,
   Boolean: Object.freeze({ not: BoolType.not, ...BooleanCombinators }),

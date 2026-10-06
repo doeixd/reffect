@@ -212,3 +212,6 @@ The script validates all six boundaries, refuses to overwrite existing documents
 ```
 
 Use an original, unsplit conversation copy as input. The current op-expr-revision-convo.md is an overview, not an extraction source. Extraction preserves bodies exactly before repository formatting; maintain the formatted documents directly afterward.
+
+- [Effect v4 workstream handoff](effect-v4-workstream.md): resume instructions, implementation file map, admission gates and next module priorities.
+- [Public Deferred execution](research/deferred-public-execution.md) and [compiler admission](research/deferred-public-admission.md): bounded authoring, owned reference context and native build contract.

@@ -1,3 +1,5 @@
+import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
+import { checkDeferredExecutionReferences } from "./deferred-execution.ts";
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
 import { UrlPathname, UrlSearchParam } from "./url.ts";
 import {
@@ -43,7 +45,7 @@ import { hostFunctionOf } from "./schema-json.ts";
 import { HtmlCapability, HtmlType, htmlOperationKind } from "./html-ir.ts";
 import type { HtmlOperationKind } from "./html-ir.ts";
 import { FileHandleType, FileRequirement } from "./file-model.ts";
-import { lowerFunctions, emitFunctions } from "./lower.ts";
+import { lowerFunctions, lowerDeferredFunctions, emitFunctions } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
@@ -589,6 +591,15 @@ const validName = /^[A-Za-z][A-Za-z0-9_]*$/;
 // Stage outputs are immutable (frozen programs, analyses and plans), so a stage given a value it
 // has already accepted answers from that first run: one compile checks, derives and verifies once
 // rather than at every later stage (#31). Only successes are kept; a refusal is recomputed.
+const deferredProfiles = new WeakMap<Program, ReturnType<typeof analyzeGeneratedDeferredProfile>>();
+const checkedDeferredProfiles = (program: Program) => {
+  const previous = deferredProfiles.get(program);
+  if (previous) return previous;
+  const profiles = analyzeGeneratedDeferredProfile(program);
+  for (const fn of profiles.keys()) checkDeferredExecutionReferences(fn);
+  deferredProfiles.set(program, profiles);
+  return profiles;
+};
 const checkedPrograms = new WeakSet<Program>();
 const derivedPrograms = new WeakMap<Program, Analysis>();
 const verifiedPlans = new WeakSet<Plan>();
@@ -612,6 +623,13 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         message: `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
       })),
     });
+  const profiles = yield* Effect.try({
+    try: () => checkedDeferredProfiles(program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("DEFERRED_GENERATED_PROFILE", "check", "functions", String(cause)),
+  });
   const issues = Object.entries(program.functions).flatMap(([name, f]) => [
     ...(!validName.test(name)
       ? [
@@ -638,7 +656,9 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         ]
       : []),
     ...(f instanceof EffectFn
-      ? checkEffectFunction(f, `functions.${name}`)
+      ? checkEffectFunction(f, `functions.${name}`).filter(
+          (issue) => issue.code !== "NESTED_TASK_GROUP" || !profiles.has(f),
+        )
       : checkFunction(f, `functions.${name}`)),
   ]);
   if (!Object.keys(program.functions).length)
@@ -960,7 +980,8 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
       ),
       ...(Array.from(types).some(reachesUnknown) ? [Capabilities.Json] : []),
       ...(effectRefs.size ? [Capabilities.SyncResult] : []),
-      ...(Array.from(effectRefs).some((ref) =>
+      ...(effectRefs.has(SyncEffects.DeferredMake) ||
+      Array.from(effectRefs).some((ref) =>
         Object.values(AsyncEffects).some((supported) => supported === ref),
       )
         ? [Capabilities.AsyncResult]
@@ -997,22 +1018,13 @@ const plan = Effect.fn("Compile.plan")(function* (
       target.id,
       "No verified lowering registered for this target",
     );
-  if (
-    analysis.effects.some((ref) =>
-      [
-        SyncEffects.DeferredMake,
-        SyncEffects.DeferredIsDone,
-        AsyncEffects.DeferredAwait,
-        AsyncEffects.DeferredComplete,
-      ].some((deferred) => deferred === ref),
-    )
-  )
-    return yield* fail(
-      "DEFERRED_NATIVE_INTEGRATION",
-      "plan",
-      "effects",
-      "Deferred native ownership, routing, masking and callback-budget admission remain unverified",
-    );
+  yield* Effect.try({
+    try: () => checkedDeferredProfiles(analysis.program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("DEFERRED_GENERATED_PROFILE", "plan", "functions", String(cause)),
+  });
   const selectedServices = yield* Effect.try({
     try: () => normalizeRuntimeServicesSelection(runtimeServices),
     catch: (cause) =>
@@ -1230,7 +1242,7 @@ const lower = Effect.fn("Compile.lower")(function* (
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
   return yield* Effect.try({
     try: () =>
-      lowerFunctions(
+      (checkedDeferredProfiles(p.analysis.program).size ? lowerDeferredFunctions : lowerFunctions)(
         p.analysis.program,
         new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
         policy,

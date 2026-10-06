@@ -207,3 +207,7 @@ export type {
   ElementShape,
   HtmlValue,
 } from "./html.ts";
+
+export { DeferredPublic as DeferredIR } from "./deferred.ts";
+export { DeferredExecution } from "./deferred-execution.ts";
+export type { DeferredExecutionOptions, DeferredObservation } from "./deferred-execution.ts";

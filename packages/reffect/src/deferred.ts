@@ -78,5 +78,13 @@ const fail: {
 );
 const isDone = <A, E>(self: Expr<Deferred.Deferred<A, E>>): Computation<boolean> =>
   Computation.make(BoolType, NeverType, { _tag: "DeferredIsDone", ...handle(self) });
-/** Internal lexical coordination builders; native/public admission remains separately gated. */
+/** Internal coordination builders include typed failure; public admission is scalar/Never only. */
 export const DeferredIR = Object.freeze({ make, await: awaitDeferred, succeed, fail, isDone });
+
+/** Public scalar/Never coordination; handles stay inside their lexical function. */
+export const DeferredPublic = Object.freeze({
+  make: <A>(success: IRType<A>): Computation<Deferred.Deferred<A, never>> => make(success),
+  await: awaitDeferred,
+  succeed,
+  isDone,
+});

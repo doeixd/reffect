@@ -19,7 +19,7 @@ export interface GeneratedDeferredProfile {
   readonly taskCapacities: ReadonlyMap<Computation<unknown, unknown>, number>;
 }
 
-/** Conditional backend experiment; this never changes public compiler admission. */
+/** Checked bounded standalone Deferred profile, shared by public admission and lowering. */
 export const analyzeGeneratedDeferredProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedDeferredProfile> => {
@@ -47,7 +47,7 @@ export const analyzeGeneratedDeferredProfile = (
     if (fn.input.length || !deferredScalar(fn.output) || !IRType.same(fn.error, NeverType))
       refuse(
         path,
-        "Private generated Deferred requires zero inputs, scalar success and Never error",
+        "Bounded generated Deferred requires zero inputs, scalar success and Never error",
       );
     if (topology.diagnostics.length)
       throw new CompileError({
@@ -57,10 +57,10 @@ export const analyzeGeneratedDeferredProfile = (
     if (topology.taskCapacity > 6 || !Number.isSafeInteger(topology.ownerCount))
       refuse(
         path,
-        "Private generated Deferred requires at most six live task contexts and finite owners",
+        "Bounded generated Deferred requires at most six live task contexts and finite owners",
       );
     if (analyzeTaskGroups(fn.body).requiresRichErrors)
-      refuse(path, "Private generated Deferred has no compound outcome adapter");
+      refuse(path, "Bounded generated Deferred has no compound outcome adapter");
     const budget = analyzeDeferredBudget(fn, `${path}.body`, defaultDeferredBudgetContext, true);
     if (!budget.admitted)
       throw new CompileError({
@@ -83,7 +83,7 @@ export const analyzeGeneratedDeferredProfile = (
       const child = (body: Computation<unknown, unknown>, edge: string) =>
         walk(body, `${at}.${edge}`, ancestors);
       const unsupported = () =>
-        refuse(at, "Operation is outside the private generated Deferred profile");
+        refuse(at, "Operation is outside the bounded generated Deferred profile");
       Match.value(c.node).pipe(
         Match.tagsExhaustive({
           DeferredMake: unsupported,
@@ -105,7 +105,7 @@ export const analyzeGeneratedDeferredProfile = (
             )
               refuse(
                 at,
-                "Private generated Deferred permits only outer All2/3 with an initial inner Race2",
+                "Bounded generated Deferred permits only outer All2/3 with an initial inner Race2",
               );
             n.children.forEach((value, i) =>
               walk(value, `${at}.children[${i}]`, [...ancestors, n.mode]),
