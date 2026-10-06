@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-06 — Milestone 11 researched and planned
+
+- [Design record](docs/research/websocket-rpc.md). Effect 4.0.0's socket protocol, read from source:
+  - one session per socket;
+  - a frame may carry several messages, and each answer is its own frame;
+  - Ping and Pong every 5 s;
+  - streams wait for an `Ack` per `Chunk`;
+  - `Interrupt` is answered with an interrupted Exit;
+  - disconnect cancels the session's work.
+- **Server notifications and reverse RPC are deferred:** 4.0.0's stock `RpcClient` ignores server-sent requests (WS-001).
+- No feature code yet.
+
 ## 2026-10-06 — SchemaBinary payload fingerprints
 
 - [Design record](docs/research/schema-binary.md#progress). `schemaBinary: { fingerprintPayloads: true }` is supported: positional structs, union positions and row-run presence masks. Fingerprints are derived at build time from the installed Effect, not ported.

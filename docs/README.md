@@ -10,6 +10,8 @@ Start with [PLAN.md](../PLAN.md) for constraints and the consolidated roadmap. U
 
 **[Milestone 10: SchemaBinary](research/schema-binary.md)** serves `RpcSerialization.layerSchemaBinary` natively (first slice delivered): generated transcoders, an exact canonical encoder and byte equality with the official server, and the upstream request-defect bug it works around. The [wire format](research/schema-binary-format.md) is specified from Effect 4.0.0's source and probes.
 
+**[Milestone 11: RPC over WebSocket](research/websocket-rpc.md)** records Effect 4.0.0's socket protocol (sessions, acked streams, ping, interruption) and the plan for a native WebSocket transport. Server push and reverse RPC are deferred: 4.0.0's stock client cannot receive them.
+
 **[Serving native RPC](research/rpc-serving.md)** covers connections, read timeouts and threading for generated servers ([#16](https://github.com/doeixd/reffect/issues/16), [#25](https://github.com/doeixd/reffect/issues/25)).
 
 **[Composite recovery refinement](research/retained-composite-recovery.md)** explains ordinary Remote mutation admission versus cancellation-retained failures during masked suspension.
