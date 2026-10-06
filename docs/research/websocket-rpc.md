@@ -92,6 +92,34 @@ Status: researched and planned (2026-10-06).
   - close cancels every task and sends nothing.
 - **WS-006. Headers.** Upgrade headers are prepended to each request's headers, as officially. Bearer authentication and session cookies are therefore read from the upgrade as well as from message headers.
 
+## Step 1: the official socket server, probed (2026-10-06)
+
+The probe ran `RpcServer.layerHttp({ protocol: "websocket" })` with `layerJson` on Node's HTTP server, driven by a raw WebSocket client.
+
+| Case                                       | Official frames                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Unary `Echo`                               | `Exit{Success}`                                                                       |
+| Stream of 3, no `Ack` for 500 ms           | one `Chunk[1]` only; each `Ack` releases the next `Chunk`; then `Exit{Success, null}` |
+| `Interrupt` after the first chunk          | `Exit{Failure, [Interrupt, fiberId]}`; the stream's finalizer ran                     |
+| `Ping`                                     | `Pong`                                                                                |
+| Garbage frame, then `Ping`                 | `Defect{SyntaxError, <JS parser message>}`, then `Pong`: the session continues        |
+| A request reusing an in-flight id          | **the socket closes (1001)**                                                          |
+| Handler defect (`Effect.die`), then `Echo` | `Defect{Error, boom}` (no Exit), then the Echo's Exit                                 |
+| An array frame of two requests             | two Exit frames                                                                       |
+| `Interrupt` for an unknown id              | nothing                                                                               |
+| `Interrupt` of a pending unary             | `Exit{Failure, [Interrupt, fiberId]}`; its interruption ran                           |
+| Close with a unary and a stream in flight  | both interrupted, finalizers ran                                                      |
+| Unknown tag; payload failing its schema    | each request's `Exit{Failure, [Die, text]}`                                           |
+| String id; `Eof`; another request          | answered with the string id; `Eof` ignored; the next request answered                 |
+
+Native decisions from the probe:
+
+- **WS-005 settled.** A duplicate in-flight id closes the session with 1001, as officially. An `Interrupt` for an unknown id and an `Eof` are ignored.
+- **Divergences that stay as registered:**
+  - A garbage frame's defect text is the native JSON path's `SyntaxError`/`Invalid JSON` (STR-007). The official text is the JS engine's.
+  - Interrupted Exits omit `fiberId`: native execution has no JS fiber identifier ([async-rpc](async-rpc.md)).
+  - R has no `Effect.die`; host faults stay under RTS-004.
+
 ## Plan
 
 1. **Probe** the official socket server: the frames it sends for unary, stream (with and without acks), interrupt, ping, duplicate id, a bad frame and a handler defect. Record the answers here, as fixtures where they are deterministic.
