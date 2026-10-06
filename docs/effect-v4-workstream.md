@@ -139,4 +139,8 @@ const artifact = await Effect.runPromise(
 // Build artifact with CargoApi before claiming native layout admission.
 ```
 
-Scoped Semaphore now has [private lexical IR/reference and conformance](research/semaphore-scoped-slice.md) plus a [raw native adapter experiment](research/semaphore-native.md). Resume at scheduled multi-waiter dispatcher parity and atomic grant/cleanup ownership, then generated inline storage/owned budgets; public/compiler admission remains refused. Source: `semaphore.ts`, `semaphore-model.ts`, `semaphore-native-runtime.ts`, with `semaphore-{ir,conformance,traversals,native-runtime}.test.ts`. The raw adapter uses Arc/Mutex/spawn and proves selected traces only.
+## Semaphore dispatcher continuation (2026-10-06)
+
+The next native candidate is `src/semaphore-dispatch-runtime.ts`, exercised by `tests/semaphore-dispatch-runtime.test.ts`; [SNAT-006–008 and evidence](research/semaphore-native.md#scheduled-scan-continuation-experiment-2026-10-06-preparation) explain it. The earlier `semaphore-native-runtime.ts` wake-all prototype is a retained counterexample: shared-parent/reversed polling selects the wrong waiter. Do not select it in compiler planning.
+
+The replacement is still a scripted, borrowed inline experiment, not generated native support. Next implement scheduled scan routing in a private bounded static task driver: release must finish its synchronous continuation before dispatch, then each selected waiter runs to semantic suspension/completion before the next observer. Preserve Deferred's different inline completion protocol. Prove selected-before-body cancellation and awaited cleanup before widening admission, and derive dispatch/registration budgets before trusting prototype counters. Run the dispatch suite sequentially with the Rust environment above; it includes official controlled traces, debug/release layout/allocation gates and the old adapter's counterexample.

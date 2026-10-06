@@ -218,4 +218,4 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 - [Effect v4 workstream handoff](effect-v4-workstream.md): resume instructions, implementation file map, admission gates and next module priorities.
 - [Public Deferred execution](research/deferred-public-execution.md) and [compiler admission](research/deferred-public-admission.md): bounded authoring, owned reference context and native build contract.
 
-- Scoped Semaphore preparation: [slice](research/semaphore-scoped-slice.md), [IR](research/semaphore-ir.md), [traversals](research/semaphore-traversals.md), and [scheduled native adapter](research/semaphore-native.md).
+- Scoped Semaphore preparation: [slice](research/semaphore-scoped-slice.md), [IR](research/semaphore-ir.md), [traversals](research/semaphore-traversals.md), and [scheduled native adapter](research/semaphore-native.md). The latter records the inline scan prototype, wake-all counterexample and remaining static-driver gates.

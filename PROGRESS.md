@@ -17,6 +17,14 @@
 - [Design record](docs/research/schema-binary.md#progress). `schemaBinary: { fingerprintPayloads: true }` is supported: positional structs, union positions and row-run presence masks. Fingerprints are derived at build time from the installed Effect, not ported.
 - The composites and Remote read suites run in both modes, byte-equal to the official server. A union-position mutation is caught.
 
+## 2026-10-06 — Semaphore inline scheduled scans and wake-all counterexample
+
+- Rechecked pinned Effect 4 online source and recorded [SNAT-006–008](docs/research/semaphore-native.md#scheduled-scan-continuation-experiment-2026-10-06-preparation) before implementation. A shared-parent/reversed-poll counterexample proves the previous wake-all adapter can select the wrong waiter; it stays experimental and unselected.
+- Separate private inline owner/borrowed permit prototype defers scans past the releasing continuation, detaches selected observers before peer resumption and revisits live insertion order after each callback. Incidental parent polls cannot grant an unselected registered acquisition. Seven controlled official scenarios match 140 debug/release traces, including capacity two, barging, reentrant release, live additions, cancellation and re-registration during a scan. Reversed-selection mutation fails the first-scan assertion; correct selection is restored.
+- Both builds record zero allocations over 1,000 quiet contention invocations each; four-slot owner/acquisition future/permit are 144/40/8 bytes on this 64-bit target. These are prototype measurements, not generated authored-future or full context costs.
+- Independent source/prototype review found no blocking defects in the scripted contract. Cancellation during scan and slot reuse gaps were covered afterward. Selected-before-body cancellation, callback defect handling, static-driver integration, authored suspension recognition, budgets, masked cleanup handoff and generated frame/layout costs remain open. Public/native Semaphore stays refused; admitted Deferred machinery is unchanged.
+- Validation: Semaphore suites 14/14, full `vp check` (512 formatted files, 316 lint/type files) and strict TypeScript pass. Public Deferred regression 4/4 and workspace builds pass (reffect rebuilt; other workspace outputs cached). Native suites ran sequentially.
+
 ## 2026-10-06 — SchemaBinary arrays of records
 
 - [Design record](docs/research/schema-binary.md#progress). Row runs carry record rows (the extras block, bit 30), byte-equal to the official server. A presence-bit mutation is caught.
