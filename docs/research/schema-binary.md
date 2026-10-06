@@ -223,6 +223,10 @@ The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its
     - a mutation that never back-references a key fails at the first relation case;
     - over a stock binary client, live events from the native hub equal upstream `liveHub`'s while R mutations land, the mutation answers (an unknown mutation included) are byte-equal, and a read after them matches.
 
+- **The showcase on SchemaBinary, done (2026-10-06).** `examples/todo-fullstack/main.ts --binary` compiles the server with `serialization: "schema-binary"`. The browser app (`examples/todo-remote/web`) picks its stock client's serialization from `TODO_REMOTE_RPC`, through a Vite `define`; a bundle without it uses NDJSON.
+  - **Evidence:** `tests/todo-fullstack-browser.test.ts` now runs under both serializations in Chrome. It covers the login page, the HttpOnly session cookie, hydration, a toggle committed through cookie-authenticated RPC, and the reload that renders it.
+  - Under SchemaBinary this also exercises the cookie's RPC media-type check. A client still speaking NDJSON would fail against the binary server, so the pass shows the browser used SchemaBinary.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.

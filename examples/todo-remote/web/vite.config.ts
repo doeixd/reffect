@@ -6,6 +6,9 @@ const native = `http://127.0.0.1:${process.env.TODO_REMOTE_PORT ?? "8787"}`;
 // server (`main.ts --serve`, port 8787 by default), which renders the first screen; it serves the
 // client modules itself.
 export default defineConfig({
+  // The RPC serialization the native server was compiled with: NDJSON, or SchemaBinary when it
+  // was started with --binary (TODO_REMOTE_RPC=schema-binary).
+  define: { __TODO_REMOTE_RPC__: JSON.stringify(process.env.TODO_REMOTE_RPC ?? "ndjson") },
   server: {
     host: "127.0.0.1",
     proxy: {

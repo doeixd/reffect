@@ -5,7 +5,10 @@
  * resumes from the reads the server made.
  *
  * vp exec node --experimental-transform-types examples/todo-fullstack/main.ts [--port 8787]
- *   [--database todos.db | --postgres postgres://user:password@host/db] [--auth]
+ *   [--database todos.db | --postgres postgres://user:password@host/db] [--auth] [--binary]
+ *
+ * With `--binary`, RPC is SchemaBinary (`RpcSerialization.layerSchemaBinary`) instead of NDJSON;
+ * the browser app is then started with `TODO_REMOTE_RPC=schema-binary`, as printed.
  *
  * With `--postgres`, the server runs on that Postgres database instead: the todos table is made
  * and seeded there when it does not exist yet, and an existing one is kept.
@@ -32,6 +35,7 @@ const option = (name: string) => {
 };
 const port = option("--port") ?? "8787";
 const auth = process.argv.includes("--auth");
+const serialization = process.argv.includes("--binary") ? "schema-binary" : "ndjson";
 // The one configured token: given, or fresh each run; it reaches the server only through its env.
 const token = process.env.TODO_TOKEN ?? randomBytes(24).toString("base64url");
 
@@ -56,6 +60,7 @@ await Effect.runPromise(
         yield* compileShowcase(template, {
           ...(loginPage === undefined ? {} : { loginPage }),
           ...(postgres === undefined ? {} : { dialect: "postgres" as const }),
+          serialization,
         }),
         `${parent}/server`,
       );
@@ -84,7 +89,8 @@ await Effect.runPromise(
       const over = postgres === undefined ? database : "Postgres";
       console.log(`todo-fullstack: http://${address} over ${over} (Ctrl-C stops it)`);
       if (auth) console.log(`sign in with token: ${token}`);
-      console.log(`browser: TODO_REMOTE_PORT=${port} vp dev examples/todo-remote/web`);
+      const rpc = serialization === "schema-binary" ? " TODO_REMOTE_RPC=schema-binary" : "";
+      console.log(`browser: TODO_REMOTE_PORT=${port}${rpc} vp dev examples/todo-remote/web`);
       return yield* Effect.never;
     }),
   ).pipe(Effect.provide(NodeServices.layer)),

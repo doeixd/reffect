@@ -10,6 +10,13 @@ import { Runtime } from "foldkit";
 import { Remote, RemoteRpc } from "foldkit-remote";
 import { BUILD_ID, Flags, Message, Model, init, subscriptions, update, view } from "./app.ts";
 
+// The serialization the server speaks, from the Vite config; a bundle without it uses NDJSON.
+declare const __TODO_REMOTE_RPC__: string | undefined;
+const serialization =
+  typeof __TODO_REMOTE_RPC__ !== "undefined" && __TODO_REMOTE_RPC__ === "schema-binary"
+    ? RpcSerialization.layerSchemaBinary()
+    : RpcSerialization.layerNdjson;
+
 // Remote.clientLayer takes the stock client; a transport failure becomes a Remote error.
 const RemoteLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -19,7 +26,7 @@ const RemoteLive = Layer.unwrap(
 ).pipe(
   Layer.provide(
     RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(
-      Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+      Layer.provide([FetchHttpClient.layer, serialization]),
     ),
   ),
 );

@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-06 — The showcase on SchemaBinary
+
+- `examples/todo-fullstack/main.ts --binary` serves the showcase over SchemaBinary. The browser app follows `TODO_REMOTE_RPC=schema-binary` ([design record](docs/research/schema-binary.md#progress)).
+- Validation:
+  - `todo-fullstack-browser` 2/2 passes in Chrome, one run per serialization, with sign-in, hydration and a cookie-authenticated toggle.
+  - `browser-bundle` 1/1 and `vp check` pass.
+
 ## 2026-10-06 — NativeRemote over SchemaBinary
 
 - [Design record](docs/research/schema-binary.md#progress). `NativeRemote.compile(..., { serialization: "schema-binary" })` serves Read, Query, Mutate and Live, byte-equal to foldkit-remote-server's handlers under `layerSchemaBinary`. This adds `KEYS` interning (record keys inside row runs) and `-0` in the engine's own numbers on the binary wire.

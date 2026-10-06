@@ -37,6 +37,8 @@ export const compileShowcase = (
     readonly loginPage?: string;
     /** The database the server runs on; SQLite by default. */
     readonly dialect?: Dialect;
+    /** The RPC serialization, NDJSON by default; the browser must use the same one. */
+    readonly serialization?: "ndjson" | "schema-binary";
   } = {},
 ) => {
   const pages = {
@@ -54,7 +56,7 @@ export const compileShowcase = (
     mutations,
     live: true,
     liveSnapshot: true,
-    serialization: "ndjson" as const,
+    serialization: options.serialization ?? "ndjson",
     pages,
   };
   return options.loginPage === undefined
