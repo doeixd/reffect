@@ -164,7 +164,7 @@ test("public compilation refuses unsupported Semaphore topology and channels", a
   }
 });
 
-test("public compiler and owned execution refuse independently timed All children", async () => {
+test("public compiler and owned execution refuse mixed-duration All children", async () => {
   const work = R.fn([], R.Unit, R.Never, () =>
     R.Semaphore.make(2).pipe(
       R.Effect.flatMap((owner) =>
@@ -173,7 +173,7 @@ test("public compiler and owned execution refuse independently timed All childre
             R.Semaphore.withPermit(owner)(
               R.Log.info("unopened").pipe(R.Effect.andThen(R.Effect.sleep(1))),
             ),
-            R.Semaphore.withPermit(owner)(R.Effect.void.pipe(R.Effect.ensuring(R.Effect.sleep(1)))),
+            R.Semaphore.withPermit(owner)(R.Effect.void.pipe(R.Effect.ensuring(R.Effect.sleep(2)))),
           ],
           { concurrency: "unbounded", discard: true },
         ),

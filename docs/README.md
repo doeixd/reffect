@@ -225,3 +225,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 - Scoped Semaphore preparation: [slice](research/semaphore-scoped-slice.md), [IR](research/semaphore-ir.md), [traversals](research/semaphore-traversals.md), and [scheduled native adapter](research/semaphore-native.md). The latter records the inline scan prototype, wake-all counterexample and remaining static-driver gates.
 
 - [Bounded public Semaphore admission](research/semaphore-public-admission.md): owned execution, operation budgets, generated scan routing and public admission gates.
+
+- [Semaphore timer ordering](research/semaphore-timer-ordering.md): primary timer/yield evidence, bounded uniform-duration widening and phase/ownership obligations.

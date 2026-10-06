@@ -22,6 +22,7 @@ export interface GeneratedSemaphoreProfile {
     readonly scans: number;
     readonly callbacks: number;
     readonly settlementRounds: 3;
+    readonly timerRegistrations: number;
   };
 }
 
@@ -80,16 +81,37 @@ const computationChildren = (
   }
   return children;
 };
-/** SPUB-007: a Pending marker alone does not establish independent timer wake order. */
+/** STIM-001/005/006: the timer bank admits one positive duration across competing children. */
 const checkConcurrentTimers = (body: Computation<unknown, unknown>, path: string): void => {
-  const hasSleep = (child: Computation<unknown, unknown>): boolean =>
+  const sleepLiterals = (child: Computation<unknown, unknown>): readonly number[] =>
     Match.value(child.node).pipe(
-      Match.tag("Sleep", () => true),
-      Match.orElse(() => computationChildren(child).some(hasSleep)),
+      Match.tag("Sleep", (node) => [node.milliseconds]),
+      Match.orElse(() => computationChildren(child).flatMap(sleepLiterals)),
     );
   Match.value(body.node).pipe(
     Match.tag("TaskGroup", (node) => {
-      if (node.children.filter(hasSleep).length > 1)
+      const timers = node.children.map(sleepLiterals);
+      const literals = timers.flat();
+      if (literals.includes(0))
+        throw new CompileError({
+          message: "Unsupported concurrent Semaphore yield",
+          diagnostics: [
+            {
+              code: "SEMAPHORE_CONCURRENT_YIELD",
+              stage: "check",
+              path,
+              message:
+                "Sleep(0) in All children, including source branches and finalizers, requires a separately verified queued-yield adapter",
+            },
+          ],
+        });
+      if (
+        timers.filter((child) => child.length > 0).length > 1 &&
+        !literals.every(
+          (milliseconds) =>
+            Number.isInteger(milliseconds) && milliseconds > 0 && milliseconds === literals[0],
+        )
+      )
         throw new CompileError({
           message: "Unsupported concurrent Semaphore timers",
           diagnostics: [
@@ -98,7 +120,7 @@ const checkConcurrentTimers = (body: Computation<unknown, unknown>, path: string
               stage: "check",
               path,
               message:
-                "At most one All child may contain Sleep, including finalizers; independent timer wake ordering is not yet verified",
+                "Multiple Sleep-bearing All children require one identical strictly positive integer duration across all source branches and finalizers",
             },
           ],
         });
@@ -159,6 +181,10 @@ export const analyzeGeneratedSemaphoreProfile = (
           scans: budget.bounds.scans,
           callbacks: budget.bounds.callbacks,
           settlementRounds: budget.bounds.settlement,
+          // No loops are admitted. Every Sleep registration consumes a source
+          // occurrence; branch sums and repeated DAG edges conservatively count
+          // masked cleanup and renewed timers as well as ordinary bodies.
+          timerRegistrations: structure.bounds.computationOccurrences,
         }),
       }),
     );

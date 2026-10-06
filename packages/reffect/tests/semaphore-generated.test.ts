@@ -47,7 +47,7 @@ test("Semaphore lowering borrows owner and scalar captures and marks every wait"
   expect(source).toContain("scan_all2(");
   expect(source).not.toContain("scan_join2(");
   expect(source).toContain("task.acquire(");
-  expect(source).toContain("task.semantic(ctx.sleep(1u64)).await");
+  expect(source).toContain("task.sleep(ctx, 1u64).await");
   expect(source).toContain("; drop(permit); match result");
   expect(source).toContain("Ok(()) => true");
   expect(source).toContain("AsyncError::Interrupted, _frames)) => false");

@@ -1,4 +1,4 @@
-/** Private borrowed scheduled-scan experiment; no compiler path selects it. */
+/** Borrowed live-scan adapter; compiler selection requires bounded generated-profile receipts. */
 export const semaphoreDispatchRuntime = (): string => `
 #[derive(Clone, Copy)]
 struct ScanRegistration { task: usize, ticket: u64 }
@@ -65,6 +65,7 @@ impl<const N: usize> ScanSemaphore<N> {
         self.state.lock().expect("Scan state lock").scanning = false;
         true
     }
+    fn has_pending_scans(&self) -> bool { self.state.lock().expect("Scan state lock").pending != 0 }
     fn available(&self) -> usize { self.state.lock().expect("Scan state lock").available }
     fn waiting(&self) -> usize {
         self.state.lock().expect("Scan state lock").registrations.iter().flatten().count()

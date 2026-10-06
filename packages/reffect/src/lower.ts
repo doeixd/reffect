@@ -2339,8 +2339,11 @@ export const emitFunctions = (
     const scans = Math.max(1, ...semaphoreProfiles.map((p) => p.driver.scans));
     const settlementRounds = Math.max(...semaphoreProfiles.map((p) => p.driver.settlementRounds));
     write(semaphoreDispatchRuntime());
-    write(semaphoreTaskRuntime({ protocolRetries, scans }));
-    write(semaphoreAllRuntime({ scans, settlementRounds }));
+    const timerRegistrations = Math.max(
+      ...semaphoreProfiles.map((p) => p.driver.timerRegistrations),
+    );
+    write(semaphoreTaskRuntime({ protocolRetries, scans, timerRegistrations }, true));
+    write(semaphoreAllRuntime({ scans, settlementRounds }, true));
   }
   if (fallibleGroups) write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
@@ -3228,7 +3231,7 @@ export const emitFunctions = (
           },
           Sleep: (n) =>
             joinFragments([
-              `{ match ${f.semaphoreProfile ? "task.semantic(" : ""}${f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text})${f.semaphoreProfile ? ")" : ""}.await { Ok(()) => Ok(()), `,
+              `{ match ${f.semaphoreProfile ? "task.sleep(ctx, " : f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
               captureFrames
                 ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
                 : "Err(error) => Err(error)",

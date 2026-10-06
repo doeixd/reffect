@@ -4,6 +4,7 @@ export const semaphoreAllRuntime = (
     scans: 64,
     settlementRounds: 64,
   },
+  orderedTimers = false,
 ): string => `
 struct ScanAllState<const K: usize> {
     started: [bool; K], done: [bool; K], terminal: bool,
@@ -49,6 +50,50 @@ ${[2, 3]
     const indices = Array.from({ length: arity }, (_, i) => i);
     const turn = (i: number) =>
       `scan_all_turn(&mut state, ${i}, bank, slots[${i}], f${i}.as_mut(), &mut out${i}, &children, cx);`;
+    const drainScans = `let mut scans = 0;
+            while owner.dispatch_one(|selected| {
+                check_parent!(); settle!();
+                ${indices.map((j) => `${j === 0 ? "if" : "else if"} selected == slots[${j}] { ${turn(j)} }`).join(" ")}
+                else { panic!("All scan selected a task outside its static group"); }
+                check_parent!(); settle!();
+            }) {
+                check_parent!(); settle!();
+                scans += 1;
+                assert!(scans <= ${limits.scans}, "Checked All scan bound");
+            }`;
+    const orderedTurns = `
+            if !startup_done {
+                startup_done = true;
+                ${indices.map((i) => `check_parent!(); settle!(); ${turn(i)} check_parent!(); settle!();`).join("\n                ")}
+                ${drainScans}
+                if state.done.iter().all(|done| *done) { return std::task::Poll::Ready(()); }
+                assert!(!owner.has_pending_scans(), "No scan crosses a timer suspension");
+                arm_timer!();
+                return std::task::Poll::Pending;
+            }
+            // The poll-entry snapshot excludes timers registered by this wave or cleanup.
+            for ready in timer_wave.into_iter().flatten() {
+                check_parent!(); settle!();
+                ${indices
+                  .map(
+                    (i) => `${i === 0 ? "if" : "else if"} ready.task == slots[${i}] {
+                    if !state.done[${i}] && bank.grant_timer(ready) { ${turn(i)} }
+                }`,
+                  )
+                  .join(" ")}
+                else { panic!("Timer selected a task outside its static group"); }
+                check_parent!(); settle!();
+            }
+            // Effect's scheduled release scans cannot interrupt the current due-timer pass.
+            check_parent!(); settle!();
+            ${drainScans}
+            // No further settlement may enqueue a scan before the Pending invariant.
+            if state.done.iter().all(|done| *done) { std::task::Poll::Ready(()) }
+            else {
+                assert!(!owner.has_pending_scans(), "No scan crosses a timer suspension");
+                arm_timer!();
+                std::task::Poll::Pending
+            }`;
     return `
 async fn scan_all${arity}<${indices.map((i) => `F${i}: std::future::Future<Output = bool>`).join(", ")}, const N: usize>(
     owner: &ScanSemaphore<N>, bank: &ScanTasks<N>, slots: [usize; ${arity}],
@@ -60,6 +105,13 @@ async fn scan_all${arity}<${indices.map((i) => `F${i}: std::future::Future<Outpu
     ${indices.flatMap((i) => indices.filter((j) => j > i).map((j) => `assert_ne!(slots[${i}], slots[${j}], "Distinct All tasks");`)).join("\n    ")}
     let mut state = ScanAllState::<${arity}>::new();
     ${indices.map((i) => `let mut out${i} = None;`).join("\n    ")}
+    ${
+      orderedTimers
+        ? `let mut startup_done = false;
+    let wake_timer = tokio::time::sleep_until(tokio::time::Instant::now());
+    tokio::pin!(wake_timer);`
+        : ""
+    }
     {
         let cancellation = async {
             loop {
@@ -69,6 +121,19 @@ async fn scan_all${arity}<${indices.map((i) => `F${i}: std::future::Future<Outpu
         };
         tokio::pin!(cancellation);
         std::future::poll_fn(|cx| {
+            ${
+              orderedTimers
+                ? `let timer_wave = bank.timer_wave(slots, tokio::time::Instant::now());
+            macro_rules! arm_timer { () => {
+                if let Some(deadline) = bank.next_timer_deadline(slots) {
+                    wake_timer.as_mut().reset(deadline);
+                    if std::future::Future::poll(wake_timer.as_mut(), cx).is_ready() {
+                        cx.waker().wake_by_ref();
+                    }
+                }
+            }; }`
+                : ""
+            }
             macro_rules! check_parent { () => {
                 if !state.parent_cancelled &&
                     std::future::Future::poll(cancellation.as_mut(), cx).is_ready() {
@@ -86,9 +151,12 @@ async fn scan_all${arity}<${indices.map((i) => `F${i}: std::future::Future<Outpu
                 }
             }}; }
             check_parent!(); settle!();
-            ${indices
-              .map(
-                (i) => `check_parent!(); settle!();
+            ${
+              orderedTimers
+                ? orderedTurns
+                : `            ${indices
+                    .map(
+                      (i) => `check_parent!(); settle!();
             ${turn(i)}
             check_parent!(); settle!();
             let mut scans = 0;
@@ -103,11 +171,13 @@ async fn scan_all${arity}<${indices.map((i) => `F${i}: std::future::Future<Outpu
                 scans += 1;
                 assert!(scans <= ${limits.scans}, "Checked All scan bound");
             }`,
-              )
-              .join("\n            ")}
+                    )
+                    .join("\n            ")}
             check_parent!(); settle!();
             if state.done.iter().all(|done| *done) { std::task::Poll::Ready(()) }
             else { std::task::Poll::Pending }
+`
+            }
         }).await;
     }
     // A late cancellation still wins after the last masked cleanup.

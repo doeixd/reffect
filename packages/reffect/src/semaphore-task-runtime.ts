@@ -1,15 +1,28 @@
+import { semaphoreTimerRuntime } from "./semaphore-timer-runtime.ts";
+
 /** Semantic-marker driver; generated limits require checked profile receipts. Defaults retain private experiments. */
 export const semaphoreTaskRuntime = (
-  limits: { readonly protocolRetries: number; readonly scans: number } = {
+  limits: {
+    readonly protocolRetries: number;
+    readonly scans: number;
+    readonly timerRegistrations?: number;
+  } = {
     protocolRetries: 64,
     scans: 64,
   },
+  orderedTimers = false,
 ): string => `
-struct ScanTasks<const N: usize> { semantic: std::sync::Mutex<[bool; N]> }
+${orderedTimers ? semaphoreTimerRuntime(limits.timerRegistrations ?? 64) : ""}
+struct ScanTasks<const N: usize> {
+    semantic: std::sync::Mutex<[bool; N]>,
+    ${orderedTimers ? "timers: std::sync::Mutex<ScanTimers<N>>," : ""}
+}
 impl<const N: usize> ScanTasks<N> {
     fn new() -> Self {
         assert!((1..=4).contains(&N), "Private task bank bounds");
-        Self { semantic: std::sync::Mutex::new([false; N]) }
+        Self { semantic: std::sync::Mutex::new([false; N]),
+            ${orderedTimers ? "timers: std::sync::Mutex::new(ScanTimers { entries: [None; N], registrations: 0 })," : ""}
+        }
     }
     fn before_poll(&self, task: usize) { self.semantic.lock().expect("Scan task bank")[task] = false; }
     fn suspended(&self, task: usize) { self.semantic.lock().expect("Scan task bank")[task] = true; }
@@ -30,6 +43,46 @@ impl<'a, const N: usize> ScanTask<'a, N> {
             if result.is_pending() { self.bank.suspended(self.task); }
             result
         }).await
+    }
+    ${
+      orderedTimers
+        ? `async fn sleep<E>(self, ctx: &mut AsyncContext, milliseconds: u64) -> Result<(), AsyncError<E>> {
+        if ctx.is_cancelled() { return Err(AsyncError::Interrupted); }
+        if self.task == 0 {
+            if milliseconds > 0 { return self.semantic(ctx.sleep(milliseconds)).await; }
+            if !ctx.interruptible {
+                self.semantic(tokio::task::yield_now()).await;
+                return Ok(());
+            }
+            return self.semantic(async {
+                tokio::select! {
+                    biased;
+                    _ = ctx.cancellation.changed() => Err(AsyncError::Interrupted),
+                    _ = tokio::task::yield_now() => Ok(()),
+                }
+            }).await;
+        }
+        let lease = self.bank.register_timer(self.task, milliseconds);
+        let granted = std::future::poll_fn(|_cx| {
+            if lease.granted() { std::task::Poll::Ready(()) }
+            else { std::task::Poll::Pending }
+        });
+        let result = if ctx.interruptible {
+            self.semantic(async {
+                tokio::select! {
+                    biased;
+                    _ = ctx.cancellation.changed() => Err(AsyncError::Interrupted),
+                    _ = granted => Ok(()),
+                }
+            }).await
+        } else {
+            self.semantic(granted).await;
+            Ok(())
+        };
+        drop(lease);
+        result
+    }`
+        : ""
     }
     async fn acquire<'b>(self, owner: &'b ScanSemaphore<N>, ctx: &mut AsyncContext)
         -> Result<ScanPermit<'b, N>, AsyncError<std::convert::Infallible>> {
