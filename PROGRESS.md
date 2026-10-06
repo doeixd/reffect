@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-06 — Private Semaphore All and structural receipts
+
+- Rechecked Effect 4 eager terminal/sibling finalization source and recorded [SNAT-012–014](docs/research/semaphore-native.md#all-interruption-and-structural-bounds-2026-10-06-preparation) before implementation. A separate private borrowed All2/3 driver now cancels started siblings before release scans, skips unopened work, settles cleanup prefixes in startup order and checks parent cancellation around ordinary/selected turns. The tuple collector and public compiler paths are unchanged.
+- Six actual official All workloads match 120 debug/release traces, including awaited asynchronous sibling finalizers after selected interruption and successful two/three-child groups. Native preflight and ordinary/selected parent-phase probes also pass; custom host callback/intra-poll parity remains unproved.
+- Independent structural receipts bound full-edge source occurrences, branch execution maxima, acquisitions/releases/scans, conservative registrations and live task/waiter capacity. Thirteen tests prove positive profiles, escaped owners, topology/cleanup refusal, cycles, cached depth and saturated sharing growth. A 128-guard structure demonstrates that a receipt does not certify private fixed 64-turn ceilings.
+- Source review corrected root narrowing and removed unproved masked-parent support. Terminal-broadcast mutation fails the holder assertion before a queued body can reuse capacity; correct code is restored. No new All allocation/layout claim is made.
+- Next audit semantic operation counts and owned context/builtin identity, derive safe generated driver budgets, integrate lowering and prove returned-future layout/interruption frames. Public/native Semaphore, mixed Deferred dispatch and registered-cleanup resource lifetimes remain open. [Resume guide](docs/effect-v4-workstream.md#semaphore-dispatcher-continuation-2026-10-06) and module/open-work records are updated.
+
+- Synced eight upstream WebSocket/CLI/documentation commits, preserving both progress records. Merged validation: eight selected suites 32/32, full `vp check` (529 formatted/330 lint/type files), strict TypeScript and workspace builds pass (reffect rebuilt; other outputs cached). Final tagged-Match root-gate review passes strict TypeScript and structural 13/13 again. Native suites ran sequentially.
+
 ## 2026-10-06 — SQL in RPC handlers researched and planned
 
 - [Design record](docs/research/sql-service.md) (SQL-001..008):
