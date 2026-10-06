@@ -21,6 +21,7 @@
 - Validation:
   - `schema-binary-remote` 2/2 passes.
   - The JSON regressions `remote-read` and `remote-live` were rerun, along with `vp run runtime:check`.
+
 ## 2026-10-06 — Private scoped Semaphore and native scheduled-release experiment
 
 - Preparation and stable Effect 4 source findings: [slice](docs/research/semaphore-scoped-slice.md), [IR](docs/research/semaphore-ir.md), [traversals](docs/research/semaphore-traversals.md), [native](docs/research/semaphore-native.md). Release schedules waiter scans rather than inline Deferred-style continuation; FIFO reservation is not a proven substitute.
@@ -28,7 +29,7 @@
 - Controlled reference fixtures prove three-child contention, asynchronous cleanup before reuse, synchronous releasing continuation before waiter entry, parent cancellation of queued children and awaited holder cleanup. IR fixtures additionally cover typed failure/recovery, fresh owners, substitution, values/frames and malformed resource use.
 - A separate current-thread Tokio experiment matches 60 exact official traces across debug/release for synchronous barging, independent queued cancellation and cooperative holder cancellation. It uses fixed registration slots but Arc/Mutex/spawn storage; the harness explicitly awaits cleanup before permit Drop. It is not selected by any compiler path. General wake-all/dispatcher parity, atomic cancellation handoff, inline storage/costs, owned budgets and interrupted-frame admission remain open.
 - Compile and direct native lowering explicitly refuse Semaphore; R/package exports are unchanged. Registered cleanup conservatively refuses all Semaphore acquisitions, including local owners, pending wider lifetime proof. [Resume guide](docs/effect-v4-workstream.md) and open-work/coverage records point to the next gate.
-- Validation: new Semaphore suites 13/13 (including the raw native matrix); Deferred reference/pipeline 12/12, structured concurrency 5/5, public Deferred 4/4, selected Scope regressions 5/5. Native suites ran sequentially. Full check, strict TypeScript and builds pass; final post-commit validation follows. Independent IR/traversal reviews found no blocking issues and clarified the conservative cleanup boundary.
+- Validation: new Semaphore suites 13/13 (including the raw native matrix); Deferred reference/pipeline 12/12, structured concurrency 5/5, public Deferred 4/4, selected Scope regressions 5/5. Native suites ran sequentially. Full check, strict TypeScript and builds pass. Independent IR/traversal reviews found no blocking issues and clarified the conservative cleanup boundary.
 
 ## 2026-10-06 — Public bounded Deferred and Effect v4 handoff
 
