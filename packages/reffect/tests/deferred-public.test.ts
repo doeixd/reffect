@@ -104,6 +104,29 @@ test("public admission refuses typed completion and unverified RPC embedding", a
     });
 });
 
+test("public emitted Rust limits return a typed diagnostic", async () => {
+  const log = R.fn([], R.Unit, R.Never, () => R.Log.info("x".repeat(2097152)));
+  for (const artifacts of [SourceArtifacts.None, SourceArtifacts.Full]) {
+    const result = await Effect.runPromise(
+      Compile.make(R.program({ completed, log })).pipe(
+        Compile.withTarget(Rust.tokio),
+        Compile.withSourceArtifacts(artifacts),
+        Compile.run,
+        Effect.exit,
+      ),
+    );
+    expect(Exit.isFailure(result)).toBe(true);
+    if (Exit.isFailure(result))
+      expect(Cause.findErrorOption(result.cause)).toMatchObject({
+        value: {
+          diagnostics: [
+            expect.objectContaining({ code: "DEFERRED_GENERATED_GROWTH", stage: "emit" }),
+          ],
+        },
+      });
+  }
+});
+
 test(
   "public standalone Deferred and ordinary exports agree after native build",
   async () => {

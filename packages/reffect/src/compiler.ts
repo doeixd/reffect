@@ -1261,7 +1261,13 @@ const emit = Effect.fn("Compile.emit")(function* (
 ): Effect.fn.Return<MappedArtifact | UnmappedArtifact, CompileError> {
   const verified = yield* verify(p);
   const module = yield* lower(yield* analyzeOwnership(verified), policy);
-  const emitted = emitFunctions(module);
+  const emitted = yield* Effect.try({
+    try: () => emitFunctions(module),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("EMIT_FAILURE", "emit", "program", String(cause)),
+  });
   if (SourceArtifacts.isNone(policy))
     return Object.freeze({
       sourceArtifacts: SourceArtifacts.None,
