@@ -1,3 +1,4 @@
+import { containsSemaphore } from "./semaphore-model.ts";
 import { runtimeModule } from "./runtime-module.ts";
 import { UtcType } from "./js-std.ts";
 import type { ProvenanceSnapshot } from "./provenance.ts";
@@ -527,6 +528,15 @@ interface Scope {
   readonly input: readonly Parameter[];
 }
 
+const rejectSemaphoreNative = (): never => {
+  throw fail(
+    "SEMAPHORE_NATIVE_INTEGRATION",
+    "lower",
+    "Semaphore",
+    "Semaphore scheduled wake scanning and cancellation-safe native ownership are not admitted",
+  );
+};
+
 const rejectDeferredNative = (): never => {
   throw fail(
     "DEFERRED_NATIVE_INTEGRATION",
@@ -610,6 +620,12 @@ function lowerFunctionsInternal(
   const functions = Object.freeze(
     Object.entries(program.functions).map(([name, f]): RustFunction => {
       const path = `functions.${name}`;
+      if (
+        f.input.some(containsSemaphore) ||
+        containsSemaphore(f.output) ||
+        (f instanceof EffectFn && containsSemaphore(f.error))
+      )
+        rejectSemaphoreNative();
       const deferredProfile = f instanceof EffectFn ? deferredProfiles?.get(f) : undefined;
       const outcomes =
         f instanceof EffectFn ? analyzeTaskGroups(f.body, `${path}.body`) : undefined;
@@ -720,6 +736,9 @@ function lowerFunctionsInternal(
           computations.add(value.node);
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
+              SemaphoreMake: rejectSemaphoreNative,
+              SemaphoreScope: rejectSemaphoreNative,
+              SemaphoreWithPermits: rejectSemaphoreNative,
               DeferredMake: rejectDeferredNative,
               DeferredScope: (n) => {
                 if (!deferredProfile) rejectDeferredNative();
@@ -873,6 +892,7 @@ function lowerFunctionsInternal(
         const bindings: RustBinding[] = [];
         const memo = new Map<Expr<unknown>["node"], RustExpr>();
         const expression = (e: Expr<unknown>, path: string): RustExpr => {
+          if (containsSemaphore(e.type)) rejectSemaphoreNative();
           const source = provenance
             ? { origin: provenance.origin(e), occurrence: provenance.use(path) }
             : undefined;
@@ -1178,6 +1198,9 @@ function lowerFunctionsInternal(
           );
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
+            SemaphoreMake: rejectSemaphoreNative,
+            SemaphoreScope: rejectSemaphoreNative,
+            SemaphoreWithPermits: rejectSemaphoreNative,
             DeferredMake: rejectDeferredNative,
             DeferredScope: (n): HelperBody => {
               if (!deferredProfile) return rejectDeferredNative();

@@ -168,6 +168,17 @@ export const analyzeScopes = (
           finalizer(n.afterClose, "afterClose", false);
           return child(n.body, "body");
         },
+        SemaphoreMake: () => 0,
+        SemaphoreScope: (n) => child(n.body, "body"),
+        SemaphoreWithPermits: (n) => {
+          if (delayed)
+            diagnostic(
+              "RESOURCE_ESCAPE",
+              at,
+              "Semaphore acquisitions in registered cleanup require a wider lifetime profile",
+            );
+          return child(n.body, "body");
+        },
         DeferredMake: () => 0,
         DeferredScope: (n) => child(n.body, "body"),
         DeferredAwait: () => {

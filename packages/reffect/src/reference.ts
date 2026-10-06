@@ -1,3 +1,4 @@
+import { containsSemaphore, usesSemaphoreExpression } from "./semaphore-model.ts";
 import { Fn, NeverType, PureReference, UnitType, evaluateExpression, fail } from "./kernel.ts";
 import { toEffectStream } from "./stream-ir.ts";
 import type { StreamFn } from "./stream-ir.ts";
@@ -20,17 +21,21 @@ const refusal = (f: Fn | EffectFn): CompileError | undefined => {
       `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
     );
   if (
-    f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
+    f.input.some(
+      (type) => containsRef(type) || containsDeferred(type) || containsSemaphore(type),
+    ) ||
     containsRef(f.output) ||
     containsDeferred(f.output) ||
-    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
-    (f instanceof Fn && usesDeferredExpression(f.body))
+    containsSemaphore(f.output) ||
+    (f instanceof EffectFn &&
+      (containsRef(f.error) || containsDeferred(f.error) || containsSemaphore(f.error))) ||
+    (f instanceof Fn && (usesDeferredExpression(f.body) || usesSemaphoreExpression(f.body)))
   )
     return fail(
       "RESOURCE_ESCAPE",
       "check",
       "function",
-      "Public channels cannot contain lexical Ref or Deferred handles",
+      "Public channels cannot contain lexical Ref, Deferred or Semaphore handles",
     );
   return undefined;
 };

@@ -138,3 +138,5 @@ const artifact = await Effect.runPromise(
 );
 // Build artifact with CargoApi before claiming native layout admission.
 ```
+
+Scoped Semaphore now has [private lexical IR/reference and conformance](research/semaphore-scoped-slice.md) plus a [raw native adapter experiment](research/semaphore-native.md). Resume at scheduled multi-waiter dispatcher parity and atomic grant/cleanup ownership, then generated inline storage/owned budgets; public/compiler admission remains refused. Source: `semaphore.ts`, `semaphore-model.ts`, `semaphore-native-runtime.ts`, with `semaphore-{ir,conformance,traversals,native-runtime}.test.ts`. The raw adapter uses Arc/Mutex/spawn and proves selected traces only.

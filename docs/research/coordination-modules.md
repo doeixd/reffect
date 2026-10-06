@@ -1,6 +1,6 @@
 # Deferred, Latch and semaphore admission plan
 
-This is a proposed implementation track, not shipped coordination support. It follows the bounded async/resource kernel and needs a minimal structured task workload before suspended operations are useful. General Fiber/FiberRef and cross-fiber mutable ownership remain separate gates.
+This record defines coordination admission gates. Current delivery is [public bounded standalone Deferred](deferred-public-execution.md) and [private scoped Semaphore IR/reference plus a native experiment](semaphore-scoped-slice.md); the wider APIs below remain proposed. It follows the bounded async/resource kernel and needs a minimal structured task workload before suspended operations are useful. General Fiber/FiberRef and cross-fiber mutable ownership remain separate gates.
 
 ## Pinned primary sources and observations
 

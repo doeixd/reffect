@@ -1,3 +1,4 @@
+import { containsSemaphore, usesSemaphoreExpression } from "./semaphore-model.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
 import { checkDeferredExecutionReferences } from "./deferred-execution.ts";
 import { Context, Effect, Layer, Match, Pipeable } from "effect";
@@ -641,17 +642,22 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
           },
         ]
       : []),
-    ...(f.input.some((type) => containsRef(type) || containsDeferred(type)) ||
+    ...(f.input.some(
+      (type) => containsRef(type) || containsDeferred(type) || containsSemaphore(type),
+    ) ||
     containsRef(f.output) ||
     containsDeferred(f.output) ||
-    (f instanceof EffectFn && (containsRef(f.error) || containsDeferred(f.error))) ||
-    (!(f instanceof EffectFn) && usesDeferredExpression(f.body))
+    containsSemaphore(f.output) ||
+    (f instanceof EffectFn &&
+      (containsRef(f.error) || containsDeferred(f.error) || containsSemaphore(f.error))) ||
+    (!(f instanceof EffectFn) &&
+      (usesDeferredExpression(f.body) || usesSemaphoreExpression(f.body)))
       ? [
           {
             code: "RESOURCE_ESCAPE",
             stage: "check",
             path: `functions.${name}`,
-            message: "Public channels cannot contain lexical Ref or Deferred handles",
+            message: "Public channels cannot contain lexical Ref, Deferred or Semaphore handles",
           },
         ]
       : []),
@@ -798,6 +804,15 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
           effectRefs.add(AsyncEffects.FileScope);
           walkComputation(n.body);
           walkComputation(n.afterClose);
+        },
+        SemaphoreMake: () => effectRefs.add(SyncEffects.SemaphoreMake),
+        SemaphoreScope: (n) => {
+          effectRefs.add(SyncEffects.SemaphoreMake);
+          walkComputation(n.body);
+        },
+        SemaphoreWithPermits: (n) => {
+          effectRefs.add(AsyncEffects.SemaphoreWithPermits);
+          walkComputation(n.body);
         },
         DeferredMake: (n) => {
           effectRefs.add(SyncEffects.DeferredMake);
@@ -1017,6 +1032,17 @@ const plan = Effect.fn("Compile.plan")(function* (
       "plan",
       target.id,
       "No verified lowering registered for this target",
+    );
+  if (
+    analysis.effects.some(
+      (ref) => ref === SyncEffects.SemaphoreMake || ref === AsyncEffects.SemaphoreWithPermits,
+    )
+  )
+    return yield* fail(
+      "SEMAPHORE_NATIVE_INTEGRATION",
+      "plan",
+      "effects",
+      "Semaphore scheduled wake scans, ownership and owned execution budgets require native conformance before admission",
     );
   yield* Effect.try({
     try: () => checkedDeferredProfiles(analysis.program),

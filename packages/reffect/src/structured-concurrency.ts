@@ -56,6 +56,9 @@ export const analyzeTaskGroups = (
         AcquireRelease: () => true,
         RegisteredFile: () => true,
         FileScope: () => true,
+        SemaphoreMake: () => true,
+        SemaphoreScope: () => true,
+        SemaphoreWithPermits: () => true,
         DeferredMake: () => true,
         DeferredScope: () => true,
         DeferredAwait: () => true,
@@ -181,6 +184,9 @@ export const analyzeTaskGroups = (
           body(n.body, "body");
           finalizer(n.finalizer, "finalizer");
         },
+        SemaphoreMake: () => {},
+        SemaphoreScope: (n) => body(n.body, "body"),
+        SemaphoreWithPermits: (n) => body(n.body, "body"),
         DeferredScope: (n) => body(n.body, "body"),
         DeferredMake: () => {},
         DeferredAwait: () => {},
@@ -373,6 +379,9 @@ export const analyzeDeferredTopology = (
             resumes: children.some((value) => value.resumes),
           };
         },
+        SemaphoreMake: () => quiet,
+        SemaphoreScope: (n) => child(n.body, "body"),
+        SemaphoreWithPermits: (n) => child(n.body, "body"),
         DeferredMake: () => {
           hasDeferred = true;
           return quiet;

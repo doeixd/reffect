@@ -86,6 +86,9 @@ export const analyzeGeneratedDeferredProfile = (
         refuse(at, "Operation is outside the bounded generated Deferred profile");
       Match.value(c.node).pipe(
         Match.tagsExhaustive({
+          SemaphoreMake: unsupported,
+          SemaphoreScope: unsupported,
+          SemaphoreWithPermits: unsupported,
           DeferredMake: unsupported,
           DeferredScope: (n) => {
             if (!deferredScalar(n.success) || !IRType.same(n.error, NeverType))
