@@ -43,9 +43,10 @@ export const toggleTodo = NativeRemote.mutation(ToggleTodo, ({ input }) => {
         Some: (found) => {
           const stored = R.Struct.get(found, "value");
           const values = Done.make({ done: R.Boolean.not(R.Struct.get(stored, "done")) });
-          return R.Effect.flatMap(R.RemoteStore.write("Todo", id, values), () =>
+          return R.RemoteStore.write("Todo", id, values).pipe(
             // Other clients watching this todo receive the new `done` (LiveHub.changed).
-            R.Effect.flatMap(R.LiveHub.changed({ entity: "Todo", id }, ["done"]), () =>
+            R.Effect.andThen(R.LiveHub.changed({ entity: "Todo", id }, ["done"])),
+            R.Effect.andThen(
               R.Effect.succeed(
                 NativeRemote.outcome(ToggleTodo).make({
                   output: R.Struct({}).make({}),

@@ -182,6 +182,100 @@ NativeRpc.compile(Group, bindings, {
 - **Server-side rendering:** pages written with `R.Html`, rendered byte-identically to Foldkit's `renderToString` and hydrated by the unchanged Foldkit client. They can read Remote data, so the browser resumes without refetching.
 - **Migration:** a translator turns supported upstream Foldkit SSR source into `R` builders ([example](examples/ssr-8b)).
 
+## Data in SQL, compiled to SQLx
+
+A Foldkit Remote backend keeps its data in SQLite or Postgres. You declare entities, queries and mutations as an ordinary [Foldkit](https://foldkit.dev) app does, and the browser imports the same declarations. The table binding is the one `foldkit-remote-drizzle` uses; for Postgres, bind a `pgTable` and say `dialect: "postgres"`.
+
+```ts
+// domain.ts: shared with the browser
+export const Todo = Entity.define(
+  "Todo",
+  Schema.Struct({ id: Schema.String, title: Schema.String, done: Schema.Boolean }),
+);
+export const Todos = Query.define("Todos", {}, () =>
+  Query.from(Todo).pipe(Query.orderBy(Order.asc(Todo.fields.title))),
+);
+
+// db.ts: the table behind the entity
+export const todos = sqliteTable("todos", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  done: integer("done", { mode: "boolean" }).notNull(),
+});
+export const bindings = bind({ Todo }, { Todo: { table: todos } });
+```
+
+Mutations are written in `R`. `R.RemoteStore` reads and writes rows, and `R.LiveHub` tells subscribed browsers what changed. This one is from [the example](examples/todo-remote/sources.ts):
+
+```ts
+// Read the stored todo, flip `done`, write it back. (`text` makes an R string literal.)
+export const toggleTodo = NativeRemote.mutation(ToggleTodo, ({ input }) => {
+  const id = R.Struct.get(input, "id");
+  return R.Effect.flatMap(R.RemoteStore.get("Todo", id), (row) =>
+    R.Option(Done).match(
+      R.Option.flatMap(row, R.Schema.decodeUnknownOption(R.Schema.toCodecJson(Done))),
+      {
+        None: () => R.Effect.fail(NativeRemote.ServerError.make({ message: text("No such todo") })),
+        Some: (found) => {
+          const stored = R.Struct.get(found, "value");
+          const values = Done.make({ done: R.Boolean.not(R.Struct.get(stored, "done")) });
+          return R.RemoteStore.write("Todo", id, values).pipe(
+            // Other clients watching this todo receive the new `done`.
+            R.Effect.andThen(R.LiveHub.changed({ entity: "Todo", id }, ["done"])),
+            R.Effect.andThen(
+              R.Effect.succeed(
+                NativeRemote.outcome(ToggleTodo).make({
+                  output: R.Struct({}).make({}),
+                  entities: R.Array.make(NativeRemote.patch(Todo, id, values)),
+                }),
+              ),
+            ),
+          );
+        },
+      },
+    ),
+  );
+});
+
+export default NativeRemote.compile(RemoteRpc, {
+  domain: Data,
+  sql: { dialect: "sqlite", bindings, databaseUrlEnv: "DATABASE_URL" },
+  mutations: [addTodo, toggleTodo, deleteTodo],
+  live: true,
+});
+```
+
+**What it compiles to.**
+
+- **Dependencies:** SQLx is the only database dependency, with only the driver you chose:
+  ```toml
+  sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "sqlite-bundled"] }
+  ```
+- **Queries:** each one becomes fixed SQL at build time, with keyset paging in both directions. The database URL is read at run time and never compiled in. Excerpt, reformatted:
+  ```rust
+  static REMOTE_SQL: remote_sql::Sql = remote_sql::Sql {
+      queries: &[remote_sql::Query { name: "Todos", entity: "Todo",
+          forward: remote_sql::Statement {
+              sql: "SELECT `id` FROM `todos` ORDER BY `title` ASC, `id` ASC LIMIT ?1", .. },
+          forward_after: remote_sql::Statement {
+              sql: "SELECT `id` FROM `todos` WHERE ((`title` > ?1) OR (`title` = ?2 AND `id` > ?3))                     ORDER BY `title` ASC, `id` ASC LIMIT ?4", .. },
+          .. }],
+      url_env: "DATABASE_URL", .. };
+  ```
+- **Mutations:** each one runs in its own SQLx transaction (`BEGIN IMMEDIATE` on SQLite). It commits when the R program succeeds and rolls back when it fails or is interrupted. Live updates are sent only after the commit. Excerpt, abridged:
+  ```rust
+  // One store session per run: committed on success, rolled back on failure or interruption.
+  let store = match REMOTE_SQL.begin().await /* ... */;
+  let outcome = reffect_generated::r_runtime_mutation_0(&mut execution, arg).await;
+  match outcome {
+      Ok(value) => match store.finish(true).await { /* commit, then Live signals */ },
+      Err(AsyncError::Fail(error)) => { let _ = store.finish(false).await; /* typed failure */ }
+      // ...
+  }
+  ```
+
+Reads, queries and mutations answer the stock `foldkit-remote` client exactly as `foldkit-remote-server` does over Drizzle. [examples/todo-fullstack](examples/todo-fullstack) runs this on SQLite or Postgres. An `R` handler for a plain RPC procedure that runs its own SQL is [not built yet](docs/open-work.md).
+
 ## The showcase: one binary, a whole app
 
 [examples/todo-fullstack](examples/todo-fullstack) is a todo app whose entire backend is one native executable. It serves server-rendered pages, Effect RPC, Remote mutations and Live updates over SQLite or Postgres. The browser side is an ordinary Foldkit and Effect app.
