@@ -227,6 +227,10 @@ The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its
   - **Evidence:** `tests/todo-fullstack-browser.test.ts` now runs under both serializations in Chrome. It covers the login page, the HttpOnly session cookie, hydration, a toggle committed through cookie-authenticated RPC, and the reload that renders it.
   - Under SchemaBinary this also exercises the cookie's RPC media-type check. A client still speaking NDJSON would fail against the binary server, so the pass shows the browser used SchemaBinary.
 
+- **Arrays of records, done (2026-10-06).** A record row's extra pairs set presence bit 30 and are written first, as one `len*2` region of plain pairs. A declared shape introduces them with id 0. The reader fills the row from them with Effect's checks. This also admits streams of records.
+  - **Evidence:** the composites corpus gains a case alternating rows with and without keys, and it is byte-equal to the official server's. Dropping the presence bit makes that case fail.
+  - Tuples and `NonEmptyArray` payloads are not a SchemaBinary gap: reffect's contract codecs admit neither under any serialization.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.

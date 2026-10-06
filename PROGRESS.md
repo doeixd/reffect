@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-06 — SchemaBinary arrays of records
+
+- [Design record](docs/research/schema-binary.md#progress). Row runs carry record rows (the extras block, bit 30), byte-equal to the official server. A presence-bit mutation is caught.
+- Validation:
+  - `schema-binary-composites` 1/1 and the `schema-binary-rpc` refusal test 1/1 pass.
+  - `vp check` passes.
+
 ## 2026-10-06 — The showcase on SchemaBinary
 
 - `examples/todo-fullstack/main.ts --binary` serves the showcase over SchemaBinary. The browser app follows `TODO_REMOTE_RPC=schema-binary` ([design record](docs/research/schema-binary.md#progress)).

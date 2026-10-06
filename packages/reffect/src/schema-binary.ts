@@ -409,7 +409,6 @@ class Emitter {
     const each = (read: string) =>
       `${head}${count}    let mut items = Vec::with_capacity(count.min(r.remaining()));\n    for index in 0..count {\n        items.push((|| -> Result<Value, ${FAILURE}> { ${read} })().map_err(|failure| failure.at_index(index))?);\n    }\n    Ok(Some(Value::Array(items)))\n}\n`;
     if (item._ === "struct") {
-      if (item.extra) throw new Error("Arrays of records under SchemaBinary are not supported yet");
       return `${head}${count}    if count > 0 { return sbrun_r_${this.run(item)}(r, count); }\n    Ok(Some(Value::Array(Vec::new())))\n}\n`;
     }
     if (item._ === "number")
@@ -591,8 +590,6 @@ class Emitter {
     if (this.items.has(name)) return name;
     this.items.set(name, "");
     const head = `fn sb${name}(items: &[Value], out: &mut Vec<u8>) -> Result<(), String> {\n    ${SB}::put_uv(out, items.len() as u64);\n`;
-    if (item._ === "struct" && item.extra)
-      throw new Error("Streams of records under SchemaBinary are not supported yet");
     const body =
       item._ === "struct"
         ? `    if !items.is_empty() { sbrun_w_${this.run(item)}(items, out)?; }\n`
@@ -647,19 +644,36 @@ class Emitter {
         return `        if let Some(item) = object.get(${rustString(field.name)}) { if declare { ${SB}::put_uv(&mut row, ${field.id}); } ${region} }\n`;
       })
       .join("");
+    // A record row's extra pairs: presence bit 30, then one region of plain pairs before the
+    // fields, introduced by id 0 when the shape is declared (`encodeRunRow`).
+    const extrasMask = layout.extra
+      ? `        let mut extras: Vec<(&String, &Value)> = object.iter().filter(|(key, _)| ![${names}].contains(&key.as_str())).collect();
+        extras.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        if !extras.is_empty() { mask |= 1 << ${SB}::RUN_MAX_FIELDS; }
+`
+      : "";
+    const extrasRegion = layout.extra
+      ? `        if !extras.is_empty() {
+            if declare { ${SB}::put_uv(&mut row, 0); }
+            let mut region = Vec::new();
+            for (key, item) in extras { sbt_${this.name(layout.extra)}(item, &mut region, ${SB}::Tag::Key(key))?; }
+            ${SB}::put_region(&mut row, &region);
+        }
+`
+      : "";
     const write = `fn sbrun_w_${digest}(items: &[Value], out: &mut Vec<u8>) -> Result<(), String> {
     let mut shapes: Vec<u64> = Vec::new();
 ${writeTables}    for item in items {
         let object = item.as_object().ok_or("an object")?;
         let mut mask: u64 = 0;
-${presence}        let mut row = Vec::new();
+${presence}${extrasMask}        let mut row = Vec::new();
         let shape = ${wide ? "None::<usize>" : "shapes.iter().position(|seen| *seen == mask)"};
         match shape {
             Some(index) => ${SB}::put_uv(&mut row, index as u64 + 1),
             None => { ${SB}::put_uv(&mut row, 0); ${wide ? "let _ = &mut shapes;" : "shapes.push(mask);"} }
         }
         let declare = shape.is_none();
-${regions}        ${SB}::put_sized(out, &row);
+${extrasRegion}${regions}        ${SB}::put_sized(out, &row);
     }
     Ok(())
 }
@@ -704,7 +718,22 @@ ${refArms}            _ => {}
     let len = usize::try_from(code / 2).map_err(|_| ${SB}::Invalid("complete value"))?;
     let mut region = ${SB}::Reader::new(row.take(len)?);
     match slot {
-${slotArms}        ${extras} => ${SB}::skip_extra_pairs(&mut region, &[${names}])?,
+${slotArms}        ${extras} => ${
+      layout.extra
+        ? `{
+            let mut keys: Vec<String> = Vec::new();
+            while !region.is_empty() {
+                let code = region.uv()?;
+                let len = usize::try_from(code / 8).map_err(|_| ${SB}::Invalid("complete value"))?;
+                let key = ${SB}::Reader::new(region.take(len)?).string()?;
+                if [${names}].contains(&key.as_str()) { return Err(${SB}::Invalid("an extra key distinct from declared fields").into()); }
+                if keys.contains(&key) { return Err(${SB}::Invalid("unique extra keys").into()); }
+                keys.push(key.clone());
+                if let Some(value) = sbf_${this.name(layout.extra)}(&mut region, (code % 8) as u8).map_err(|failure: ${FAILURE}| failure.at_key(&key))? { object.insert(key, value); }
+            }
+        }`
+        : `${SB}::skip_extra_pairs(&mut region, &[${names}])?`
+    },
         _ => {}
     }
     Ok(())

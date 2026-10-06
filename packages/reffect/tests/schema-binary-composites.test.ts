@@ -34,6 +34,7 @@ const Bag = Schema.Struct({
   words: Schema.Array(NativeRpc.StringJson),
   counts: Schema.Record(NativeRpc.StringJson, Schema.Number),
   extra: Schema.Unknown,
+  tables: Schema.Array(Schema.Record(NativeRpc.StringJson, Schema.Number)),
 });
 const Group = RpcGroup.make(
   Rpc.make("Echo", { payload: Bag, success: Bag }),
@@ -62,6 +63,7 @@ const RBag = R.Struct({
   words: R.Array(R.String),
   counts: R.Record(R.String, R.Number),
   extra: R.Unknown,
+  tables: R.Array(R.Record(R.String, R.Number)),
 });
 const echo = R.fn([RBag], RBag, (bag) => bag);
 const reject = R.fn([RShape], R.Number, RShape, (shape) => R.Effect.fail(shape));
@@ -106,6 +108,7 @@ const empty: typeof Bag.Type = {
   words: [],
   counts: {},
   extra: null,
+  tables: [],
 };
 const items = (count: number, distinct: boolean) =>
   Array.from({ length: count }, (_, i) => ({
@@ -144,6 +147,11 @@ const bags: ReadonlyArray<readonly [string, typeof Bag.Type]> = [
   ["varint numbers", { ...empty, numbers: [0, -0, 1, -1, 2 ** 48 - 1] }],
   ["decimal numbers", { ...empty, numbers: [1, 2.5, -0.25, 12.5, 2 ** 41 - 1] }],
   ["f64 numbers", { ...empty, numbers: [1, Math.PI, Number.NaN, 2 ** 48] }],
+  // Record rows: the extras block, and shapes reused only by rows with extras.
+  [
+    "arrays of records",
+    { ...empty, tables: [{ b: 1, a: 2.5 }, {}, { a: -1 }, {}, { é: 0, "10": 3 }] },
+  ],
   ["flags and words", { ...empty, flags: [true, false, true], words: ["", "é😀", "a"] }],
   [
     "records",
