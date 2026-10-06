@@ -680,7 +680,7 @@ export const compileServer = (
                   Rs.verbatimExpr(
                     servedStream
                       ? // The forwarder stops on disconnect or cancellation; dropping the subscription unsubscribes.
-                        `match ${served.call} { Err(error) => failure(error), Ok(mut subscription) => { let ended = forward_chunks(context.out, context.id, cancellation, &mut subscription.events).await; drop(subscription); if ended { success(Value::Null) } else { interrupted() } } }`
+                        `match ${served.call} { Err(error) => failure(error), Ok(mut subscription) => { let ended = forward_chunks(context.out, context.id, context.tag, cancellation, &mut subscription.events).await; drop(subscription); if ended { success(Value::Null) } else { interrupted() } } }`
                       : `match Served::from(${served.call}) { Served::Success(value) => success(value), Served::Failure(error) => failure(error), Served::Interrupted => ${runtimeFunctions.length ? "interrupted()" : 'unreachable!("only runtime functions are interrupted")'} }`,
                   ),
                 ),
@@ -938,11 +938,11 @@ export const compileServer = (
                 [
                   "let (sink, mut chunks) = tokio::sync::mpsc::channel::<Vec<Value>>(1);",
                   "execution.set_stream_sink(sink);",
-                  "let (out, id, watch) = (context.out, context.id, cancellation.clone());",
+                  "let (out, id, tag, watch) = (context.out, context.id, context.tag, cancellation.clone());",
                   // Each future owns its end: when the client goes away the forwarder stops, its
                   // receiver drops, and the producer's next send interrupts it (STREAM-003).
                   `let run = async move { let result = ${compiledCall.text}.await; drop(execution); result };`,
-                  "let forward = async move { forward_chunks(out, id, &watch, &mut chunks).await; };",
+                  "let forward = async move { forward_chunks(out, id, tag, &watch, &mut chunks).await; };",
                   "let (result, ()) = tokio::join!(run, forward);",
                 ].join(" "),
               ),
@@ -1092,11 +1092,6 @@ export const compileServer = (
             schemaBinaryCodecs(
               entries.filter(Rpc.isRpc).map((definition) => {
                 const rpc: Rpc.AnyWithProps = definition;
-                if (RpcSchema.isStreamSchema(rpc.successSchema))
-                  throw unsupported(
-                    `rpc.${rpc._tag}`,
-                    "Streams over SchemaBinary are not supported yet",
-                  );
                 return { tag: rpc._tag, rpc };
               }),
               binary.maxFrameSize,

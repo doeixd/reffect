@@ -6,7 +6,7 @@
  * emitted once as straight-line code, so no schema tree is interpreted at run time.
  */
 import { Effect, Match, SchemaAST } from "effect";
-import { Rpc, RpcSerialization } from "effect/rpc";
+import { Rpc, RpcSchema, RpcSerialization } from "effect/rpc";
 import { unsupported } from "./contract-codec.ts";
 import { namingDigest } from "./naming.ts";
 
@@ -551,6 +551,26 @@ class Emitter {
         return `${head}    let mut slot = Vec::new();\n    sbw_${name}(value, &mut slot)?;\n    ${SB}::put_field_tag(out, tag, ${SB}::FIELD_WIRE_SIZED);\n    ${SB}::put_sized(out, &slot);\n    Ok(())\n}\n`;
     }
   }
+  /**
+   * A stream chunk's elements, `NonEmptyArray(item)`: one slot layout repeated, so a count, then a
+   * row run for structs, raw inline slots, or sized ones; no number run (format record §6.1).
+   */
+  nonEmpty(item: Layout): string {
+    const name = `ne_${namingDigest(JSON.stringify(item))}`;
+    if (this.items.has(name)) return name;
+    this.items.set(name, "");
+    const head = `fn sb${name}(items: &[Value], out: &mut Vec<u8>) -> Result<(), String> {\n    ${SB}::put_uv(out, items.len() as u64);\n`;
+    if (item._ === "struct" && item.extra)
+      throw new Error("Streams of records under SchemaBinary are not supported yet");
+    const body =
+      item._ === "struct"
+        ? `    if !items.is_empty() { sbrun_w_${this.run(item)}(items, out)?; }\n`
+        : inline(item)
+          ? `    for item in items { sbw_${this.name(item)}(item, out)?; }\n`
+          : `    for item in items { let mut slot = Vec::new(); sbw_${this.name(item)}(item, &mut slot)?; ${SB}::put_sized(out, &slot); }\n`;
+    this.items.set(name, `${head}${body}    Ok(())\n}\n`);
+    return name;
+  }
   /** A struct array's row run (format record §6.3): shapes, regions and per-field intern tables. */
   private run(layout: StructLayout): string {
     const name = `run_${namingDigest(JSON.stringify(layout))}`;
@@ -714,20 +734,29 @@ export const schemaBinaryCodecs = (
     const exit = Rpc.exitSchema(rpc).ast;
     if (!SchemaAST.isDeclaration(exit) || exit.typeParameters.length !== 3)
       throw unsupported(path, "Rpc.exitSchema is not the Exit declaration this compiler reads");
-    const named = (layout: () => Layout, at: string) => {
+    // A refusal while emitting is a compile error at the schema it came from.
+    const emitted = (emit: () => string, at: string) => {
       try {
-        return emitter.name(layout());
+        return emit();
       } catch (cause) {
         throw cause instanceof Error && !("diagnostics" in cause)
           ? unsupported(at, cause.message)
           : cause;
       }
     };
+    const named = (ast: SchemaAST.AST, at: string) =>
+      emitted(() => emitter.name(layoutOf(ast, at)), at);
+    const stream = RpcSchema.isStreamSchema(rpc.successSchema)
+      ? rpc.successSchema.success
+      : undefined;
     return {
       tag,
-      payload: named(() => layoutOf(rpc.payloadSchema.ast, `${path}.payload`), `${path}.payload`),
-      success: named(() => layoutOf(exit.typeParameters[0], `${path}.success`), `${path}.success`),
-      error: named(() => layoutOf(exit.typeParameters[1], `${path}.error`), `${path}.error`),
+      chunk:
+        stream &&
+        emitted(() => emitter.nonEmpty(layoutOf(stream.ast, `${path}.stream`)), `${path}.stream`),
+      payload: named(rpc.payloadSchema.ast, `${path}.payload`),
+      success: named(exit.typeParameters[0], `${path}.success`),
+      error: named(exit.typeParameters[1], `${path}.error`),
     };
   });
   const never = emitter.name({ _: "never" });
@@ -760,6 +789,20 @@ ${arms.map((arm) => `        ${rustString(arm.tag)} => sbr_${arm.payload},\n`).j
         Ok(value)
     };
     decode().map_err(|failure| failure.message())
+}
+/// A streamed chunk's elements, written as its procedure's \`NonEmptyArray\` frame.
+fn sb_chunk(tag: &str, values: &[Value]) -> Result<Vec<u8>, String> {
+    let mut value = Vec::new();
+    match tag {
+${arms
+  .flatMap((arm) =>
+    arm.chunk ? [`        ${rustString(arm.tag)} => sb${arm.chunk}(values, &mut value)?,\n`] : [],
+  )
+  .join("")}        _ => return Err("a streaming procedure".into()),
+    }
+    let mut frame = Vec::new();
+    ${SB}::put_frame(&mut frame, None, &value);
+    Ok(frame)
 }
 /// An answer's exit, as the JSON value the server builds, written as its procedure's frame.
 fn sb_exit(tag: &str, exit: &Value) -> Result<Vec<u8>, String> {

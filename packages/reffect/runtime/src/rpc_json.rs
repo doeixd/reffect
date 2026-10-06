@@ -46,6 +46,10 @@ const CONTENT_TYPE: &str = if NDJSON {
 } else {
     "application/json"
 };
+/// A streamed chunk's message.
+fn chunk_message(id: &Value, _tag: &str, values: Vec<Value>) -> Value {
+    json!({"_tag":"Chunk", "requestId":id, "values":values})
+}
 /// Whether each message is written as it is ready (NDJSON), or the body once at the end.
 const FRAMED: bool = NDJSON;
 /// One message as a framed serialization writes it.

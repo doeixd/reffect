@@ -10,6 +10,13 @@
 - Independent read-only review found no blocking correctness/type/security issues. Trusted identity checks, selective nested admission, isDone-only async capability and explicit RPC refusal were inspected. Initial topology analysis adds compile-time work for ordinary Effect functions; successful immutable Program receipts are cached, with no demonstrated material regression.
 - Final primary review found that the mixed-module emitted-Rust ceiling escaped as an Effect defect. A public regression reproduced it; the follow-up preserves the typed CompileError diagnostic under both artifact policies (DPUBA-005). Generated native code is unchanged.
 
+## 2026-10-05 — SchemaBinary streaming
+
+- [Design record](docs/research/schema-binary.md#progress). `stream: true` procedures bound to `R.Stream.fn` are served over SchemaBinary: chunks are `NonEmptyArray` frames, byte-equal to the official server's, and the stock client consumes them.
+- Validation:
+  - `schema-binary-stream` 1/1 passes.
+  - The JSON/NDJSON `stream-rpc` suite and `vp run runtime:check` were rerun for the shared forwarder change.
+
 ## 2026-10-05 — Milestone 10 step 5: authentication over SchemaBinary
 
 - [Design record](docs/research/schema-binary.md#progress). `NativeRpc.compile(..., { auth, serialization: "schema-binary" })` is admitted: denials are written in `Rpc.exitSchema`'s failure union, byte-equal to the official middleware's answers.

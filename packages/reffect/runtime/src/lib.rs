@@ -140,6 +140,16 @@ pub mod rpc_binary_host {
             .map(Value::String)
             .map_err(|invalid| schema_binary::Failure::from(invalid).message())
     }
+    fn sb_chunk(_tag: &str, values: &[Value]) -> Result<Vec<u8>, String> {
+        let mut value = Vec::new();
+        schema_binary::put_uv(&mut value, values.len() as u64);
+        for item in values {
+            schema_binary::put_sized(&mut value, item.as_str().ok_or("a string")?.as_bytes());
+        }
+        let mut frame = Vec::new();
+        schema_binary::put_frame(&mut frame, None, &value);
+        Ok(frame)
+    }
     fn sb_exit(_tag: &str, exit: &Value) -> Result<Vec<u8>, String> {
         let mut value = Vec::new();
         match exit["_tag"].as_str() {

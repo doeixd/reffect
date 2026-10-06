@@ -117,6 +117,13 @@ fn tagged(mut response: Value, tag: &str) -> Value {
     }
     response
 }
+/// A streamed chunk's message, tagged so its procedure's element codec writes it.
+fn chunk_message(id: &Value, tag: &str, values: Vec<Value>) -> Value {
+    tagged(
+        json!({"_tag":"Chunk", "requestId":id, "values":values}),
+        tag,
+    )
+}
 /// A defect frame: `Schema.Defect()` is JSON text.
 fn defect_frame(defect: &Value) -> Vec<u8> {
     let mut frame = Vec::new();
@@ -135,6 +142,22 @@ fn encode_one(response: &Value) -> Vec<u8> {
                 Ok(exit) => Message::Exit {
                     request_id: request_id_of(response.get("requestId").unwrap_or(&Value::Null)),
                     exit,
+                },
+                Err(message) => Message::Defect {
+                    defect: defect_frame(&json!({"name":"ProtocolError", "message":message})),
+                },
+            }
+        }
+        Some("Chunk") => {
+            let tag = response.get("~tag").and_then(Value::as_str).unwrap_or("");
+            let values = response
+                .get("values")
+                .and_then(Value::as_array)
+                .map_or(&[][..], Vec::as_slice);
+            match sb_chunk(tag, values) {
+                Ok(values) => Message::Chunk {
+                    request_id: request_id_of(response.get("requestId").unwrap_or(&Value::Null)),
+                    values,
                 },
                 Err(message) => Message::Defect {
                     defect: defect_frame(&json!({"name":"ProtocolError", "message":message})),

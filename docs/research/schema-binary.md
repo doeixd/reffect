@@ -208,6 +208,11 @@ The answer's content type is `application/vnd.effect.rpc+schema-binary`, and its
     - against the official server with the same middleware, the native bytes are equal for a missing token, a wrong token, a transport header, an envelope header, a typed failure and a public procedure;
     - the stock client gets `"Unauthorized"` and `false` as typed failures, and the principals as successes.
 
+- **Streaming, done (2026-10-05).** A chunk is a `Chunk` message whose `values` hole is a `NonEmptyArray(streamSuccess)` frame: a count, then a row run for structs, raw inline slots, or sized ones. There is no number run, unlike `Array`. The exit is `Rpc.exitSchema`'s `Void` success or failure union.
+  - `forward_chunks` now builds each chunk through the serialization's `chunk_message`: JSON is unchanged, and binary tags the chunk so `sb_chunk` picks the procedure's element codec.
+  - **Evidence** (`tests/schema-binary-stream.test.ts`, the streaming corpus of `stream-rpc` plus a struct stream). The native bytes equal the official server's for chunked number, string and struct streams (row runs with back-references inside a chunk), a typed stream failure, an empty stream, and a stream beside a unary call (compared per request). The stock client collects each stream.
+  - Runtime-served streams (NativeRemote Live) remain refused with NativeRemote.
+
 ## Acceptance (milestone 10, first slice)
 
 - The stock `RpcClient` with `RpcSerialization.layerSchemaBinary` calls the native server for every admitted shape, and success, typed failure, defect and interruption round-trip.

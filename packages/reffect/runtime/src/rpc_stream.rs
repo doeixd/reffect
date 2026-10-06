@@ -32,6 +32,7 @@ impl ChunkSource for tokio::sync::mpsc::Receiver<Value> {
 async fn forward_chunks(
     out: &Out,
     id: &Value,
+    tag: &str,
     cancellation: &tokio::sync::watch::Receiver<bool>,
     source: &mut impl ChunkSource,
 ) -> bool {
@@ -48,9 +49,7 @@ async fn forward_chunks(
         };
         let Some(values) = next else { return true };
         if out
-            .send(Outgoing::Message(
-                json!({"_tag":"Chunk", "requestId":id, "values":values}),
-            ))
+            .send(Outgoing::Message(chunk_message(id, tag, values)))
             .await
             .is_err()
         {
