@@ -6,9 +6,11 @@
  *
  * vp exec node --experimental-transform-types examples/todo-fullstack/main.ts [--port 8787]
  *   [--database todos.db | --postgres postgres://user:password@host/db] [--auth] [--binary]
+ *   [--websocket]
  *
  * With `--binary`, RPC is SchemaBinary (`RpcSerialization.layerSchemaBinary`) instead of NDJSON;
- * the browser app is then started with `TODO_REMOTE_RPC=schema-binary`, as printed.
+ * the browser app is then started with `TODO_REMOTE_RPC=schema-binary`, as printed. With
+ * `--websocket`, RPC is one WebSocket session per browser (`TODO_REMOTE_TRANSPORT=websocket`).
  *
  * With `--postgres`, the server runs on that Postgres database instead: the todos table is made
  * and seeded there when it does not exist yet, and an existing one is kept.
@@ -36,6 +38,7 @@ const option = (name: string) => {
 const port = option("--port") ?? "8787";
 const auth = process.argv.includes("--auth");
 const serialization = process.argv.includes("--binary") ? "schema-binary" : "ndjson";
+const transport = process.argv.includes("--websocket") ? "websocket" : "http";
 // The one configured token: given, or fresh each run; it reaches the server only through its env.
 const token = process.env.TODO_TOKEN ?? randomBytes(24).toString("base64url");
 
@@ -61,6 +64,7 @@ await Effect.runPromise(
           ...(loginPage === undefined ? {} : { loginPage }),
           ...(postgres === undefined ? {} : { dialect: "postgres" as const }),
           serialization,
+          transport,
         }),
         `${parent}/server`,
       );
@@ -89,7 +93,9 @@ await Effect.runPromise(
       const over = postgres === undefined ? database : "Postgres";
       console.log(`todo-fullstack: http://${address} over ${over} (Ctrl-C stops it)`);
       if (auth) console.log(`sign in with token: ${token}`);
-      const rpc = serialization === "schema-binary" ? " TODO_REMOTE_RPC=schema-binary" : "";
+      const rpc =
+        (serialization === "schema-binary" ? " TODO_REMOTE_RPC=schema-binary" : "") +
+        (transport === "websocket" ? " TODO_REMOTE_TRANSPORT=websocket" : "");
       console.log(`browser: TODO_REMOTE_PORT=${port}${rpc} vp dev examples/todo-remote/web`);
       return yield* Effect.never;
     }),

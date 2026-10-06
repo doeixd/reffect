@@ -6,6 +6,7 @@
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
+import { Socket } from "effect/socket";
 import { Runtime } from "foldkit";
 import { Remote, RemoteRpc } from "foldkit-remote";
 import { BUILD_ID, Flags, Message, Model, init, subscriptions, update, view } from "./app.ts";
@@ -17,19 +18,29 @@ const serialization =
     ? RpcSerialization.layerSchemaBinary()
     : RpcSerialization.layerNdjson;
 
+// The transport, likewise: HTTP, or one WebSocket session on the page's own origin.
+declare const __TODO_REMOTE_TRANSPORT__: string | undefined;
+const protocol =
+  typeof __TODO_REMOTE_TRANSPORT__ !== "undefined" && __TODO_REMOTE_TRANSPORT__ === "websocket"
+    ? RpcClient.layerProtocolSocket().pipe(
+        Layer.provide([
+          Socket.layerWebSocket(
+            `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/rpc`,
+          ).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
+          serialization,
+        ]),
+      )
+    : RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(
+        Layer.provide([FetchHttpClient.layer, serialization]),
+      );
+
 // Remote.clientLayer takes the stock client; a transport failure becomes a Remote error.
 const RemoteLive = Layer.unwrap(
   Effect.gen(function* () {
     const rpc = yield* RpcClient.make(RemoteRpc, { disableTracing: true });
     return Remote.clientLayer(rpc);
   }),
-).pipe(
-  Layer.provide(
-    RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(
-      Layer.provide([FetchHttpClient.layer, serialization]),
-    ),
-  ),
-);
+).pipe(Layer.provide(protocol));
 
 const application = Runtime.makeApplication({
   Model,

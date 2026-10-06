@@ -22,6 +22,10 @@ Open the address Vite prints. Vite serves the client modules and forwards page n
 
 Start the server with `--binary` and its RPC speaks `RpcSerialization.layerSchemaBinary` instead of NDJSON: reads, queries, mutations and Live, answered byte-equal to the official server ([schema-binary](../../docs/research/schema-binary.md)). Start the browser app with `TODO_REMOTE_RPC=schema-binary`, as the server prints, so its stock client speaks the same serialization. It combines with `--auth`: the session cookie is then accepted only with the SchemaBinary media type.
 
+## WebSocket (`--websocket`)
+
+Start the server with `--websocket` and its RPC is one WebSocket session per browser, as `RpcServer.layerHttp({ protocol: "websocket" })` serves it: reads, queries, mutations and Live over one connection ([websocket-rpc](../../docs/research/websocket-rpc.md)). Start the browser app with `TODO_REMOTE_TRANSPORT=websocket`, as the server prints. It combines with `--binary` and `--auth`. Browsers send no Fetch Metadata on the handshake, so a deployment signing in by cookie must configure its page `origin`.
+
 ## Signed in (`--auth`)
 
 Start the server with `--auth` and every page and procedure needs a principal. A browser without a session sees `login.html` (with status 401). It signs in with the token the server prints at start (or `TODO_TOKEN`). The token becomes an HttpOnly `__Host-` session cookie that the page and the hydrated app's RPC carry. The server accepts the cookie on RPC only from the page's own origin with the RPC content type, so another site cannot act with it. See [cookie sessions](../../docs/research/cookie-sessions.md).

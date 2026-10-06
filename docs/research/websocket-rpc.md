@@ -139,6 +139,20 @@ Native decisions from the probe:
   - **Stock client:** the stock `RpcClient` over `layerProtocolSocket` and `NodeSocket.layerWebSocket` passes under JSON, NDJSON and SchemaBinary. It covers unary, typed failure, a stream, a stream stopped early (an `Interrupt`), a timed-out request, and eight concurrent requests on one session.
   - **A test pitfall, recorded:** a socket client's protocol layer must live in the caller's scope (`Layer.build`). Provided to `RpcClient.make` alone, its socket closes as soon as the client is made.
 
+## Step 5: NativeRemote and the showcase over WebSocket (2026-10-06)
+
+- **NativeRemote.** `NativeRemote.compile(..., { transport: "websocket" })` passes the transport through. Live no longer needs NDJSON or SchemaBinary over a socket, because every message is its own frame.
+  - **Evidence** (`tests/schema-binary-remote.test.ts`): the stock client subscribes to Live over a native session with JSON frames while mutations go through the same session. Its decoded events, mutation outcomes and follow-up read equal those from the official server.
+- **WS-007. Session cookies over WebSocket.** The cookie's RPC check required the page's own origin _and_ the RPC media type (a CSRF defense). An upgrade is a body-less GET, so it is now accepted when it passes the same-origin check, the standard defense against cross-site WebSocket hijacking; HTTP bodies still need the media type.
+  - **Browsers send no Fetch Metadata on a WebSocket handshake.** The origin check therefore compares `Origin` with the configured page `origin`, which a deployment must set to the site's origin. Found in Chrome: with the default origin, the signed-in socket answered `Unauthorized` until the test configured it.
+- **The showcase.**
+  - `examples/todo-fullstack/main.ts --websocket` compiles the server with `transport: "websocket"`.
+  - The browser app follows `TODO_REMOTE_TRANSPORT=websocket` (a Vite `define`): it uses `layerProtocolSocket` over `ws(s)://<host>/rpc`, and Vite proxies the upgrade (`ws: true`).
+  - **Evidence:** `tests/todo-fullstack-browser.test.ts` also runs NDJSON over WebSocket in Chrome, with sign-in, hydration and a cookie-authenticated toggle.
+- **Test pitfalls, recorded:**
+  - An NDJSON message ends at its newline, so a hand-sent frame without one waits in the parser, on either server.
+  - Objects decoded from SchemaBinary and from JSON hold the same data with keys in different orders, so cross-serialization comparisons use plain data.
+
 ## Plan
 
 1. **Probe** the official socket server: the frames it sends for unary, stream (with and without acks), interrupt, ping, duplicate id, a bad frame and a handler defect. Record the answers here, as fixtures where they are deterministic.

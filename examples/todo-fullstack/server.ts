@@ -39,6 +39,8 @@ export const compileShowcase = (
     readonly dialect?: Dialect;
     /** The RPC serialization, NDJSON by default; the browser must use the same one. */
     readonly serialization?: "ndjson" | "schema-binary";
+    /** The RPC transport, HTTP by default; the browser must use the same one. */
+    readonly transport?: "http" | "websocket";
   } = {},
 ) => {
   const pages = {
@@ -57,6 +59,7 @@ export const compileShowcase = (
     live: true,
     liveSnapshot: true,
     serialization: options.serialization ?? "ndjson",
+    ...(options.transport === undefined ? {} : { transport: options.transport }),
     pages,
   };
   return options.loginPage === undefined

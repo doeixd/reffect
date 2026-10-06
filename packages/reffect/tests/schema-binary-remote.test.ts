@@ -9,7 +9,7 @@ import { SchemaBinary } from "effect/encoding";
 import { FetchHttpClient, HttpEffect } from "effect/http";
 import { ChildProcess } from "effect/process";
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
-import { NodeServices } from "@effect/platform-node";
+import { NodeServices, NodeSocket } from "@effect/platform-node";
 import { Entity } from "foldkit-entity";
 import { Mutation, Remote, RemoteRpc } from "foldkit-remote";
 import { RemoteServer } from "foldkit-remote-server";
@@ -317,6 +317,115 @@ test(
             }),
           )(JSON.parse(ready.value));
           const native = yield* liveSession(`http://${address}/rpc`, fetch);
+          expect(native).toStrictEqual(official);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    );
+  },
+  nativeTestBudget(0) + 240000,
+);
+
+/**
+ * The same steps through one client, whose protocol layer is given: live events while a rename
+ * and a drop land, the mutations' outcomes, and a read after them, all decoded.
+ */
+const clientSession = (
+  protocol: Layer.Layer<RpcClient.Protocol, never, import("effect").Scope.Scope>,
+) =>
+  Effect.gen(function* () {
+    // The protocol lives as long as the session; provided to `make` alone, a socket would close.
+    const context = yield* Layer.build(protocol);
+    const rpc = yield* RpcClient.make(LiveGroup, { disableTracing: true }).pipe(
+      Effect.provideContext(context),
+    );
+    const events = yield* rpc
+      .FoldkitRemoteLive({
+        version: 4,
+        requirements: [{ entity: "Project", id: "p1", fields: ["name", "rank"] }],
+        after: 5,
+      })
+      .pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped);
+    yield* Effect.sleep("300 millis");
+    const mutate = (requestId: string, mutation: string, input: unknown) =>
+      rpc.FoldkitRemoteMutate({ requestId, mutation, input }).pipe(Effect.result);
+    const outcomes = [
+      yield* mutate("r1", "Rename", { id: "p1", name: "Zephyr" }),
+      yield* mutate("r2", "Drop", { id: "p1" }),
+      yield* mutate("r3", "Nope", {}),
+    ];
+    const read = yield* rpc.FoldkitRemoteRead({
+      version: 4,
+      requests: [{ entity: "Project", id: "p2", fields: ["name", "rank", "members"] }],
+    });
+    // As plain data: the two serializations decode object keys in different orders.
+    return JSON.parse(
+      JSON.stringify({
+        events: [...(yield* Fiber.join(events).pipe(Effect.timeout("10 seconds")))],
+        outcomes,
+        read,
+      }),
+    ) as unknown;
+  }).pipe(Effect.scoped);
+
+test(
+  "native Remote, Live included, over a WebSocket session",
+  async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reference = yield* officialLive;
+          const official = yield* clientSession(
+            RpcClient.layerProtocolHttp({ url: "http://reffect.test/rpc" }).pipe(
+              Layer.provide([
+                FetchHttpClient.layer.pipe(
+                  Layer.provide(
+                    Layer.succeed(FetchHttpClient.Fetch)(((input, init) =>
+                      reference(new Request(input, init))) as typeof fetch),
+                  ),
+                ),
+                RpcSerialization.layerSchemaBinary(),
+              ]),
+            ),
+          );
+          expect(JSON.stringify(official)).toContain('"EntityPatched"');
+          expect(JSON.stringify(official)).toContain('"EntityDeleted"');
+
+          const fs = yield* FileSystem.FileSystem;
+          const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-ws-remote-" });
+          const artifact = yield* NativeRemote.compile(LiveGroup, {
+            domain: liveDomain,
+            rows: liveRows,
+            mutations: [rename, drop],
+            live: true,
+            transport: "websocket",
+          });
+          const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
+          yield* CargoApi.fetch(directory);
+          yield* CargoApi.build(directory, "debug");
+          const child = yield* ChildProcess.make(
+            `${directory}/target/debug/reffect_generated${process.platform === "win32" ? ".exe" : ""}`,
+            ["--port", "0"],
+          );
+          yield* Stream.runDrain(child.stderr).pipe(Effect.forkScoped);
+          const ready = yield* Stream.runHead(
+            Stream.splitLines(Stream.decodeText(child.stdout)),
+          ).pipe(Effect.timeout("10 seconds"));
+          if (!Option.isSome(ready)) throw new Error("Missing ready record");
+          const { address } = Schema.decodeUnknownSync(
+            Schema.Struct({
+              schema: Schema.Literal("reffect.rpc.ready@1"),
+              address: Schema.String,
+            }),
+          )(JSON.parse(ready.value));
+          // JSON over the socket: a WebSocket frames every message, so Live needs no NDJSON.
+          const native = yield* clientSession(
+            RpcClient.layerProtocolSocket().pipe(
+              Layer.provide([
+                NodeSocket.layerWebSocket(`ws://${address}/rpc`),
+                RpcSerialization.layerJson,
+              ]),
+            ),
+          );
           expect(native).toStrictEqual(official);
         }),
       ).pipe(Effect.provide(NodeServices.layer)),

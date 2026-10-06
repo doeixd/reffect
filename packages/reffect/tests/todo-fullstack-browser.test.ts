@@ -28,9 +28,13 @@ const template = readFileSync(`${examples}/todo-remote/web/index.html`, "utf8");
 const loginPage = readFileSync(`${examples}/todo-fullstack/login.html`, "utf8");
 const token = "showcase-test-token";
 
-for (const serialization of ["ndjson", "schema-binary"] as const)
+for (const [serialization, transport] of [
+  ["ndjson", "http"],
+  ["schema-binary", "http"],
+  ["ndjson", "websocket"],
+] as const)
   test.skipIf(!existsSync(CHROME))(
-    `the signed-in showcase: login page, cookie, hydration and a toggle in Chrome (${serialization})`,
+    `the signed-in showcase: login page, cookie, hydration and a toggle in Chrome (${serialization}, ${transport})`,
     async () => {
       await Effect.runPromise(
         Effect.scoped(
@@ -39,7 +43,20 @@ for (const serialization of ["ndjson", "schema-binary"] as const)
             const parent = yield* fs.makeTempDirectoryScoped({ prefix: "reffect-showcase-auth-" });
             const database = `${parent}/todos.db`;
             seed(database);
-            const artifact = yield* compileShowcase(template, { loginPage, serialization });
+            // The page's origin, as a deployment configures it: the site Vite serves. A browser's
+            // WebSocket handshake carries no Fetch Metadata, so the cookie's origin check reads
+            // its Origin against this.
+            const vitePort =
+              5100 +
+              (process.pid % 300) +
+              (serialization === "ndjson" ? 0 : 300) +
+              (transport === "http" ? 0 : 600);
+            const artifact = yield* compileShowcase(template, {
+              loginPage,
+              serialization,
+              transport,
+              origin: `http://127.0.0.1:${vitePort}`,
+            });
             const directory = yield* CargoApi.write(artifact, `${parent}/crate`);
             yield* CargoApi.fetch(directory);
             yield* CargoApi.build(directory, "debug");
@@ -66,11 +83,12 @@ for (const serialization of ["ndjson", "schema-binary"] as const)
             // The browser app, as `vp dev` serves it, forwarding pages, /rpc and /session.
             process.env.TODO_REMOTE_PORT = address.split(":")[1];
             process.env.TODO_REMOTE_RPC = serialization;
+            process.env.TODO_REMOTE_TRANSPORT = transport;
             const vite = yield* Effect.promise(() =>
               createServer({
                 root: `${examples}/todo-remote/web`,
                 logLevel: "silent",
-                server: { host: "127.0.0.1", port: 0, strictPort: false },
+                server: { host: "127.0.0.1", port: vitePort, strictPort: true },
               }),
             );
             yield* Effect.addFinalizer(() => Effect.promise(() => vite.close()));
@@ -81,7 +99,12 @@ for (const serialization of ["ndjson", "schema-binary"] as const)
             const site = `http://127.0.0.1:${listening.port}`;
 
             const browser = yield* Effect.promise(() =>
-              chrome(9500 + (process.pid % 300) + (serialization === "ndjson" ? 0 : 300)),
+              chrome(
+                9500 +
+                  (process.pid % 300) +
+                  (serialization === "ndjson" ? 0 : 300) +
+                  (transport === "http" ? 0 : 600),
+              ),
             );
             yield* Effect.addFinalizer(() => Effect.promise(browser.close));
             const until = async (expression: string, what: string) => {

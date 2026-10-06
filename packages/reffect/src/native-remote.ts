@@ -115,6 +115,8 @@ export interface NativeRemoteOptions {
   readonly serialization?: "json" | "ndjson" | "schema-binary";
   /** `layerSchemaBinary`'s options, under `serialization: "schema-binary"`. */
   readonly schemaBinary?: CompileOptions["schemaBinary"];
+  /** The transport, HTTP by default; over WebSocket every message is its own frame. */
+  readonly transport?: CompileOptions["transport"];
   /**
    * Server-rendered pages (8A) whose first screen holds Remote data (M9-3 step 2). `remote` is the
    * page's plan, usually `planPage(...)` (#13): each planned request runs against this server's
@@ -756,9 +758,11 @@ const compile = <Rpcs extends Rpc.Any>(
         for (const tag of group.requests.keys())
           if (tag !== READ && tag !== QUERY && tag !== MUTATE && tag !== LIVE)
             throw unsupported(`rpc.${tag}`, "Only the Remote contract's procedures are served");
-        // A Live stream never ends, so a JSON body would buffer it forever and never answer (LR-4).
+        // A Live stream never ends, so a JSON body would buffer it forever and never answer (LR-4);
+        // a WebSocket frames every message, whatever the serialization.
         if (
           options.live &&
+          options.transport !== "websocket" &&
           options.serialization !== "ndjson" &&
           options.serialization !== "schema-binary"
         )
@@ -1055,6 +1059,7 @@ fn remote_authorize_for(principal: Option<u64>, entity: &str, fields: &[String])
         ...(options.auth ? { auth: options.auth } : {}),
         ...(options.serialization ? { serialization: options.serialization } : {}),
         ...(options.schemaBinary ? { schemaBinary: options.schemaBinary } : {}),
+        ...(options.transport ? { transport: options.transport } : {}),
       },
       {
         procedures,

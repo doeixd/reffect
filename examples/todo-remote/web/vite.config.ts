@@ -8,11 +8,16 @@ const native = `http://127.0.0.1:${process.env.TODO_REMOTE_PORT ?? "8787"}`;
 export default defineConfig({
   // The RPC serialization the native server was compiled with: NDJSON, or SchemaBinary when it
   // was started with --binary (TODO_REMOTE_RPC=schema-binary).
-  define: { __TODO_REMOTE_RPC__: JSON.stringify(process.env.TODO_REMOTE_RPC ?? "ndjson") },
+  // Its transport: HTTP, or one WebSocket session when started with --websocket.
+  define: {
+    __TODO_REMOTE_RPC__: JSON.stringify(process.env.TODO_REMOTE_RPC ?? "ndjson"),
+    __TODO_REMOTE_TRANSPORT__: JSON.stringify(process.env.TODO_REMOTE_TRANSPORT ?? "http"),
+  },
   server: {
     host: "127.0.0.1",
     proxy: {
-      "/rpc": native,
+      // A WebSocket server takes its session's upgrade at /rpc.
+      "/rpc": { target: native, ws: true },
       // Sign-in and sign-out of a server started with --auth (#4).
       "/session": native,
       "/": {

@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-06 — Milestone 11: NativeRemote and the showcase over WebSocket
+
+- [Design record](docs/research/websocket-rpc.md):
+  - `NativeRemote.compile(..., { transport: "websocket" })`, with Live over any serialization;
+  - session cookies accepted on a same-origin upgrade (WS-007);
+  - `examples/todo-fullstack --websocket`.
+- Validation:
+  - `todo-fullstack-browser` 3/3 passes in Chrome, including NDJSON over WebSocket with cookie sign-in.
+  - `schema-binary-remote` 4/4 passes, its WebSocket Live case included.
+  - The regressions `remote-auth` 4/4, `session-browser` 1/1, `rpc-auth` 3/3 and `websocket-rpc` 4/4 pass.
+  - `vp check` and the strict `tsc` pass.
+
 ## 2026-10-06 — Semaphore real-future driver and awaited cleanup
 
 - Recorded [SNAT-009–011](docs/research/semaphore-native.md#bounded-real-future-driver-2026-10-06-preparation) before implementation. Separate private two/three-child driver borrows pinned futures, marks authored suspension, runs protocol retries through synchronous tails and dispatches one live observer at a time. Parent interruption broadcasts cancellation and awaits every child's cleanup.

@@ -149,9 +149,15 @@ fn rpc_body(headers: &HeaderMap) -> bool {
         .and_then(|value| value.split(';').next())
         .is_some_and(|media| media.trim().eq_ignore_ascii_case(RPC_CONTENT_TYPE))
 }
+/// A WebSocket upgrade: a GET without a body, whose browser always sends its Origin.
+fn websocket_upgrade(headers: &HeaderMap) -> bool {
+    single_header(headers, "upgrade").is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+}
 /// An RPC request's cookie principal: only from the page's own origin, with the RPC body (#4).
+/// A WebSocket session has no body to type; its upgrade's origin check is the defense against
+/// cross-site WebSocket hijacking (milestone 11).
 fn session_principal(headers: &HeaderMap, state: &RuntimeState) -> Option<u64> {
-    if !same_origin(headers) || !rpc_body(headers) { return None }
+    if !same_origin(headers) || !(rpc_body(headers) || websocket_upgrade(headers)) { return None }
     cookie_principal(headers, state)
 }
 fn session_answer(status: StatusCode, cookie: Option<String>) -> Response {
