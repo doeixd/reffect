@@ -792,6 +792,10 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
           walk(n.id);
           if (n.values) walk(n.values);
         },
+        SqlExecute: (n) => {
+          effectRefs.add(AsyncEffects.SqlExecute);
+          n.params.forEach(walk);
+        },
         Repeat: (n) => {
           effectRefs.add(AsyncEffects.Repeat);
           walkComputation(n.body);

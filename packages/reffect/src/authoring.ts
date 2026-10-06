@@ -4,6 +4,7 @@ import { SchemaIR } from "./schema-json.ts";
 import { UrlIR } from "./url.ts";
 import { StreamAuthoring } from "./stream.ts";
 import { LiveHubIR, RemoteStoreIR } from "./remote-store.ts";
+import { SqlSchemaIR, sql } from "./sql.ts";
 import { HtmlIR } from "./html.ts";
 import { Source } from "./source.ts";
 import { flow } from "./flow.ts";
@@ -160,6 +161,9 @@ export const R = Object.freeze({
   /** Effect `DateTime`: UTC instants, as a page's `now` is one. */
   DateTime: DateTimeIR,
   RemoteStore: RemoteStoreIR,
+  /** The `sql` tagged template of `yield* SqlClient.SqlClient` (SQL-001). */
+  sql,
+  SqlSchema: SqlSchemaIR,
   LiveHub: LiveHubIR,
   /** Foldkit Remote values an R page reads (M9-3). */
   Remote: Object.freeze({

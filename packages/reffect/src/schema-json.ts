@@ -6,10 +6,10 @@
  * without the `JsonEncoders` capability refuses the operation instead of guessing an encoding.
  */
 import { namingDigest } from "./naming.ts";
-import { Option, Schema } from "effect";
+import { Cause, Exit, Option, Schema } from "effect";
 import { OptionIR } from "./option.ts";
 import type { OptionValue } from "./option.ts";
-import { UndefinedOr } from "./records.ts";
+import { ArrayType, UndefinedOr } from "./records.ts";
 import {
   Capabilities,
   Expr,
@@ -74,6 +74,64 @@ const decodeOperation = (witness: IRType<unknown>): DecodeJson => {
   hostFunctions.set(operation, jsonDecoderName(witness));
   return operation;
 };
+
+type TypeSideOperation = Operation<readonly [IRType<unknown>], unknown>;
+/** What a type-side operation reads: one `Unknown` value, or a statement's rows as an Array. */
+export type TypeSideInput = "value" | "rows";
+interface TypeSide {
+  readonly witness: IRType<unknown>;
+  readonly issue: boolean;
+  readonly input: TypeSideInput;
+}
+const typeSideOperations = new WeakMap<IRType<unknown>, Map<string, TypeSideOperation>>();
+const typeSides = new WeakMap<object, TypeSide>();
+const failureMessage = (exit: Exit.Exit<unknown, Schema.SchemaError>): string =>
+  Exit.isSuccess(exit)
+    ? ""
+    : Option.match(Cause.findErrorOption(exit.cause), {
+        onNone: () => "",
+        onSome: (error) => error.message,
+      });
+const typeSideOperation = (side: TypeSide): TypeSideOperation => {
+  const key = `${side.issue}/${side.input}`;
+  const byKey = typeSideOperations.get(side.witness) ?? new Map<string, TypeSideOperation>();
+  typeSideOperations.set(side.witness, byKey);
+  const known = byKey.get(key);
+  if (known) return known;
+  const schema = side.witness.schema as Schema.Codec<unknown>;
+  const option = Schema.decodeUnknownOption(schema);
+  const exit = Schema.decodeUnknownExit(schema);
+  const kind = side.issue ? "issue" : "option";
+  const operation: TypeSideOperation = Operation.make(
+    SemanticRef.operation(`reffect/schema.decode-type-${kind}@1/${side.input}/${side.witness.id}`),
+    [side.input === "rows" ? ArrayType.of(UnknownType) : UnknownType] as const,
+    side.issue ? StringType : UndefinedOr(side.witness),
+    (value) => (side.issue ? failureMessage(exit(value)) : Option.getOrUndefined(option(value))),
+  ).pipe(Operation.withCapabilities([Capabilities.Json, Capabilities.JsonEncoders]));
+  byKey.set(key, operation);
+  typeSides.set(operation, side);
+  hostFunctions.set(
+    operation,
+    `json_type_${kind}_${side.input}_${digest(side.witness.id)}_${side.witness.id.length}`,
+  );
+  return operation;
+};
+/**
+ * `Schema.decodeUnknownOption(W)` on the type side, as `SqlSchema` decodes rows (SQL-006): a
+ * Number field accepts numbers only, unlike the JSON codec's non-finite strings.
+ */
+export const typeDecodeOperation = (
+  witness: IRType<unknown>,
+  input: TypeSideInput = "value",
+): TypeSideOperation => typeSideOperation({ witness, issue: false, input });
+/** The `SchemaError` message the type-side decode gives, or "" when the value decodes. */
+export const typeIssueOperation = (
+  witness: IRType<unknown>,
+  input: TypeSideInput = "value",
+): TypeSideOperation => typeSideOperation({ witness, issue: true, input });
+/** What a type-side decode or issue operation reads and answers. */
+export const typeSideOf = (operation: AnyOperation): TypeSide | undefined =>
+  typeSides.get(operation);
 
 /** The host function implementing an operation, for operations a NativeRpc host supplies. */
 export const hostFunctionOf = (operation: AnyOperation): string | undefined =>

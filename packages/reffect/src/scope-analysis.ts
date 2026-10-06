@@ -345,6 +345,12 @@ export const analyzeScopes = (
           if (n.values) expression(n.values, "values");
           return 0;
         },
+        SqlExecute: (n) => {
+          // Its failure is a typed outcome the cleanup could not report (#18).
+          if (cleanup) diagnostic("SQL_CLEANUP", at, "Cleanup cannot run SQL statements");
+          n.params.forEach((param, index) => expression(param, `params.${index}`));
+          return 0;
+        },
         Launch: (n) => {
           if (cleanup) diagnostic("LAUNCH_CLEANUP", at, "Cleanup cannot launch a server lifetime");
           n.values.forEach((value, index) => expression(value, `values.${index}`));

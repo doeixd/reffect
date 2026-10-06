@@ -145,6 +145,7 @@ export const analyzeDeferredBudget = (
         RandomDraw: unaccounted,
         Launch: unaccounted,
         RemoteStore: unaccounted,
+        SqlExecute: unaccounted,
         Repeat: unaccounted,
         Retry: unaccounted,
         ForEach: unaccounted,

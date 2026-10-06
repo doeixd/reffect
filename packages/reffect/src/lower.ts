@@ -413,6 +413,11 @@ type HelperBody =
       readonly id: RustBlock;
       readonly values: RustBlock | undefined;
     }
+  | {
+      readonly _tag: "SqlExecute";
+      readonly strings: readonly string[];
+      readonly params: readonly RustBlock[];
+    }
   | { readonly _tag: "Ensuring"; readonly body: number; readonly finalizer: number }
   /** `Stream.runCollect`, fused into one chunk loop (STREAM-004). */
   | {
@@ -844,6 +849,7 @@ function lowerFunctionsInternal(
                 expression(n.id);
                 if (n.values) expression(n.values);
               },
+              SqlExecute: (n) => n.params.forEach(expression),
             }),
           );
         };
@@ -1417,6 +1423,13 @@ function lowerFunctionsInternal(
               id: block(n.id, scope, `${path}.id`),
               values: n.values && block(n.values, scope, `${path}.values`),
             }),
+            SqlExecute: (n): HelperBody => ({
+              _tag: "SqlExecute",
+              strings: n.strings,
+              params: Object.freeze(
+                n.params.map((param, i) => block(param, scope, `${path}.params.${i}`)),
+              ),
+            }),
             Repeat: (n): HelperBody => ({
               _tag: "Repeat",
               body: effectHelper(n.body, scope, error, `${path}.body`),
@@ -1631,6 +1644,7 @@ function lowerFunctionsInternal(
                 Sleep: () => true,
                 Launch: () => true,
                 RemoteStore: () => true,
+                SqlExecute: () => true,
                 Repeat: () => true,
                 Retry: () => true,
                 FileScope: () => true,
@@ -2066,6 +2080,7 @@ export const emitFunctions = (
             Sleep: () => 0,
             Launch: () => 0,
             RemoteStore: () => 0,
+            SqlExecute: () => 0,
           }),
         );
         memo.set(index, result);
@@ -2127,6 +2142,14 @@ export const emitFunctions = (
       ),
     ),
   );
+  const usesSql = module.functions.some((f) =>
+    f.helpers.some((helper) =>
+      Match.value(helper.body).pipe(
+        Match.tag("SqlExecute", () => true),
+        Match.orElse(() => false),
+      ),
+    ),
+  );
   const usesStreams = module.functions.some((f) =>
     f.helpers.some((helper) =>
       Match.value(helper.body).pipe(
@@ -2173,6 +2196,7 @@ export const emitFunctions = (
         taskArities.length > 0,
         usesStreams,
         fallibleGroups,
+        usesSql,
       ),
     );
   if (infallibleArities.length) write(structuredRuntime(infallibleArities));
@@ -3087,6 +3111,22 @@ export const emitFunctions = (
                       : "Err(error) => Err(error)",
                     " } }",
                   ]),
+          // The statement runs to completion, as on the reference's synchronous driver; its
+          // outcome, a failure included, is data the R program decodes (SQL-002).
+          SqlExecute: (n) =>
+            joinFragments([
+              `{ match ctx.sql_execute(&[${n.strings.map((text) => Rs.stringLiteral(text).text).join(", ")}], vec![`,
+              ...n.params.flatMap((param) => [
+                "crate::IntoSqlParam::into_sql_param(",
+                renderBlock(param),
+                "), ",
+              ]),
+              "]).await { Ok(outcome) => Ok(outcome), ",
+              captureFrames
+                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sql").text})))`
+                : "Err(error) => Err(error)",
+              " } }",
+            ]),
           Repeat: (n) => {
             const projection = fallibleGroups
               ? `let error = match error { AsyncError::Combined(cause) if !ctx.is_cancelled() && cause.first().is_some() => { let value = match cause.first().unwrap() { ${IRType.same(f.helpers[n.body].error!, BoolType) ? "RuntimeFailure::Bool(value) => value," : IRType.same(f.helpers[n.body].error!, U64Type) ? "RuntimeFailure::U64(value) => value," : IRType.same(f.helpers[n.body].error!, UnitType) ? "RuntimeFailure::Unit => ()," : ""} _ => panic!("Checked repeat failure witness") }; AsyncError::Fail(value) }, error => error }; `
@@ -4140,6 +4180,7 @@ const writeCompositeTypes = (
           Annotate: (body) => [body.value],
           Launch: (body) => body.values,
           RemoteStore: (body) => (body.values ? [body.id, body.values] : [body.id]),
+          SqlExecute: (body) => body.params,
         }),
         Match.orElse(() => []),
       );

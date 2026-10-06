@@ -99,6 +99,7 @@ export const analyzeTaskGroups = (
         Sleep: () => false,
         Launch: () => false,
         RemoteStore: () => false,
+        SqlExecute: () => false,
         Log: () => false,
       }),
     );
@@ -160,6 +161,9 @@ export const analyzeTaskGroups = (
               "TASK_GROUP_HOST",
               "Remote store identity and mutation interleaving are not admitted in child tasks",
             );
+        },
+        SqlExecute: () => {
+          if (child) issue("TASK_GROUP_HOST", "SQL statements are not admitted in child tasks");
         },
         Scope: (n) => body(n.body, "body"),
         AddFinalizer: (n) => finalizer(n.finalizer, "finalizer"),
@@ -493,6 +497,7 @@ export const analyzeDeferredTopology = (
         Sleep: () => quiet,
         Launch: () => quiet,
         RemoteStore: () => quiet,
+        SqlExecute: () => quiet,
         Log: () => quiet,
       }),
     );

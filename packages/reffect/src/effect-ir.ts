@@ -43,6 +43,7 @@ import {
   arrayItem,
   fail,
   structLayout,
+  nullOrItem,
   undefinedOrItem,
   unionCases,
 } from "./kernel.ts";
@@ -51,6 +52,7 @@ import { FileHandleType, FileLease, validFilePath } from "./file-model.ts";
 import { openReferenceFile } from "./reference-files.ts";
 import { LaunchHost } from "./launch-host.ts";
 import { LiveHubHost, RemoteStoreHost } from "./remote-store-host.ts";
+import { sqlOutcomeReference } from "./sql-host.ts";
 import {
   StreamIR,
   mapStreamExpressions,
@@ -119,6 +121,7 @@ export const AsyncEffects = Object.freeze({
   Launch: SemanticRef.effect("reffect/effect/launch@1"),
   RemoteStore: SemanticRef.effect("reffect/effect/remote-store@1"),
   LiveHub: SemanticRef.effect("reffect/effect/live-hub@1"),
+  SqlExecute: SemanticRef.effect("reffect/sql/execute@1"),
   StreamEmit: SemanticRef.effect("reffect/stream/emit@1"),
   Ensuring: SemanticRef.effect("reffect/effect/ensuring@1"),
   AcquireUseRelease: SemanticRef.effect("reffect/effect/acquireUseRelease@1"),
@@ -285,6 +288,16 @@ export type ComputationNode =
       readonly id: Expr<unknown>;
       readonly values: Expr<unknown> | undefined;
     }
+  /**
+   * One SQL statement (SQL-002): the template's literal segments and its parameters. It yields
+   * the outcome as `Unknown` data, `{ _tag: "Success", success: rows }` or `{ _tag: "Failure",
+   * failure: SqlError }`, which `R.sql` decodes; it never fails itself.
+   */
+  | {
+      readonly _tag: "SqlExecute";
+      readonly strings: readonly string[];
+      readonly params: readonly Expr<unknown>[];
+    }
   | {
       readonly _tag: "Ensuring";
       readonly body: Computation<unknown, unknown>;
@@ -444,6 +457,12 @@ export const substituteComputation = (
           const id = substituting(n.id);
           const values = n.values && substituting(n.values);
           return id === n.id && values === n.values ? self : rebuild({ ...n, id, values });
+        },
+        SqlExecute: (n) => {
+          const params = n.params.map(substituting);
+          return params.every((param, index) => param === n.params[index])
+            ? self
+            : rebuild({ ...n, params });
         },
         SemaphoreMake: () => self,
         SemaphoreScope: (n) => {
@@ -643,6 +662,21 @@ export const remoteStore = (
   values: Expr<unknown> | undefined,
 ): Computation<void, never> =>
   Computation.make(UnitType, NeverType, { _tag: "RemoteStore", op, entity, id, values });
+/** The witnesses a SQL statement binds (SQL-001): scalars SQLite and SQLx both bind. */
+export const sqlParameter = (type: IRType<unknown>): boolean => {
+  const item = nullOrItem(type) ?? type;
+  return [StringType, NumberType, U64Type, BoolType].some((scalar) => IRType.same(item, scalar));
+};
+/** One SQL statement's outcome as `Unknown` data (SQL-002). */
+export const sqlExecute = (
+  strings: readonly string[],
+  params: readonly Expr<unknown>[],
+): Computation<unknown, never> =>
+  Computation.make(UnknownType, NeverType, {
+    _tag: "SqlExecute",
+    strings: Object.freeze([...strings]),
+    params: Object.freeze([...params]),
+  });
 /** A streaming procedure's body; a stream that cannot fail may widen to the declared error. */
 export const streamEmit = (
   stream: StreamIR<unknown, unknown>,
@@ -889,6 +923,7 @@ export const isAsyncComputation = (root: Computation<unknown, unknown>): boolean
         Sleep: () => true,
         Launch: () => true,
         RemoteStore: () => true,
+        SqlExecute: () => true,
         Repeat: () => true,
         Retry: () => true,
         Ensuring: () => true,
@@ -1417,6 +1452,20 @@ export const checkEffectFunction = (f: EffectFn, path: string): readonly Diagnos
           expression(n.id, "id");
           if (n.values) expression(n.values, "values");
         },
+        SqlExecute: (n) => {
+          if (!IRType.same(c.output, UnknownType) || !IRType.same(c.error, NeverType))
+            add(at, "A SQL statement yields its outcome as Unknown and never fails");
+          if (n.strings.length !== n.params.length + 1)
+            add(at, "A SQL statement has one more literal segment than parameters");
+          n.params.forEach((param, index) => {
+            if (!sqlParameter(param.type))
+              add(
+                `${at}.params.${index}`,
+                "SQL parameters are String, Number, u64, Boolean or NullOr of these",
+              );
+            expression(param, `params.${index}`);
+          });
+        },
         Repeat: (n) => {
           if (
             !validSchedulePlan(n.schedule) ||
@@ -1846,6 +1895,10 @@ const runUnknown = Effect.fn("EffectReference.runUnknown")(function* <
             Effect.all([expression(n.id), n.values ? expression(n.values) : Effect.void]).pipe(
               Effect.flatMap(([id, values]) => remoteStoreReference(n.op, n.entity, id, values)),
             ),
+          SqlExecute: (n) =>
+            Effect.forEach(n.params, expression).pipe(
+              Effect.flatMap((params) => sqlOutcomeReference(n.strings, params)),
+            ),
           Repeat: (n) =>
             evaluate(n.body, bindings).pipe(
               Effect.repeat({ schedule: toEffectSchedule(n.schedule), times: n.times }),
@@ -2098,6 +2151,7 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
         Sleep: () => {},
         Launch: () => {},
         RemoteStore: () => {},
+        SqlExecute: () => {},
         Repeat: (n) => adaptNode(n.body, `${path}.body`),
         Retry: (n) => adaptNode(n.body, `${path}.body`),
         Ensuring: (n) => {
@@ -2390,6 +2444,17 @@ const runWithFramesUnknown = Effect.fn("EffectReference.runWithFramesUnknown")(f
                   : (cause as FramedFailure),
               ),
               Effect.flatMap(([id, values]) => remoteStoreReference(n.op, n.entity, id, values)),
+            ),
+          SqlExecute: (n) =>
+            Effect.forEach(n.params, (param, index) =>
+              expression(param, `${path}.params.${index}`),
+            ).pipe(
+              mapFramedError((cause): FramedFailure =>
+                cause instanceof CompileError
+                  ? { _tag: "Internal", cause }
+                  : (cause as FramedFailure),
+              ),
+              Effect.flatMap((params) => sqlOutcomeReference(n.strings, params)),
             ),
           Repeat: (n) =>
             child(n.body, bindings).pipe(

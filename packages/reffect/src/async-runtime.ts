@@ -4,6 +4,33 @@ import {
   runtimeServiceMethods,
 } from "./runtime-services.ts";
 import type { RuntimeServiceUsage } from "./runtime-services.ts";
+/** The SQL parameter and service declarations (SQL-001, SQL-007). */
+const sqlRuntime = `/// One SQL parameter (SQL-001), as SQLite binds the JavaScript value.
+#[derive(Clone, Debug)]
+pub enum SqlParam { Null, Text(String), Real(f64), Integer(u64), Bool(bool) }
+pub trait IntoSqlParam { fn into_sql_param(self) -> SqlParam; }
+impl IntoSqlParam for String { fn into_sql_param(self) -> SqlParam { SqlParam::Text(self) } }
+impl IntoSqlParam for &String { fn into_sql_param(self) -> SqlParam { SqlParam::Text(self.clone()) } }
+impl IntoSqlParam for &str { fn into_sql_param(self) -> SqlParam { SqlParam::Text(self.to_string()) } }
+impl IntoSqlParam for f64 { fn into_sql_param(self) -> SqlParam { SqlParam::Real(self) } }
+impl IntoSqlParam for &f64 { fn into_sql_param(self) -> SqlParam { SqlParam::Real(*self) } }
+impl IntoSqlParam for u64 { fn into_sql_param(self) -> SqlParam { SqlParam::Integer(self) } }
+impl IntoSqlParam for &u64 { fn into_sql_param(self) -> SqlParam { SqlParam::Integer(*self) } }
+impl IntoSqlParam for bool { fn into_sql_param(self) -> SqlParam { SqlParam::Bool(self) } }
+impl IntoSqlParam for &bool { fn into_sql_param(self) -> SqlParam { SqlParam::Bool(*self) } }
+impl<T: IntoSqlParam> IntoSqlParam for Option<T> {
+    fn into_sql_param(self) -> SqlParam { self.map_or(SqlParam::Null, IntoSqlParam::into_sql_param) }
+}
+impl<'a, T> IntoSqlParam for &'a Option<T> where &'a T: IntoSqlParam {
+    fn into_sql_param(self) -> SqlParam { self.as_ref().map_or(SqlParam::Null, IntoSqlParam::into_sql_param) }
+}
+pub type SqlFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = serde_json::Value> + Send + 'a>>;
+/// The SQL service a host serves (SQL-007): one statement, from its literal segments and
+/// parameters, answered as its outcome data, the rows or the classified SqlError.
+pub trait SqlService: Send + Sync {
+    fn execute<'a>(&'a self, segments: &'static [&'static str], params: Vec<SqlParam>) -> SqlFuture<'a>;
+}
+`;
 /** Audited execution scaffold. Logging and failure storage are selected by reachability/policy. */
 export const asyncRuntime = (
   logging: boolean,
@@ -16,6 +43,7 @@ export const asyncRuntime = (
   taskGroups = false,
   streams = false,
   fallibleGroups = false,
+  sql = false,
 ): string => `
 #[derive(Debug)]
 pub enum AsyncError<E> { Fail(E), Interrupted${fallibleGroups ? ", Combined(RuntimeCause)" : ""} }
@@ -70,7 +98,7 @@ pub trait LiveHub: Send + Sync {
 }
 `
     : ""
-}pub struct AsyncContext {
+}${sql ? sqlRuntime : ""}pub struct AsyncContext {
     ${runtimeServiceFields(services)}
     cancellation: tokio::sync::watch::Receiver<bool>,
     interruptible: bool,
@@ -80,6 +108,7 @@ pub trait LiveHub: Send + Sync {
     ${launch ? "launch: Option<tokio::sync::oneshot::Sender<LaunchValues>>," : ""}
     ${store ? "store: Option<std::sync::Arc<dyn RemoteStore>>, live_hub: Option<std::sync::Arc<dyn LiveHub>>," : ""}
     ${streams ? "stream_sink: Option<tokio::sync::mpsc::Sender<Vec<serde_json::Value>>>," : ""}
+    ${sql ? "sql: Option<std::sync::Arc<dyn SqlService>>," : ""}
 }
 impl AsyncContext {
     pub fn new(cancellation: tokio::sync::watch::Receiver<bool>) -> Self {
@@ -91,6 +120,7 @@ impl AsyncContext {
             ${launch ? "launch: None," : ""}
             ${store ? "store: None, live_hub: None," : ""}
             ${streams ? "stream_sink: None," : ""}
+            ${sql ? "sql: None," : ""}
         }
     }
     ${runtimeServiceMethods(services)}
@@ -102,6 +132,7 @@ impl AsyncContext {
         ${logging ? "child.annos = self.annos.clone(); child.spans = self.spans.clone(); child.request = self.request.clone();" : ""}
         ${store ? "child.store = self.store.clone(); child.live_hub = self.live_hub.clone();" : ""}
         ${streams ? "child.stream_sink = self.stream_sink.clone();" : ""}
+        ${sql ? "child.sql = self.sql.clone();" : ""}
         child
     }`
         : ""
@@ -147,6 +178,17 @@ impl AsyncContext {
     async fn remote_store_get<E>(&mut self, entity: &str, id: &str) -> Result<Option<serde_json::Value>, AsyncError<E>> {
         let Some(store) = self.store.clone() else { return Err(AsyncError::Interrupted) };
         store.get(entity, id).await.map_err(|_| AsyncError::Interrupted)
+    }`
+        : ""
+    }
+    ${
+      sql
+        ? `pub fn set_sql_service(&mut self, sql: std::sync::Arc<dyn SqlService>) { self.sql = Some(sql); }
+    /// Runs one statement to completion; interruption is observed after it, as on a
+    /// synchronous driver. Without a service the host cannot run it, which interrupts.
+    async fn sql_execute<E>(&mut self, segments: &'static [&'static str], params: Vec<SqlParam>) -> Result<serde_json::Value, AsyncError<E>> {
+        let Some(sql) = self.sql.clone() else { return Err(AsyncError::Interrupted) };
+        Ok(sql.execute(segments, params).await)
     }`
         : ""
     }

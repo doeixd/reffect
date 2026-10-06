@@ -45,6 +45,7 @@ const readsDriver = (root: Computation<unknown, unknown>): boolean => {
         Sleep: () => false,
         Launch: () => false,
         RemoteStore: () => false,
+        SqlExecute: () => false,
         Repeat: () => false,
         Retry: () => false,
         Ensuring: () => false,

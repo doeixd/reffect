@@ -151,6 +151,7 @@ export const analyzeGeneratedDeferredProfile = (
           RandomDraw: unsupported,
           Launch: unsupported,
           RemoteStore: unsupported,
+          SqlExecute: unsupported,
           StreamRunCollect: unsupported,
           StreamEmit: unsupported,
           Annotate: unsupported,
