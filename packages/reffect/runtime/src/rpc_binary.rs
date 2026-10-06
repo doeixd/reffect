@@ -167,6 +167,7 @@ fn encode_one(response: &Value) -> Vec<u8> {
         Some("Defect") => Message::Defect {
             defect: defect_frame(response.get("defect").unwrap_or(&Value::Null)),
         },
+        Some("Pong") => Message::Pong,
         _ => Message::Defect {
             defect: defect_frame(
                 &json!({"name":"ProtocolError", "message":"Unsupported response message"}),
@@ -260,4 +261,74 @@ fn write_json(value: &Value, out: &mut String) {
             out.push('}');
         }
     }
+}
+
+/// What one WebSocket frame holds: its messages, the defect answering it, or a close code.
+#[allow(dead_code)]
+enum Feed {
+    Messages(Vec<Value>),
+    Defect(Value),
+    Close(u16),
+}
+/// A WebSocket session's parser: SchemaBinary frames may span WebSocket frames, so an unfinished
+/// frame waits for the next one. As `SchemaBinary.parser`, a failure after some messages is
+/// reported on the next feed, and the parser is spent from then on.
+#[derive(Default)]
+#[allow(dead_code)]
+struct SocketParser {
+    pending: Vec<u8>,
+    stashed: Option<String>,
+    spent: bool,
+}
+#[allow(dead_code)]
+impl SocketParser {
+    fn feed(&mut self, frame: &[u8]) -> Feed {
+        let defect = |message: String| {
+            Feed::Defect(
+                json!({"_tag":"Defect", "defect":{"name":"SchemaError", "message":message}}),
+            )
+        };
+        if let Some(message) = self.stashed.take() {
+            return defect(message);
+        }
+        if self.spent {
+            return defect("Expected parser is spent".to_string());
+        }
+        self.pending.extend_from_slice(frame);
+        let mut messages = Vec::new();
+        let mut frames =
+            schema_binary::Frames::new(&self.pending, Some(ENVELOPE_FINGERPRINT), MAX_FRAME_SIZE);
+        let mut failure = None;
+        for decoded in frames.by_ref() {
+            match decoded
+                .map_err(schema_binary::Failure::from)
+                .and_then(schema_binary::read_message)
+            {
+                Ok(message) => messages.push(message_value(message)),
+                Err(error) => {
+                    failure = Some(error.message());
+                    break;
+                }
+            }
+        }
+        let consumed = frames.consumed();
+        self.pending.drain(..consumed);
+        if let Some(message) = failure {
+            self.spent = true;
+            self.pending.clear();
+            if messages.is_empty() {
+                return defect(message);
+            }
+            self.stashed = Some(message);
+        }
+        Feed::Messages(messages)
+    }
+}
+/// SchemaBinary answers in binary frames.
+#[allow(dead_code)]
+const BINARY_FRAMES: bool = true;
+/// One answer as its own frame.
+#[allow(dead_code)]
+fn socket_frame(response: &Value) -> Vec<u8> {
+    encode_one(response)
 }

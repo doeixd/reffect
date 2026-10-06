@@ -1,9 +1,43 @@
-/// What a body's worker sends: each message as it is ready, then Done (STREAM-002).
+/// What a body's worker sends: each message as it is ready, then Done (STREAM-002). A WebSocket
+/// session may also close itself with a code (WS-005).
+#[allow(dead_code)]
 enum Outgoing {
     Message(Value),
     Done,
+    Close(u16),
 }
-type Out = tokio::sync::mpsc::Sender<Outgoing>;
+/// Where a request's messages go: the response body (HTTP) or the session (WebSocket). On a
+/// session, a stream waits at `acked` for the client's Ack after each chunk (WS-004); over HTTP
+/// there is no gate (STREAM-002).
+#[derive(Clone)]
+struct Out {
+    messages: tokio::sync::mpsc::Sender<Outgoing>,
+    acks: Option<std::sync::Arc<tokio::sync::Notify>>,
+}
+#[allow(dead_code)]
+impl Out {
+    fn new(messages: tokio::sync::mpsc::Sender<Outgoing>) -> Self {
+        Out {
+            messages,
+            acks: None,
+        }
+    }
+    async fn send(
+        &self,
+        message: Outgoing,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<Outgoing>> {
+        self.messages.send(message).await
+    }
+    async fn closed(&self) {
+        self.messages.closed().await
+    }
+    /// The client acknowledged the last chunk; at once without a gate.
+    async fn acked(&self) {
+        if let Some(acks) = &self.acks {
+            acks.notified().await
+        }
+    }
+}
 /// Where a streaming procedure's chunks come from (LIVE-009).
 #[allow(dead_code)]
 trait ChunkSource {
@@ -54,6 +88,13 @@ async fn forward_chunks(
             .is_err()
         {
             return false;
+        }
+        // One unacknowledged chunk at a time on a session, as the official latch allows.
+        tokio::select! {
+            biased;
+            _ = cancellation.changed() => return false,
+            _ = out.closed() => return false,
+            _ = out.acked() => {}
         }
     }
 }

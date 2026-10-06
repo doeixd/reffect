@@ -294,6 +294,12 @@ export type CompileOptions = {
    */
   readonly serialization?: "json" | "ndjson" | "schema-binary";
   /**
+   * The transport, as `RpcServer.layerHttp`'s `protocol` chooses it: HTTP request bodies, or one
+   * WebSocket session per connection at the RPC path (milestone 11). Defaults to HTTP; the
+   * serialization applies to either.
+   */
+  readonly transport?: "http" | "websocket";
+  /**
    * `layerSchemaBinary`'s options, under `serialization: "schema-binary"`. `maxFrameSize`
    * defaults to 16 MiB; `fingerprintPayloads` writes payloads, exits and chunks in fingerprint
    * mode, as the client must too.
@@ -1096,7 +1102,9 @@ export const compileServer = (
           layered: layer !== undefined,
           services: serverServices.map((service) => service.id),
           runtimeFunctions,
+          // A WebSocket session runs its requests as futures with their own cancellation.
           asynchronous:
+            options.transport === "websocket" ||
             runtime?.asynchronous === true ||
             runtimeFunctions.length > 0 ||
             Object.values(functions).some(
@@ -1469,6 +1477,7 @@ ${
             prepared.pages !== undefined,
             runtime?.boot,
             prepared.auth?.session !== undefined,
+            options.transport === "websocket",
           ),
         ),
       ],
@@ -1491,7 +1500,7 @@ ${
       files: Object.freeze({
         "Cargo.toml":
           core.files["Cargo.toml"].split("\n[dependencies]")[0] +
-          '\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }\n' +
+          `\n[dependencies]\naxum = { version = "=0.8.9", default-features = false, features = ${JSON.stringify(["http1", "tokio", "json", ...(options.transport === "websocket" ? ["ws"] : [])])} }\n` +
           // Every server runs the multi-thread accept loop with timers; a layered one also
           // listens for the shutdown signal.
           `tokio = { version = "=1.53.1", features = ${JSON.stringify(["macros", "rt", "rt-multi-thread", "net", "time", "sync", ...(prepared.layered ? ["signal"] : [])])} }\n` +

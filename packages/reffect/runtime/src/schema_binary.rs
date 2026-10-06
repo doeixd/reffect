@@ -739,6 +739,10 @@ impl<'a> Frames<'a> {
     pub fn unfinished(&self) -> bool {
         self.unfinished
     }
+    /// Bytes of whole frames read so far; the rest is an unfinished frame.
+    pub fn consumed(&self) -> usize {
+        self.pos
+    }
     fn frame(&mut self) -> Decoded<Option<&'a [u8]>> {
         let buffered = &self.bytes[self.pos..];
         if buffered.is_empty() {

@@ -77,3 +77,60 @@ fn unframed(message: &Value) -> Option<Value> {
     (NDJSON && !message.is_object())
         .then(|| json!({"_tag":"Defect", "defect":"Unknown request tag: undefined"}))
 }
+
+/// What one WebSocket frame holds: its messages, the defect answering it, or a close code.
+#[allow(dead_code)]
+enum Feed {
+    Messages(Vec<Value>),
+    Defect(Value),
+    Close(u16),
+}
+/// The official socket server's NDJSON line limit (`MaxBufferSizeExceeded`, close 1009).
+#[allow(dead_code)]
+const SOCKET_LINE_LIMIT: usize = 16 * 1024 * 1024;
+/// A WebSocket session's parser: JSON reads each frame whole (an object or an array of
+/// messages); NDJSON keeps an unfinished line across frames, as `RpcSerialization` does.
+#[derive(Default)]
+#[allow(dead_code)]
+struct SocketParser {
+    pending: Vec<u8>,
+}
+#[allow(dead_code)]
+impl SocketParser {
+    fn feed(&mut self, frame: &[u8]) -> Feed {
+        if !NDJSON {
+            return match serde_json::from_str::<Value>(&body_text(frame)) {
+                Ok(Value::Array(messages)) => Feed::Messages(messages),
+                Ok(message) => Feed::Messages(vec![message]),
+                Err(_) => Feed::Defect(
+                    json!({"_tag":"Defect", "defect":{"name":"SyntaxError", "message":"Invalid JSON"}}),
+                ),
+            };
+        }
+        self.pending.extend_from_slice(frame);
+        let mut messages = Vec::new();
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=end).collect();
+            // As RpcSerialization.ndjson: a line that does not parse is skipped.
+            if let Ok(message) = serde_json::from_slice::<Value>(&line[..line.len() - 1]) {
+                messages.push(message);
+            }
+        }
+        if self.pending.len() > SOCKET_LINE_LIMIT {
+            return Feed::Close(1009);
+        }
+        Feed::Messages(messages)
+    }
+}
+/// JSON and NDJSON answer in text frames.
+#[allow(dead_code)]
+const BINARY_FRAMES: bool = false;
+/// One answer as its own frame: JSON text, or one NDJSON line.
+#[allow(dead_code)]
+fn socket_frame(response: &Value) -> Vec<u8> {
+    if NDJSON {
+        encode_one(response)
+    } else {
+        response.to_string().into_bytes()
+    }
+}

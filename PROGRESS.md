@@ -9,6 +9,21 @@
 - Pinned Effect runs a synchronous root before checking RunOptions.signal; the pre-start oracle uses explicit interruption, matching reffect's owned boundary, rather than claiming bare upstream AbortSignal equivalence.
 - Validation: six Semaphore suites 15/15, full `vp check` (515 formatted/318 lint/type files) and strict TypeScript pass. Protocol-Pending mutation fails the native assertion; correct code is restored. Native builds ran sequentially. Public Deferred regression 4/4 and workspace builds also pass (reffect rebuilt; other outputs cached).
 
+## 2026-10-06 — Milestone 11: Effect RPC over WebSocket
+
+- [Design record](docs/research/websocket-rpc.md). `NativeRpc.compile(..., { transport: "websocket" })` serves one session per socket, as `RpcServer.layerHttp({ protocol: "websocket" })` does:
+  - concurrent requests;
+  - one chunk per `Ack`;
+  - interruption from either side;
+  - JSON, NDJSON and SchemaBinary.
+- A scripted session gets the official server's frames, and the stock socket client works under every serialization.
+- Every server's accept loop now enables upgrades, and shuts down gracefully through hyper's own `graceful_shutdown`.
+- Validation:
+  - `websocket-rpc` 4/4 passes.
+  - The regressions `server-layer` 3/3, `stream-rpc` 2/2, `rpc-serving` 2/2 and `native-rpc` 2/2 pass.
+  - `vp run runtime:check` passes: 45/45 cargo tests.
+  - `vp check` and the strict `tsc` pass.
+
 ## 2026-10-06 — Milestone 11 researched and planned
 
 - [Design record](docs/research/websocket-rpc.md). Effect 4.0.0's socket protocol, read from source:

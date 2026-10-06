@@ -20,6 +20,7 @@ export const rpcRuntime = (
   pages = false,
   boot?: string,
   session = false,
+  websocket = false,
 ): string => String.raw`
 use axum::{body::Bytes, extract::{DefaultBodyLimit, State}, http::{StatusCode, HeaderMap}, routing::post, Json, Router};
 use axum::response::{Response, IntoResponse};
@@ -32,7 +33,7 @@ const NDJSON: bool = ${serialization === "ndjson"};
 /// Whether the wire carries \`-0\`: SchemaBinary does, \`JSON.stringify\` writes it as \`0\`.
 #[allow(dead_code)]
 const NEGATIVE_ZERO_ON_WIRE: bool = ${serialization === "schema-binary"};
-${RuntimeSources.rpc_wire}${serialization === "schema-binary" ? RuntimeSources.rpc_binary : RuntimeSources.rpc_json}
+${RuntimeSources.rpc_wire}${serialization === "schema-binary" ? RuntimeSources.rpc_binary : RuntimeSources.rpc_json}${websocket ? RuntimeSources.rpc_socket : ""}
 ${decodeArgs()}${
   asynchronous
     ? String.raw`${RuntimeSources.rpc_stream}
@@ -87,12 +88,16 @@ ${
 `
 }
 ${serveRuntime}
-${layered ? layeredMain(pages, boot, session) : plainMain(pages, boot, session)}`;
+${layered ? layeredMain(pages, boot, session, websocket) : plainMain(pages, boot, session, websocket)}`;
 
-/** The RPC routes, and pages for every path and method they do not take (SSR-007). */
-const routes = (pages: boolean, session: boolean): string =>
-  `let mut app = Router::new().route(RPC_PATH, post(rpc));
-    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), post(rpc)); }${
+/**
+ * The RPC routes, and pages for every path and method they do not take (SSR-007). A WebSocket
+ * server answers its path with the upgrade (\`RpcServer.layerProtocolWebsocket\`'s GET) instead.
+ */
+const routes = (pages: boolean, session: boolean, websocket: boolean): string =>
+  `let rpc_route = || ${websocket ? "axum::routing::get(rpc_socket)" : "post(rpc)"};
+    let mut app = Router::new().route(RPC_PATH, rpc_route());
+    if RPC_PATH != "/" { app = app.route(&format!("{}/", RPC_PATH), rpc_route()); }${
       // Session login and logout (#4) beside the page host.
       session
         ? "\n    let app = app.route(SESSION_PATH, post(session_login).delete(session_logout));"
@@ -110,12 +115,13 @@ const plainMain = (
   pages: boolean,
   boot?: string,
   session = false,
+  websocket = false,
 ): string => String.raw`#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = server_args(false)?;
     let state = load_state()?;
     ${boot === undefined ? "" : `${boot}?;`}
-    ${routes(pages, session)}
+    ${routes(pages, session, websocket)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     let listener = bind(&args).await?;
     serve(listener, app, std::future::pending()).await?;
@@ -145,6 +151,7 @@ const layeredMain = (
   pages: boolean,
   boot?: string,
   session = false,
+  websocket = false,
 ): string => String.raw`static SERVICES: std::sync::OnceLock<reffect_generated::LaunchValues> = std::sync::OnceLock::new();
 static SHUTDOWN: std::sync::OnceLock<tokio::sync::watch::Receiver<bool>> = std::sync::OnceLock::new();
 #[tokio::main(flavor = "multi_thread")]
@@ -169,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = SERVICES.set(services);
     let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
     let _ = SHUTDOWN.set(shutdown_receiver);
-    ${routes(pages, session)}
+    ${routes(pages, session, websocket)}
     let app = app.layer(DefaultBodyLimit::max(MAX_BODY)).with_state(state);
     let listener = bind(&args).await?;
     let signal = async move {
@@ -208,7 +215,8 @@ async fn rpc(State(state): State<RuntimeState>, headers: HeaderMap, incoming: ax
     let (cancellation, receiver) = tokio::sync::watch::channel(false);
     let cancellation = std::sync::Arc::new(cancellation);
 ${layered ? shutdownForwarder : ""}    // The official server buffers 16 messages between its handlers and the body (STREAM-002).
-    let (out, lines) = tokio::sync::mpsc::channel::<Outgoing>(16);
+    let (messages, lines) = tokio::sync::mpsc::channel::<Outgoing>(16);
+    let out = Out::new(messages);
     tokio::spawn(async move {
         // The requests run concurrently and each answers when it finishes, as the official
         // server's fibers do (#25). They share this task, first polled in request order, so each

@@ -23,7 +23,7 @@ tokio = { version = "=1.53.1", features = [
   "sync",
   "signal",
 ] }
-axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio", "json", "ws"] }
 hyper = { version = "=1.11.1", features = ["server", "http1"] }
 hyper-util = { version = "=0.1.21", features = ["tokio", "server-graceful"] }
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }

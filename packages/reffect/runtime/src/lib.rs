@@ -275,6 +275,66 @@ pub mod rpc_binary_host {
     }
 }
 
+/// The RPC server's static items for a WebSocket server (milestone 11): the JSON body module,
+/// the session, and a stand-in `request` answering each request with its own payload.
+#[allow(dead_code)]
+pub mod rpc_socket_host {
+    use axum::extract::State;
+    use axum::http::HeaderMap;
+    use axum::response::{IntoResponse, Response};
+    use axum::{body::Bytes, http::StatusCode};
+    use serde_json::{json, Value};
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    pub const NDJSON: bool = false;
+    pub const MAX_BATCH: usize = 64;
+    #[derive(Clone)]
+    struct RuntimeState;
+    async fn request(
+        message: &Value,
+        _headers: &HeaderMap,
+        _state: &RuntimeState,
+        _cancellation: &tokio::sync::watch::Receiver<bool>,
+        _out: &Out,
+    ) -> Value {
+        exit(&message["id"], success(message["payload"].clone()))
+    }
+
+    include!("rpc_args.rs");
+    include!("rpc_wire.rs");
+    include!("rpc_json.rs");
+    include!("rpc_stream.rs");
+    include!("rpc_socket.rs");
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn request_ids_key_numbers_by_value_and_strings_apart() {
+            assert_eq!(id_key(&json!(1)), id_key(&json!(1.0)));
+            assert_ne!(id_key(&json!(1)), id_key(&json!("1")));
+            assert_eq!(id_key(&json!(null)), None);
+        }
+
+        #[test]
+        fn json_frames_hold_one_message_or_an_array() {
+            let mut parser = SocketParser::default();
+            match parser.feed(br#"[{"_tag":"Ping"},{"_tag":"Ping"}]"#) {
+                Feed::Messages(messages) => assert_eq!(messages.len(), 2),
+                _ => panic!("an array frame"),
+            }
+            match parser.feed(b"not json") {
+                Feed::Defect(defect) => assert_eq!(defect["defect"]["name"], "SyntaxError"),
+                _ => panic!("a defect"),
+            }
+        }
+    }
+}
+
 /// The SQL source, compiled under each dialect as generated crates compile it: `remote_sql`
 /// with its `dialect` child module, beside `remote_engine`.
 #[allow(dead_code)]

@@ -38,7 +38,9 @@ async fn serve(
     shutdown: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()> {
     let connections = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
-    let graceful = hyper_util::server::graceful::GracefulShutdown::new();
+    // Graceful shutdown: each connection stops taking requests and finishes its in-flight
+    // responses (hyper's own graceful_shutdown, which an upgradeable connection also has).
+    let (stop, stopped) = tokio::sync::watch::channel(false);
     let mut shutdown = std::pin::pin!(shutdown);
     loop {
         // At the cap, accepting waits: further clients queue in the OS backlog.
@@ -65,13 +67,24 @@ async fn serve(
         let connection = hyper::server::conn::http1::Builder::new()
             .timer(hyper_util::rt::TokioTimer::new())
             .header_read_timeout(std::time::Duration::from_millis(HEADER_TIMEOUT_MS))
-            .serve_connection(hyper_util::rt::TokioIo::new(stream), service);
-        let connection = graceful.watch(connection);
+            .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
+            // A WebSocket server upgrades its RPC path; other connections never ask to.
+            .with_upgrades();
+        let mut stopped = stopped.clone();
         tokio::spawn(async move {
-            let _ = connection.await;
+            let mut connection = std::pin::pin!(connection);
+            tokio::select! {
+                _ = connection.as_mut() => {}
+                _ = async { let _ = stopped.wait_for(|stop| *stop).await; } => {
+                    connection.as_mut().graceful_shutdown();
+                    let _ = connection.await;
+                }
+            }
             drop(permit);
         });
     }
-    graceful.shutdown().await;
+    let _ = stop.send(true);
+    // Every connection holds a permit until it is done.
+    let _ = connections.acquire_many(MAX_CONNECTIONS as u32).await;
     Ok(())
 }

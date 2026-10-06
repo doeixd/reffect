@@ -120,6 +120,25 @@ Native decisions from the probe:
   - Interrupted Exits omit `fiberId`: native execution has no JS fiber identifier ([async-rpc](async-rpc.md)).
   - R has no `Effect.die`; host faults stay under RTS-004.
 
+## Steps 2–4: the native WebSocket transport (2026-10-06)
+
+- **Runtime** (`runtime/src/rpc_socket.rs`): one session per socket. A single loop reads frames, writes answers and polls the session's request futures, so no task outlives the socket.
+  - Each request runs `request()` unchanged, with its own cancellation and an `Out` whose `acks` gate releases one chunk per `Ack` (WS-004). HTTP's `Out` has no gate.
+  - `Ping` gets `Pong`. `Ack` and `Interrupt` reach the request by id; an unknown id is ignored, and `Eof` is ignored.
+  - A duplicate in-flight id closes with 1001.
+  - On close, every request is cancelled and its answer discarded.
+  - A client close is answered by the socket's own handshake, so the session keeps reading until the stream ends.
+- **Per-frame parsers** sit beside each serialization's body code (`SocketParser` in `rpc_json.rs`/`rpc_binary.rs`):
+  - JSON reads each frame whole: an object, or an array of messages.
+  - NDJSON buffers lines across frames, skips unparseable lines, and closes with 1009 over 16 MiB.
+  - SchemaBinary buffers frames across WebSocket frames. As `SchemaBinary.parser`, a failure after some messages is reported on the next frame, and the parser is spent from then on (reading of upstream, not probed).
+- **Accept loop.** Every server now enables hyper's upgrades. Graceful shutdown is done directly: each connection calls hyper's `graceful_shutdown`, and shutdown waits for every connection permit. This is needed because hyper-util's `GracefulShutdown` has no impl for HTTP/1 upgradeable connections.
+- **Compiler.** `NativeRpc.compile(..., { transport: "websocket" })` serves the upgrade at `GET path` instead of `POST`, uses the async runtime, and adds axum's `ws` feature only to such servers. The check crate's lock now pins `tokio-tungstenite` 0.29 for them.
+- **Evidence** (`tests/websocket-rpc.test.ts`):
+  - **Scripted session:** the probe's twelve cases go to the official socket server and to the native one under JSON, and the frames are equal. The only normalizations are the registered `fiberId` and the `SyntaxError` text. This covers one chunk until each `Ack`, interrupting a stream and a pending request, ping, a garbage frame, an array frame, the duplicate-id close (1001), unknown tags and bad payloads, string ids and `Eof`.
+  - **Stock client:** the stock `RpcClient` over `layerProtocolSocket` and `NodeSocket.layerWebSocket` passes under JSON, NDJSON and SchemaBinary. It covers unary, typed failure, a stream, a stream stopped early (an `Interrupt`), a timed-out request, and eight concurrent requests on one session.
+  - **A test pitfall, recorded:** a socket client's protocol layer must live in the caller's scope (`Layer.build`). Provided to `RpcClient.make` alone, its socket closes as soon as the client is made.
+
 ## Plan
 
 1. **Probe** the official socket server: the frames it sends for unary, stream (with and without acks), interrupt, ping, duplicate id, a bad frame and a handler defect. Record the answers here, as fixtures where they are deterministic.
