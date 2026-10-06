@@ -266,6 +266,7 @@ export const analyzeSemaphoreStructure = (
         Retry: unsupported,
         Launch: unsupported,
         RemoteStore: unsupported,
+        SqlExecute: unsupported,
         StreamRunCollect: unsupported,
         StreamEmit: unsupported,
         Fail: unsupported,
