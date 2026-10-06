@@ -37,9 +37,24 @@ await Effect.runPromise(
       );
       const sum = yield* client.Add({ left: 18446744073709551615n, right: 1n });
       const rejected = yield* client.Guard({ allowed: false }).pipe(Effect.flip);
-      if (sum !== 0n || rejected !== false) throw new Error("Unexpected native RPC result");
+      const found = yield* client.FirstBelow({ values: [9n, 7n, 3n, 1n], limit: 5n });
+      const missing = yield* client.FirstBelow({ values: [9n], limit: 5n });
+      const left = yield* client.Withdraw({ balance: 10n, amount: 4n });
+      const refused = yield* client.Withdraw({ balance: 3n, amount: 4n }).pipe(Effect.flip);
+      if (
+        sum !== 0n ||
+        rejected !== false ||
+        found !== 3n ||
+        missing !== null ||
+        left !== 6n ||
+        refused !== "insufficient funds"
+      )
+        throw new Error("Unexpected native RPC result");
       yield* Effect.sync(() =>
-        console.log(`stock client → native Rust: sum=${sum}, typed failure=${String(rejected)}`),
+        console.log(
+          `stock client → native Rust: sum=${sum}, typed failure=${String(rejected)}, ` +
+            `firstBelow=${found}/${String(missing)}, withdraw=${left}/${refused}`,
+        ),
       );
     }),
   ).pipe(Effect.provide(NodeServices.layer)),

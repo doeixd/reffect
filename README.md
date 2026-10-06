@@ -28,10 +28,20 @@ export const Arithmetic = RpcGroup.make(
     success: Schema.Boolean,
     error: Schema.Boolean,
   }),
+  // No match is `null` on the wire.
+  Rpc.make("FirstBelow", {
+    payload: { values: Schema.Array(RpcCodecs.U64Json), limit: RpcCodecs.U64Json },
+    success: Schema.NullOr(RpcCodecs.U64Json),
+  }),
+  Rpc.make("Withdraw", {
+    payload: { balance: RpcCodecs.U64Json, amount: RpcCodecs.U64Json },
+    success: RpcCodecs.U64Json,
+    error: Schema.String,
+  }),
 );
 ```
 
-**2. Write the handlers with `R`.** `R.fn` takes the input types, the output type, an optional error type, and a body over symbolic values. Success, typed failure and matching work as they do in Effect.
+**2. Write the handlers with `R`.** `R.fn` takes the input types, the output type, an optional error type, and a body over symbolic values. Success, typed failure, matching, `Option` and `Result` work as they do in Effect.
 
 ```ts
 // server.ts
@@ -50,6 +60,27 @@ const bindings = {
       R.Match.bool(allowed, R.Effect.succeed(allowed), R.Effect.fail(allowed)),
     ),
     ["allowed"],
+  ),
+  // Option: the first value below the limit, if any, as a nullable result.
+  FirstBelow: NativeRpc.bind(
+    R.fn([R.Array(R.U64), R.U64], R.NullOr(R.U64), (values, limit) =>
+      values.pipe(
+        R.Array.findFirst((value) => R.U64.lt(value, limit)),
+        R.Option.getOrNull,
+      ),
+    ),
+    ["values", "limit"],
+  ),
+  // Result: decide the outcome as data, then match it into success or a typed failure.
+  Withdraw: NativeRpc.bind(
+    R.fn([R.U64, R.U64], R.U64, R.String, (balance, amount) =>
+      R.Match.bool(
+        R.U64.lt(balance, amount),
+        R.Result.fail(R.String.literal("insufficient funds"), R.U64),
+        R.Result.succeed(R.U64.sub(balance, amount), R.String),
+      ).pipe(R.Result.match({ onSuccess: R.Effect.succeed, onFailure: R.Effect.fail })),
+    ),
+    ["balance", "amount"],
   ),
 };
 
@@ -81,14 +112,42 @@ const client =
   );
 const sum = yield * client.Add({ left: 18446744073709551615n, right: 1n }); // 0n
 const rejected = yield * client.Guard({ allowed: false }).pipe(Effect.flip); // false
+const found = yield * client.FirstBelow({ values: [9n, 7n, 3n, 1n], limit: 5n }); // 3n
+const missing = yield * client.FirstBelow({ values: [9n], limit: 5n }); // null
+const left = yield * client.Withdraw({ balance: 10n, amount: 4n }); // 6n
+const refused = yield * client.Withdraw({ balance: 3n, amount: 4n }).pipe(Effect.flip); // "insufficient funds"
 ```
+
+**What it compiles to.** Each handler becomes plain Rust: `u64` arithmetic, Rust enums for `Option` and `Result` data, and `Result<_, E>` for the typed error channel. There is no interpreter and no boxed effect at run time. An abridged excerpt of the generated `src/lib.rs` (the crate is in `.reffect/server` after a build):
+
+```rust
+// Add
+pub fn r_handler_0(p0: u64, p1: u64) -> u64 {
+    let v0: u64 = (p0).wrapping_add(p1);
+    v0
+}
+
+// Withdraw: the R.Result value is an enum...
+pub enum Union_b5716499d12e348d { Success(Success_a5783af8ccacd78f), Failure(Failure_3399a754572c0211), }
+
+fn h_handler_3_2(p0: u64, p1: u64) -> Union_b5716499d12e348d {
+    let v0: u64 = (p0).wrapping_sub(p1);
+    let v1: Union_b5716499d12e348d = Union_b5716499d12e348d::Success(Success_a5783af8ccacd78f { success: v0, });
+    v1
+}
+
+// ...and the handler's typed failure is Rust's Err.
+pub fn r_handler_3(p0: u64, p1: u64) -> Result<u64, String> { /* match on the enum */ }
+```
+
+Besides the handlers, the crate holds the Axum server, the JSON codecs for your contract and a short trail of failure locations for diagnostics.
 
 The whole program is in [examples/rpc](examples/rpc). From this repository, the CLI is `node packages/reffect/bin/reffect.js`:
 
 ```sh
 vp exec node packages/reffect/bin/reffect.js build examples/rpc/server.ts
 vp exec node --experimental-transform-types examples/rpc/main.ts  # builds, starts and calls it
-# stock client → native Rust: sum=0, typed failure=false
+# stock client → native Rust: sum=0, typed failure=false, firstBelow=3/null, withdraw=6/insufficient funds
 ```
 
 ## Choosing serialization and transport
