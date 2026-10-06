@@ -2,6 +2,8 @@
 
 **Write your Effect server in TypeScript. Ship it as a native Rust binary.**
 
+> Pre-release: APIs and supported features are still changing.
+
 reffect compiles a subset of [Effect v4](https://effect.website) programs to Rust. You write handlers with `R`, a typed builder API that reads like Effect, against an ordinary Effect `RpcGroup`. reffect then generates a small Rust server (Tokio and Axum). Your clients don't change: the stock Effect `RpcClient` talks to the native server as it would talk to a Node one.
 
 Every supported feature is checked against official Effect, often down to the bytes on the wire. When something can't be compiled faithfully, reffect refuses it with a located diagnostic instead of guessing.
@@ -133,17 +135,21 @@ Add `--auth` for cookie sign-in, `--binary` for SchemaBinary, `--websocket` for 
 
 ## Getting started
 
+> **reffect is pre-release and not published yet.** Try it from this repository.
+
 You need:
 
 - [Vite+](https://viteplus.dev/guide/) (`vp`), which also manages Node;
 - Rust and Cargo, with your platform's linker. On Windows, run native builds from a Visual Studio developer shell so MSVC's `link.exe` is used.
 
 ```sh
+git clone https://github.com/doeixd/reffect.git
+cd reffect
 vp install
 vp exec node --experimental-transform-types examples/rpc/main.ts
 ```
 
-reffect is not published to npm yet. Use it from this workspace (`packages/reffect`).
+The library itself is `packages/reffect`; the examples import it from there.
 
 ## Good to know
 
