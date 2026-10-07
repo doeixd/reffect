@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-07 — Private owned Queue reference execution
+
+- Recorded [QEXEC-001–004](docs/research/queue-execution.md) before implementation. Internal QueueExecution.run/runWithFrames now validates the checked profile and budget before starting a fresh default2048 scheduler/context with captured logs. Options accept only an optional brand-checked AbortSignal; intrinsic access/listeners relay into an owned controller, preabort stays unopened and forwarding listeners retire on settlement.
+- Reference frames reuse the scope-indexed planner: interrupted All retains parent All/QueueScope/function trails, while child wait trails are omitted. Observations/logs and cancellation are invocation-local. Native frames and public Queue exports/Compile remain refused; this adds no native runtime fields or payload metadata.
+- Source tests cover raw official differential pressure/captures, ambient isolation, shadowed signal properties, preabort, blocked offer/take settlement, exact parent frame paths, preflight refusals, listener retirement and concurrent invocation isolation. Missing listener retirement fails the negative mutation. Existing owned-runner signal overrides are recorded as a separate follow-up in open work.
+- Generated Queue debug/release differential tests now use the owned runner and retain their existing continuation mutation, zero-allocation fixtures and layouts. All61 tests across8 source/reference suites plus the native generated test pass. Strict TypeScript, full vp check and workspace build pass; final independent review found no blocker. Next: generated interruption frames/Cause/Exit before public admission; [handoff](docs/effect-v4-workstream.md#queue-owned-reference-execution--2026-10-07) records boundaries. Core PLAN.md is untouched.
+
 ## 2026-10-07 — Conditional Queue default-scheduler receipts
 
 - Recorded [QBUD-001–004](docs/research/queue-budget.md) against freshly retrieved pinned primary sources before implementation. Private generated selection now requires a whole-invocation operation bound below2048, separate from source-growth/native layout checks. Each Take receives a finite-offer retry allowance; shared occurrences count fully, branches use independent maxima and unknown contexts/operations/cycles fail closed. No payload metadata or runtime fields are added.

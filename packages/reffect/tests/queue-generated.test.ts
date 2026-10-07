@@ -3,10 +3,10 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { Cause, Effect, Exit, Fiber, Logger } from "effect";
+import { Cause, Exit } from "effect";
 import { expect, test } from "vite-plus/test";
 import { R, Rust, SourceArtifacts } from "../src/index.ts";
-import { EffectReference } from "../src/effect-ir.ts";
+import { QueueExecution } from "../src/queue-execution.ts";
 import type { Computation, EffectFn } from "../src/effect-ir.ts";
 import { emitFunctions, lowerQueueFunctions } from "../src/lower.ts";
 import { QueueIR as Q } from "../src/queue.ts";
@@ -116,27 +116,11 @@ const functions = {
   blocked,
   quiet: pressure(1, false),
 };
-const observe = async (fn: EffectFn, cancelled = false) => {
-  const logs: string[] = [];
-  const exit = await Effect.runPromise(
-    Effect.gen(function* () {
-      const work = EffectReference.runUnknown(fn, []);
-      if (!cancelled) return yield* Effect.exit(work);
-      const fiber = yield* Effect.forkChild(work, { startImmediately: true });
-      yield* Fiber.interrupt(fiber);
-      return yield* Fiber.await(fiber);
-    }).pipe(
-      Effect.provideService(
-        Logger.CurrentLoggers,
-        new Set([
-          Logger.make((entry) => {
-            logs.push(String(entry.message));
-          }),
-        ]),
-      ),
-    ),
-  );
-  return { logs, exit };
+const observe = async (fn: EffectFn<readonly [], unknown, never>, cancelled = false) => {
+  const controller = new AbortController();
+  const observation = QueueExecution.run(fn, { signal: controller.signal });
+  if (cancelled) controller.abort();
+  return observation;
 };
 const harness = String.raw`
 use reffect_generated as r;
