@@ -1,6 +1,6 @@
 # Queue automatic-yield receipts
 
-Current status: the bounded standalone offer/take profile is now public through [QPUB](queue-public-admission.md). Earlier private/public-gate wording below records the original research stage; broader APIs remain gated.
+Current status: the bounded standalone offer/take profile is now public through [QPUB](queue-public-admission.md). Earlier private/public-gate wording below records the original research stage; broader APIs remain gated. [QDONE-006–008](queue-done-recovery.md#generated-recovery-safeguards--preparation-2026-10-07) extends analysis to End/shutdown and local recovery: current retry charge is16 times `(offers + terminals) * takes`, and CatchAll sums source and handler. Generated/public completion remains refused; original offer/take totals below are unchanged.
 
 Preparation recorded2026-10-07 against AGENTS, PLAN/PROGRESS, QGEN/QASYNC, DBUD and LPUB, the private generated profile, and both reference evaluators. This is a conditional analysis for the existing private offer/take shape, not public Queue admission.
 

@@ -209,6 +209,11 @@ export const analyzeGeneratedDeferredGrowth = (
           child(n.source, "source");
           child(n.body, "body");
         },
+        CatchAll: (n) => {
+          if (coordination !== "Queue") return unaccounted(path);
+          child(n.source, "source");
+          child(n.body, "body");
+        },
         Match: (n) => {
           pure(n.condition, "condition");
           child(n.onTrue, "onTrue");

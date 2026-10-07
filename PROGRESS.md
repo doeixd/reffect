@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-10-07 — Queue generated recovery safeguards
+
+- Recorded [QDONE-006–008](docs/research/queue-done-recovery.md#generated-recovery-safeguards--preparation-2026-10-07) before code: terminal-aware retry receipts, source-plus-handler recovery accounting and Queue-only full-edge CatchAll growth. Fresh pinned primary sources checked. Analysis alone will not widen selector/lowering/public gates; core PLAN.md is untouched.
+- Implemented saturating terminal counters, global terminal/offer wake charges and source-plus-handler recovery receipts; Queue-mode growth now traverses both CatchAll edges, including dormant/shared handlers. Existing offer/take totals stay unchanged. Twelve focused tests pass; three deliberate mutations fail. Native/public admission remains closed for completion despite finite receipts. All 39 tests across seven source suites and all 39 tests across ten serial native/IR suites pass. Strict TypeScript, full `vp check` (no warnings) and workspace build pass (one rebuilt package, three cache hits). Native allocation/layout evidence is unchanged. Post-commit source plus shared-growth/generated/frame/public checks precede pushing. Independent read-only review found no material blocker in the conditional bound or unchanged admission gates.
+
 ## 2026-10-07 — Private Queue typed Done recovery
 
 - Recorded [QDONE-001–005](docs/research/queue-done-recovery.md) before implementation: distinct zero-sized unit Done, inline typed take failure and statically stored local recovery future, with interruption bypass, no per-payload metadata and measured raw-driver costs. Generated/public completion still needs narrow marker selection, audited budget/growth/frame rules and retained outcomes. Fresh pinned primary sources checked; core PLAN.md is untouched.

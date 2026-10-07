@@ -12,6 +12,7 @@ export interface QueueBudgetAnalysis {
   readonly framed: number;
   readonly offers: number;
   readonly takes: number;
+  readonly terminals: number;
   readonly admitted: boolean;
   readonly diagnostics: readonly Diagnostic[];
 }
@@ -20,12 +21,14 @@ interface Summary {
   readonly framed: number;
   readonly offers: number;
   readonly takes: number;
+  readonly terminals: number;
 }
-const summary = (plain: number, framed = plain, offers = 0, takes = 0): Summary => ({
+const summary = (plain: number, framed = plain, offers = 0, takes = 0, terminals = 0): Summary => ({
   plain,
   framed,
   offers,
   takes,
+  terminals,
 });
 const cap = (n: number) => Math.min(queueBudgetLimit, n);
 const add = (a: Summary, b: Summary): Summary =>
@@ -34,6 +37,7 @@ const add = (a: Summary, b: Summary): Summary =>
     cap(a.framed + b.framed),
     cap(a.offers + b.offers),
     cap(a.takes + b.takes),
+    cap(a.terminals + b.terminals),
   );
 const maximum = (a: Summary, b: Summary): Summary =>
   summary(
@@ -41,6 +45,7 @@ const maximum = (a: Summary, b: Summary): Summary =>
     Math.max(a.framed, b.framed),
     Math.max(a.offers, b.offers),
     Math.max(a.takes, b.takes),
+    Math.max(a.terminals, b.terminals),
   );
 
 /**
@@ -83,6 +88,7 @@ export const analyzeQueueBudget = (
         Succeed: () => summary(5),
         Map: (n) => add(summary(7, 8), child(n.source, "source")),
         FlatMap: (n) => add(summary(2, 6), add(child(n.source, "source"), child(n.body, "body"))),
+        CatchAll: (n) => add(summary(3, 5), add(child(n.source, "source"), child(n.body, "body"))),
         Match: (n) =>
           add(summary(4, 8), maximum(child(n.onTrue, "onTrue"), child(n.onFalse, "onFalse"))),
         Log: (n) => (n.attributes.length === 0 ? summary(9) : unaccounted()),
@@ -95,7 +101,9 @@ export const analyzeQueueBudget = (
             ? summary(16, 16, 1)
             : n.operation === "Take"
               ? summary(16, 18, 0, 1)
-              : unaccounted(),
+              : n.operation === "End" || n.operation === "Shutdown"
+                ? summary(16, 16, 0, 0, 1)
+                : unaccounted(),
         TaskGroup: (n) => {
           if (n.mode !== "All" || n.children.length !== 2)
             return issue("QUEUE_BUDGET_TOPOLOGY", at, "Queue group receipt covers only All2");
@@ -133,9 +141,9 @@ export const analyzeQueueBudget = (
           "inputs",
           "Input Schema decoding has no audited receipt; this profile requires zero inputs",
         );
-  // Every Take can retry after every appended offer. This deliberately sums
-  // incompatible wakes and separate fiber turns, rather than assuming fairness.
-  const retry = cap(16 * base.offers * base.takes);
+  // Closing End can schedule a taker pass without an appended offer; finalize
+  // resumes terminal takers too. Charge all occurrences, even false terminal calls.
+  const retry = cap(16 * (base.offers + base.terminals) * base.takes);
   const total = add(base, summary(retry));
   if (!diagnostics.length && Math.max(total.plain, total.framed) >= queueBudgetLimit)
     issue(

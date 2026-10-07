@@ -36,3 +36,35 @@ vp run -r build
 ```
 
 Results are recorded in PROGRESS.md after verification. Run these checks again after the focused commit before pushing.
+
+## Generated recovery safeguards — preparation 2026-10-07
+
+Fresh online Queue/internal-effect sources again match the hashes above. Reviewed current generated profile, compiler marker audit, plain/framed evaluators, QBUD and shared growth visitor before feature edits. This delivery prepares analysis only; selector, native mapping/lowering, owned execution and public constructors remain unchanged.
+
+- **QDONE-006 — Terminal-aware conditional budget.** Count each End/shutdown occurrence in a new `terminals` field, with saturating edge addition and independent branch maxima. Both reference terminal functions are Sync followed by Success (inside the evaluator Suspend); charge16 in both modes, including spare interruption paths. Finalize resumes each removed taker once; Closing End can schedule a readiness pass without an appended offer. Extend global retry charge to `16 * (offers + terminals) * takes`; false repeated terminal calls are conservatively counted too. Offers after completion return false and cannot create unbounded wakes. The original no-terminal receipts remain identical except for `terminals: 0`. This bounds reference operation expansion under QBUD's conditional default context, not termination, runtime steps or safe reentrant shutdown topology.
+- **QDONE-007 — Recovery charges both edges.** CatchAll uses DBUD's existing3/5 plain/framed local overhead and sums source plus handler occurrence summaries. Handler may run after source failure, so taking a maximum is unsound. Failure filtering is synchronous; rejected interruption adds a Failure primitive covered by this receipt. Framed handler failure adds the existing outward decoration. Keep unknown Fail, finalizers/timers, host options and non-All2 groups refused. No scalar error representation is inferred by this analysis.
+- **QDONE-008 — Full-edge recovery growth.** Queue-mode growth traverses both CatchAll edges regardless of success or handler reachability. Count shared incoming edges fully, including handler text/expression/depth costs, and detect cycles in either edge. Leave other coordinator modes' CatchAll refusals unchanged; a native Done expression remains unaccounted. A finite receipt is never sufficient for generated admission.
+
+Acceptance: official plain/framed scheduler probes cover empty End, buffered drain, recovery that posts another terminal/take/offer, Closing shutdown, Open interruption bypass and actual parent cancellation. Check exact terminal/retry arithmetic, shared handler edges, branch counters, saturation, dormant oversized handler rejection, cycles and recovery text. Mutate away terminal retry and handler accounting to demonstrate meaningful guards. Existing profile/lowering must still refuse completion programs even when both analysis receipts pass. Retain existing Queue/source/compiler/growth regressions and all native Queue costs. Next implement narrowly checked private lowering with frame reset and native marker proof.
+
+### Delivered analysis safeguards
+
+Queue receipts now retain `terminals`, charge terminal wakes alongside offer retries and sum both CatchAll paths. Queue-mode growth accounts for both recovery edges including dormant/shared handler text and detects handler cycles. No runtime code, native payload layout, public API, selector or compiler marker guard changes. The simple empty-End/local recovery fixture is126 plain/176 framed, including its two asVoid Maps. Existing offer/take totals are unchanged with zero terminals.
+
+Twelve focused tests pass across budget and new safeguards. Official plain/framed probes cover controlled terminal and recovery workloads plus shutdown/cancellation with no automatic yielding. A dormant oversized handler passes budget but fails source growth; terminal pressure passes growth but saturates/rejects budget. Finite receipts still fail generated selection/lowering. Three temporary negative source mutations (terminal retry, handler budget, handler growth) fail their contracts; original sources were restored before regression. These probes corroborate the primary-source argument; they do not admit the pinned defective reentrant topology or enforce ambient context by themselves.
+
+Additional validation commands:
+
+```bash
+vp test packages/reffect/tests/queue-budget.test.ts packages/reffect/tests/queue-recovery-safeguards.test.ts packages/reffect/tests/queue-generated-profile.test.ts packages/reffect/tests/queue-execution.test.ts packages/reffect/tests/queue-lowering.test.ts packages/reffect/tests/latch-budget.test.ts packages/reffect/tests/semaphore-budget.test.ts --maxWorkers=1
+# Add this suite to the serial native Queue command above to verify the shared growth visitor:
+vp test packages/reffect/tests/deferred-generated-growth.test.ts --maxWorkers=1
+```
+
+Independent read-only review found no material blocker in the conditional operation proof, shared/dormant growth accounting or unchanged admission gates. Strict TypeScript and full check/build pass. Source regression passes39 tests across seven suites; serial native/IR regression passes39 across ten, with existing allocation/layout evidence unchanged. Re-run source checks, strict/check/build and the following shared-growth/generated/frame/public native regression after the commit before pushing:
+
+```bash
+vp test packages/reffect/tests/deferred-generated-growth.test.ts packages/reffect/tests/queue-generated.test.ts packages/reffect/tests/queue-generated-frames.test.ts packages/reffect/tests/queue-public.test.ts --maxWorkers=1
+```
+
+Results are recorded in PROGRESS.md.

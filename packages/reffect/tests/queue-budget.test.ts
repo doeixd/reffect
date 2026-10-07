@@ -198,7 +198,6 @@ test("unaudited host assumptions, inputs, capacity, cycles and operations fail c
     diagnostics: expect.arrayContaining([expect.objectContaining({ code: "QUEUE_BUDGET_CYCLE" })]),
   });
   for (const source of [
-    queued((owner) => all(Q.shutdown(owner).pipe(R.Effect.asVoid), R.Effect.void)),
     queued(() => all(R.Effect.sleep(1), R.Effect.void)),
     queued(() => R.Effect.race(R.Effect.void, R.Effect.void)),
   ])
