@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-10-07 — Bounded public Queue
+
+- Delivered [QPUB-001–005](docs/research/queue-public-admission.md): public `R.Queue`/`QueueIR` make/bounded/dual offer/take, owned `QueueExecution` and checked standalone Compile admission. Original shape/reference/default2048/growth/byte/layout gates and hidden marker audits remain. Independent coordinator and runtime-service exports compose; RPC, shutdown/Done, generated cleanup and wider ownership remain refused. Core PLAN.md is untouched.
+- `vp test` source regression passes 65 tests across eight suites; public Queue plus compiler-stage regression passes 26 tests across six suites; private Queue debug/release and public Deferred/Semaphore/Latch regression passes 23 tests across five suites, with native builds serial. Actual public artifacts execute capacity1..3 and scalar payloads, all four coordinator families and injected Clock/Random under None/Bounded. Existing disabled-frame allocations/layouts remain unchanged; quiet Bounded cancellation still allocates three diagnostic capsules.
+- Strict `tsc --noEmit --strict --project packages/reffect/tsconfig.json`, full `vp check` and `vp run -r build` pass (one rebuilt package, three cache hits). Removed two unused-expression warnings in negative type contracts. Post-commit strict/check/build and the serial relevant tests are required before pushing. Independent read-only review found no material blocker. Updated package/API docs, coverage, open work and the [resume guide](docs/effect-v4-workstream.md#bounded-public-queue--2026-10-07). Next: End/shutdown/Done retained-outcome and cancellation-order research before extending the public facade.
+
+
+## 2026-10-07 — Bounded public Queue preparation
+
+- Recorded [QPUB-001–005](docs/research/queue-public-admission.md) before implementation: narrow make/bounded/offer/take exports, checked public compiler routing, owned execution and independent coordinator modules. Existing profile/budget/growth/layout gates remain; RPC, shutdown/Done and generated cleanup are separate. Core PLAN.md is untouched.
+
 ## 2026-10-07 — Private generated Queue interruption frames
 
 - Recorded [QFRAME-001–004](docs/research/queue-generated-frames.md) before implementation. Internal Queue lowering now accepts explicit Bounded using existing helper/context trails, preserving the None default and parent-only All interruption after actual child settlement. Public admission and generated finalizers remain separate; core PLAN.md is untouched.

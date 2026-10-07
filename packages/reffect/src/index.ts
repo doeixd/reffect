@@ -218,3 +218,7 @@ export type { SemaphoreExecutionOptions, SemaphoreObservation } from "./semaphor
 export { LatchIR } from "./latch.ts";
 export { LatchExecution } from "./latch-execution.ts";
 export type { LatchExecutionOptions, LatchObservation } from "./latch-execution.ts";
+
+export { QueuePublic as QueueIR } from "./queue.ts";
+export { QueueExecution } from "./queue-execution.ts";
+export type { QueueExecutionOptions, QueueObservation } from "./queue-execution.ts";

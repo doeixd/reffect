@@ -1,5 +1,7 @@
 # Private owned Queue reference execution
 
+Current status: the bounded standalone offer/take profile is now public through [QPUB](queue-public-admission.md). Earlier private/public-gate wording below records the original research stage; broader APIs remain gated.
+
 Current native frame support is verified separately by [QFRAME](queue-generated-frames.md); public admission remains gated. The preparation below records the earlier reference-only boundary.
 
 Prepared2026-10-07 against AGENTS, PLAN/PROGRESS, QBUD/QGEN, the existing Latch/Semaphore/Deferred owned runners and interruption-frame planner. This establishes the default reference context for the private generated offer/take profile; public exports and native frame policy remain unchanged.

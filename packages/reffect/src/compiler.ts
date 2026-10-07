@@ -1,3 +1,4 @@
+import { analyzeGeneratedQueueProfile } from "./queue-generated-profile.ts";
 import { containsQueue, containsQueueDone } from "./queue-model.ts";
 import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { containsLatch, usesLatchExpression } from "./latch-model.ts";
@@ -56,6 +57,7 @@ import {
   lowerDeferredFunctions,
   lowerSemaphoreFunctions,
   lowerLatchFunctions,
+  lowerQueueFunctions,
   emitFunctions,
 } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -632,6 +634,15 @@ const checkedLatchProfiles = (program: Program) => {
   return profiles;
 };
 
+const queueProfiles = new WeakMap<Program, ReturnType<typeof analyzeGeneratedQueueProfile>>();
+const checkedQueueProfiles = (program: Program) => {
+  const previous = queueProfiles.get(program);
+  if (previous) return previous;
+  const profiles = analyzeGeneratedQueueProfile(program);
+  queueProfiles.set(program, profiles);
+  return profiles;
+};
+
 const checkedPrograms = new WeakSet<Program>();
 const derivedPrograms = new WeakMap<Program, Analysis>();
 const verifiedPlans = new WeakSet<Plan>();
@@ -655,20 +666,29 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         message: `The function's IR nests deeper than ${NESTING_LIMIT} levels`,
       })),
     });
+  const queue = yield* Effect.try({
+    try: () => checkedQueueProfiles(program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("QUEUE_GENERATED_PROFILE", "check", "functions", String(cause)),
+  });
   for (const [name, fn] of Object.entries(program.functions)) {
     if (
       fn.input.some((type) => containsQueue(type) || containsQueueDone(type)) ||
       containsQueue(fn.output) ||
       containsQueueDone(fn.output) ||
       (fn instanceof EffectFn &&
-        (hasQueueComputation(fn.body) || containsQueue(fn.error) || containsQueueDone(fn.error))) ||
+        ((hasQueueComputation(fn.body) && !queue.has(fn)) ||
+          containsQueue(fn.error) ||
+          containsQueueDone(fn.error))) ||
       usesQueueNativeType(fn.body)
     )
       return yield* fail(
         "QUEUE_NATIVE_UNSUPPORTED",
         "check",
         `functions.${name}`,
-        "Queue native ownership and generated coordinator integration are not admitted",
+        "Queue/Done values require the checked standalone offer/take profile",
       );
   }
   yield* Effect.try({
@@ -879,12 +899,20 @@ const deriveProgram = Effect.fn("Compile.derive")(function* (
           walkComputation(n.body);
           walkComputation(n.afterClose);
         },
-        QueueMake: () => effectRefs.add(SyncEffects.QueueMake),
+        QueueMake: (n) => {
+          effectRefs.add(SyncEffects.QueueMake);
+          types.add(n.success);
+          types.add(n.error);
+        },
         QueueScope: (n) => {
           effectRefs.add(SyncEffects.QueueMake);
+          types.add(n.success);
+          types.add(n.error);
           walkComputation(n.body);
         },
         QueueOperation: (n) => {
+          types.add(n.success);
+          types.add(n.error);
           if (n.operation === "Offer") {
             effectRefs.add(AsyncEffects.QueueOffer);
             walk(n.value);
@@ -1138,6 +1166,31 @@ const plan = Effect.fn("Compile.plan")(function* (
       "plan",
       target.id,
       "No verified lowering registered for this target",
+    );
+  const queue = yield* Effect.try({
+    try: () => checkedQueueProfiles(analysis.program),
+    catch: (cause) =>
+      cause instanceof CompileError
+        ? cause
+        : fail("QUEUE_GENERATED_PROFILE", "plan", "functions", String(cause)),
+  });
+  if (
+    !queue.size &&
+    analysis.effects.some((ref) =>
+      [
+        SyncEffects.QueueMake,
+        AsyncEffects.QueueOffer,
+        AsyncEffects.QueueTake,
+        SyncEffects.QueueEnd,
+        SyncEffects.QueueShutdown,
+      ].some((operation) => operation === ref),
+    )
+  )
+    return yield* fail(
+      "QUEUE_NATIVE_INTEGRATION",
+      "plan",
+      "effects",
+      "Queue requires the checked standalone offer/take profile",
     );
   const semaphore = yield* Effect.try({
     try: () => checkedSemaphoreProfiles(analysis.program),
@@ -1407,13 +1460,15 @@ const lower = Effect.fn("Compile.lower")(function* (
     return yield* fail("INVALID_OWNERSHIP", "lower", "ownership", "Unsupported ownership strategy");
   return yield* Effect.try({
     try: () =>
-      (checkedLatchProfiles(p.analysis.program).size
-        ? lowerLatchFunctions
-        : checkedSemaphoreProfiles(p.analysis.program).size
-          ? lowerSemaphoreFunctions
-          : checkedDeferredProfiles(p.analysis.program).size
-            ? lowerDeferredFunctions
-            : lowerFunctions)(
+      (checkedQueueProfiles(p.analysis.program).size
+        ? lowerQueueFunctions
+        : checkedLatchProfiles(p.analysis.program).size
+          ? lowerLatchFunctions
+          : checkedSemaphoreProfiles(p.analysis.program).size
+            ? lowerSemaphoreFunctions
+            : checkedDeferredProfiles(p.analysis.program).size
+              ? lowerDeferredFunctions
+              : lowerFunctions)(
         p.analysis.program,
         new Map(p.selections.map((selection) => [selection.operation.ref, selection.selected])),
         policy,

@@ -1,3 +1,4 @@
+import { QueuePublic } from "./queue.ts";
 import { SemaphoreIR } from "./semaphore.ts";
 import { LatchIR } from "./latch.ts";
 import { DeferredPublic } from "./deferred.ts";
@@ -201,6 +202,7 @@ export const R = Object.freeze({
   Deferred: DeferredPublic,
   Semaphore: SemaphoreIR,
   Latch: LatchIR,
+  Queue: QueuePublic,
   Clock: ClockIR,
   Random: RandomIR,
   Boolean: Object.freeze({ not: BoolType.not, ...BooleanCombinators }),

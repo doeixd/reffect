@@ -347,7 +347,7 @@ test("blocked offer and take preserve interruption frames and run cancellation c
   }
 });
 
-test("native compilation, generic lowering and mixed coordinators explicitly refuse Queue", async () => {
+test("native compilation refuses unchecked Queue shapes and generic lowering stays gated", async () => {
   const work = R.fn([], R.Unit, R.Never, () =>
     Q.bounded(R.Bool, 1).pipe(R.Effect.flatMap(() => R.Log.info("must not run"))),
   );
@@ -366,7 +366,7 @@ test("native compilation, generic lowering and mixed coordinators explicitly ref
       exit.cause.reasons.flatMap((reason) =>
         reason._tag === "Fail" ? reason.error.diagnostics.map((d) => d.code) : [],
       ),
-    ).toContain("QUEUE_NATIVE_UNSUPPORTED");
+    ).toContain("QUEUE_STRUCTURAL_PROFILE");
   const selected = new Map(Rust.std.implementations.map((i) => [i.operation.ref, i]));
   let lowerFailure: unknown;
   try {

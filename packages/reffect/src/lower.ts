@@ -737,6 +737,7 @@ export function lowerQueueFunctions(
   selected: ReadonlyMap<OperationRef, Implementation>,
   policy: ArtifactPolicy = SourceArtifacts.Full,
   failureFrames: FailureFramePolicy = FailureFrames.None,
+  servicesSelection: RuntimeServicesSelection = {},
 ): LoweredModule {
   const profiles = analyzeGeneratedQueueProfile(program);
   return lowerFunctionsInternal(
@@ -744,10 +745,10 @@ export function lowerQueueFunctions(
     selected,
     policy,
     failureFrames,
-    {},
-    undefined,
-    undefined,
-    undefined,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
+    analyzeGeneratedLatchProfile(program),
     profiles,
   );
 }

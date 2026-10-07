@@ -567,6 +567,30 @@ See [the runnable example](../../examples/rpc-async/README.md),
 [design/evidence](../../docs/research/async-rpc.md) and
 [measured costs](../../docs/metadata-cost.md#async-context-and-future-costs).
 
+## Bounded standalone Queue
+
+`R.Queue` and exported `QueueIR` expose `make`, `bounded`, dual `offer` and `take` with explicit scalar witnesses:
+
+```ts
+const Transfer = R.fn([], R.Unit, R.Never, () =>
+  R.Queue.bounded(R.U64, 1).pipe(
+    R.Effect.flatMap((queue) =>
+      R.Effect.all(
+        [
+          R.Queue.offer(queue, R.U64.literal(42n)).pipe(R.Effect.asVoid),
+          R.Queue.take(queue).pipe(R.Effect.asVoid),
+        ],
+        { concurrency: "unbounded", discard: true },
+      ),
+    ),
+  ),
+);
+```
+
+`QueueExecution.run(Transfer)` executes the checked profile through official Effect in an owned default scheduler context; `runWithFrames` adds bounded logical frames. Both capture logs and accept an optional AbortSignal, await interrupted child settlement and leave pre-aborted work unopened. Public Compile supports this profile with `Rust.tokio`, including independent Deferred/Semaphore/Latch and service-using exports in the same module.
+
+The supported shape is zero inputs, Bool/U64/Unit success and payloads, Never errors, literal capacity1..3 with suspend strategy, one root lexical owner and one unconditional All2 of Unit/Never children. Offer/take must occur inside those children. Growth, operation-budget, emitted-byte and returned-future limits are checked. None/Bounded failure frames and Full/None source artifacts are independent; scalar payloads remain plain native values. End/shutdown/Done, Sleep/Ensuring, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
+
 ## Typed recovery and structured resource lifetimes
 
 `R.Effect.catchAll` builds a symbolic typed-error handler; `mapError` transforms that channel and `orElse` runs a fallback after a typed failure. They preserve successful values and bypass interruption/compiler failures. Success channels follow the existing same-witness-or-Never rule. Recovery discards handled failure frames before executing its handler; a failed handler starts its own trail. These operations work in synchronous and async profiles. See [decisions and conformance](../../docs/research/error-recovery.md).

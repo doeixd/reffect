@@ -255,3 +255,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 [Shared owned cancellation](research/owned-execution-cancellation.md) records the signal override repair, shared lifetime helper and module-specific regression obligations.
 
 [Generated Queue interruption frames](research/queue-generated-frames.md) records private native frame/Cause/Exit parity and its policy-specific cost gates.
+
+[Bounded public Queue admission](research/queue-public-admission.md) records the public facade, compiler/host gates and validation contract.

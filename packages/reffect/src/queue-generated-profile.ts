@@ -29,7 +29,7 @@ const refuse = (path: string, message: string): never => {
 const remapGrowth = (error: unknown): never => {
   if (!(error instanceof CompileError)) throw error;
   throw new CompileError({
-    message: `Unsupported private generated Queue growth: ${error.message.replaceAll("Deferred", "Queue")}`,
+    message: `Unsupported generated Queue growth: ${error.message.replaceAll("Deferred", "Queue")}`,
     diagnostics: error.diagnostics.map((issue) => ({
       ...issue,
       code: issue.code.replace("DEFERRED_", "QUEUE_"),
@@ -37,7 +37,7 @@ const remapGrowth = (error: unknown): never => {
     })),
   });
 };
-/** Private representation/ownership receipt plus a conditional default-context budget. */
+/** Checked representation/ownership receipt plus a conditional default-context budget. */
 export const analyzeGeneratedQueueProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => {
@@ -144,7 +144,7 @@ export const analyzeGeneratedQueueProfile = (
     const budget = analyzeQueueBudget(fn, path);
     if (!budget.admitted)
       throw new CompileError({
-        message: "Unsupported private Queue reference budget",
+        message: "Unsupported Queue reference budget",
         diagnostics: budget.diagnostics,
       });
     profiles.set(

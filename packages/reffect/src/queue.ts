@@ -113,5 +113,17 @@ const shutdown = <A, E>(self: Expr<Queue.Queue<A, E>>): Computation<boolean> =>
     operation: "Shutdown",
     ...handle(self),
   });
-/** Private lexical bounded Queue; native/public admission remains gated. */
+/** Internal reference builders retain End/shutdown and Done; public admission is narrower. */
 export const QueueIR = Object.freeze({ make, bounded, offer, take, end, shutdown });
+
+/** Public bounded suspend Queue; native admission requires the checked standalone All2 profile. */
+export const QueuePublic = Object.freeze({
+  make: <A>(
+    success: IRType<A>,
+    options: { readonly capacity: number; readonly strategy?: "suspend" },
+  ): Computation<Queue.Queue<A, never>> => make(success, options),
+  bounded: <A>(success: IRType<A>, capacity: number): Computation<Queue.Queue<A, never>> =>
+    bounded(success, capacity),
+  offer,
+  take,
+});

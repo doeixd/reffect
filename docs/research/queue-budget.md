@@ -1,5 +1,7 @@
 # Queue automatic-yield receipts
 
+Current status: the bounded standalone offer/take profile is now public through [QPUB](queue-public-admission.md). Earlier private/public-gate wording below records the original research stage; broader APIs remain gated.
+
 Preparation recorded2026-10-07 against AGENTS, PLAN/PROGRESS, QGEN/QASYNC, DBUD and LPUB, the private generated profile, and both reference evaluators. This is a conditional analysis for the existing private offer/take shape, not public Queue admission.
 
 ## Primary evidence

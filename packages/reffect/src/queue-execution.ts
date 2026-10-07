@@ -58,9 +58,9 @@ const execute = <A, Out>(
 };
 
 /**
- * Private execution of the bounded Queue profile in an owned official Effect context.
+ * Execution of the bounded Queue profile in an owned official Effect context.
  * Observes Exit and captured logs; accepts only an optional AbortSignal.
- * Native frame parity is verified separately; public Queue compilation stays gated.
+ * Accepts the checked standalone offer/take profile; wider ownership stays gated.
  */
 export const QueueExecution = Object.freeze({
   run: <A>(fn: EffectFn<readonly [], A, never>, options?: QueueExecutionOptions) =>

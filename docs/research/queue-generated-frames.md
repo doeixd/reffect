@@ -1,5 +1,7 @@
 # Private generated Queue interruption frames
 
+Current status: the bounded standalone offer/take profile is now public through [QPUB](queue-public-admission.md). Earlier private/public-gate wording below records the original research stage; broader APIs remain gated.
+
 Prepared 2026-10-07 against AGENTS, PLAN/PROGRESS, QGEN/QBUD/QEXEC, DINT's scope-indexed reference planner and the shared bounded native trail. This closes the diagnostic gap in the existing private offer/take All2 profile; public exports and broader operations remain refused.
 
 ## Primary evidence
