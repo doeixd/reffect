@@ -100,3 +100,37 @@ vp run -r build
 ```
 
 Independent read-only review found no source blocker in selection/markers, helper/frame identity, mixed-carrier exhaustiveness or costs. It caught the unreachable suspended-recovery acceptance phrase and absent service-export claim; both are corrected. Source regression passes 50 tests across seven suites; serial native/diagnostic regression passes 18 across five, with existing Queue costs unchanged. Strict TypeScript and workspace build pass (one rebuilt package, three cache hits). Full check found one unused test import, removed before lint verification. Post-commit strict/check/build and the same source/native regressions precede pushing. Public completion, Shutdown, suspended recovery and retained/fail-fast Done remain open.
+
+## Private retained source through cleanup — preparation 2026-10-07
+
+Fresh [Effect4.0.0 internal/effect.ts](https://unpkg.com/effect@4.0.0/src/internal/effect.ts) matches the recorded SHA256. Reviewed OnExit's masked finalizer and original-exit restoration, concurrent All's terminal/observer aggregation, QASYNC host cancellation and existing Done carrier. An official probe interrupts cleanup after a source Done, scalar success, owner interruption or waiting-source interruption: cleanup completes in all four; Done remains typed failure, while an earlier success becomes interruption.
+
+- **QDONE-013 — Retain before cleanup.** Add a private borrowed QueueTask `ensuring_done` combinator for scalar success/unit Done/control errors and an infallible cleanup factory. Await source first, construct/run cleanup exactly once, retain its Result inline across suspension, and return only after cleanup settles. After cleanup, sticky child interruption replaces success only; typed Done and existing owner/control interruption remain failures. No erased Unit error, boxed future, dynamic Cause or new driver/bridge field.
+- **QDONE-014 — Masking is explicit.** Cleanup may use only existing masked `cleanup_sleep`/`cleanup_shutdown` primitives and synchronous work; the combinator does not make arbitrary supplied futures safe or mask ordinary Queue requests. Infallible cleanup excludes defects/typed finalizer failures, and dropping the future does not run cleanup. Host lifecycle stays run-once/current-thread; preabort opens neither source nor cleanup. No compiler/public API widening. This is a prerequisite for retained All outcomes, not an All fail-fast implementation. All still needs safe interruption of an active End initiator plus Cause aggregation/frame policy before admission.
+- **QDONE-015 — Evidence.** Compare official child Exit categories and cleanup trace for normal Done/success, cancellation during their cleanup, owner shutdown and blocked-source cancellation, plus success payloads Bool/Unit. Hosted native debug/release must await cleanup, preserve Done, convert canceled success, retire waiters and restore masks. Assert zero warmed quiet allocations and bounded actual child layouts. Mutations erase retained Done and forget late success interruption; both must fail. Existing Queue host/local/generated/public regressions retain their gates.
+
+Alternatives: defer all work until a general fallible scheduler (unnecessarily bundles error retention with reentrant cancellation); add generic stored Cause to QueueBridge (adds cost to public offer/take); reuse infallible child bool (loses Done). Chosen static combinator isolates source retention with no ordinary runtime layout change. Full Cause multiplicity, fail-fast, generated finalizers and public completion remain open.
+
+### All startup constraint for the next gate
+
+Independent public-API probes against pinned Effect distinguish eager startup from registered children. Direct `All([take, end→log], unbounded)` logs `end:true` before the group returns a single Done failure: the eagerly starting End child is not yet a member of the concurrent iterator's fiber Set. Park End on a Deferred first, start All, then release it: the waiting Take fails inline, its observer interrupts the registered End child, and the post-End log is absent. A blanket rule interrupting every active End initiator would fail the first case. The existing generated profile excludes external Deferred suspension; this evidence guides later routing/membership design without admitting it.
+
+Queue End's `exitZipRight` keeps the first Failure, and shared unit Done reasons are deduplicated by Cause equality; do not invent two Done reasons from End's implementation. Retention here compares typed Exit categories and cleanup order, not complete Cause reasons/annotations/interrupt identities or logical frames.
+
+### Delivered raw retained cleanup
+
+The private borrowed task now stores its Result directly across cleanup and checks late sticky interruption only on success. Six official/native hosted traces cover normal Done/success, canceled Done/success cleanup, owner interruption and waiting-source cancellation. Additional probes cover Bool/Unit success, source-before-factory order, exactly-once cleanup, restored masks, waiter retirement and unopened preabort. Debug/release agree. Erasing domain failure or forgetting late success interruption fails the corresponding mutation.
+
+Linux fixture child futures are576 bytes in each of the six cases; the quiet mixed scalar/Done future is456 bytes (all below the1024-byte fixture gate).100 warmed executions with masked1ms Sleep allocate0 times, including source retention, borrowed host driver and context/watch cloning; original runtime/watch construction and output are excluded. No bridge/driver field, metadata envelope or dependency changes. Existing generated Done artifact/frame/build layouts and allocation counts remain unchanged. This demonstrates source retention through infallible masked cleanup, not a generated/fallible All or full Cause implementation. Independent read-only review found no blocker in this scope.
+
+Validation:
+
+```bash
+# Source Cargo, use CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1:
+vp test packages/reffect/tests/queue-retained-cleanup.test.ts packages/reffect/tests/queue-host-runtime.test.ts packages/reffect/tests/queue-done-recovery.test.ts packages/reffect/tests/queue-generated-done.test.ts packages/reffect/tests/queue-public.test.ts --maxWorkers=1
+tsc --noEmit --strict --project packages/reffect/tsconfig.json
+vp check
+vp run -r build
+```
+
+Repeat relevant tests and checks after commit before pushing; final results belong in PROGRESS.md.

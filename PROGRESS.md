@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Private Queue retained cleanup
+
+- Recorded [QDONE-013–015](docs/research/queue-done-recovery.md#private-retained-source-through-cleanup--preparation-2026-10-07) before feature code. Fresh pinned OnExit/All primary source and official interruption probe distinguish retained Done from canceled success. Delivered a private static source/cleanup combinator before reentrant All fail-fast; public/compiler profiles and PLAN.md stay unchanged.
+- Official/native debug/release traces preserve Done through cleanup cancellation and replace earlier success with interruption. Cleanup factories run once after source settlement; preabort opens neither, masks restore and waiters retire. Two negative mutations fail.100 warmed quiet sleeping-cleanup executions allocate0; fixture child futures576 bytes and quiet mixed scalar future456 bytes. No ordinary bridge/driver fields change.
+- All11 tests across five serial native suites pass, including existing generated Done and public admission. Strict reffect TypeScript, full check (no warnings/errors), and workspace build (one rebuilt package, three cache hits) pass. Independent read-only review found no blocker within the category-only/infallible-cleanup scope. Recorded the eager-versus-registered End constraint; next remains retained/fail-fast All, Cause/frame policy, generated cleanup and safe Shutdown before public completion. Updated the [handoff](docs/effect-v4-workstream.md#private-queue-retained-cleanup--2026-10-07); repeat relevant checks after commit before pushing.
+
 ## 2026-10-07 — Private generated Queue Done
 
 - Recorded [QDONE-009–012](docs/research/queue-done-recovery.md#private-generated-endlocal-recovery--preparation-2026-10-07) before feature code: explicit private End-only selection, canonical zero-sized Done helper mapping, child-local recovery and handled-frame reset. Public/compiler/owned execution remain end-free; Shutdown and retained Done stay gated. Fresh pinned primary sources checked; core PLAN.md is untouched.

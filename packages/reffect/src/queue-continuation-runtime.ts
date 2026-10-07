@@ -41,6 +41,18 @@ impl<T: Copy> QueueBridge<T> {
 #[derive(Clone, Copy)]
 struct QueueTask<'a, T: Copy> { bridge: &'a QueueBridge<T>, task: usize }
 impl<T: Copy> QueueTask<'_, T> {
+    async fn ensuring_done<A, Source, Cleanup, Finalizer>(&self, source: Source, cleanup: Cleanup) -> Result<A, QueueTakeFailure>
+    where Source: std::future::Future<Output = Result<A, QueueTakeFailure>>,
+          Cleanup: FnOnce() -> Finalizer,
+          Finalizer: std::future::Future<Output = ()> {
+        let result = source.await;
+        // Only explicit masked cleanup primitives are supported, not arbitrary Pending.
+        cleanup().await;
+        match result {
+            Ok(_) if self.bridge.interrupted[self.task].get() => Err(QueueTakeFailure::ControlInterrupted),
+            result => result,
+        }
+    }
     fn operation(&self, request: QueueRequest<T>) -> QueueRequestFuture<'_, T> {
         QueueRequestFuture { task: *self, request, generation: None, complete: false, masked: false }
     }
