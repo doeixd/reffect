@@ -269,4 +269,12 @@ Read [QEXEC-001–004](research/queue-execution.md). Internal `QueueExecution.ru
 
 Resume in queue-execution.test.ts and queue-generated.test.ts. The generated debug/release differential now executes its reference through this boundary, while execution tests independently compare with raw official Effect. Framed cancellation retains All/QueueScope/function parents after child unregistering, with no child Queue wait trails. Frames/logs/signal controllers belong to each invocation and do not travel with scalar payloads.
 
-Next establish generated interruption frames/Cause/Exit parity before public standalone Queue admission. Keep End/shutdown/Done, generated Ensuring/Sleep, fail-fast, broader ownership, RPC/Send and host-future abandonment separate. The existing Deferred/Semaphore/Latch external-signal override gap is an open follow-up linked from QEXEC/open-work; the Queue relay is not yet shared with those runners.
+Next establish generated interruption frames/Cause/Exit parity before public standalone Queue admission. Keep End/shutdown/Done, generated Ensuring/Sleep, fail-fast, broader ownership, RPC/Send and host-future abandonment separate. The [shared cancellation repair](research/owned-execution-cancellation.md) now closes the Deferred/Semaphore/Latch external-signal override gap; all four runners use the internal relay.
+
+## Shared owned cancellation repair — 2026-10-07
+
+Read [OCAN-001–004](research/owned-execution-cancellation.md). `owned-execution-signal.ts` owns native-signal option validation and relay lifetime; each runner supplies its diagnostic constructor, unopened preabort observation and typed start callback. Semantic identity/growth/budget/profile checks remain before listener installation, and context/log/frame interpretation remain local to Deferred/Semaphore/Latch/Queue. Only a fresh owned signal enters the official Effect runner. Native values, generated Rust and public APIs are unchanged.
+
+Resume with owned-cancellation.test.ts, owned-execution-signal.test.ts and the four existing execution suites. The lying-aborted reproducer failed all three old public runners. Current plain/framed cases exclude property hooks and await actual masked cleanup; direct helper probes verify fulfillment, rejection, synchronous start errors, no-signal behavior and unrelated-listener preservation. Queue generated debug/release differential retains previous costs/layouts and negative continuation evidence.
+
+Next implement generated Queue interruption frames/Cause/Exit, then review public standalone admission. Do not bypass default2048 receipts or extend End/shutdown/Done, async finalizer markers, broader ownership, RPC/Send or hosted-future abandonment merely because cancellation mechanics are now shared.

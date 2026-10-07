@@ -251,3 +251,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 [Queue automatic-yield receipts](research/queue-budget.md) records finite retry accounting and the conditional default-context gate for private generated offer/take programs.
 
 [Private owned Queue execution](research/queue-execution.md) records default-context enforcement, cancellation ownership and reference-only interruption trails.
+
+[Shared owned cancellation](research/owned-execution-cancellation.md) records the signal override repair, shared lifetime helper and module-specific regression obligations.

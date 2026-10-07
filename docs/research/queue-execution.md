@@ -21,7 +21,7 @@ Generated interruption frames/Cause/Exit, Done/shutdown/fail-fast, Ensuring/Slee
 
 ## Follow-up discovered during review
 
-Existing Deferred/Semaphore/Latch owned runners intrinsically brand-check external signals but later read their ordinary aborted/listener properties and pass them directly to Effect. A genuine signal with a shadowed aborted getter can conceal preabort, and shadowed listener methods can execute hooks. Independent review reproduced the ordinary-versus-intrinsic state mismatch. Queue's relay isolates those properties; porting it to the existing runners remains a linked open item rather than changing their public boundaries in this unit. Arbitrary global runtime monkeypatches and host Proxy traps are outside the trusted native-signal assumptions.
+Existing Deferred/Semaphore/Latch owned runners intrinsically brand-check external signals but later read their ordinary aborted/listener properties and pass them directly to Effect. A genuine signal with a shadowed aborted getter can conceal preabort, and shadowed listener methods can execute hooks. Independent review reproduced the ordinary-versus-intrinsic state mismatch. The [shared cancellation repair](owned-execution-cancellation.md) now supplies that intrinsic relay to all four runners without widening their public boundaries. Arbitrary global runtime monkeypatches and host Proxy traps are outside the trusted native-signal assumptions.
 
 ## Delivered evidence
 

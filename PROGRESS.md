@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Shared owned cancellation repair
+
+- Recorded [OCAN-001–004](docs/research/owned-execution-cancellation.md) before implementation. The new shadowed-aborted reproducer failed Deferred/Latch/Semaphore and passed Queue. All four runners now use one internal typed signal validator/relay; context/profile/frame behavior and public diagnostics remain module-owned. Preabort never opens source work, and external signal property overrides cannot enter the Effect runner.
+- Six helper lifecycle tests cover no signal, intrinsic preabort, independent forwarding, awaited completion, fulfillment/rejection and synchronous start failures. Sixteen cross-module regressions cover both execution modes, signal overrides, awaited masked cleanup, listener retirement and module-specific refusal codes. The existing owned suites retain frame/context/profile guarantees; all54 tests across6 source/reference suites pass.
+- Native generated Queue debug/release parity passes with its existing continuation mutation, zero-allocation fixture measurements and returned future layouts unchanged. No Rust runtime, scalar metadata or public profile is widened. Strict reffect TypeScript, full vp check and workspace builds pass; independent extraction review found no blocker. Removed the completed legacy-runner open item and updated the [handoff](docs/effect-v4-workstream.md#shared-owned-cancellation-repair--2026-10-07). Next: generated Queue interruption frames/Cause/Exit before public admission. Core PLAN.md is untouched.
+
 ## 2026-10-07 — Private owned Queue reference execution
 
 - Recorded [QEXEC-001–004](docs/research/queue-execution.md) before implementation. Internal QueueExecution.run/runWithFrames now validates the checked profile and budget before starting a fresh default2048 scheduler/context with captured logs. Options accept only an optional brand-checked AbortSignal; intrinsic access/listeners relay into an owned controller, preabort stays unopened and forwarding listeners retire on settlement.
