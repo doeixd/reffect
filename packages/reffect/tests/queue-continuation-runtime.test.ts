@@ -560,7 +560,7 @@ test("borrowed ordinary Queue futures preserve official synchronous continuation
     console.info("Queue interruption child future bytes:", interruptionSizes.join("/"));
     expect(interruptionSizes).toHaveLength(2);
     expect(interruptionSizes.every((size) => size > 0 && size <= 1024)).toBe(true);
-    const mutation = "self.pump(event.task);";
+    const mutation = "self.pump_with_waker(event.task, waker);";
     expect(runtime.split(mutation)).toHaveLength(2);
     await writeFile(
       source,
@@ -594,12 +594,11 @@ test("borrowed ordinary Queue futures preserve official synchronous continuation
     expect(leak).toMatchObject({
       stderr: expect.stringContaining("Scoped Queue driver must retire registrations"),
     });
-    const settlement =
-      'assert_eq!(self.pump(task), QueueBoundary::Complete, "Suspending Queue cleanup is unsupported");';
+    const settlement = "let boundary = self.pump_with_waker(task, waker);";
     expect(runtime.split(settlement)).toHaveLength(2);
     await writeFile(
       source,
-      `${queueBoundedRuntime()}\n${runtime.replace(settlement, "self.done[task].set(true);")}\n${harness}`,
+      `${queueBoundedRuntime()}\n${runtime.replace(settlement, "self.done[task].set(true); let boundary = QueueBoundary::Complete;")}\n${harness}`,
     );
     const abandoned = join(directory, "abandoned-cleanup");
     await run("rustc", ["--edition=2021", source, "-o", abandoned], { timeout: 60000 });

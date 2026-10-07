@@ -243,3 +243,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 [Private Queue driver ownership](research/queue-driver-ownership.md) records quiescent scope cleanup, closed-bank protection and nonpanicking registration retirement without claiming task finalization.
 
 [Private Queue interruption settlement](research/queue-interruption-settlement.md) records interrupted control results, waiter removal and sequential child cleanup before parent return.
+
+[Queue asynchronous settlement](research/queue-async-settlement.md) extends the private borrowed Queue driver with managed timer cleanup and hosted cancellation; public/generated admission remains gated.

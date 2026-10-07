@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Private Queue asynchronous cleanup and hosted cancellation
+
+- Recorded [QASYNC-001–005](docs/research/queue-async-settlement.md) before implementation. Real host Wakers now flow through Queue initiating/callback polls; explicit CleanupWaiting distinguishes masked timer suspension from Queue request Pending. A private current-thread adapter reuses AsyncContext/watch, initiates interruption in child order then awaits cleanup, preserves late-cancelled pinned Sleep and skips unopened children on preabort. Public/generated Queue admission stays refused.
+- Four hosted official debug/release traces pass, including a producer finalizer starting Sleep inside a consumer callback. Missing-Waker and early-return mutations fail. Local cancellation/disconnection/false-update/masking and child-mask Drop restoration probes pass. Independent review found no blocker in the bounded profile; intra-dispatch cancellation and hosted-future abandonment remain explicit gates.
+- All17 Queue tests across4 suites pass with native builds serial; full `vp check`, strict reffect TypeScript and workspace build pass (reffect rebuilt,3/4 cached). Quiet1000 hosted groups allocate0 times both without Sleep and with warmed masked1ms Sleep; runtime and original watch creation are excluded. Linux bridge/context/task/driver/host future layouts144/24/16/72/232 bytes; actual sleeping-cleanup/producer children376/120. Payload scalars remain plain. Checked lexical lowering, receipts/default yields, frames/Cause/Exit, broader cleanup/hosts and public admission remain next; [handoff](docs/effect-v4-workstream.md#queue-asynchronous-cleanup-and-host-cancellation--2026-10-07) records how to resume.
+
 ## 2026-10-07 — Private Queue interruption and synchronous cleanup
 
 - Recorded [QINT-001–005](docs/research/queue-interruption-settlement.md) before implementation. Distinct Interrupted control results resume cancellable child futures after waiter removal; sticky bridge interruption blocks ordinary subsequent requests. Only explicit nonwaiting cleanup shutdown bypasses interruption. Sequential interrupt-all pumps actual cleanup and rechecks peer completion; abandoning cancel/Drop retain their narrower meaning.
