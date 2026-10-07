@@ -6,7 +6,6 @@
 - `vp test` source regression passes 65 tests across eight suites; public Queue plus compiler-stage regression passes 26 tests across six suites; private Queue debug/release and public Deferred/Semaphore/Latch regression passes 23 tests across five suites, with native builds serial. Actual public artifacts execute capacity1..3 and scalar payloads, all four coordinator families and injected Clock/Random under None/Bounded. Existing disabled-frame allocations/layouts remain unchanged; quiet Bounded cancellation still allocates three diagnostic capsules.
 - Strict `tsc --noEmit --strict --project packages/reffect/tsconfig.json`, full `vp check` and `vp run -r build` pass (one rebuilt package, three cache hits). Removed two unused-expression warnings in negative type contracts. Post-commit strict/check/build and the serial relevant tests are required before pushing. Independent read-only review found no material blocker. Updated package/API docs, coverage, open work and the [resume guide](docs/effect-v4-workstream.md#bounded-public-queue--2026-10-07). Next: End/shutdown/Done retained-outcome and cancellation-order research before extending the public facade.
 
-
 ## 2026-10-07 — Bounded public Queue preparation
 
 - Recorded [QPUB-001–005](docs/research/queue-public-admission.md) before implementation: narrow make/bounded/offer/take exports, checked public compiler routing, owned execution and independent coordinator modules. Existing profile/budget/growth/layout gates remain; RPC, shutdown/Done and generated cleanup are separate. Core PLAN.md is untouched.
