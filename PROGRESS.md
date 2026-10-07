@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Private Queue terminal control
+
+- Recorded and implemented [QTERM-001–005](docs/research/queue-terminal-control.md): private End/shutdown helpers now return bool or child control interruption through the existing request protocol. Owner Done/interruption remain separate, ordinary terminal requests respect sticky cancellation, and only explicit cleanup_shutdown is masked. No new runtime fields or public/profile/compiler/RPC admission. Fresh pinned/upstream sources were checked; no baseline upgrade or duplicate issue. Core PLAN.md is untouched.
+- All 14 tests across seven Queue suites pass with native builds serial: terminal, bounded, continuation, hosted cleanup, generated pressure, generated frames and public admission. Four official terminal trace families agree in debug/release; four negative mutations fail. Six quiet fixture families over 1,000 rounds allocate zero times. Actual paired child futures measure 128/152, 120/160, 120/160, 120/160, 136/112 and 136/112 bytes in both modes, under the 512-byte per-child fixture gate; these are raw borrowed-driver costs, not generated terminal roots. Existing public/generated measurements remain unchanged.
+- Strict TypeScript, full `vp check` (no warnings) and `vp run -r build` pass (one rebuilt package, three cache hits). Post-commit checks and the serial Queue regression precede pushing. Independent read-only review found no blocker. [Exact validation commands and evidence](docs/research/queue-terminal-control.md#delivered-private-extension) and the [resume guide](docs/effect-v4-workstream.md#queue-terminal-control-foundation--2026-10-07) identify the next gate: native unit Done/local catchAll representation, then retained All outcomes, terminal frames/budgets and generated cleanup before public completion admission.
+
 ## 2026-10-07 — Bounded public Queue
 
 - Delivered [QPUB-001–005](docs/research/queue-public-admission.md): public `R.Queue`/`QueueIR` make/bounded/dual offer/take, owned `QueueExecution` and checked standalone Compile admission. Original shape/reference/default2048/growth/byte/layout gates and hidden marker audits remain. Independent coordinator and runtime-service exports compose; RPC, shutdown/Done, generated cleanup and wider ownership remain refused. Core PLAN.md is untouched.

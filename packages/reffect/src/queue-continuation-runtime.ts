@@ -43,6 +43,18 @@ impl<T: Copy> QueueTask<'_, T> {
             _ => unreachable!("Queue take control result"),
         }
     }
+    async fn end_exit(&self) -> Result<bool, QueueInterrupted> {
+        match self.operation(QueueRequest::End).await {
+            QueueResponse::Boolean(value) => Ok(value), QueueResponse::Interrupted => Err(QueueInterrupted),
+            _ => unreachable!("Queue end control result"),
+        }
+    }
+    async fn shutdown_exit(&self) -> Result<bool, QueueInterrupted> {
+        match self.operation(QueueRequest::Shutdown).await {
+            QueueResponse::Boolean(value) => Ok(value), QueueResponse::Interrupted => Err(QueueInterrupted),
+            _ => unreachable!("Queue shutdown control result"),
+        }
+    }
     async fn cleanup_shutdown(&self) -> bool {
         let mut request = self.operation(QueueRequest::Shutdown); request.masked = true;
         match request.await {

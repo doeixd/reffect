@@ -257,3 +257,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 [Generated Queue interruption frames](research/queue-generated-frames.md) records private native frame/Cause/Exit parity and its policy-specific cost gates.
 
 [Bounded public Queue admission](research/queue-public-admission.md) records the public facade, compiler/host gates and validation contract.
+
+[Queue terminal control](research/queue-terminal-control.md) records the cancellation-aware completion prerequisite and remaining generated/public Done gates.
