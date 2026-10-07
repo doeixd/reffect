@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-07 — Private Queue continuation bridge
+
+- Recorded [QCB-001–005](docs/research/queue-continuation-bridge.md) before implementation. A posted-request bridge executes Queue operations outside child poll, releasing exclusive pinned borrows before synchronous peer callbacks. Two heterogeneous futures stay borrowed inline; generations/tickets, active/completed guards and separate step/depth assertions protect routing. No public or compiler admission changes.
+- Six official differential traces pass in debug/release: repeated backpressure with producer continuation before consumer, barging, Closing, shutdown and explicit offer/take cancellation. Delaying producer continuation fails the negative mutation. Foreign Pending is refused; replacement-ticket injection is separately labelled local safety evidence, not naturally scheduled retry proof. Independent review found no borrowing/routing blocker and clarified interrupted-child versus mandatory owner callback semantics.
+- Quiet construction/full execution across1000 invocations allocate0 times. Linux owner/request bank/borrowed driver/producer future/consumer future measure120/136/72/168/152 bytes. These are fixture costs, not checked generated root or host-context costs. Drop alone intentionally has no cleanup contract and remains an admission gate.
+- Queue IR/protocol/bridge regression passes16 tests across3 suites, native builds serial. Full `vp check`, strict package TypeScript and workspace build pass (initial reffect rebuild; final build4/4 cached). Checked IR lowering, cancellation/Drop ownership, operation receipts/default yields, frames/growth/layout and owned/public execution remain next; [handoff](docs/effect-v4-workstream.md#queue-continuation-bridge--2026-10-06) and open work record those boundaries.
+
 ## 2026-10-06 — Private Queue lexical IR and reference
 
 - Recorded [QIR-001–007](docs/research/queue-lexical-ir.md) before implementation/refinement. Private QueueIR supports lexical Bool/U64/Unit owners, capacity 1..3 suspend make/bounded, dual offer, take, explicit unit Done end and shutdown. No public exports or generated admission are introduced.
