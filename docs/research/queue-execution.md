@@ -1,5 +1,7 @@
 # Private owned Queue reference execution
 
+Current native frame support is verified separately by [QFRAME](queue-generated-frames.md); public admission remains gated. The preparation below records the earlier reference-only boundary.
+
 Prepared2026-10-07 against AGENTS, PLAN/PROGRESS, QBUD/QGEN, the existing Latch/Semaphore/Deferred owned runners and interruption-frame planner. This establishes the default reference context for the private generated offer/take profile; public exports and native frame policy remain unchanged.
 
 ## Primary sources

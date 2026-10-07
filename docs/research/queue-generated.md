@@ -1,5 +1,7 @@
 # Private generated Queue foundation
 
+Current frame support: [QFRAME](queue-generated-frames.md) now verifies explicit private None/Bounded interruption diagnostics. The original preparation below retains its narrower initial gate; public admission and generated finalizers remain separate.
+
 Preparation checked2026-10-07 against PLAN, PROGRESS, QIR/QCB/QOWN/QINT/QASYNC, existing lower.ts and the Latch generated/profile/growth machinery. This first checked lowering remains separate from public/compiler admission.
 
 ## Primary evidence

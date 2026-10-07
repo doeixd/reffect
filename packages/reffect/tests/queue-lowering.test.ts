@@ -52,15 +52,20 @@ test("private Queue lowering uses borrowed callbacks and scalar captures", () =>
   expect(emitted.ranges.some((range) => range.role === "definition")).toBe(true);
 });
 
-test("Queue artifact opt-out preserves runtime and refuses unproved frame policy", () => {
+test("Queue artifact opt-out is independent of private bounded frames", () => {
   const emitted = emitFunctions(
     lowerQueueFunctions(R.program({ work }), selected, SourceArtifacts.None),
   );
   expect(emitted.ranges).toEqual([]);
   expect(emitted.files["src/lib.rs"]).toContain("struct QueueDriver");
-  expect(() =>
-    lowerQueueFunctions(R.program({ work }), selected, SourceArtifacts.Full, FailureFrames.Bounded),
-  ).toThrow(/FailureFrames.None/);
+  for (const artifacts of [SourceArtifacts.Full, SourceArtifacts.None]) {
+    const framed = emitFunctions(
+      lowerQueueFunctions(R.program({ work }), selected, artifacts, FailureFrames.Bounded),
+    );
+    expect(framed.files["src/lib.rs"]).toContain("FrameTrail");
+    expect(framed.files["src/lib.rs"]).toContain('\\"kind\\":\\"queueScope\\"');
+    expect(framed.ranges.length > 0).toBe(artifacts === SourceArtifacts.Full);
+  }
   expect(() => lowerFunctions(R.program({ work }), selected)).toThrow(/Queue/);
 });
 

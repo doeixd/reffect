@@ -253,3 +253,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 [Private owned Queue execution](research/queue-execution.md) records default-context enforcement, cancellation ownership and reference-only interruption trails.
 
 [Shared owned cancellation](research/owned-execution-cancellation.md) records the signal override repair, shared lifetime helper and module-specific regression obligations.
+
+[Generated Queue interruption frames](research/queue-generated-frames.md) records private native frame/Cause/Exit parity and its policy-specific cost gates.

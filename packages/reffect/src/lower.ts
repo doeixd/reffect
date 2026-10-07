@@ -739,13 +739,6 @@ export function lowerQueueFunctions(
   failureFrames: FailureFramePolicy = FailureFrames.None,
 ): LoweredModule {
   const profiles = analyzeGeneratedQueueProfile(program);
-  if (profiles.size && !FailureFrames.isNone(failureFrames))
-    throw fail(
-      "QUEUE_GENERATED_FRAMES",
-      "lower",
-      "Queue",
-      "Private generated Queue requires FailureFrames.None",
-    );
   return lowerFunctionsInternal(
     program,
     selected,
@@ -3212,17 +3205,23 @@ export const emitFunctions = (
         Match.tagsExhaustive({
           QueueScope: (n) =>
             joinFragments([
-              `{ let ${n.owner.name} = BoundedQueue::<${typeName(n.owner.success)}, ${n.owner.capacity}, 2>::new(); let ${n.owner.name} = &${n.owner.name}; `,
+              `{ let ${n.owner.name} = BoundedQueue::<${typeName(n.owner.success)}, ${n.owner.capacity}, 2>::new(); let ${n.owner.name} = &${n.owner.name}; ${captureFrames ? "match " : ""}`,
               adaptFrag(n.body, helper.output, use("body")),
-              " }",
+              captureFrames
+                ? ` { Ok(value) => Ok(value), ${failureArm(helper, "queueScope")} } }`
+                : " }",
             ]),
           QueueOperation: (n) =>
             joinFragments([
               `{ match queue_task.expect("Checked Queue child task").${n.operation === "Offer" ? "offer_exit(" : "take_exit("}`,
               ...(n.value ? [renderBlock(n.value)] : []),
               n.operation === "Offer"
-                ? ").await { Ok(value) => Ok(value), Err(_) => Err(AsyncError::Interrupted) } }"
-                : ").await { Ok(QueueTake::Value(value)) => Ok(value), Ok(QueueTake::Terminal(_)) | Err(_) => Err(AsyncError::Interrupted) } }",
+                ? ").await { Ok(value) => Ok(value), Err(_) => "
+                : ").await { Ok(QueueTake::Value(value)) => Ok(value), Ok(QueueTake::Terminal(_)) | Err(_) => ",
+              captureFrames
+                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, n.operation === "Offer" ? "queueOffer" : "queueTake").text})))`
+                : "Err(AsyncError::Interrupted)",
+              " } }",
             ]),
           LatchScope: (n) =>
             joinFragments([
@@ -3304,11 +3303,17 @@ export const emitFunctions = (
                     use(`children[${i}]`),
                     textFragment(child.asynchronous ? Rs.await(call).text : call.text),
                   ),
-                  " { Ok(()) => true, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false }); }; ",
+                  captureFrames
+                    ? ` { Ok(()) => true, Err((AsyncError::Fail(never), _frames)) => match never {}, Err((AsyncError::Interrupted, _frames)) => false${fallibleGroups ? ', Err((AsyncError::Combined(_), _frames)) => panic!("Checked infallible Queue child produced combined cause")' : ""} }); }; `
+                    : ` { Ok(()) => true, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible Queue child produced combined cause")' : ""} }); }; `,
                 );
               });
               parts.push(
-                `tokio::pin!(future0, future1); let driver = QueueDriver::new(${n.queueRoute!.owner}, &bridge, future0.as_mut(), future1.as_mut()); let interrupted = driver.run_hosted(ctx).await; if !interrupted && successful.iter().all(|value| value.get()) && !ctx.is_cancelled() { Ok(()) } else { Err(AsyncError::Interrupted) } }`,
+                `tokio::pin!(future0, future1); let driver = QueueDriver::new(${n.queueRoute!.owner}, &bridge, future0.as_mut(), future1.as_mut()); let interrupted = driver.run_hosted(ctx).await; if !interrupted && successful.iter().all(|value| value.get()) && !ctx.is_cancelled() { Ok(()) } else { `,
+                captureFrames
+                  ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "all").text})))`
+                  : "Err(AsyncError::Interrupted)",
+                " } }",
               );
               return joinFragments(parts);
             }

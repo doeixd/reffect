@@ -21,7 +21,7 @@ Before delivery, test branch maxima/shared edges, strict saturation, context/inp
 
 ## Remaining gates
 
-[QEXEC](queue-execution.md) now enforces these context assumptions through the private owned reference boundary. Generated interruption frames/Cause/Exit and finalizer masking, end/shutdown/Done retained outcomes and broader ownership remain separate. The earlier runtime step/depth assertions are safety ceilings, not this receipt. Public Queue stays refused.
+[QEXEC](queue-execution.md) now enforces these context assumptions through the private owned reference boundary. [QFRAME](queue-generated-frames.md) now verifies private generated interruption frames/Cause/Exit. Finalizer masking, end/shutdown/Done retained outcomes and broader ownership remain separate. The earlier runtime step/depth assertions are safety ceilings, not this receipt. Public Queue stays refused.
 
 ## Delivered validation and review
 
