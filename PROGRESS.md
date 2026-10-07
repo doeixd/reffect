@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-07 — Private Queue fallible All
+
+- Recorded [QALL-001–005](docs/research/queue-done-recovery.md#private-fallible-all-driver--preparation-2026-10-07) before code. Fresh pinned concurrent iterator source, startup probes and existing driver/host retention guide a private emitted specialization. Implemented explicit private fallible runtime/host emission while preserving default runtime layouts and all public/compiler gates; core PLAN.md remains untouched.
+- Inline results and suspension membership retain Done through fail-fast and masked cleanup, preserve eager End/Take continuations and interrupt registered initiators without re-polling borrowed futures. Independent review suggested the Take/release fixtures; they exposed a Processing/inactive Retry gap, reproduced in the initial regression and repaired. Four negative mutations fail; final focused debug/release test matches all 13 official traces. Accessor/host guards refuse inherited root masking, abandoned entered children and closed outcomes.
+- Linux selected driver 80 bytes versus ordinary 72, hosted future 232, fixture children 560/384 (quiet 120/384). Both quiet modes allocate 0 across 100 warmed runs. Default generated Done artifacts/frame/build combinations retain prior layout/allocation measurements; the five existing suites pass 11 tests. Strict TypeScript, full workspace check and build pass; latest source changes have focused/strict/build verification, and the coherent six-suite regression plus full check are required again after commit before pushing.
+- Updated [handoff](docs/effect-v4-workstream.md#private-queue-fallible-all--2026-10-07) and open work. Next: bounded Cause/frame contract and checked generated fallible All, then generated cleanup and safe Shutdown/public completion. The private carrier is category-only; full Cause reasons/identity are not proved.
+
 ## 2026-10-07 — Private Queue retained cleanup
 
 - Recorded [QDONE-013–015](docs/research/queue-done-recovery.md#private-retained-source-through-cleanup--preparation-2026-10-07) before feature code. Fresh pinned OnExit/All primary source and official interruption probe distinguish retained Done from canceled success. Delivered a private static source/cleanup combinator before reentrant All fail-fast; public/compiler profiles and PLAN.md stay unchanged.

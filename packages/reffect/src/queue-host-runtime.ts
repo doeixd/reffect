@@ -1,5 +1,5 @@
 /** Private current-thread host adapter; emitted beside asyncRuntime(false, false). */
-export const queueHostRuntime = (): string => String.raw`
+export const queueHostRuntime = (fallible = false): string => String.raw`
 struct QueueCleanupMask<'a> { context: &'a mut AsyncContext, previous: bool }
 impl Drop for QueueCleanupMask<'_> {
     fn drop(&mut self) { self.context.interruptible = self.previous; }
@@ -26,9 +26,10 @@ impl<T: Copy> QueueTask<'_, T> {
         // The pinned Sleep is destroyed before mask restores interruptibility.
     }
 }
-impl<T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::future::Future<Output = ()>> QueueDriver<'_, T, C, F, G> {
+impl<T: Copy, const C: usize, F: std::future::Future<Output = ${fallible ? "Result<(), QueueTakeFailure>" : "()"}>, G: std::future::Future<Output = ${fallible ? "Result<(), QueueTakeFailure>" : "()"}>> QueueDriver<'_, T, C, F, G> {
     async fn run_hosted(&self, context: &mut AsyncContext) -> bool {
         assert!(!self.bridge.closed.get(), "Closed hosted Queue driver");
+        ${fallible ? 'assert!(context.interruptible, "Fallible Queue All requires interruptible root");' : ""}
         assert!(self.steps.get() == 0 && !self.is_done(0) && !self.is_done(1), "Hosted Queue driver must start fresh and run once");
         let interruptible = context.interruptible;
         let mut cancellation = context.cancellation.clone();
@@ -60,7 +61,7 @@ impl<T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::futur
                     // The second child's body has not entered a scope: retire without polling.
                     self.cancel(1);
                     self.begin_interrupt(0, cx.waker()); interrupted = true;
-                } else {
+                } ${fallible ? "else if self.terminal.get().is_some() { self.cancel(1); }" : ""} else {
                     self.pump_with_waker(1, cx.waker());
                 }
             }

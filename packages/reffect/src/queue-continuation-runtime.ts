@@ -1,5 +1,7 @@
 /** Private borrowed two-child experiment; scoped registration retirement, managed cleanup requires a separate host adapter. */
-export const queueContinuationRuntime = (): string => String.raw`
+export const queueContinuationRuntime = (fallible = false): string => {
+  const output = fallible ? "Result<(), QueueTakeFailure>" : "()";
+  return String.raw`
 #[derive(Clone, Copy)]
 enum QueueRequest<T> { Offer(T), Take, End, Shutdown }
 #[derive(Clone, Copy)]
@@ -131,7 +133,9 @@ impl<T: Copy> std::future::Future for QueueRequestFuture<'_, T> {
             if slot.phase != QueueRequestPhase::Ready { return std::task::Poll::Pending; }
             let response = slot.response.take().expect("Queue request result");
             slot.phase = QueueRequestPhase::Idle; slot.request = None; slot.ticket = None;
-            this.complete = true; std::task::Poll::Ready(response)
+            this.complete = true;
+            ${fallible ? "if !this.masked && this.task.bridge.interrupted[this.task.task].get() { return std::task::Poll::Ready(QueueResponse::Interrupted); }" : ""}
+            std::task::Poll::Ready(response)
         } else {
             assert!(slot.phase == QueueRequestPhase::Idle, "One outstanding Queue request per task");
             if !this.masked && this.task.bridge.interrupted[this.task.task].get() {
@@ -145,14 +149,20 @@ impl<T: Copy> std::future::Future for QueueRequestFuture<'_, T> {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueueBoundary { Waiting, CleanupWaiting, Complete }
-struct QueueDriver<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::future::Future<Output = ()>> {
+struct QueueDriver<'a, T: Copy, const C: usize, F: std::future::Future<Output = ${output}>, G: std::future::Future<Output = ${output}>> {
     queue: &'a BoundedQueue<T, C, 2>, bridge: &'a QueueBridge<T>,
     first: std::cell::RefCell<std::pin::Pin<&'a mut F>>,
     second: std::cell::RefCell<std::pin::Pin<&'a mut G>>,
     active: [std::cell::Cell<bool>; 2], done: [std::cell::Cell<bool>; 2],
     steps: std::cell::Cell<usize>, depth: std::cell::Cell<usize>,
+    ${
+      fallible
+        ? `outcomes: [std::cell::Cell<Option<Result<(), QueueTakeFailure>>>; 2],
+    members: [std::cell::Cell<bool>; 2], terminal: std::cell::Cell<Option<QueueTakeFailure>>,`
+        : ""
+    }
 }
-impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::future::Future<Output = ()>> QueueDriver<'a, T, C, F, G> {
+impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ${output}>, G: std::future::Future<Output = ${output}>> QueueDriver<'a, T, C, F, G> {
     fn new(queue: &'a BoundedQueue<T, C, 2>, bridge: &'a QueueBridge<T>,
         first: std::pin::Pin<&'a mut F>, second: std::pin::Pin<&'a mut G>) -> Self {
         assert!(!bridge.closed.get(), "Closed Queue bridge");
@@ -167,7 +177,49 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
         Self { queue, bridge, first: std::cell::RefCell::new(first), second: std::cell::RefCell::new(second),
             active: std::array::from_fn(|_| std::cell::Cell::new(false)),
             done: std::array::from_fn(|_| std::cell::Cell::new(false)),
-            steps: std::cell::Cell::new(0), depth: std::cell::Cell::new(0) }
+            steps: std::cell::Cell::new(0), depth: std::cell::Cell::new(0)
+            ${
+              fallible
+                ? `, outcomes: std::array::from_fn(|_| std::cell::Cell::new(None)),
+            members: std::array::from_fn(|_| std::cell::Cell::new(false)), terminal: std::cell::Cell::new(None)`
+                : ""
+            } }
+    }
+    ${
+      fallible
+        ? `fn record_outcome(&self, task: usize, result: Result<(), QueueTakeFailure>) {
+        self.outcomes[task].set(Some(result));
+        if let Err(error) = result {
+            if self.terminal.get().is_none() || matches!(error, QueueTakeFailure::Done(_)) {
+                self.terminal.set(Some(error));
+            }
+            let peer = 1 - task;
+            // Retry callbacks can execute an operation before re-polling its pinned future.
+            let processing = self.bridge.slots.borrow()[peer].phase == QueueRequestPhase::Processing;
+            if self.members[peer].get() && !self.done[peer].get() && (self.active[peer].get() || processing) {
+                self.bridge.interrupted[peer].set(true);
+            }
+        }
+    }
+    fn settle_failures(&self, waker: &std::task::Waker) {
+        if self.terminal.get().is_none() { return; }
+        assert!(!self.active.iter().any(|active| active.get()), "Failure settlement only at a boundary");
+        for task in 0..2 {
+            if self.members[task].get() && !self.done[task].get() && !self.bridge.interrupted[task].get() {
+                self.begin_interrupt(task, waker);
+            }
+        }
+    }
+    fn all_exit(&self, parent_interrupted: bool) -> Result<(), QueueTakeFailure> {
+        assert!(!self.bridge.closed.get(), "Closed All cannot report settlement");
+        assert!(self.is_done(0) && self.is_done(1), "All result requires settled children");
+        assert!((0..2).all(|task| !self.members[task].get() || self.outcomes[task].get().is_some()), "Abandoned entered child cannot report settlement");
+        if let Some(error) = self.terminal.get() { return Err(error); }
+        if parent_interrupted { return Err(QueueTakeFailure::ControlInterrupted); }
+        assert!(self.outcomes.iter().all(|outcome| outcome.get() == Some(Ok(()))), "Successful All requires both outcomes");
+        Ok(())
+    }`
+        : ""
     }
     fn step(&self) {
         let steps = self.steps.get().checked_add(1).expect("Queue bridge step overflow");
@@ -243,9 +295,16 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
             let poll = if task == 0 { self.first.borrow_mut().as_mut().poll(&mut cx) }
                 else { self.second.borrow_mut().as_mut().poll(&mut cx) };
             // Short RefCell pinned borrow ends before any protocol operation or callback.
-            if poll.is_ready() {
+            ${
+              fallible
+                ? `if let std::task::Poll::Ready(result) = poll {
+                assert!(self.bridge.slots.borrow()[task].phase == QueueRequestPhase::Idle, "Completed child retained Queue request");
+                self.done[task].set(true); self.record_outcome(task, result); break QueueBoundary::Complete;
+            }`
+                : `if poll.is_ready() {
                 assert!(self.bridge.slots.borrow()[task].phase == QueueRequestPhase::Idle, "Completed child retained Queue request");
                 self.done[task].set(true); break QueueBoundary::Complete;
+            }`
             }
             let phase = self.bridge.slots.borrow()[task].phase;
             if phase == QueueRequestPhase::Posted { self.execute_with_waker(task, waker); continue; }
@@ -253,7 +312,14 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
             assert!(phase == QueueRequestPhase::Waiting, "Foreign Pending is unsupported by the private Queue bridge");
             break QueueBoundary::Waiting;
         };
-        self.depth.set(depth - 1); self.active[task].set(false); boundary
+        self.depth.set(depth - 1); self.active[task].set(false);
+        ${
+          fallible
+            ? `if boundary != QueueBoundary::Complete { self.members[task].set(true); }
+        if depth == 1 { self.settle_failures(waker); }`
+            : ""
+        }
+        boundary
     }
     fn dispatch_with_waker(&self, waker: &std::task::Waker) -> bool {
         if self.bridge.closed.get() { return false; }
@@ -264,7 +330,9 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
     fn dispatch(&self) -> bool { self.dispatch_with_waker(std::task::Waker::noop()) }
     fn route(&self, event: QueueEvent) { self.route_with_waker(event, std::task::Waker::noop()); }
     fn start(&self) {
-        self.pump(0); self.pump(1); self.dispatch();
+        self.pump(0);
+        ${fallible ? "if self.terminal.get().is_some() { self.cancel(1); } else { self.pump(1); }" : "self.pump(1);"}
+        self.dispatch();
     }
     fn begin_interrupt(&self, task: usize, waker: &std::task::Waker) -> bool {
         assert!(task < 2 && !self.active.iter().any(|active| active.get()), "Interrupt only at a semantic boundary");
@@ -332,7 +400,8 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
         true
     }
 }
-impl<T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::future::Future<Output = ()>> Drop for QueueDriver<'_, T, C, F, G> {
+impl<T: Copy, const C: usize, F: std::future::Future<Output = ${output}>, G: std::future::Future<Output = ${output}>> Drop for QueueDriver<'_, T, C, F, G> {
     fn drop(&mut self) { self.retire(); }
 }
 `;
+};
