@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-07 — Conditional Queue default-scheduler receipts
+
+- Recorded [QBUD-001–004](docs/research/queue-budget.md) against freshly retrieved pinned primary sources before implementation. Private generated selection now requires a whole-invocation operation bound below2048, separate from source-growth/native layout checks. Each Take receives a finite-offer retry allowance; shared occurrences count fully, branches use independent maxima and unknown contexts/operations/cycles fail closed. No payload metadata or runtime fields are added.
+- Independent review caught framed-child undercharging: All children retain framed decorations while omitting root interruption observers. Corrected the checker, primary-source record and explicit receipt tests; final review found no further blocker.
+- Official plain/framed scheduler probes cover threshold admission, capacity1/2/3 pressure, barging and blocked offer/take interruption without default automatic yields. A longer child actually yields in both modes. A source that passes growth but exceeds the operation budget is refused. Missing-retry accounting fails the negative mutation.
+- Validation:40 tests across6 source/reference suites pass; generated Queue debug/release parity passes with unchanged zero-allocation fixture measurements and layouts. Strict reffect TypeScript, full vp check and workspace build pass. Context enforcement/owned execution, generated frames/Cause/Exit, Done/shutdown/finalizer evidence and public admission remain next; [handoff](docs/effect-v4-workstream.md#queue-default-scheduler-receipts--2026-10-07) and open work are updated. Core PLAN.md is untouched.
+
 ## 2026-10-07 — Private checked Queue offer/take lowering
 
 - Recorded [QGEN-001–005](docs/research/queue-generated.md) before implementation. Internal lowerQueueFunctions now selects a checked root scalar/Never Queue, capacity1..3 and unconditional All2 offer/take children. Existing scalar implementations/captures/SourceWriter are reused; separate child contexts share parent cancellation, inline receipts retain child outcomes, and actual emitted bytes/returned future layouts have limits. Generic/public Compile, hidden Queue/Done markers, frames, shutdown/Done, timers/finalizers and broader ownership remain refused.

@@ -247,3 +247,5 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 [Queue asynchronous settlement](research/queue-async-settlement.md) extends the private borrowed Queue driver with managed timer cleanup and hosted cancellation; public/generated admission remains gated.
 
 [Private generated Queue](research/queue-generated.md) records checked compiler lowering for the first two-child scalar offer/take profile and its admission gates.
+
+[Queue automatic-yield receipts](research/queue-budget.md) records finite retry accounting and the conditional default-context gate for private generated offer/take programs.

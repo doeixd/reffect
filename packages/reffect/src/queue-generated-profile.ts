@@ -3,6 +3,8 @@ import { Computation, EffectFn, checkEffectFunction } from "./effect-ir.ts";
 import { BoolType, CompileError, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Expr, Program } from "./kernel.ts";
 import { hasQueueComputation } from "./queue-profile.ts";
+import { analyzeQueueBudget } from "./queue-budget.ts";
+import type { QueueBudgetAnalysis } from "./queue-budget.ts";
 import { validQueueCapacity } from "./queue-model.ts";
 import { checkDeferredExecutionReferences } from "./deferred-execution.ts";
 import {
@@ -17,6 +19,7 @@ export interface GeneratedQueueProfile {
   readonly ownerCount: 1;
   readonly taskCapacity: 2;
   readonly bounds: GeneratedDeferredGrowth;
+  readonly budget: QueueBudgetAnalysis;
 }
 const scalar = (type: IRType<unknown>): boolean =>
   [BoolType, U64Type, UnitType].some((builtin) => builtin === type);
@@ -34,7 +37,7 @@ const remapGrowth = (error: unknown): never => {
     })),
   });
 };
-/** Private representation/ownership receipt; no default-scheduler admission claim. */
+/** Private representation/ownership receipt plus a conditional default-context budget. */
 export const analyzeGeneratedQueueProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => {
@@ -138,6 +141,12 @@ export const analyzeGeneratedQueueProfile = (
     };
     walk(root.body, `${path}.body`);
     if (groups !== 1) refuse(path, "Exactly one unconditional unnested All2 is required");
+    const budget = analyzeQueueBudget(fn, path);
+    if (!budget.admitted)
+      throw new CompileError({
+        message: "Unsupported private Queue reference budget",
+        diagnostics: budget.diagnostics,
+      });
     profiles.set(
       fn,
       Object.freeze({
@@ -146,6 +155,7 @@ export const analyzeGeneratedQueueProfile = (
         ownerCount: 1,
         taskCapacity: 2,
         bounds: bounds!,
+        budget,
       }),
     );
   }
