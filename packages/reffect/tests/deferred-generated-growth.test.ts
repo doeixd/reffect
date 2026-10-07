@@ -190,7 +190,7 @@ test("actual emitted Rust cap covers mixed crates and preserves ordinary emissio
         emitFunctions(
           lowerDeferredFunctions(R.program({ log, work: chain(1) }), selected, artifacts, frames),
         ),
-      ).toThrowError(/rustBytes/);
+      ).toThrowError(/Rust bytes/);
   expect(() =>
     checkGeneratedDeferredRustBytes({
       "src/lib.rs": "😀".repeat(524288),
@@ -199,7 +199,7 @@ test("actual emitted Rust cap covers mixed crates and preserves ordinary emissio
   ).not.toThrow();
   expect(() =>
     checkGeneratedDeferredRustBytes({ "src/lib.rs": "😀".repeat(524288), "src/main.rs": "x" }),
-  ).toThrowError(/rustBytes/);
+  ).toThrowError(/Rust bytes/);
 }, 30000);
 
 const programs = {

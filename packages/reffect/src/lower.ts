@@ -1,4 +1,11 @@
 import {
+  analyzeGeneratedQueueProfile,
+  type GeneratedQueueProfile,
+} from "./queue-generated-profile.ts";
+import { queueBoundedRuntime } from "./queue-bounded-runtime.ts";
+import { queueContinuationRuntime } from "./queue-continuation-runtime.ts";
+import { queueHostRuntime } from "./queue-host-runtime.ts";
+import {
   analyzeGeneratedLatchProfile,
   type GeneratedLatchProfile,
 } from "./latch-generated-profile.ts";
@@ -321,10 +328,21 @@ interface DeferredCapture {
 interface SemaphoreCapture {
   readonly name: string;
 }
+interface QueueCapture {
+  readonly name: string;
+  readonly success: IRType<unknown>;
+  readonly capacity: number;
+}
 interface LatchCapture {
   readonly name: string;
 }
 type HelperBody =
+  | { readonly _tag: "QueueScope"; readonly owner: QueueCapture; readonly body: number }
+  | {
+      readonly _tag: "QueueOperation";
+      readonly operation: "Offer" | "Take";
+      readonly value?: RustBlock;
+    }
   | {
       readonly _tag: "LatchScope";
       readonly owner: LatchCapture;
@@ -353,6 +371,7 @@ type HelperBody =
       readonly _tag: "TaskGroup";
       readonly mode: "All" | "Race";
       readonly children: readonly number[];
+      readonly queueRoute?: { readonly owner: string };
       readonly latchRoute?: { readonly slots: readonly number[]; readonly owner: string };
       readonly semaphoreRoute?: { readonly slots: readonly number[]; readonly owner: string };
       readonly deferredRoute?: {
@@ -520,6 +539,7 @@ type HelperBody =
       readonly body: number;
     };
 interface Helper {
+  readonly queueOwners?: readonly QueueCapture[];
   readonly latchOwners?: readonly LatchCapture[];
   readonly semaphoreOwners?: readonly SemaphoreCapture[];
   readonly deferredOwners?: readonly DeferredCapture[];
@@ -537,6 +557,7 @@ interface Helper {
   readonly body: HelperBody;
 }
 interface RustFunction {
+  readonly queueProfile?: GeneratedQueueProfile;
   readonly latchProfile?: GeneratedLatchProfile;
   readonly semaphoreProfile?: GeneratedSemaphoreProfile;
   readonly deferredProfile?: { readonly taskCapacity: number; readonly ownerCount: number };
@@ -573,6 +594,7 @@ export const hasFallibleTaskGroups = (module: LoweredModule): boolean =>
   module.functions.some((f) => f.richErrors);
 
 interface Scope {
+  readonly queueOwners?: ReadonlyMap<symbol, QueueCapture>;
   readonly latchTask?: number;
   readonly latchOwners?: ReadonlyMap<symbol, LatchCapture>;
   readonly semaphoreTask?: number;
@@ -710,6 +732,33 @@ export function lowerLatchFunctions(
   );
 }
 
+export function lowerQueueFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.None,
+): LoweredModule {
+  const profiles = analyzeGeneratedQueueProfile(program);
+  if (profiles.size && !FailureFrames.isNone(failureFrames))
+    throw fail(
+      "QUEUE_GENERATED_FRAMES",
+      "lower",
+      "Queue",
+      "Private generated Queue requires FailureFrames.None",
+    );
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    profiles,
+  );
+}
+
 function lowerFunctionsInternal(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
@@ -726,6 +775,7 @@ function lowerFunctionsInternal(
   >,
   semaphoreProfiles?: ReadonlyMap<EffectFn, GeneratedSemaphoreProfile>,
   latchProfiles?: ReadonlyMap<EffectFn, GeneratedLatchProfile>,
+  queueProfiles?: ReadonlyMap<EffectFn, GeneratedQueueProfile>,
 ): LoweredModule {
   for (const fn of Object.values(program.functions))
     if (
@@ -733,19 +783,23 @@ function lowerFunctionsInternal(
       containsQueue(fn.output) ||
       containsQueueDone(fn.output) ||
       (fn instanceof EffectFn &&
-        (hasQueueComputation(fn.body) || containsQueue(fn.error) || containsQueueDone(fn.error))) ||
+        ((hasQueueComputation(fn.body) && !queueProfiles?.has(fn)) ||
+          containsQueue(fn.error) ||
+          containsQueueDone(fn.error))) ||
       usesQueueNativeType(fn.body)
     )
       rejectQueueNative();
   const coordinationGrowth = Object.entries(program.functions).flatMap(([name, fn]) => {
     if (!(fn instanceof EffectFn)) return [];
-    const coordination = latchProfiles?.has(fn)
-      ? "Latch"
-      : semaphoreProfiles?.has(fn)
-        ? "Semaphore"
-        : deferredProfiles?.has(fn)
-          ? "Deferred"
-          : undefined;
+    const coordination = queueProfiles?.has(fn)
+      ? "Queue"
+      : latchProfiles?.has(fn)
+        ? "Latch"
+        : semaphoreProfiles?.has(fn)
+          ? "Semaphore"
+          : deferredProfiles?.has(fn)
+            ? "Deferred"
+            : undefined;
     return coordination
       ? [analyzeGeneratedDeferredGrowth(fn, `functions.${name}.body`, coordination)]
       : [];
@@ -770,6 +824,7 @@ function lowerFunctionsInternal(
         (f instanceof EffectFn && containsSemaphore(f.error))
       )
         rejectSemaphoreNative();
+      const queueProfile = f instanceof EffectFn ? queueProfiles?.get(f) : undefined;
       const latchProfile = f instanceof EffectFn ? latchProfiles?.get(f) : undefined;
       const semaphoreProfile = f instanceof EffectFn ? semaphoreProfiles?.get(f) : undefined;
       const deferredProfile = f instanceof EffectFn ? deferredProfiles?.get(f) : undefined;
@@ -810,6 +865,7 @@ function lowerFunctionsInternal(
           deferredTask: scope.deferredTask,
           latchTask: scope.latchTask,
           latchOwners: scope.latchOwners,
+          queueOwners: scope.queueOwners,
           semaphoreTask: scope.semaphoreTask,
           semaphoreOwners: scope.semaphoreOwners,
         };
@@ -828,6 +884,7 @@ function lowerFunctionsInternal(
           deferredTask: scope.deferredTask,
           latchTask: scope.latchTask,
           latchOwners: scope.latchOwners,
+          queueOwners: scope.queueOwners,
           semaphoreTask: scope.semaphoreTask,
           semaphoreOwners: scope.semaphoreOwners,
         };
@@ -893,8 +950,15 @@ function lowerFunctionsInternal(
           Match.value(value.node).pipe(
             Match.tagsExhaustive({
               QueueMake: rejectQueueNative,
-              QueueScope: rejectQueueNative,
-              QueueOperation: rejectQueueNative,
+              QueueScope: (n) => {
+                if (!queueProfile) rejectQueueNative();
+                computation(n.body);
+              },
+              QueueOperation: (n) => {
+                if (!queueProfile) rejectQueueNative();
+                owners.add(n.binder);
+                if (n.operation === "Offer") expression(n.value);
+              },
               LatchMake: rejectLatchNative,
               LatchScope: (n) => {
                 if (!latchProfile) rejectLatchNative();
@@ -934,6 +998,7 @@ function lowerFunctionsInternal(
               },
               TaskGroup: (n) => {
                 if (latchProfile) scope.latchOwners?.forEach((_, binder) => owners.add(binder));
+                if (queueProfile) scope.queueOwners?.forEach((_, binder) => owners.add(binder));
                 if (semaphoreProfile)
                   scope.semaphoreOwners?.forEach((_, binder) => owners.add(binder));
                 n.children.forEach(computation);
@@ -1033,6 +1098,9 @@ function lowerFunctionsInternal(
         return {
           bindings: scope.bindings,
           deferredTask: scope.deferredTask,
+          queueOwners: scope.queueOwners
+            ? new Map(Array.from(scope.queueOwners).filter(([binder]) => owners.has(binder)))
+            : undefined,
           latchTask: scope.latchTask,
           latchOwners: scope.latchOwners
             ? new Map(Array.from(scope.latchOwners).filter(([binder]) => owners.has(binder)))
@@ -1069,7 +1137,7 @@ function lowerFunctionsInternal(
             index,
             files: [],
             input:
-              deferredProfile || semaphoreProfile || latchProfile
+              deferredProfile || semaphoreProfile || latchProfile || queueProfile
                 ? capturedScope(scope, e).input
                 : scope.input,
             output: e.type,
@@ -1393,8 +1461,37 @@ function lowerFunctionsInternal(
         const body: HelperBody = Match.value(c.node).pipe(
           Match.tagsExhaustive({
             QueueMake: rejectQueueNative,
-            QueueScope: rejectQueueNative,
-            QueueOperation: rejectQueueNative,
+            QueueScope: (n): HelperBody => {
+              if (!queueProfile) return rejectQueueNative();
+              const owner = Object.freeze({
+                name: `queue${index}`,
+                success: n.success,
+                capacity: n.capacity,
+              });
+              const owners = new Map(scope.queueOwners);
+              owners.set(n.binder, owner);
+              return {
+                _tag: "QueueScope",
+                owner,
+                body: effectHelper(
+                  n.body,
+                  { ...scope, queueOwners: owners },
+                  error,
+                  `${path}.body`,
+                ),
+              };
+            },
+            QueueOperation: (n): HelperBody => {
+              if (!queueProfile || (n.operation !== "Offer" && n.operation !== "Take"))
+                return rejectQueueNative();
+              return {
+                _tag: "QueueOperation",
+                operation: n.operation,
+                ...(n.operation === "Offer"
+                  ? { value: block(n.value, scope, `${path}.value`) }
+                  : {}),
+              };
+            },
             LatchMake: rejectLatchNative,
             LatchScope: (n): HelperBody => {
               if (!latchProfile) return rejectLatchNative();
@@ -1513,6 +1610,9 @@ function lowerFunctionsInternal(
                 _tag: "TaskGroup",
                 mode: n.mode,
                 children,
+                ...(queueProfile
+                  ? { queueRoute: { owner: Array.from(scope.queueOwners!.values())[0].name } }
+                  : {}),
                 ...(latchProfile
                   ? {
                       latchRoute: {
@@ -1875,12 +1975,17 @@ function lowerFunctionsInternal(
           }),
         );
         const captures =
-          deferredProfile || semaphoreProfile || latchProfile ? capturedScope(scope, c) : scope;
+          deferredProfile || semaphoreProfile || latchProfile || queueProfile
+            ? capturedScope(scope, c)
+            : scope;
         helpers.set(
           index,
           Object.freeze({
             index,
             files: scope.fileInputs,
+            ...(queueProfile
+              ? { queueOwners: Object.freeze(Array.from(captures.queueOwners?.values() ?? [])) }
+              : {}),
             ...(latchProfile
               ? { latchOwners: Object.freeze(Array.from(captures.latchOwners?.values() ?? [])) }
               : {}),
@@ -1900,6 +2005,8 @@ function lowerFunctionsInternal(
               : {}),
             asynchronous: Match.value(body).pipe(
               Match.tagsExhaustive({
+                QueueScope: () => true,
+                QueueOperation: () => true,
                 LatchScope: () => true,
                 LatchOperation: (n) => n.operation === "Await",
                 SemaphoreScope: () => true,
@@ -1987,6 +2094,7 @@ function lowerFunctionsInternal(
             }
           : {}),
         ...(semaphoreProfile ? { semaphoreProfile } : {}),
+        ...(queueProfile ? { queueProfile } : {}),
         ...(latchProfile ? { latchProfile } : {}),
         richErrors: outcomes?.requiresRichErrors ?? false,
         services: Object.freeze({ clock, random }),
@@ -1995,6 +2103,7 @@ function lowerFunctionsInternal(
           !!deferredProfile ||
           !!semaphoreProfile ||
           !!latchProfile ||
+          !!queueProfile ||
           Match.value(node).pipe(
             Match.tagsExhaustive({
               Pure: () => false,
@@ -2254,7 +2363,7 @@ export const emitFunctions = (
   // DINT-007: inline private Deferred futures exceed rustc's default query depth
   // before a 32-frame diagnostic trail can overflow. Keep the allowance finite.
   const queryAllowance = module.functions.some(
-    (f) => f.deferredProfile || f.semaphoreProfile || f.latchProfile,
+    (f) => f.deferredProfile || f.semaphoreProfile || f.latchProfile || f.queueProfile,
   )
     ? '#![recursion_limit = "256"]\n\n'
     : "";
@@ -2272,6 +2381,13 @@ export const emitFunctions = (
         .replaceAll("deferred", "latch")
         .replaceAll("DEFERRED", "LATCH"),
     );
+  if (module.functions.some((f) => f.queueProfile)) {
+    write(
+      generatedDeferredFutureLayoutPrelude
+        .replaceAll("deferred", "queue")
+        .replaceAll("DEFERRED", "QUEUE"),
+    );
+  }
   const hasEffect = module.functions.some((f) => f.node._tag === "Effect");
   const captureFrames = !FailureFrames.isNone(module.failureFrames);
   if (hasEffect && captureFrames)
@@ -2339,6 +2455,8 @@ export const emitFunctions = (
         const child = (...children: number[]) => Math.max(0, ...children.map(depth));
         const result = Match.value(f.helpers[index].body).pipe(
           Match.tagsExhaustive({
+            QueueScope: (n) => depth(n.body),
+            QueueOperation: () => 0,
             LatchScope: (n) => depth(n.body),
             LatchOperation: () => 0,
             SemaphoreScope: (n) => depth(n.body),
@@ -2471,7 +2589,7 @@ export const emitFunctions = (
     ),
   );
   const infallibleArities = module.functions
-    .filter((f) => !f.deferredProfile && !f.semaphoreProfile && !f.latchProfile)
+    .filter((f) => !f.deferredProfile && !f.semaphoreProfile && !f.latchProfile && !f.queueProfile)
     .flatMap((f) =>
       f.helpers.flatMap((helper) =>
         Match.value(helper.body).pipe(
@@ -2552,6 +2670,11 @@ export const emitFunctions = (
         }),
       );
   }
+  if (module.functions.some((f) => f.queueProfile)) {
+    write(queueBoundedRuntime());
+    write(queueContinuationRuntime());
+    write(queueHostRuntime());
+  }
   if (fallibleGroups) write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
@@ -2577,6 +2700,12 @@ export const emitFunctions = (
             ? [
                 identExpr("turn"),
                 ...(helper.deferredOwners ?? []).map((owner) => identExpr(owner.name)),
+              ]
+            : []),
+          ...(f.queueProfile && helper.error
+            ? [
+                identExpr("queue_task"),
+                ...(helper.queueOwners ?? []).map((owner) => identExpr(owner.name)),
               ]
             : []),
           ...(f.latchProfile && helper.error
@@ -3026,6 +3155,8 @@ export const emitFunctions = (
     const entryFrameKind = (body: HelperBody): string =>
       Match.value(body).pipe(
         Match.tags({
+          QueueScope: () => "queueScope",
+          QueueOperation: (n) => (n.operation === "Offer" ? "queueOffer" : "queueTake"),
           LatchScope: () => "latchScope",
           LatchOperation: (n) => `latch${n.operation}`,
           SemaphoreScope: () => "semaphoreScope",
@@ -3079,6 +3210,20 @@ export const emitFunctions = (
             : resultType(helper.output, helper.error);
       const helperBody: MappedFragment = Match.value(helper.body).pipe(
         Match.tagsExhaustive({
+          QueueScope: (n) =>
+            joinFragments([
+              `{ let ${n.owner.name} = BoundedQueue::<${typeName(n.owner.success)}, ${n.owner.capacity}, 2>::new(); let ${n.owner.name} = &${n.owner.name}; `,
+              adaptFrag(n.body, helper.output, use("body")),
+              " }",
+            ]),
+          QueueOperation: (n) =>
+            joinFragments([
+              `{ match queue_task.expect("Checked Queue child task").${n.operation === "Offer" ? "offer_exit(" : "take_exit("}`,
+              ...(n.value ? [renderBlock(n.value)] : []),
+              n.operation === "Offer"
+                ? ").await { Ok(value) => Ok(value), Err(_) => Err(AsyncError::Interrupted) } }"
+                : ").await { Ok(QueueTake::Value(value)) => Ok(value), Ok(QueueTake::Terminal(_)) | Err(_) => Err(AsyncError::Interrupted) } }",
+            ]),
           LatchScope: (n) =>
             joinFragments([
               `{ let ${n.owner.name} = CohortLatch::<${f.latchProfile!.taskCapacity}>::new(${n.open}); let ${n.owner.name} = &${n.owner.name}; match `,
@@ -3140,6 +3285,33 @@ export const emitFunctions = (
               " } }",
             ]),
           TaskGroup: (n) => {
+            if (f.queueProfile) {
+              const parts: Array<string | MappedFragment> = [
+                "{ let bridge = QueueBridge::new(); let successful = [std::cell::Cell::new(false), std::cell::Cell::new(false)]; ",
+              ];
+              n.children.forEach((index, i) => {
+                const child = f.helpers[index];
+                const call = Rs.call(identExpr(`h_${f.name}_${child.index}`), [
+                  Rs.verbatimExpr(`&mut context${i}`),
+                  ...child.input.map((p) => Rs.verbatimExpr(helperArgument(p))),
+                  identExpr(`task${i}`),
+                  ...(child.queueOwners ?? []).map((owner) => identExpr(owner.name)),
+                ]);
+                parts.push(
+                  `let mut context${i} = ctx.child_context(ctx.cancellation.clone(), false); let task${i} = Some(bridge.task(${i})); let future${i} = async { successful[${i}].set(match `,
+                  mapFragment(
+                    child.origin,
+                    use(`children[${i}]`),
+                    textFragment(child.asynchronous ? Rs.await(call).text : call.text),
+                  ),
+                  " { Ok(()) => true, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false }); }; ",
+                );
+              });
+              parts.push(
+                `tokio::pin!(future0, future1); let driver = QueueDriver::new(${n.queueRoute!.owner}, &bridge, future0.as_mut(), future1.as_mut()); let interrupted = driver.run_hosted(ctx).await; if !interrupted && successful.iter().all(|value| value.get()) && !ctx.is_cancelled() { Ok(()) } else { Err(AsyncError::Interrupted) } }`,
+              );
+              return joinFragments(parts);
+            }
             const race = Rs.litBool(n.mode === "Race");
             const fallible = helper.richOutcome ?? false;
             const parts: (string | MappedFragment)[] = ["{ "];
@@ -3206,7 +3378,7 @@ export const emitFunctions = (
                     : ` { ${IRType.same(child.output, NeverType) ? "Ok(value) => match value {}" : "Ok(()) => true"}, Err(AsyncError::Fail(never)) => match never {}, Err(AsyncError::Interrupted) => false${fallibleGroups ? ', Err(AsyncError::Combined(_)) => panic!("Checked infallible child produced combined cause")' : ""} } }${f.deferredProfile ? ")" : ""}; `,
               );
             });
-            if (f.deferredProfile || f.semaphoreProfile || f.latchProfile)
+            if (f.deferredProfile || f.semaphoreProfile || f.latchProfile || f.queueProfile)
               parts.push(`tokio::pin!(${n.children.map((_, i) => `future${i}`).join(", ")}); `);
             const groupArguments = f.latchProfile
               ? [
@@ -4097,6 +4269,15 @@ export const emitFunctions = (
                     ),
                   ]
                 : []),
+              ...(f.queueProfile && helper.error
+                ? [
+                    `queue_task: Option<QueueTask<'_, ${typeName(f.queueProfile.success)}>>`,
+                    ...(helper.queueOwners ?? []).map(
+                      (owner) =>
+                        `${owner.name}: &BoundedQueue<${typeName(owner.success)}, ${owner.capacity}, 2>`,
+                    ),
+                  ]
+                : []),
               ...(f.latchProfile && helper.error
                 ? [
                     `task: ScanTask<'_, ${f.latchProfile.taskCapacity}>`,
@@ -4140,6 +4321,7 @@ export const emitFunctions = (
       f.semaphoreProfile || f.latchProfile
         ? `let bank = ScanTasks::<${(f.semaphoreProfile ?? f.latchProfile)!.taskCapacity}>::new(); let task = ScanTask::new(&bank, 0); `
         : "";
+    const queueEntry = f.queueProfile ? "let queue_task = None; " : "";
     const entryCancellation = f.asynchronous
       ? `if ctx.is_cancelled() { ${captureFrames ? `ctx.frames = Some(FrameTrail::new(${frameLiteral(f.name, f.path, "function", f.origin).text}));` : ""} return Err(AsyncError::Interrupted); } `
       : "";
@@ -4161,13 +4343,13 @@ export const emitFunctions = (
           captureFrames
             ? joinFragments([
                 f.asynchronous
-                  ? `{ ctx.frames = None; ${entryCancellation}${deferredEntry}${semaphoreEntry}match `
+                  ? `{ ctx.frames = None; ${entryCancellation}${deferredEntry}${semaphoreEntry}${queueEntry}match `
                   : "{ match ",
                 adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
                 ` { Ok(value) => Ok(value), Err((error, mut frames)) => { frames.push(${frameLiteral(f.name, f.path, "function", f.origin).text}); ${f.asynchronous ? "ctx.frames = Some(frames)" : "store_frames(frames)"}; Err(error) } } }`,
               ])
             : joinFragments([
-                `{ ${entryCancellation}${deferredEntry}${semaphoreEntry}`,
+                `{ ${entryCancellation}${deferredEntry}${semaphoreEntry}${queueEntry}`,
                 adaptFrag(n.root, f.output, useAt(`${f.path}.body`)),
                 " }",
               ]),
@@ -4175,7 +4357,7 @@ export const emitFunctions = (
     );
     writer.writeFragment(
       joinFragments([
-        `\npub ${f.asynchronous && !f.deferredProfile && !f.semaphoreProfile && !f.latchProfile ? "async " : ""}fn `,
+        `\npub ${f.asynchronous && !f.deferredProfile && !f.semaphoreProfile && !f.latchProfile && !f.queueProfile ? "async " : ""}fn `,
         mapFragment(
           f.origin,
           useAt(f.path),
@@ -4187,7 +4369,7 @@ export const emitFunctions = (
           f.origin,
           useAt(f.path),
           textFragment(
-            f.deferredProfile || f.semaphoreProfile || f.latchProfile
+            f.deferredProfile || f.semaphoreProfile || f.latchProfile || f.queueProfile
               ? `impl std::future::Future<Output = ${resultType(f.output, NeverType)}> + '_`
               : Match.value(f.node).pipe(
                   Match.tagsExhaustive({
@@ -4199,7 +4381,7 @@ export const emitFunctions = (
           "definition",
         ),
         " ",
-        f.deferredProfile || f.semaphoreProfile || f.latchProfile
+        f.deferredProfile || f.semaphoreProfile || f.latchProfile || f.queueProfile
           ? joinFragments([
               "{ let future = async move ",
               entryBody,
@@ -4208,7 +4390,7 @@ export const emitFunctions = (
                 f.origin,
                 useAt(f.path),
                 textFragment(
-                  `let _layout = assert_${f.latchProfile ? "latch" : f.semaphoreProfile ? "semaphore" : "deferred"}_future_layout(&future);`,
+                  `let _layout = assert_${f.queueProfile ? "queue" : f.latchProfile ? "latch" : f.semaphoreProfile ? "semaphore" : "deferred"}_future_layout(&future);`,
                 ),
                 "use",
               ),
@@ -4259,6 +4441,11 @@ export const emitFunctions = (
       ]),
     );
   }
+  const queueRoots = module.functions.filter((f) => f.queueProfile);
+  if (queueRoots.length)
+    write(
+      `#[doc(hidden)]\n#[cold]\n#[inline(never)]\npub fn reffect_queue_future_layouts(ctx: &mut AsyncContext) -> [usize; ${queueRoots.length}] { [${queueRoots.map((f) => `{ let future = r_${f.name}(ctx); let size = assert_queue_future_layout(&future); drop(future); size }`).join(", ")}] }\n`,
+    );
   const latchRoots = module.functions.filter((f) => f.latchProfile);
   if (latchRoots.length) {
     writer.writeFragment(
@@ -4576,13 +4763,15 @@ export const emitFunctions = (
   if (queryAllowance)
     checkGeneratedDeferredRustBytes(
       files,
-      module.functions.some((f) => f.latchProfile) &&
-        !module.functions.some((f) => f.deferredProfile || f.semaphoreProfile)
-        ? "Latch"
-        : module.functions.some((f) => f.semaphoreProfile) &&
-            !module.functions.some((f) => f.deferredProfile || f.latchProfile)
-          ? "Semaphore"
-          : "Deferred",
+      module.functions.some((f) => f.queueProfile)
+        ? "Queue"
+        : module.functions.some((f) => f.latchProfile) &&
+            !module.functions.some((f) => f.deferredProfile || f.semaphoreProfile)
+          ? "Latch"
+          : module.functions.some((f) => f.semaphoreProfile) &&
+              !module.functions.some((f) => f.deferredProfile || f.latchProfile)
+            ? "Semaphore"
+            : "Deferred",
     );
   return Object.freeze({ files, ranges: writer.ranges });
 };
@@ -4677,6 +4866,7 @@ const writeCompositeTypes = (
           Match: (body) => [body.condition],
           MatchTags: (body) => [body.scrutinee],
           ForEach: (body) => [body.source],
+          QueueOperation: (body) => (body.value ? [body.value] : []),
           Log: (body) => body.attributes.map((attribute) => attribute.block),
           Annotate: (body) => [body.value],
           Launch: (body) => body.values,

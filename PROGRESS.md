@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Private checked Queue offer/take lowering
+
+- Recorded [QGEN-001–005](docs/research/queue-generated.md) before implementation. Internal lowerQueueFunctions now selects a checked root scalar/Never Queue, capacity1..3 and unconditional All2 offer/take children. Existing scalar implementations/captures/SourceWriter are reused; separate child contexts share parent cancellation, inline receipts retain child outcomes, and actual emitted bytes/returned future layouts have limits. Generic/public Compile, hidden Queue/Done markers, frames, shutdown/Done, timers/finalizers and broader ownership remain refused.
+- Emitted debug/release Rust matches official reference backpressure/capacity/payload/capture/Boolean/Unit traces and blocked cancellation; lost producer resumption fails. Source artifacts opt out independently, mapped use/definition ranges remain, and selected profiles cannot admit hidden markers in unrelated pure exports. Independent review found no blocker in the bounded path. Quiet1000 generated constructions/executions and one blocked cancellation allocate0 with parent runtime/watch setup and logging excluded; Linux returned futures measure1232..2208 bytes. Payloads remain plain.
+- Shared growth regressions preserve native depth/branch/group boundaries in None/Bounded debug/release. Corrected two pre-existing assertions expecting rustBytes when emitted-size diagnostics say Rust bytes; the2MiB UTF-8 cap remains enforced. Full workspace check, strict TypeScript and build pass. Scheduler/default2048 receipts, frames/Cause/Exit and owned reference execution remain next before public admission; [handoff](docs/effect-v4-workstream.md#private-checked-queue-lowering--2026-10-07) records the route and separate cleanup/shutdown gates.
+
 ## 2026-10-07 — Private Queue asynchronous cleanup and hosted cancellation
 
 - Recorded [QASYNC-001–005](docs/research/queue-async-settlement.md) before implementation. Real host Wakers now flow through Queue initiating/callback polls; explicit CleanupWaiting distinguishes masked timer suspension from Queue request Pending. A private current-thread adapter reuses AsyncContext/watch, initiates interruption in child order then awaits cleanup, preserves late-cancelled pinned Sleep and skips unopened children on preabort. Public/generated Queue admission stays refused.
