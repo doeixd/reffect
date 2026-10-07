@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Private Queue interruption and synchronous cleanup
+
+- Recorded [QINT-001–005](docs/research/queue-interruption-settlement.md) before implementation. Distinct Interrupted control results resume cancellable child futures after waiter removal; sticky bridge interruption blocks ordinary subsequent requests. Only explicit nonwaiting cleanup shutdown bypasses interruption. Sequential interrupt-all pumps actual cleanup and rechecks peer completion; abandoning cancel/Drop retain their narrower meaning.
+- Ten official debug/release traces pass. Plain cleanup finishes before parent return; shutdown cleanup can complete its sibling normally before cancellation reaches it. Four negative mutations fail, including skipped cleanup and reversed child order. Independent review found no ordering/masking/completion blocker within the synchronous subset.
+- All16 Queue regression tests across3 suites pass, native builds serial. Full `vp check`, strict reffect TypeScript and workspace build pass (4/4 cached). Quiet1000 rounds covering complete execution, pending scope cleanup and both interruption modes allocate0 times. Linux control layouts remain120/144/72 bytes, ordinary futures168/152 and interruption-cleanup futures128/120. Suspended finalizers, host cancellation, full Cause/Exit/frames, receipts/default yields, checked lowering and public admission remain separate gates.
+
 ## 2026-10-07 — Private Queue scoped driver ownership
 
 - Recorded [QOWN-001–005](docs/research/queue-driver-ownership.md) before implementation. Quiescent close and Drop retire both exclusively owned registrations without polling child futures. Closed-bank guards prevent reuse; nonpanicking retirement tolerates a held bank borrow, unpublished receipt and poisoned-owner unwind. Borrowed futures remain caller-owned; this is not Effect finalizer/Exit settlement.

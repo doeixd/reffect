@@ -1,9 +1,11 @@
-/** Private borrowed two-child experiment; scoped registration retirement, no host/finalizer integration. */
+/** Private borrowed two-child experiment; scoped registration retirement, no host/general finalizer integration. */
 export const queueContinuationRuntime = (): string => String.raw`
 #[derive(Clone, Copy)]
 enum QueueRequest<T> { Offer(T), Take, End, Shutdown }
 #[derive(Clone, Copy)]
-enum QueueResponse<T> { Boolean(bool), Take(QueueTake<T>) }
+enum QueueResponse<T> { Boolean(bool), Take(QueueTake<T>), Interrupted }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct QueueInterrupted;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum QueueRequestPhase { Idle, Posted, Processing, Waiting, Ready }
 #[derive(Clone, Copy)]
@@ -11,12 +13,12 @@ struct QueueRequestSlot<T: Copy> {
     generation: u64, phase: QueueRequestPhase, request: Option<QueueRequest<T>>,
     response: Option<QueueResponse<T>>, ticket: Option<u64>,
 }
-struct QueueBridge<T: Copy> { slots: std::cell::RefCell<[QueueRequestSlot<T>; 2]>, closed: std::cell::Cell<bool>, installed: std::cell::Cell<bool> }
+struct QueueBridge<T: Copy> { slots: std::cell::RefCell<[QueueRequestSlot<T>; 2]>, closed: std::cell::Cell<bool>, installed: std::cell::Cell<bool>, interrupted: [std::cell::Cell<bool>; 2] }
 impl<T: Copy> QueueBridge<T> {
     fn new() -> Self {
         Self { slots: std::cell::RefCell::new([QueueRequestSlot {
             generation: 0, phase: QueueRequestPhase::Idle, request: None, response: None, ticket: None,
-        }; 2]), closed: std::cell::Cell::new(false), installed: std::cell::Cell::new(false) }
+        }; 2]), closed: std::cell::Cell::new(false), installed: std::cell::Cell::new(false), interrupted: std::array::from_fn(|_| std::cell::Cell::new(false)) }
     }
     fn task(&self, task: usize) -> QueueTask<'_, T> {
         assert!(!self.closed.get(), "Closed Queue bridge");
@@ -27,7 +29,25 @@ impl<T: Copy> QueueBridge<T> {
 struct QueueTask<'a, T: Copy> { bridge: &'a QueueBridge<T>, task: usize }
 impl<T: Copy> QueueTask<'_, T> {
     fn operation(&self, request: QueueRequest<T>) -> QueueRequestFuture<'_, T> {
-        QueueRequestFuture { task: *self, request, generation: None, complete: false }
+        QueueRequestFuture { task: *self, request, generation: None, complete: false, masked: false }
+    }
+    async fn offer_exit(&self, value: T) -> Result<bool, QueueInterrupted> {
+        match self.operation(QueueRequest::Offer(value)).await {
+            QueueResponse::Boolean(value) => Ok(value), QueueResponse::Interrupted => Err(QueueInterrupted),
+            _ => unreachable!("Queue offer control result"),
+        }
+    }
+    async fn take_exit(&self) -> Result<QueueTake<T>, QueueInterrupted> {
+        match self.operation(QueueRequest::Take).await {
+            QueueResponse::Take(value) => Ok(value), QueueResponse::Interrupted => Err(QueueInterrupted),
+            _ => unreachable!("Queue take control result"),
+        }
+    }
+    async fn cleanup_shutdown(&self) -> bool {
+        let mut request = self.operation(QueueRequest::Shutdown); request.masked = true;
+        match request.await {
+            QueueResponse::Boolean(value) => value, _ => unreachable!("Masked Queue shutdown result"),
+        }
     }
     async fn offer(&self, value: T) -> bool {
         match self.operation(QueueRequest::Offer(value)).await {
@@ -51,7 +71,7 @@ impl<T: Copy> QueueTask<'_, T> {
     }
 }
 struct QueueRequestFuture<'a, T: Copy> {
-    task: QueueTask<'a, T>, request: QueueRequest<T>, generation: Option<u64>, complete: bool,
+    task: QueueTask<'a, T>, request: QueueRequest<T>, generation: Option<u64>, complete: bool, masked: bool,
 }
 impl<T: Copy> Unpin for QueueRequestFuture<'_, T> {}
 impl<T: Copy> std::future::Future for QueueRequestFuture<'_, T> {
@@ -69,6 +89,9 @@ impl<T: Copy> std::future::Future for QueueRequestFuture<'_, T> {
             this.complete = true; std::task::Poll::Ready(response)
         } else {
             assert!(slot.phase == QueueRequestPhase::Idle, "One outstanding Queue request per task");
+            if !this.masked && this.task.bridge.interrupted[this.task.task].get() {
+                this.complete = true; return std::task::Poll::Ready(QueueResponse::Interrupted);
+            }
             slot.generation = slot.generation.checked_add(1).expect("Queue request generation overflow");
             this.generation = Some(slot.generation); slot.request = Some(this.request);
             slot.phase = QueueRequestPhase::Posted; std::task::Poll::Pending
@@ -193,6 +216,26 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
     fn start(&self) {
         self.pump(0); self.pump(1); self.dispatch();
     }
+    fn interrupt(&self, task: usize) -> bool {
+        assert!(task < 2 && !self.active.iter().any(|active| active.get()), "Interrupt only at a semantic boundary");
+        if self.done[task].get() { return false; }
+        let (ticket, generation) = {
+            let mut slots = self.bridge.slots.borrow_mut(); let slot = &mut slots[task];
+            assert!(slot.phase == QueueRequestPhase::Waiting, "Interrupt only a Queue-waiting child");
+            let ticket = slot.ticket.take().expect("Interrupted Queue waiter ticket");
+            self.bridge.interrupted[task].set(true); slot.phase = QueueRequestPhase::Processing;
+            (ticket, slot.generation)
+        };
+        // Registration cleanup and any peer callbacks precede authored finalizers.
+        self.queue.cancel(ticket, &mut |event| self.route(event));
+        self.publish(task, generation, QueueResponse::Interrupted);
+        assert_eq!(self.pump(task), QueueBoundary::Complete, "Suspending Queue cleanup is unsupported");
+        true
+    }
+    fn interrupt_all(&self) -> bool {
+        // The first cleanup may complete its peer normally before its turn.
+        let first = self.interrupt(0); let second = self.interrupt(1); first || second
+    }
     fn close(&self) -> bool {
         assert!(!self.active.iter().any(|active| active.get()), "Close only at a semantic boundary");
         self.retire()
@@ -224,7 +267,7 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
             let ticket = slot.ticket.take(); slot.phase = QueueRequestPhase::Idle;
             slot.request = None; slot.response = None; ticket
         };
-        // Explicit settlement: callbacks run before cancellation returns. No Drop assertion.
+        // Abandoning cancellation has no authored finalizers; use interrupt for settlement.
         if let Some(ticket) = ticket { self.queue.cancel(ticket, &mut |event| self.route(event)); }
         true
     }

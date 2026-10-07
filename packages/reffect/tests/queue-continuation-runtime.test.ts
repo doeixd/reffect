@@ -163,6 +163,43 @@ const ownershipOracle = async (closing: boolean) => {
   return events;
 };
 
+const interruptionOracle = (shutdown: boolean) =>
+  Effect.gen(function* () {
+    const queue = yield* Queue.bounded<number>(1);
+    const events: string[] = [];
+    const log = (event: string) =>
+      Effect.sync(() => {
+        events.push(event);
+      });
+    const first = yield* Effect.forkChild(
+      Queue.take(queue).pipe(
+        Effect.andThen(log("unexpected:take")),
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* log("taker:cleanup:start");
+            expect(queue.state._tag !== "Done" && queue.state.takers.size).toBe(0);
+            yield* log("taker:unregistered");
+            if (shutdown) yield* Queue.shutdown(queue);
+            yield* log("taker:cleanup:end");
+          }),
+        ),
+      ),
+      { startImmediately: true },
+    );
+    const second = yield* Effect.forkChild(
+      Effect.gen(function* () {
+        yield* Queue.offer(queue, 1);
+        yield* log("producer:A");
+        const result = yield* Queue.offer(queue, 2);
+        yield* log(`producer:${result}`);
+      }).pipe(Effect.ensuring(log("producer:cleanup"))),
+      { startImmediately: true },
+    );
+    yield* Fiber.interruptAll([first, second]);
+    yield* log("parent:settled");
+    return events;
+  });
+
 const harness = String.raw`
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -389,6 +426,48 @@ fn retirement_edges() {
     assert!(result.is_err()); assert!(bridge.closed.get());
     assert!(queue.state.lock().unwrap_or_else(|p|p.into_inner()).bank.iter().all(Option::is_none));
 }
+fn interrupted(shutdown:bool, print:bool) -> (usize,usize) {
+    let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new(); let log=Log::new();
+    let first=std::pin::pin!(async {
+        assert_eq!(bridge.task(0).take_exit().await,Err(QueueInterrupted));
+        log.push("taker:cleanup:start");
+        assert!(!queue.state.lock().unwrap().bank.iter().flatten().any(|r| r.task==0));
+        log.push("taker:unregistered");
+        if shutdown { assert!(bridge.task(0).cleanup_shutdown().await); }
+        log.push("taker:cleanup:end");
+    });
+    let second=std::pin::pin!(async {
+        assert_eq!(bridge.task(1).offer_exit(1).await,Ok(true)); log.push("producer:A");
+        match bridge.task(1).offer_exit(2).await {
+            Ok(false) => log.push("producer:false"),
+            Err(QueueInterrupted) => {}, _=>panic!("Unexpected producer completion"),
+        }
+        log.push("producer:cleanup");
+    });
+    let sizes=(std::mem::size_of_val(first.as_ref().get_ref()),std::mem::size_of_val(second.as_ref().get_ref()));
+    let driver=QueueDriver::new(&queue,&bridge,first,second); driver.pump(0); driver.pump(1);
+    assert!(driver.interrupt_all()); assert!(!driver.interrupt_all());
+    assert!(driver.is_done(0)&&driver.is_done(1)); assert_eq!(queue.registered(),0);
+    assert!(log.values.borrow()[..log.len.get()].contains(&"taker:cleanup:end"),"Interrupted child must finish cleanup");
+    assert!(log.values.borrow()[..log.len.get()].contains(&"producer:cleanup"),"Interrupted sibling must finish cleanup");
+    assert!(bridge.interrupted[0].get()); assert_eq!(bridge.interrupted[1].get(),!shutdown,"Cleanup must get first chance to complete sibling");
+    if shutdown {
+        assert!(log.values.borrow()[..log.len.get()].contains(&"producer:false"),"Shutdown cleanup must finish sibling normally");
+    }
+    log.push("parent:settled");
+    if print { log.print(if shutdown {"interrupt-shutdown"} else {"interrupt-plain"}); } sizes
+}
+fn sticky_interruption() {
+    // Local misuse/refusal probe, not a supported recovery/finalizer graph.
+    let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new();
+    let first=std::pin::pin!(async {
+        assert_eq!(bridge.task(0).take_exit().await,Err(QueueInterrupted));
+        assert_eq!(bridge.task(0).offer_exit(99).await,Err(QueueInterrupted));
+    });
+    let second=std::pin::pin!(async {}); let driver=QueueDriver::new(&queue,&bridge,first,second);
+    driver.pump(0); driver.pump(1); assert!(driver.interrupt(0)); assert!(!driver.interrupt(0));
+    assert_eq!(queue.state.lock().unwrap().len,0); assert_eq!(queue.registered(),0);
+}
 fn foreign() {
     let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new();
     let first=std::pin::pin!(std::future::pending::<()>()); let second=std::pin::pin!(async {});
@@ -396,16 +475,17 @@ fn foreign() {
 }
 fn quiet() {
     ALLOCS.store(0,Ordering::Relaxed); TRACK.store(true,Ordering::Relaxed);
-    let mut sizes=(0,0,0,0,0);
-    for _ in 0..1000 { sizes=pressure(false); scoped_retirement(false,false,false); scoped_retirement(true,true,false); }
+    let mut sizes=(0,0,0,0,0); let mut interruption_sizes=(0,0);
+    for _ in 0..1000 { sizes=pressure(false); scoped_retirement(false,false,false); scoped_retirement(true,true,false); interrupted(false,false); interruption_sizes=interrupted(true,false); }
     TRACK.store(false,Ordering::Relaxed);
     let allocations=ALLOCS.load(Ordering::Relaxed); assert_eq!(allocations,0);
     println!("COST:{allocations}:{}:{}:{}:{}:{}",sizes.0,sizes.1,sizes.2,sizes.3,sizes.4);
+    println!("INTERRUPTION_FUTURES:{}:{}",interruption_sizes.0,interruption_sizes.1);
 }
 fn main() {
     if std::env::args().nth(1).as_deref()==Some("foreign") { foreign(); return; }
     pressure(true); barging(); forced_retry(); for kind in ["closing","shutdown","cancel-offer"] { terminal(kind); }
-    cancel_take(); scoped_retirement(false,false,true); scoped_retirement(true,true,true); retirement_edges(); quiet();
+    cancel_take(); scoped_retirement(false,false,true); scoped_retirement(true,true,true); retirement_edges(); interrupted(false,true); interrupted(true,true); sticky_interruption(); quiet();
 }
 `;
 
@@ -449,6 +529,15 @@ test("borrowed ordinary Queue futures preserve official synchronous continuation
       expect(line, kind).toBeDefined();
       expect(JSON.parse(line!.slice(prefix.length)), kind).toEqual(await ownershipOracle(closing));
     }
+    for (const shutdown of [false, true]) {
+      const kind = shutdown ? "interrupt-shutdown" : "interrupt-plain";
+      const prefix = `CASE:${kind}:`;
+      const line = outputs[0]!.split("\n").find((line) => line.startsWith(prefix));
+      expect(line, kind).toBeDefined();
+      expect(JSON.parse(line!.slice(prefix.length)), kind).toEqual(
+        await Effect.runPromise(interruptionOracle(shutdown)),
+      );
+    }
     const cost = outputs[0]!
       .split("\n")
       .find((line) => line.startsWith("COST:"))!
@@ -462,6 +551,15 @@ test("borrowed ordinary Queue futures preserve official synchronous continuation
     expect(cost[0]).toBe(0);
     expect(cost).toHaveLength(6);
     expect(cost.slice(1).every((size) => size > 0 && size <= 1024)).toBe(true);
+    const interruptionSizes = outputs[0]!
+      .split("\n")
+      .find((line) => line.startsWith("INTERRUPTION_FUTURES:"))!
+      .split(":")
+      .slice(1)
+      .map(Number);
+    console.info("Queue interruption child future bytes:", interruptionSizes.join("/"));
+    expect(interruptionSizes).toHaveLength(2);
+    expect(interruptionSizes.every((size) => size > 0 && size <= 1024)).toBe(true);
     const mutation = "self.pump(event.task);";
     expect(runtime.split(mutation)).toHaveLength(2);
     await writeFile(
@@ -495,6 +593,41 @@ test("borrowed ordinary Queue futures preserve official synchronous continuation
     }
     expect(leak).toMatchObject({
       stderr: expect.stringContaining("Scoped Queue driver must retire registrations"),
+    });
+    const settlement =
+      'assert_eq!(self.pump(task), QueueBoundary::Complete, "Suspending Queue cleanup is unsupported");';
+    expect(runtime.split(settlement)).toHaveLength(2);
+    await writeFile(
+      source,
+      `${queueBoundedRuntime()}\n${runtime.replace(settlement, "self.done[task].set(true);")}\n${harness}`,
+    );
+    const abandoned = join(directory, "abandoned-cleanup");
+    await run("rustc", ["--edition=2021", source, "-o", abandoned], { timeout: 60000 });
+    let skipped: unknown;
+    try {
+      await run(abandoned, [], { timeout: 10000 });
+    } catch (error) {
+      skipped = error;
+    }
+    expect(skipped).toMatchObject({
+      stderr: expect.stringContaining("Interrupted child must finish cleanup"),
+    });
+    const order = "let first = self.interrupt(0); let second = self.interrupt(1); first || second";
+    expect(runtime.split(order)).toHaveLength(2);
+    await writeFile(
+      source,
+      `${queueBoundedRuntime()}\n${runtime.replace(order, "let second = self.interrupt(1); let first = self.interrupt(0); first || second")}\n${harness}`,
+    );
+    const reversed = join(directory, "reversed-interruption");
+    await run("rustc", ["--edition=2021", source, "-o", reversed], { timeout: 60000 });
+    let ordering: unknown;
+    try {
+      await run(reversed, [], { timeout: 10000 });
+    } catch (error) {
+      ordering = error;
+    }
+    expect(ordering).toMatchObject({
+      stderr: expect.stringContaining("Cleanup must get first chance to complete sibling"),
     });
   } finally {
     await rm(directory, { recursive: true, force: true });

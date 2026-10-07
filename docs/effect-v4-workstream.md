@@ -230,3 +230,11 @@ Read [QOWN-001–005](research/queue-driver-ownership.md) before extending cance
 Resume by running the three Queue suites serially after sourcing Cargo. Eight official traces, two negative mutations and local poison/active-panic/borrow/reuse/overlap fixtures pass. Quiet complete execution and pending scope cleanup allocate0; Linux owner/bank/driver/producer/consumer sizes120/144/72/168/152 bytes.
 
 Next design per-request cancellation and parent interruption with awaited finalizer settlement, then integrate a checked Queue profile into lower.ts. Keep default-context operation receipts, scheduling/yield behavior, provenance/failure frames and generated root costs as admission gates. Guard Drop does not permit arbitrary select, foreign futures, reentrant root cancellation or multi-thread hosting. Public Queue remains refused.
+
+## Queue interruption and synchronous cleanup — 2026-10-07
+
+Read [QINT-001–005](research/queue-interruption-settlement.md). Private Rust offer_exit/take_exit use Interrupted control results, distinct from offer false and owner terminal outcomes. interrupt removes the waiting child's ticket before callbacks/cleanup, resumes its future and requires actual completion. interrupt_all visits slots sequentially; the first masked cleanup_shutdown may complete the second normally before its interruption turn. Legacy cancel/Drop do not run authored finalizers. Native scalars remain plain; sticky interruption belongs to the bridge.
+
+Resume in queue-continuation-runtime.ts and its serial debug/release fixture. Ten official traces and four negative mutations pass; quiet complete/pending/interrupted workloads allocate0. New helpers do not establish full Cause/Exit or failure-frame agreement. Cancellable children branch directly from Interrupted into fixed synchronous cleanup and return; recovery, suspending/fallible/nested finalizers and host interruption stay refused.
+
+Next connect awaited cleanup and parent cancellation to existing AsyncContext machinery, then add the checked lexical Queue profile/lowering, default2048 receipts, provenance/frame policy and actual generated root costs before owned/public admission. Keep Queue-specific inline producer callbacks and scheduled taker passes separate throughout.
