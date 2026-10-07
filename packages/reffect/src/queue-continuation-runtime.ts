@@ -1,4 +1,4 @@
-/** Private borrowed two-child experiment; explicit cancellation, no host or Drop integration. */
+/** Private borrowed two-child experiment; scoped registration retirement, no host/finalizer integration. */
 export const queueContinuationRuntime = (): string => String.raw`
 #[derive(Clone, Copy)]
 enum QueueRequest<T> { Offer(T), Take, End, Shutdown }
@@ -11,14 +11,15 @@ struct QueueRequestSlot<T: Copy> {
     generation: u64, phase: QueueRequestPhase, request: Option<QueueRequest<T>>,
     response: Option<QueueResponse<T>>, ticket: Option<u64>,
 }
-struct QueueBridge<T: Copy> { slots: std::cell::RefCell<[QueueRequestSlot<T>; 2]> }
+struct QueueBridge<T: Copy> { slots: std::cell::RefCell<[QueueRequestSlot<T>; 2]>, closed: std::cell::Cell<bool>, installed: std::cell::Cell<bool> }
 impl<T: Copy> QueueBridge<T> {
     fn new() -> Self {
         Self { slots: std::cell::RefCell::new([QueueRequestSlot {
             generation: 0, phase: QueueRequestPhase::Idle, request: None, response: None, ticket: None,
-        }; 2]) }
+        }; 2]), closed: std::cell::Cell::new(false), installed: std::cell::Cell::new(false) }
     }
     fn task(&self, task: usize) -> QueueTask<'_, T> {
+        assert!(!self.closed.get(), "Closed Queue bridge");
         assert!(task < 2, "Checked Queue bridge task"); QueueTask { bridge: self, task }
     }
 }
@@ -57,6 +58,7 @@ impl<T: Copy> std::future::Future for QueueRequestFuture<'_, T> {
     type Output = QueueResponse<T>;
     fn poll(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let this = self.get_mut();
+        assert!(!this.task.bridge.closed.get(), "Closed Queue bridge");
         assert!(!this.complete, "Completed Queue request polled");
         let mut slots = this.task.bridge.slots.borrow_mut(); let slot = &mut slots[this.task.task];
         if let Some(generation) = this.generation {
@@ -85,6 +87,15 @@ struct QueueDriver<'a, T: Copy, const C: usize, F: std::future::Future<Output = 
 impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::future::Future<Output = ()>> QueueDriver<'a, T, C, F, G> {
     fn new(queue: &'a BoundedQueue<T, C, 2>, bridge: &'a QueueBridge<T>,
         first: std::pin::Pin<&'a mut F>, second: std::pin::Pin<&'a mut G>) -> Self {
+        assert!(!bridge.closed.get(), "Closed Queue bridge");
+        assert!(!bridge.installed.get(), "Queue bridge already installed");
+        assert!(bridge.slots.borrow().iter().all(|slot| slot.phase == QueueRequestPhase::Idle), "Fresh Queue bridge receipts");
+        let mut state = queue.state.lock().expect("Queue driver installation");
+        let exclusive = !state.driver_owned && state.bank.iter().all(Option::is_none);
+        if exclusive { state.driver_owned = true; }
+        drop(state);
+        assert!(exclusive, "Exclusive Queue driver installation");
+        bridge.installed.set(true);
         Self { queue, bridge, first: std::cell::RefCell::new(first), second: std::cell::RefCell::new(second),
             active: std::array::from_fn(|_| std::cell::Cell::new(false)),
             done: std::array::from_fn(|_| std::cell::Cell::new(false)),
@@ -175,11 +186,35 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
         self.depth.set(depth - 1); self.active[task].set(false); boundary
     }
     fn dispatch(&self) -> bool {
+        if self.bridge.closed.get() { return false; }
         assert!(!self.active.iter().any(|active| active.get()), "Dispatch only at a semantic boundary");
         self.step(); self.queue.dispatch(&mut |event| self.route(event))
     }
     fn start(&self) {
         self.pump(0); self.pump(1); self.dispatch();
+    }
+    fn close(&self) -> bool {
+        assert!(!self.active.iter().any(|active| active.get()), "Close only at a semantic boundary");
+        self.retire()
+    }
+    fn retire(&self) -> bool {
+        if self.bridge.closed.replace(true) { return false; }
+        for done in &self.done { done.set(true); }
+        // Drop cannot poll borrowed futures, panic on a RefCell borrow, or trust
+        // a receipt that may not have been published before unwinding.
+        if let Ok(mut slots) = self.bridge.slots.try_borrow_mut() {
+            for slot in slots.iter_mut() {
+                slot.phase = QueueRequestPhase::Idle; slot.request = None;
+                slot.response = None; slot.ticket = None;
+            }
+        }
+        // Both owner task IDs are exclusively ours and already inactive. This
+        // is whole-driver retirement, never per-operation cancellation.
+        let mut state = self.queue.state.lock().unwrap_or_else(|poison| poison.into_inner());
+        for registration in &mut state.bank { *registration = None; }
+        if state.life == QueueLife::Closing && state.len == 0 { state.life = QueueLife::Done; }
+        state.scheduled = false; state.driver_owned = false;
+        true
     }
     fn cancel(&self, task: usize) -> bool {
         assert!(task < 2 && !self.active[task].get(), "Cancel outside child poll/continuation");
@@ -193,5 +228,8 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::f
         if let Some(ticket) = ticket { self.queue.cancel(ticket, &mut |event| self.route(event)); }
         true
     }
+}
+impl<T: Copy, const C: usize, F: std::future::Future<Output = ()>, G: std::future::Future<Output = ()>> Drop for QueueDriver<'_, T, C, F, G> {
+    fn drop(&mut self) { self.retire(); }
 }
 `;

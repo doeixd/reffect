@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-07 — Private Queue scoped driver ownership
+
+- Recorded [QOWN-001–005](docs/research/queue-driver-ownership.md) before implementation. Quiescent close and Drop retire both exclusively owned registrations without polling child futures. Closed-bank guards prevent reuse; nonpanicking retirement tolerates a held bank borrow, unpublished receipt and poisoned-owner unwind. Borrowed futures remain caller-owned; this is not Effect finalizer/Exit settlement.
+- Independent review caught overlapping empty-driver installation. Inline owner/bridge installation leases now reject overlap without poisoning and keep an old closed guard from retiring a replacement driver. Payload scalars carry no added metadata.
+- Eight official debug/release traces pass, including parent exit with Open/Closing owners: buffered A and terminal state survive while canceled child continuations stay silent. Both delayed-producer and missing-Drop mutations fail. Local panic/reuse/overlap/borrow safety probes pass. All16 Queue regression tests across3 suites pass, native builds serial. Full `vp check`, strict reffect TypeScript and workspace build pass (4/4 build outputs cached).
+- Quiet1000 rounds covering complete execution and pending Open Drop/Closing close allocate0 times. Linux owner/bank/driver/producer/consumer layouts are120/144/72/168/152 bytes; bank guards add8 bytes and owner flag fits existing padding. Request Drop/select, async finalizer settlement, receipts/default yields, checked lowering and owned/public execution remain next.
+
 ## 2026-10-07 — Private Queue continuation bridge
 
 - Recorded [QCB-001–005](docs/research/queue-continuation-bridge.md) before implementation. A posted-request bridge executes Queue operations outside child poll, releasing exclusive pinned borrows before synchronous peer callbacks. Two heterogeneous futures stay borrowed inline; generations/tickets, active/completed guards and separate step/depth assertions protect routing. No public or compiler admission changes.

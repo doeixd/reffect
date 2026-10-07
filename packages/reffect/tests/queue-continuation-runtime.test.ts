@@ -118,6 +118,51 @@ const oracle = (kind: (typeof kinds)[number]) =>
     return events;
   });
 
+const ownershipOracle = async (closing: boolean) => {
+  const events: string[] = [];
+  const log = (event: string) =>
+    Effect.sync(() => {
+      events.push(event);
+    });
+  const queue = await Effect.runPromise(
+    Effect.gen(function* () {
+      const owner = yield* Queue.bounded<number, Cause.Done>(1);
+      yield* Effect.forkChild(Queue.take(owner).pipe(Effect.andThen(log("unexpected:take"))), {
+        startImmediately: true,
+      });
+      yield* Effect.forkChild(
+        Effect.gen(function* () {
+          yield* Queue.offer(owner, 1);
+          yield* log("p:1");
+          yield* Queue.offer(owner, 2);
+          yield* log("unexpected:offer");
+        }),
+        { startImmediately: true },
+      );
+      if (closing) {
+        yield* Queue.end(owner);
+        yield* log("end");
+      }
+      yield* log("root:return");
+      return owner;
+    }),
+  );
+  expect(await Effect.runPromise(Queue.take(queue))).toBe(1);
+  events.push("c:1");
+  if (!closing) {
+    expect(await Effect.runPromise(Queue.end(queue))).toBe(true);
+    events.push("end");
+  }
+  const exit = await Effect.runPromise(Effect.exit(Queue.take(queue)));
+  expect(Exit.isFailure(exit) && Cause.hasFails(exit.cause)).toBe(true);
+  if (Exit.isFailure(exit)) {
+    const error = Cause.findErrorOption(exit.cause);
+    expect(Option.isSome(error) && Cause.isDone(error.value)).toBe(true);
+  }
+  events.push("done");
+  return events;
+};
+
 const harness = String.raw`
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -263,16 +308,86 @@ fn cancel_take() {
     assert_eq!(queue.registered(),0); driver.pump(1);
     assert!(driver.is_done(0)&&driver.is_done(1)); assert_eq!(queue.registered(),0); log.print("cancel-take");
 }
-fn unsupported_drop() {
-    let queue=BoundedQueue::<u64,1,2>::new();
+fn scoped_retirement(closing:bool, explicit:bool, print:bool) {
+    let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new(); let log=Log::new();
     {
-        let bridge=QueueBridge::new(); let first=std::pin::pin!(async { bridge.task(0).take().await; });
-        let second=std::pin::pin!(async {}); let driver=QueueDriver::new(&queue,&bridge,first,second);
-        driver.pump(0); assert_eq!(queue.registered(),1);
+        let first=std::pin::pin!(async { bridge.task(0).take().await; log.push("unexpected:take"); });
+        let second=std::pin::pin!(async {
+            assert!(bridge.task(1).offer(1).await); log.push("p:1");
+            bridge.task(1).offer(2).await; log.push("unexpected:offer");
+        });
+        let driver=QueueDriver::new(&queue,&bridge,first,second);
+        driver.pump(0); driver.pump(1); assert_eq!(queue.registered(),2);
+        if closing { assert!(queue.end(&mut |_| panic!("Premature terminal notice"))); log.push("end"); }
+        log.push("root:return");
+        if explicit { assert!(driver.close()); assert!(!driver.close()); assert!(!driver.cancel(0)); }
     }
-    // Drop has no cancellation contract in this private borrowed experiment.
-    assert_eq!(queue.registered(),1,"Drop routing remains a separate admission gate");
-    queue.shutdown(&mut |_| {}); assert_eq!(queue.registered(),0);
+    assert_eq!(queue.registered(),0,"Scoped Queue driver must retire registrations");
+    assert!(bridge.closed.get());
+    assert_eq!(queue.state.lock().unwrap().life,if closing {QueueLife::Closing} else {QueueLife::Open});
+    assert_eq!(queue.take(0,&mut |_| panic!()),QueueResult::Ready(QueueTake::Value(1))); log.push("c:1");
+    if !closing { assert!(queue.end(&mut |_| panic!())); log.push("end"); }
+    assert_eq!(queue.take(0,&mut |_| panic!()),QueueResult::Ready(QueueTake::Terminal(QueueTerminal::Done))); log.push("done");
+    if print { log.print(if closing {"owned-closing"} else {"owned-open"}); }
+}
+fn retirement_edges() {
+    // A bank borrow cannot make Drop panic or prevent owner cleanup.
+    let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new();
+    let mut first=std::pin::pin!(async { bridge.task(0).take().await; });
+    let second=std::pin::pin!(async {});
+    let driver=QueueDriver::new(&queue,&bridge,first.as_mut(),second);
+    driver.pump(0); let borrow=bridge.slots.borrow_mut(); drop(driver);
+    assert!(bridge.closed.get()); assert_eq!(queue.registered(),0); drop(borrow);
+    let rejected=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut cx=std::task::Context::from_waker(std::task::Waker::noop());
+        std::future::Future::poll(first.as_mut(),&mut cx)
+    }));
+    assert!(rejected.is_err(),"Closed request must reject repoll");
+    let rejected=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let next=std::pin::pin!(async {}); let peer=std::pin::pin!(async {});
+        QueueDriver::new(&queue,&bridge,next,peer);
+    }));
+    assert!(rejected.is_err(),"Closed bridge must reject a new driver");
+    // Overlapping empty owners must be refused without poisoning the first lease.
+    let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new(); let other=QueueBridge::new();
+    let first=std::pin::pin!(async { bridge.task(0).take().await; }); let second=std::pin::pin!(async {});
+    let driver=QueueDriver::new(&queue,&bridge,first,second);
+    let rejected=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let first=std::pin::pin!(async {}); let second=std::pin::pin!(async {});
+        QueueDriver::new(&queue,&other,first,second);
+    }));
+    assert!(rejected.is_err()); assert!(!queue.state.is_poisoned()); assert!(!other.installed.get());
+    let rejected=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let first=std::pin::pin!(async {}); let second=std::pin::pin!(async {});
+        QueueDriver::new(&queue,&bridge,first,second);
+    }));
+    assert!(rejected.is_err()); driver.pump(0); assert!(driver.close());
+    let first=std::pin::pin!(async { other.task(0).take().await; }); let second=std::pin::pin!(async {});
+    let replacement=QueueDriver::new(&queue,&other,first,second); replacement.pump(0);
+    assert_eq!(queue.offer(1,2),QueueResult::Ready(true));
+    assert!(!driver.dispatch(),"Closed dispatcher must not consume replacement notifications"); driver.start();
+    assert_eq!(queue.registered(),1); assert!(!replacement.is_done(0));
+    drop(driver); assert_eq!(queue.registered(),1,"Old close must not retire replacement driver");
+    assert!(replacement.dispatch()); assert!(replacement.is_done(0));
+    drop(replacement); assert_eq!(queue.registered(),0);
+    // An active flag retained after child-poll panic cannot make Drop panic.
+    let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new();
+    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let first=std::pin::pin!(async { bridge.task(0).take().await; });
+        let second=std::pin::pin!(async { panic!("Expected child panic"); });
+        let driver=QueueDriver::new(&queue,&bridge,first,second); driver.pump(0); driver.pump(1);
+    }));
+    assert!(result.is_err()); assert!(bridge.closed.get()); assert_eq!(queue.registered(),0);
+    // Poison and a missing publication receipt must not cause a second panic in Drop.
+    let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new();
+    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let first=std::pin::pin!(async { bridge.task(0).take().await; });
+        let second=std::pin::pin!(async {}); let driver=QueueDriver::new(&queue,&bridge,first,second);
+        driver.pump(0); bridge.slots.borrow_mut()[0].ticket=None;
+        let _locked=queue.state.lock().unwrap(); panic!("Expected owner poison");
+    }));
+    assert!(result.is_err()); assert!(bridge.closed.get());
+    assert!(queue.state.lock().unwrap_or_else(|p|p.into_inner()).bank.iter().all(Option::is_none));
 }
 fn foreign() {
     let queue=BoundedQueue::<u64,1,2>::new(); let bridge=QueueBridge::new();
@@ -282,7 +397,7 @@ fn foreign() {
 fn quiet() {
     ALLOCS.store(0,Ordering::Relaxed); TRACK.store(true,Ordering::Relaxed);
     let mut sizes=(0,0,0,0,0);
-    for _ in 0..1000 { sizes=pressure(false); }
+    for _ in 0..1000 { sizes=pressure(false); scoped_retirement(false,false,false); scoped_retirement(true,true,false); }
     TRACK.store(false,Ordering::Relaxed);
     let allocations=ALLOCS.load(Ordering::Relaxed); assert_eq!(allocations,0);
     println!("COST:{allocations}:{}:{}:{}:{}:{}",sizes.0,sizes.1,sizes.2,sizes.3,sizes.4);
@@ -290,7 +405,7 @@ fn quiet() {
 fn main() {
     if std::env::args().nth(1).as_deref()==Some("foreign") { foreign(); return; }
     pressure(true); barging(); forced_retry(); for kind in ["closing","shutdown","cancel-offer"] { terminal(kind); }
-    cancel_take(); unsupported_drop(); quiet();
+    cancel_take(); scoped_retirement(false,false,true); scoped_retirement(true,true,true); retirement_edges(); quiet();
 }
 `;
 
@@ -327,6 +442,13 @@ test("borrowed ordinary Queue futures preserve official synchronous continuation
         await Effect.runPromise(oracle(kind)),
       );
     }
+    for (const closing of [false, true]) {
+      const kind = closing ? "owned-closing" : "owned-open";
+      const prefix = `CASE:${kind}:`;
+      const line = outputs[0]!.split("\n").find((line) => line.startsWith(prefix));
+      expect(line, kind).toBeDefined();
+      expect(JSON.parse(line!.slice(prefix.length)), kind).toEqual(await ownershipOracle(closing));
+    }
     const cost = outputs[0]!
       .split("\n")
       .find((line) => line.startsWith("COST:"))!
@@ -356,6 +478,23 @@ test("borrowed ordinary Queue futures preserve official synchronous continuation
     }
     expect(rejection).toMatchObject({
       stderr: expect.stringContaining("producer continuation must precede consumer"),
+    });
+    const scopedDrop = "fn drop(&mut self) { self.retire(); }";
+    expect(runtime.split(scopedDrop)).toHaveLength(2);
+    await writeFile(
+      source,
+      `${queueBoundedRuntime()}\n${runtime.replace(scopedDrop, "fn drop(&mut self) {}")}\n${harness}`,
+    );
+    const leaked = join(directory, "missing-retirement");
+    await run("rustc", ["--edition=2021", source, "-o", leaked], { timeout: 60000 });
+    let leak: unknown;
+    try {
+      await run(leaked, [], { timeout: 10000 });
+    } catch (error) {
+      leak = error;
+    }
+    expect(leak).toMatchObject({
+      stderr: expect.stringContaining("Scoped Queue driver must retire registrations"),
     });
   } finally {
     await rm(directory, { recursive: true, force: true });

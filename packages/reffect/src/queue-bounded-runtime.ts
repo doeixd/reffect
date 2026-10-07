@@ -21,7 +21,7 @@ struct QueueRegistration<T> { task: usize, ticket: u64, wait: QueueWait<T> }
 struct QueueState<T: Copy, const C: usize, const N: usize> {
     ring: [Option<T>; C], head: usize, len: usize,
     bank: [Option<QueueRegistration<T>>; N], next_ticket: u64,
-    life: QueueLife, terminal: QueueTerminal, scheduled: bool,
+    life: QueueLife, terminal: QueueTerminal, scheduled: bool, driver_owned: bool,
 }
 struct BoundedQueue<T: Copy, const C: usize, const N: usize> {
     state: std::sync::Mutex<QueueState<T, C, N>>,
@@ -31,7 +31,7 @@ impl<T: Copy, const C: usize, const N: usize> BoundedQueue<T, C, N> {
         assert!(C > 0 && (1..=4).contains(&N), "Checked private Queue bounds");
         Self { state: std::sync::Mutex::new(QueueState {
             ring: [None; C], head: 0, len: 0, bank: [None; N], next_ticket: 0,
-            life: QueueLife::Open, terminal: QueueTerminal::Done, scheduled: false,
+            life: QueueLife::Open, terminal: QueueTerminal::Done, scheduled: false, driver_owned: false,
         }) }
     }
     fn register(s: &mut QueueState<T, C, N>, task: usize, wait: QueueWait<T>) -> u64 {
