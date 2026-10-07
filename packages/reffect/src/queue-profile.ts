@@ -2,7 +2,7 @@ import { authoredChildren } from "./provenance.ts";
 import { Match } from "effect";
 import { Computation } from "./effect-ir.ts";
 import { Expr } from "./kernel.ts";
-import { containsQueue, containsQueueDone } from "./queue-model.ts";
+import { QueueDoneType, containsQueue, containsQueueDone } from "./queue-model.ts";
 export const hasQueueComputation = (body: Computation<unknown, unknown>): boolean => {
   const pending = [body];
   const seen = new Set<Computation<unknown, unknown>>();
@@ -30,6 +30,7 @@ export const hasQueueComputation = (body: Computation<unknown, unknown>): boolea
 /** Shared fail-closed native audit, including hidden pure operation channels. */
 export const usesQueueNativeType = (
   root: Expr<unknown> | Computation<unknown, unknown>,
+  localDone = false,
 ): boolean => {
   const pending = [root];
   const seen = new Set<Expr<unknown> | Computation<unknown, unknown>>();
@@ -41,7 +42,8 @@ export const usesQueueNativeType = (
     if (containsQueue(success) || containsQueueDone(success)) return true;
     if (
       current instanceof Computation &&
-      (containsQueue(current.error) || containsQueueDone(current.error))
+      (containsQueue(current.error) ||
+        (containsQueueDone(current.error) && !(localDone && current.error === QueueDoneType)))
     )
       return true;
     if (

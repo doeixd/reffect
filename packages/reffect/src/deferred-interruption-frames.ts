@@ -2,6 +2,7 @@ import { Cause, Effect, Exit, Match } from "effect";
 import type { Computation, LogicalFrame } from "./effect-ir.ts";
 import { maxLogicalFrames } from "./effect-ir.ts";
 import { fail } from "./kernel.ts";
+import type { IRType } from "./kernel.ts";
 
 // Execution receipts do not bound helper expansion across unexecuted branches.
 const maxDiagnosticPlanEntries = 4096;
@@ -12,17 +13,25 @@ interface FramePlan {
   readonly children: ReadonlyMap<string, FramePlan>;
 }
 
-// Mirror private native helper identity. All admitted error channels are Never.
+// Mirror helper identity across lexical scopes and specialized error channels.
 const planFrames = (root: Computation<unknown, unknown>, basePath: string): FramePlan => {
   type LexicalScope = object;
-  const memo = new Map<LexicalScope, Map<Computation<unknown, unknown>["node"], FramePlan>>();
+  const memo = new Map<
+    LexicalScope,
+    Map<IRType<unknown>, Map<Computation<unknown, unknown>["node"], FramePlan>>
+  >();
   let entries = 0;
   const walk = (
     computation: Computation<unknown, unknown>,
     path: string,
     scope: LexicalScope,
+    error: IRType<unknown> = computation.error,
   ): FramePlan => {
-    const nodes = memo.get(scope) ?? new Map<Computation<unknown, unknown>["node"], FramePlan>();
+    const channels =
+      memo.get(scope) ??
+      new Map<IRType<unknown>, Map<Computation<unknown, unknown>["node"], FramePlan>>();
+    const nodes =
+      channels.get(error) ?? new Map<Computation<unknown, unknown>["node"], FramePlan>();
     const cached = nodes.get(computation.node);
     if (cached) return cached;
     if (++entries > maxDiagnosticPlanEntries)
@@ -35,9 +44,14 @@ const planFrames = (root: Computation<unknown, unknown>, basePath: string): Fram
     const children = new Map<string, FramePlan>();
     const entry = Object.freeze({ node: computation.node, path, children });
     nodes.set(computation.node, entry);
-    memo.set(scope, nodes);
-    const child = (body: Computation<unknown, unknown>, edge: string, fresh = false) =>
-      children.set(edge, walk(body, `${path}.${edge}`, fresh ? {} : scope));
+    channels.set(error, nodes);
+    memo.set(scope, channels);
+    const child = (
+      body: Computation<unknown, unknown>,
+      edge: string,
+      fresh = false,
+      childError = error,
+    ) => children.set(edge, walk(body, `${path}.${edge}`, fresh ? {} : scope, childError));
     Match.value(computation.node).pipe(
       Match.tags({
         DeferredScope: (node) => child(node.body, "body", true),
@@ -54,6 +68,10 @@ const planFrames = (root: Computation<unknown, unknown>, basePath: string): Fram
           child(node.source, "source");
           child(node.body, "body", true);
         },
+        CatchAll: (node) => {
+          child(node.source, "source", false, node.source.error);
+          child(node.body, "body", true);
+        },
         Match: (node) => {
           child(node.onTrue, "onTrue");
           child(node.onFalse, "onFalse");
@@ -63,7 +81,9 @@ const planFrames = (root: Computation<unknown, unknown>, basePath: string): Fram
           child(node.finalizer, "finalizer");
         },
         TaskGroup: (node) =>
-          node.children.forEach((body, index) => child(body, `children[${index}]`, true)),
+          node.children.forEach((body, index) =>
+            child(body, `children[${index}]`, true, body.error),
+          ),
         MatchTags: (node) =>
           node.cases.forEach((branch, index) => child(branch.body, `cases[${index}]`, true)),
         DeferredAwait: () => {},
@@ -180,6 +200,7 @@ export class DeferredInterruptionBoundary {
         TaskGroup: (node) => (node.mode === "All" ? "all" : "race"),
         FlatMap: () => "flatMap" as const,
         Map: () => "map" as const,
+        CatchAll: () => "catchAll" as const,
         Match: () => "match" as const,
         MatchTags: () => "match" as const,
         Ensuring: () => "ensuring" as const,

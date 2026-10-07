@@ -2,10 +2,10 @@ import { Match } from "effect";
 import { Computation, EffectFn, checkEffectFunction } from "./effect-ir.ts";
 import { BoolType, CompileError, IRType, NeverType, U64Type, UnitType, fail } from "./kernel.ts";
 import type { Expr, Program } from "./kernel.ts";
-import { hasQueueComputation } from "./queue-profile.ts";
+import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { analyzeQueueBudget } from "./queue-budget.ts";
 import type { QueueBudgetAnalysis } from "./queue-budget.ts";
-import { validQueueCapacity } from "./queue-model.ts";
+import { QueueDoneType, validQueueCapacity } from "./queue-model.ts";
 import { checkDeferredExecutionReferences } from "./deferred-execution.ts";
 import {
   analyzeGeneratedDeferredGrowth,
@@ -16,6 +16,7 @@ import type { GeneratedDeferredGrowth } from "./deferred-growth.ts";
 export interface GeneratedQueueProfile {
   readonly success: IRType<unknown>;
   readonly capacity: number;
+  readonly completion: "None" | "End";
   readonly ownerCount: 1;
   readonly taskCapacity: 2;
   readonly bounds: GeneratedDeferredGrowth;
@@ -38,8 +39,9 @@ const remapGrowth = (error: unknown): never => {
   });
 };
 /** Checked representation/ownership receipt plus a conditional default-context budget. */
-export const analyzeGeneratedQueueProfile = (
+const analyzeQueueProfile = (
   program: Program,
+  localDone: boolean,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => {
   const profiles = new Map<EffectFn, GeneratedQueueProfile>();
   const moduleGrowth: GeneratedDeferredGrowth[] = [];
@@ -63,9 +65,16 @@ export const analyzeGeneratedQueueProfile = (
     );
     if (fn.input.length || !scalar(fn.output) || fn.error !== NeverType)
       refuse(path, "Generated Queue requires zero inputs and builtin scalar/Never channels");
-    if (!scalar(root.success) || root.error !== NeverType || !validQueueCapacity(root.capacity))
+    const done = localDone && root.error === QueueDoneType;
+    if (
+      !scalar(root.success) ||
+      (!done && root.error !== NeverType) ||
+      !validQueueCapacity(root.capacity)
+    )
       refuse(path, "Queue owner requires builtin Bool/U64/Unit, Never and literal capacity 1..3");
     const audit = (expression: Expr<unknown>, occurrence: string) => {
+      if (usesQueueNativeType(expression))
+        refuse(occurrence, "Queue/Done values and hidden pure channels cannot escape");
       const body = Computation.make(expression.type, NeverType, {
         _tag: "Succeed",
         value: expression,
@@ -81,8 +90,12 @@ export const analyzeGeneratedQueueProfile = (
       at: string,
       grouped = false,
       conditional = false,
+      caught = false,
     ): void => {
-      if (!scalar(body.output) || body.error !== NeverType)
+      if (
+        !scalar(body.output) ||
+        (body.error !== NeverType && !(done && caught && body.error === QueueDoneType))
+      )
         refuse(at, "Computation channels must be builtin scalar/Never");
       Match.value(body.node).pipe(
         Match.tags({
@@ -91,13 +104,17 @@ export const analyzeGeneratedQueueProfile = (
             if (
               node.binder !== root.binder ||
               node.success !== root.success ||
-              node.error !== NeverType
+              node.error !== root.error
             )
               refuse(
                 at,
                 "Queue operation requires the root lexical owner and exact builtin channels",
               );
-            if (node.operation !== "Offer" && node.operation !== "Take")
+            if (
+              node.operation !== "Offer" &&
+              node.operation !== "Take" &&
+              !(done && node.operation === "End")
+            )
               refuse(at, "End/shutdown and Done are outside generated Queue");
             if (node.operation === "Offer") audit(node.value, `${at}.value`);
           },
@@ -107,6 +124,7 @@ export const analyzeGeneratedQueueProfile = (
               node.children.length !== 2 ||
               grouped ||
               conditional ||
+              caught ||
               ++groups > 1
             )
               refuse(at, "Exactly one unconditional unnested All2 is supported");
@@ -118,17 +136,28 @@ export const analyzeGeneratedQueueProfile = (
           },
           Succeed: (node) => audit(node.value, `${at}.value`),
           Map: (node) => {
-            walk(node.source, `${at}.source`, grouped, conditional);
+            walk(node.source, `${at}.source`, grouped, conditional, caught);
             audit(node.body, `${at}.body`);
           },
           FlatMap: (node) => {
-            walk(node.source, `${at}.source`, grouped, conditional);
-            walk(node.body, `${at}.body`, grouped, conditional);
+            walk(node.source, `${at}.source`, grouped, conditional, caught);
+            walk(node.body, `${at}.body`, grouped, conditional, caught);
           },
           Match: (node) => {
             audit(node.condition, `${at}.condition`);
-            walk(node.onTrue, `${at}.onTrue`, grouped, true);
-            walk(node.onFalse, `${at}.onFalse`, grouped, true);
+            walk(node.onTrue, `${at}.onTrue`, grouped, true, caught);
+            walk(node.onFalse, `${at}.onFalse`, grouped, true, caught);
+          },
+          CatchAll: (node) => {
+            if (
+              !done ||
+              !grouped ||
+              node.source.error !== QueueDoneType ||
+              node.body.error !== NeverType
+            )
+              refuse(at, "Only child-local unit Done recovery with a Never handler is supported");
+            walk(node.source, `${at}.source`, grouped, conditional, true);
+            walk(node.body, `${at}.body`, grouped, conditional, false);
           },
           Log: (node) => {
             if (node.attributes.length) refuse(at, "Only plain literal logs are supported");
@@ -152,6 +181,7 @@ export const analyzeGeneratedQueueProfile = (
       Object.freeze({
         success: root.success,
         capacity: root.capacity,
+        completion: done ? "End" : "None",
         ownerCount: 1,
         taskCapacity: 2,
         bounds: bounds!,
@@ -161,3 +191,12 @@ export const analyzeGeneratedQueueProfile = (
   }
   return profiles;
 };
+
+export const analyzeGeneratedQueueProfile = (
+  program: Program,
+): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, false);
+
+/** Private End-only profile; compiler/public selection remains end-free. */
+export const analyzeGeneratedQueueDoneProfile = (
+  program: Program,
+): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, true);

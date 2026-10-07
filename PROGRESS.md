@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Private generated Queue Done
+
+- Recorded [QDONE-009–012](docs/research/queue-done-recovery.md#private-generated-endlocal-recovery--preparation-2026-10-07) before feature code: explicit private End-only selection, canonical zero-sized Done helper mapping, child-local recovery and handled-frame reset. Public/compiler/owned execution remain end-free; Shutdown and retained Done stay gated. Fresh pinned primary sources checked; core PLAN.md is untouched.
+- Implemented private End/local recovery selection and helper mapping, preserving hidden markers and infallible All boundaries. Reference frame identity now includes specialized errors and CatchAll edges. All eight artifact/frame/build combinations execute with official trace agreement; quiet construction allocates zero, recovery allocates zero under None or one released temporary trail under Bounded. Root sizes are 1080..1632 bytes None and 1096..1864 Bounded in these fixtures. Two emitted-code mutations fail.
+- All 50 source tests across seven suites and all 18 native/diagnostic tests across five serial suites pass. Strict TypeScript and workspace build pass (one rebuilt package, three cache hits). Full check found one unused test import, now removed; lint verification and required post-commit checks precede pushing. Independent review found no source blocker; it identified and corrected the unreachable suspended-recovery and absent-service fixture claims. [Delivery/validation](docs/research/queue-done-recovery.md#delivered-private-generated-extension) and [resume guide](docs/effect-v4-workstream.md#private-generated-queue-endlocal-done--2026-10-07) point to retained Done/fail-fast, cleanup/masking and safe Shutdown reconciliation before public completion.
+
 ## 2026-10-07 — Queue generated recovery safeguards
 
 - Recorded [QDONE-006–008](docs/research/queue-done-recovery.md#generated-recovery-safeguards--preparation-2026-10-07) before code: terminal-aware retry receipts, source-plus-handler recovery accounting and Queue-only full-edge CatchAll growth. Fresh pinned primary sources checked. Analysis alone will not widen selector/lowering/public gates; core PLAN.md is untouched.

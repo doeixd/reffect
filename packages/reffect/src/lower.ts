@@ -1,5 +1,6 @@
 import {
   analyzeGeneratedQueueProfile,
+  analyzeGeneratedQueueDoneProfile,
   type GeneratedQueueProfile,
 } from "./queue-generated-profile.ts";
 import { queueBoundedRuntime } from "./queue-bounded-runtime.ts";
@@ -11,7 +12,7 @@ import {
 } from "./latch-generated-profile.ts";
 import { latchCohortRuntime } from "./latch-cohort-runtime.ts";
 import { latchAllRuntime } from "./latch-all-runtime.ts";
-import { containsQueue, containsQueueDone } from "./queue-model.ts";
+import { QueueDoneType, containsQueue, containsQueueDone } from "./queue-model.ts";
 import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { containsLatch } from "./latch-model.ts";
 import { analyzeGeneratedSemaphoreProfile } from "./semaphore-generated-profile.ts";
@@ -340,7 +341,7 @@ type HelperBody =
   | { readonly _tag: "QueueScope"; readonly owner: QueueCapture; readonly body: number }
   | {
       readonly _tag: "QueueOperation";
-      readonly operation: "Offer" | "Take";
+      readonly operation: "Offer" | "Take" | "End";
       readonly value?: RustBlock;
     }
   | {
@@ -753,6 +754,27 @@ export function lowerQueueFunctions(
   );
 }
 
+/** Private checked End/local Done lowering; not used by public Compile selection. */
+export function lowerQueueDoneFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.None,
+  servicesSelection: RuntimeServicesSelection = {},
+): LoweredModule {
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
+    analyzeGeneratedLatchProfile(program),
+    analyzeGeneratedQueueDoneProfile(program),
+  );
+}
+
 function lowerFunctionsInternal(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
@@ -780,7 +802,10 @@ function lowerFunctionsInternal(
         ((hasQueueComputation(fn.body) && !queueProfiles?.has(fn)) ||
           containsQueue(fn.error) ||
           containsQueueDone(fn.error))) ||
-      usesQueueNativeType(fn.body)
+      usesQueueNativeType(
+        fn.body,
+        fn instanceof EffectFn && queueProfiles?.get(fn)?.completion === "End",
+      )
     )
       rejectQueueNative();
   const coordinationGrowth = Object.entries(program.functions).flatMap(([name, fn]) => {
@@ -1476,7 +1501,12 @@ function lowerFunctionsInternal(
               };
             },
             QueueOperation: (n): HelperBody => {
-              if (!queueProfile || (n.operation !== "Offer" && n.operation !== "Take"))
+              if (
+                !queueProfile ||
+                (n.operation !== "Offer" &&
+                  n.operation !== "Take" &&
+                  !(queueProfile.completion === "End" && n.operation === "End"))
+              )
                 return rejectQueueNative();
               return {
                 _tag: "QueueOperation",
@@ -2285,9 +2315,11 @@ export const emitFunctions = (
   let usesHtml = false;
   // Set when JSON text is written as JSON.stringify does (M9-1).
   let usesJsonText = false;
+  const localQueueDone = module.functions.some((f) => f.queueProfile?.completion === "End");
   const rsTypeOf = (type: IRType<unknown>): RsType => {
     const content = refContent(type);
     if (content) return rsTypeOf(content);
+    if (type === QueueDoneType && localQueueDone) return Rs.namedType("QueueDone");
     if (IRType.same(type, U64Type)) return Rs.namedType("u64");
     if (IRType.same(type, BoolType)) return Rs.namedType("bool");
     if (IRType.same(type, UnitType)) return Rs.unitType();
@@ -3150,7 +3182,12 @@ export const emitFunctions = (
       Match.value(body).pipe(
         Match.tags({
           QueueScope: () => "queueScope",
-          QueueOperation: (n) => (n.operation === "Offer" ? "queueOffer" : "queueTake"),
+          QueueOperation: (n) =>
+            n.operation === "Offer"
+              ? "queueOffer"
+              : n.operation === "End"
+                ? "queueEnd"
+                : "queueTake",
           LatchScope: () => "latchScope",
           LatchOperation: (n) => `latch${n.operation}`,
           SemaphoreScope: () => "semaphoreScope",
@@ -3212,18 +3249,34 @@ export const emitFunctions = (
                 ? ` { Ok(value) => Ok(value), ${failureArm(helper, "queueScope")} } }`
                 : " }",
             ]),
-          QueueOperation: (n) =>
-            joinFragments([
-              `{ match queue_task.expect("Checked Queue child task").${n.operation === "Offer" ? "offer_exit(" : "take_exit("}`,
-              ...(n.value ? [renderBlock(n.value)] : []),
+          QueueOperation: (n) => {
+            const kind =
               n.operation === "Offer"
-                ? ").await { Ok(value) => Ok(value), Err(_) => "
-                : ").await { Ok(QueueTake::Value(value)) => Ok(value), Ok(QueueTake::Terminal(_)) | Err(_) => ",
-              captureFrames
-                ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, n.operation === "Offer" ? "queueOffer" : "queueTake").text})))`
-                : "Err(AsyncError::Interrupted)",
+                ? "queueOffer"
+                : n.operation === "End"
+                  ? "queueEnd"
+                  : "queueTake";
+            const interrupted = captureFrames
+              ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, kind).text})))`
+              : "Err(AsyncError::Interrupted)";
+            if (n.operation === "Take" && f.queueProfile?.completion === "End") {
+              const domain = captureFrames
+                ? `Err((AsyncError::Fail(done), FrameTrail::new(${frameOf(helper, kind).text})))`
+                : "Err(AsyncError::Fail(done))";
+              return textFragment(
+                `{ match queue_task.expect("Checked Queue child task").take_done_exit().await { Ok(value) => Ok(value), Err(QueueTakeFailure::Done(done)) => ${domain}, Err(QueueTakeFailure::OwnerInterrupted) | Err(QueueTakeFailure::ControlInterrupted) => ${interrupted} } }`,
+              );
+            }
+            return joinFragments([
+              `{ match queue_task.expect("Checked Queue child task").${n.operation === "Offer" ? "offer_exit(" : n.operation === "End" ? "end_exit(" : "take_exit("}`,
+              ...(n.value ? [renderBlock(n.value)] : []),
+              n.operation === "Take"
+                ? ").await { Ok(QueueTake::Value(value)) => Ok(value), Ok(QueueTake::Terminal(_)) | Err(_) => "
+                : ").await { Ok(value) => Ok(value), Err(_) => ",
+              interrupted,
               " } }",
-            ]),
+            ]);
+          },
           LatchScope: (n) =>
             joinFragments([
               `{ let ${n.owner.name} = CohortLatch::<${f.latchProfile!.taskCapacity}>::new(${n.open}); let ${n.owner.name} = &${n.owner.name}; match `,
@@ -3798,6 +3851,24 @@ export const emitFunctions = (
           CatchAll: (n) => {
             const source = f.helpers[n.source];
             const binder = Rs.ident(n.binder).text;
+            if (f.queueProfile?.completion === "End" && source.error === QueueDoneType) {
+              const pattern = captureFrames
+                ? `Err((AsyncError::Fail(${binder}), handled_frames))`
+                : `Err(AsyncError::Fail(${binder}))`;
+              const interrupted = captureFrames
+                ? `Err((AsyncError::Interrupted, mut frames)) => { frames.push(${frameOf(helper, "catchAll").text}); Err((AsyncError::Interrupted, frames)) }`
+                : "Err(AsyncError::Interrupted) => Err(AsyncError::Interrupted)";
+              const impossible = fallibleGroups
+                ? `, ${captureFrames ? "Err((AsyncError::Combined(_), _))" : "Err(AsyncError::Combined(_))"} => panic!("Checked local Queue Done cannot retain a combined cause")`
+                : "";
+              return joinFragments([
+                "{ match ",
+                callFrag(n.source, use("source")),
+                ` { Ok(value) => Ok(value), ${pattern} => { ${captureFrames ? "drop(handled_frames); " : ""}match `,
+                adaptFrag(n.body, helper.output, use("body")),
+                ` { Ok(value) => Ok(value), ${failureArm(helper, "catchAll")} } }, ${interrupted}${impossible} } }`,
+              ]);
+            }
             const sourceSuccess = IRType.same(source.output, NeverType)
               ? "Ok(value) => match value {}, "
               : "Ok(value) => Ok(value), ";
