@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-07 — Private Queue typed Done recovery
+
+- Recorded [QDONE-001–005](docs/research/queue-done-recovery.md) before implementation: distinct zero-sized unit Done, inline typed take failure and statically stored local recovery future, with interruption bypass, no per-payload metadata and measured raw-driver costs. Generated/public completion still needs narrow marker selection, audited budget/growth/frame rules and retained outcomes. Fresh pinned primary sources checked; core PLAN.md is untouched.
+- Implemented private `take_done_exit` and generic `queue_catch_done`: scalar success stays plain; only Done invokes the handler; owner/control interruptions bypass it and recovery failures propagate. Nine official trace families agree in debug/release, four negative mutations fail, and Rust rejects substituting Unit for Done. QueueDone is zero-sized, its failure carrier one byte, and nine quiet families over 1,000 rounds allocate zero times. Actual child future pairs are 360/120 bytes for seven U64 families and 96/208 for Bool and Unit, under the per-child 512-byte fixture gate. These are raw-driver costs, not generated terminal roots.
+- Strict TypeScript, all 29 tests across nine serial Queue suites, full `vp check` (no warnings) and workspace build pass (one rebuilt package, three cache hits). Post-commit checks and the same serial regression precede pushing. Independent read-only review found no blocker. [Validation record](docs/research/queue-done-recovery.md#delivered-private-extension) and [resume guide](docs/effect-v4-workstream.md#queue-typed-done-recovery-foundation--2026-10-07) identify the next gate: checked private generated local Done, with budget/growth/frame/type-mapping and returned-root cost evidence before public completion.
+
 ## 2026-10-07 — Private Queue terminal control
 
 - Recorded and implemented [QTERM-001–005](docs/research/queue-terminal-control.md): private End/shutdown helpers now return bool or child control interruption through the existing request protocol. Owner Done/interruption remain separate, ordinary terminal requests respect sticky cancellation, and only explicit cleanup_shutdown is masked. No new runtime fields or public/profile/compiler/RPC admission. Fresh pinned/upstream sources were checked; no baseline upgrade or duplicate issue. Core PLAN.md is untouched.

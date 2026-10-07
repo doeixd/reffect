@@ -6,6 +6,19 @@ enum QueueRequest<T> { Offer(T), Take, End, Shutdown }
 enum QueueResponse<T> { Boolean(bool), Take(QueueTake<T>), Interrupted }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QueueInterrupted;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct QueueDone;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueueTakeFailure { Done(QueueDone), OwnerInterrupted, ControlInterrupted }
+async fn queue_catch_done<T, Source, Handler, Recovery>(source: Source, handler: Handler) -> Result<T, QueueTakeFailure>
+where Source: std::future::Future<Output = Result<T, QueueTakeFailure>>,
+      Handler: FnOnce(QueueDone) -> Recovery,
+      Recovery: std::future::Future<Output = Result<T, QueueTakeFailure>> {
+    match source.await {
+        Err(QueueTakeFailure::Done(done)) => handler(done).await,
+        result => result,
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum QueueRequestPhase { Idle, Posted, Processing, Waiting, Ready }
 #[derive(Clone, Copy)]
@@ -41,6 +54,14 @@ impl<T: Copy> QueueTask<'_, T> {
         match self.operation(QueueRequest::Take).await {
             QueueResponse::Take(value) => Ok(value), QueueResponse::Interrupted => Err(QueueInterrupted),
             _ => unreachable!("Queue take control result"),
+        }
+    }
+    async fn take_done_exit(&self) -> Result<T, QueueTakeFailure> {
+        match self.take_exit().await {
+            Ok(QueueTake::Value(value)) => Ok(value),
+            Ok(QueueTake::Terminal(QueueTerminal::Done)) => Err(QueueTakeFailure::Done(QueueDone)),
+            Ok(QueueTake::Terminal(QueueTerminal::Interrupted)) => Err(QueueTakeFailure::OwnerInterrupted),
+            Err(_) => Err(QueueTakeFailure::ControlInterrupted),
         }
     }
     async fn end_exit(&self) -> Result<bool, QueueInterrupted> {
