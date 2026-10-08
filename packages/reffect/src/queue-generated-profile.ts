@@ -17,6 +17,7 @@ export interface GeneratedQueueProfile {
   readonly success: IRType<unknown>;
   readonly capacity: number;
   readonly completion: "None" | "End";
+  readonly fallibleAll?: true;
   readonly ownerCount: 1;
   readonly taskCapacity: 2;
   readonly bounds: GeneratedDeferredGrowth;
@@ -41,7 +42,7 @@ const remapGrowth = (error: unknown): never => {
 /** Checked representation/ownership receipt plus a conditional default-context budget. */
 const analyzeQueueProfile = (
   program: Program,
-  localDone: boolean,
+  mode: "None" | "Local" | "All",
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => {
   const profiles = new Map<EffectFn, GeneratedQueueProfile>();
   const moduleGrowth: GeneratedDeferredGrowth[] = [];
@@ -56,16 +57,36 @@ const analyzeQueueProfile = (
     } catch (error) {
       remapGrowth(error);
     }
-    const diagnostics = checkEffectFunction(fn, `functions.${name}`);
-    if (diagnostics.length)
-      throw new CompileError({ message: "Invalid lexical Queue function", diagnostics });
+    const check = () => {
+      const diagnostics = checkEffectFunction(fn, `functions.${name}`).filter(
+        (issue) =>
+          !(
+            mode === "All" &&
+            issue.code === "TASK_GROUP_RECOVERY" &&
+            issue.path === `${path}.body`
+          ),
+      );
+      if (diagnostics.length)
+        throw new CompileError({ message: "Invalid lexical Queue function", diagnostics });
+    };
+    if (mode !== "All") check();
     const root = Match.value(fn.body.node).pipe(
       Match.tag("QueueScope", (node) => node),
       Match.orElse(() => refuse(path, "Exactly one root lexical Queue is required")),
     );
     if (fn.input.length || !scalar(fn.output) || fn.error !== NeverType)
       refuse(path, "Generated Queue requires zero inputs and builtin scalar/Never channels");
-    const done = localDone && root.error === QueueDoneType;
+    const done = mode !== "None" && root.error === QueueDoneType;
+    const fallibleAll = mode === "All";
+    if (
+      fallibleAll &&
+      (!done ||
+        fn.output !== UnitType ||
+        root.body.node._tag !== "CatchAll" ||
+        root.body.node.source.node._tag !== "TaskGroup" ||
+        root.body.node.source.error !== QueueDoneType)
+    )
+      refuse(path, "Private fallible Queue requires root unit Done All2 recovery");
     if (
       !scalar(root.success) ||
       (!done && root.error !== NeverType) ||
@@ -94,7 +115,8 @@ const analyzeQueueProfile = (
     ): void => {
       if (
         !scalar(body.output) ||
-        (body.error !== NeverType && !(done && caught && body.error === QueueDoneType))
+        (body.error !== NeverType &&
+          !(done && (caught || fallibleAll) && body.error === QueueDoneType))
       )
         refuse(at, "Computation channels must be builtin scalar/Never");
       Match.value(body.node).pipe(
@@ -129,7 +151,10 @@ const analyzeQueueProfile = (
             )
               refuse(at, "Exactly one unconditional unnested All2 is supported");
             node.children.forEach((child, index) => {
-              if (child.output !== UnitType || child.error !== NeverType)
+              if (
+                child.output !== UnitType ||
+                (child.error !== NeverType && !(fallibleAll && child.error === QueueDoneType))
+              )
                 refuse(at, "All2 children require builtin Unit/Never channels");
               walk(child, `${at}.children[${index}]`, true, false);
             });
@@ -149,6 +174,21 @@ const analyzeQueueProfile = (
             walk(node.onFalse, `${at}.onFalse`, grouped, true, caught);
           },
           CatchAll: (node) => {
+            if (fallibleAll) {
+              if (
+                body !== root.body ||
+                grouped ||
+                conditional ||
+                node.source.node._tag !== "TaskGroup" ||
+                node.source.error !== QueueDoneType ||
+                node.body.error !== NeverType ||
+                node.body.output !== UnitType
+              )
+                refuse(at, "Only root All2 Done recovery is supported");
+              walk(node.source, `${at}.source`, false, false, false);
+              walk(node.body, `${at}.body`, false, false, false);
+              return;
+            }
             if (
               !done ||
               !grouped ||
@@ -170,6 +210,7 @@ const analyzeQueueProfile = (
     };
     walk(root.body, `${path}.body`);
     if (groups !== 1) refuse(path, "Exactly one unconditional unnested All2 is required");
+    if (fallibleAll) check();
     const budget = analyzeQueueBudget(fn, path);
     if (!budget.admitted)
       throw new CompileError({
@@ -182,6 +223,7 @@ const analyzeQueueProfile = (
         success: root.success,
         capacity: root.capacity,
         completion: done ? "End" : "None",
+        ...(fallibleAll ? { fallibleAll: true as const } : {}),
         ownerCount: 1,
         taskCapacity: 2,
         bounds: bounds!,
@@ -194,9 +236,14 @@ const analyzeQueueProfile = (
 
 export const analyzeGeneratedQueueProfile = (
   program: Program,
-): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, false);
+): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "None");
 
 /** Private End-only profile; compiler/public selection remains end-free. */
 export const analyzeGeneratedQueueDoneProfile = (
   program: Program,
-): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, true);
+): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Local");
+
+/** Private receipt for root All2 Done recovery; no ordinary Queue coexports. */
+export const analyzeGeneratedQueueFallibleProfile = (
+  program: Program,
+): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "All");

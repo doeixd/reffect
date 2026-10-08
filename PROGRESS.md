@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-08 — Private generated Queue fallible All
+
+- Recorded [QGALL-001–006](docs/research/queue-done-recovery.md#checked-generated-fallible-all--preparation-2026-10-08) before implementation. Fresh pinned source and existing Cause/frame/marker guards select a fixed private End-only All2 recovery profile; public admission and PLAN.md remain unchanged.
+
+- Delivered a fixed End-only root All2 recovery receipt and lowerer, with selective composite-recovery validation, distinct Done cause mapping and cancellation-aware Combined retention. Group-owned failure trails preserve the first Done child and release handled frames; None emits no trail holder. Public/compiler selectors and scalar classification stay unchanged.
+- Eight artifact/frame/build combinations agree with owned official traces. Exact interruption paths, eager/reversed startup, buffered success, second-child/shared/unopened cases and producer-release fail-fast are covered. Quiet construction allocates 0; 100 warmed recoveries allocate 0 under None or 100 released Bounded trails. Linux roots 1208..1744 bytes None and 1248..2152 Bounded; emitted libraries 163548..235169 bytes. Existing local-Done/public/native cause and source safeguards pass 28 tests across seven suites; the added Bounded retained-domain trail probe passes debug/release and its mutation, bringing coverage to 29 tests. Strict TypeScript, full workspace check and build pass; final post-commit checks precede push.
+- Independent review found no source blocker, narrowed the exact handler/function contract to Unit and requested the Bounded retention probe. Four mutations cover erased Done, skipped guard, leaked handled trails and erased retained child frames. Updated [handoff](docs/effect-v4-workstream.md#checked-generated-queue-fallible-all--2026-10-08) and open work. Next: default/fallible Queue driver coexistence, generated cleanup and safe Shutdown/public completion; core PLAN.md stays untouched.
+
 ## 2026-10-08 — Private Queue Cause projection and recovery
 
 - Recorded [QCAUSE-001–005](docs/research/queue-done-recovery.md#private-queue-cause-projection--preparation-2026-10-08) before code. Fresh pinned All/catch/continuation source and existing scalar/native/compiler guards guide a selected Done tag and private cancellation-aware cause/recovery adapter. Generated/public admission and PLAN.md remain unchanged.

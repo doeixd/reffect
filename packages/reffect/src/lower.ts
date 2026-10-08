@@ -1,6 +1,7 @@
 import {
   analyzeGeneratedQueueProfile,
   analyzeGeneratedQueueDoneProfile,
+  analyzeGeneratedQueueFallibleProfile,
   type GeneratedQueueProfile,
 } from "./queue-generated-profile.ts";
 import { queueBoundedRuntime } from "./queue-bounded-runtime.ts";
@@ -74,6 +75,7 @@ import type { SchedulePlan } from "./schedule.ts";
 import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
+import { queueCauseRuntime } from "./queue-cause-runtime.ts";
 import { causeRuntime } from "./cause-runtime.ts";
 import { structuredRuntime, fallibleStructuredRuntime } from "./structured-runtime.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
@@ -772,6 +774,27 @@ export function lowerQueueDoneFunctions(
     analyzeGeneratedSemaphoreProfile(program),
     analyzeGeneratedLatchProfile(program),
     analyzeGeneratedQueueDoneProfile(program),
+  );
+}
+
+/** Private checked root All2 Done recovery; public completion remains gated. */
+export function lowerQueueFallibleFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.None,
+  servicesSelection: RuntimeServicesSelection = {},
+): LoweredModule {
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
+    analyzeGeneratedLatchProfile(program),
+    analyzeGeneratedQueueFallibleProfile(program),
   );
 }
 
@@ -2609,11 +2632,13 @@ export const emitFunctions = (
       ),
     ),
   );
-  const fallibleArities = module.functions.flatMap((f) =>
-    f.helpers.flatMap((helper) =>
-      helper.body._tag === "TaskGroup" && helper.richOutcome ? [helper.body.children.length] : [],
-    ),
-  );
+  const fallibleArities = module.functions
+    .filter((f) => !f.queueProfile)
+    .flatMap((f) =>
+      f.helpers.flatMap((helper) =>
+        helper.body._tag === "TaskGroup" && helper.richOutcome ? [helper.body.children.length] : [],
+      ),
+    );
   const infallibleArities = module.functions
     .filter((f) => !f.deferredProfile && !f.semaphoreProfile && !f.latchProfile && !f.queueProfile)
     .flatMap((f) =>
@@ -2625,7 +2650,8 @@ export const emitFunctions = (
       ),
     );
   const fallibleGroups = hasFallibleTaskGroups(module);
-  if (fallibleGroups) write(causeRuntime(captureFrames));
+  const fallibleQueue = module.functions.some((f) => f.queueProfile?.fallibleAll);
+  if (fallibleGroups) write(causeRuntime(captureFrames, fallibleQueue));
   if (hasAsync)
     write(
       asyncRuntime(
@@ -2698,10 +2724,12 @@ export const emitFunctions = (
   }
   if (module.functions.some((f) => f.queueProfile)) {
     write(queueBoundedRuntime());
-    write(queueContinuationRuntime());
-    write(queueHostRuntime());
+    write(queueContinuationRuntime(fallibleQueue));
+    write(queueHostRuntime(fallibleQueue));
+    if (fallibleQueue) write(queueCauseRuntime());
   }
-  if (fallibleGroups) write(fallibleStructuredRuntime(fallibleArities, captureFrames));
+  if (fallibleGroups && (!fallibleQueue || fallibleArities.length))
+    write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
     const contextual = f.asynchronous || f.services.clock || f.services.random;
@@ -3338,6 +3366,41 @@ export const emitFunctions = (
               " } }",
             ]),
           TaskGroup: (n) => {
+            if (f.queueProfile?.fallibleAll) {
+              const parts: Array<string | MappedFragment> = [
+                `{ let bridge = QueueBridge::new(); ${captureFrames ? "let domain_frames = std::cell::RefCell::new(None::<Box<FrameTrail>>); " : ""}`,
+              ];
+              n.children.forEach((index, i) => {
+                const child = f.helpers[index];
+                const call = Rs.call(identExpr(`h_${f.name}_${child.index}`), [
+                  Rs.verbatimExpr(`&mut context${i}`),
+                  ...child.input.map((p) => Rs.verbatimExpr(helperArgument(p))),
+                  identExpr(`task${i}`),
+                  ...(child.queueOwners ?? []).map((owner) => identExpr(owner.name)),
+                ]);
+                parts.push(
+                  `let mut context${i} = ctx.child_context(ctx.cancellation.clone(), false); let task${i} = Some(bridge.task(${i})); let future${i} = async { match `,
+                  mapFragment(
+                    child.origin,
+                    use(`children[${i}]`),
+                    textFragment(child.asynchronous ? Rs.await(call).text : call.text),
+                  ),
+                  ` { Ok(()) => Ok(()), ${captureFrames ? "Err((AsyncError::Fail(error), frames))" : "Err(AsyncError::Fail(error))"} => `,
+                  child.error === NeverType
+                    ? "match error {}"
+                    : `{ ${captureFrames ? "if domain_frames.borrow().is_none() { *domain_frames.borrow_mut() = Some(frames); } " : ""}Err(QueueTakeFailure::Done(error)) }`,
+                  `, ${captureFrames ? "Err((AsyncError::Interrupted, _frames))" : "Err(AsyncError::Interrupted)"} => Err(QueueTakeFailure::ControlInterrupted), ${captureFrames ? "Err((AsyncError::Combined(_), _))" : "Err(AsyncError::Combined(_))"} => panic!("Checked Queue child cannot contain combined cause") } }; `,
+                );
+              });
+              parts.push(
+                `tokio::pin!(future0, future1); let driver = QueueDriver::new(${n.queueRoute!.owner}, &bridge, future0.as_mut(), future1.as_mut()); let interrupted = driver.run_hosted(ctx).await; let cause = driver.all_cause(interrupted); if !cause.interrupted && cause.first().is_none() { Ok(()) } else { `,
+                captureFrames
+                  ? `let frames = match domain_frames.borrow_mut().take() { Some(mut frames) => { frames.push(${frameOf(helper, "all").text}); frames }, None => FrameTrail::new(${frameOf(helper, "all").text}) }; Err((AsyncError::Combined(cause), frames))`
+                  : "Err(AsyncError::Combined(cause))",
+                " } }",
+              );
+              return joinFragments(parts);
+            }
             if (f.queueProfile) {
               const parts: Array<string | MappedFragment> = [
                 "{ let bridge = QueueBridge::new(); let successful = [std::cell::Cell::new(false), std::cell::Cell::new(false)]; ",
@@ -3858,6 +3921,22 @@ export const emitFunctions = (
               const interrupted = captureFrames
                 ? `Err((AsyncError::Interrupted, mut frames)) => { frames.push(${frameOf(helper, "catchAll").text}); Err((AsyncError::Interrupted, frames)) }`
                 : "Err(AsyncError::Interrupted) => Err(AsyncError::Interrupted)";
+              if (f.queueProfile.fallibleAll) {
+                const combined = captureFrames
+                  ? "Err((AsyncError::Combined(cause), mut frames))"
+                  : "Err(AsyncError::Combined(cause))";
+                return joinFragments([
+                  "{ match ",
+                  callFrag(n.source, use("source")),
+                  ` { Ok(value) => Ok(value), ${combined} => { if ctx.is_cancelled() || cause.first().is_none() { `,
+                  captureFrames
+                    ? `frames.push(${frameOf(helper, "catchAll").text}); return Err((AsyncError::Combined(cause), frames)); `
+                    : "return Err(AsyncError::Combined(cause)); ",
+                  `} assert!(cause.len == 1 && cause.first() == Some(RuntimeFailure::QueueDone), "Checked Queue All Done witness"); let ${binder} = QueueDone; ${captureFrames ? "drop(frames); " : ""}match `,
+                  adaptFrag(n.body, helper.output, use("body")),
+                  ` { Ok(value) => Ok(value), ${failureArm(helper, "catchAll")} } }, ${interrupted}, ${pattern} => panic!("Checked Queue All must project cause") } }`,
+                ]);
+              }
               const impossible = fallibleGroups
                 ? `, ${captureFrames ? "Err((AsyncError::Combined(_), _))" : "Err(AsyncError::Combined(_))"} => panic!("Checked local Queue Done cannot retain a combined cause")`
                 : "";
