@@ -150,18 +150,45 @@ const reference = async (name: string, fn: EffectFn<readonly [], void, never>) =
   expect(Exit.isSuccess(framed.exit)).toBe(true);
   if (!Exit.isSuccess(framed.exit)) throw new Error("Missing framed observation");
   expect(Exit.isSuccess(framed.exit.value.exit)).toBe(recovered);
-  // Owned single-function observation names its root work; compilation uses the
-  // exported function name. Only relabel the root, preserving recorded boundaries.
-  return {
-    logs: plain.logs,
-    frames: framed.exit.value.frames.map(({ path, kind }) => ({
-      path:
-        path === "functions.work"
-          ? `functions.${name}`
-          : path.replace("functions.work.", `functions.${name}.`),
-      kind,
-    })),
-  };
+  // Public eager interruption has no returned source frames. Native diagnostics
+  // retain the separately recorded enclosing boundaries, as in the old matrix.
+  if (!recovered) {
+    expect(framed.exit.value.frames).toEqual([]);
+    const frames = new DeferredInterruptionFrames();
+    const context = Context.empty().pipe(
+      Context.add(Scheduler.Scheduler, new Scheduler.MixedScheduler()),
+      Context.add(Scheduler.MaxOpsBeforeYield, 2048),
+      Context.add(Scheduler.PreventSchedulerYield, false),
+      Context.add(Logger.CurrentLoggers, new Set([Logger.make(() => {})])),
+    );
+    const observed = await Effect.runPromiseExitWith(context)(
+      PrivateEffectReference.runWithFramesUnknown(
+        fn,
+        [],
+        `functions.${name}.body`,
+        () => {
+          frames.claim();
+          frames.prepare(fn.body, `functions.${name}.body`);
+          return [];
+        },
+        frames.root(`functions.${name}.body`),
+      ),
+    );
+    expect(Exit.isSuccess(observed) && Exit.isFailure(observed.value.exit)).toBe(true);
+    expect(frames.snapshot().frames.map(({ kind }) => kind)).toEqual([
+      "all",
+      "catchAll",
+      "queueScope",
+      "function",
+    ]);
+    expect(frames.snapshot().omitted).toBe(0);
+    return {
+      logs: plain.logs,
+      frames: frames.snapshot().frames.map(({ path, kind }) => ({ path, kind })),
+    };
+  }
+  expect(framed.exit.value.frames).toEqual([]);
+  return { logs: plain.logs, frames: [] };
 };
 // This adapter deliberately compares native restoration policy separately from
 // public recorded-only frames: append recorded root parents to the actual failing
