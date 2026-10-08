@@ -1,10 +1,11 @@
 # Progress
 
-## 2026-10-08 — Generated Queue Shutdown preparation
+## 2026-10-08 — Private offer-free Queue Shutdown and cleanup repair
 
 - Recorded [QGSHUT-001–004](docs/research/queue-done-recovery.md#generated-queue-shutdown--preparation-2026-10-08) before feature code: separate private root-All shutdown, whole-function no-Offer safety proof, queue-free cleanup and preserved cause/control distinctions. No generated Closing claim or public widening; PLAN.md stays untouched.
 - Fresh exact-All-Exit probes expose eager observer-registration loss in the existing private cleanup selector: second-child Queue source operations can trigger peer failure before the finalizing child registers. Repairing that admission with queue-free second-child sources; first-child source operations remain supported. Added QGSHUT-005/QGCLEAN-006 and exact-boundary snapshot obligations before expanding Shutdown.
-- Implemented private offer-free root-All Shutdown lowering through the existing cancellable adapter, explicit queueShutdown frames and the repaired cleanup placement checks. Independent review found no gate/representation blocker. Six cheap selection/reference/hazard tests and scoped checks pass; all native conformance/cost matrices and final workspace checks remain required before push.
+- Implemented private offer-free root-All Shutdown lowering through the existing cancellable adapter, explicit queueShutdown frames and the repaired cleanup placement checks. Independent review found no gate/representation blocker. Six cheap selection/reference/hazard tests and scoped checks pass; final results are recorded below.
+- Post-commit full workspace check (615 formatted/397 linted files), strict types/build,14 budget/profile and8 legacy admission checks pass. New Shutdown suite passes4tests,8native configurations and3mutations in368.29s. Quiet construction/execution allocates0 under None, or one released trail per framed recovery; roots1168..1720/1184..1840bytes and Rust144438..192560bytes. Repaired cleanup suite also passes4tests,8native configurations and4mutations in402.69s; all30targeted tests are green. Admitted fixtures copy logs at exact function Exit; unsafe second-child sources are refused. Final records are reviewed before push.
 
 ## 2026-10-08 — Private generated Queue cleanup
 
