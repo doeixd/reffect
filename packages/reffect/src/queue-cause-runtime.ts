@@ -1,5 +1,9 @@
+import { specializeQueueRuntime, type QueueRuntimeFamily } from "./queue-runtime-symbols.ts";
+
 /** Private adapter; requires fallible Queue emission and causeRuntime(_, true). */
-export const queueCauseRuntime = (): string => String.raw`
+export const queueCauseRuntime = (family: QueueRuntimeFamily = "Default"): string =>
+  specializeQueueRuntime(
+    String.raw`
 impl<T: Copy, const C: usize, F: std::future::Future<Output = Result<(), QueueTakeFailure>>, G: std::future::Future<Output = Result<(), QueueTakeFailure>>> QueueDriver<'_, T, C, F, G> {
     fn all_cause(&self, parent_interrupted: bool) -> RuntimeCause {
         let result = self.all_exit(parent_interrupted);
@@ -21,4 +25,6 @@ fn queue_recover_all_done(context: &AsyncContext, cause: RuntimeCause, handler: 
     recovered.interrupted = context.is_cancelled();
     recovered
 }
-`;
+`,
+    family,
+  );

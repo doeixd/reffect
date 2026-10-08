@@ -1,12 +1,6 @@
-/** Private borrowed two-child experiment; scoped registration retirement, managed cleanup requires a separate host adapter. */
-export const queueContinuationRuntime = (fallible = false): string => {
-  const output = fallible ? "Result<(), QueueTakeFailure>" : "()";
-  return String.raw`
-#[derive(Clone, Copy)]
-enum QueueRequest<T> { Offer(T), Take, End, Shutdown }
-#[derive(Clone, Copy)]
-enum QueueResponse<T> { Boolean(bool), Take(QueueTake<T>), Interrupted }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+import { specializeQueueRuntime, type QueueRuntimeFamily } from "./queue-runtime-symbols.ts";
+
+const sharedDeclarations = String.raw`#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QueueInterrupted;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QueueDone;
@@ -21,7 +15,24 @@ where Source: std::future::Future<Output = Result<T, QueueTakeFailure>>,
         result => result,
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+`;
+
+/** Private borrowed two-child experiment; scoped registration retirement, managed cleanup requires a separate host adapter. */
+export const queueContinuationRuntime = (
+  fallible = false,
+  family: QueueRuntimeFamily = "Default",
+): string => {
+  if (family === "Fallible" && !fallible) {
+    throw new Error("The mixed fallible Queue family requires fallible emission");
+  }
+  const output = fallible ? "Result<(), QueueTakeFailure>" : "()";
+  return specializeQueueRuntime(
+    String.raw`
+#[derive(Clone, Copy)]
+enum QueueRequest<T> { Offer(T), Take, End, Shutdown }
+#[derive(Clone, Copy)]
+enum QueueResponse<T> { Boolean(bool), Take(QueueTake<T>), Interrupted }
+${family === "Fallible" ? "" : sharedDeclarations}#[derive(Clone, Copy, PartialEq, Eq)]
 enum QueueRequestPhase { Idle, Posted, Processing, Waiting, Ready }
 #[derive(Clone, Copy)]
 struct QueueRequestSlot<T: Copy> {
@@ -408,5 +419,7 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ${output}>, G:
 impl<T: Copy, const C: usize, F: std::future::Future<Output = ${output}>, G: std::future::Future<Output = ${output}>> Drop for QueueDriver<'_, T, C, F, G> {
     fn drop(&mut self) { self.retire(); }
 }
-`;
+`,
+    family,
+  );
 };

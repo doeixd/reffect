@@ -21,6 +21,7 @@ import {
   lowerQueueFunctions,
 } from "../src/lower.ts";
 import { QueueExecution } from "../src/queue-execution.ts";
+import { generatedDeferredGrowthLimits } from "../src/deferred-growth.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
 
 const selected = new Map(Rust.std.implementations.map((item) => [item.operation.ref, item]));
@@ -246,7 +247,6 @@ test("fallible Queue selection discharges only a checked root Done recovery", as
   for (const fn of [
     unsupported(R.Effect.sleep(1)),
     unsupported(R.Effect.void, true),
-    childRecovery,
     consumed,
     cleanup,
     nested,
@@ -262,9 +262,23 @@ test("fallible Queue selection discharges only a checked root Done recovery", as
       ),
     ),
   );
-  expect(() =>
-    lowerQueueFallibleFunctions(R.program({ work: functions.empty!, publicQueue }), selected),
-  ).toThrow();
+  const coexports = R.program({ work: functions.empty!, publicQueue, childRecovery });
+  expect(analyzeGeneratedQueueFallibleProfile(coexports).size).toBe(3);
+  expect(() => lowerQueueFallibleFunctions(coexports, selected)).not.toThrow();
+  const receipts = analyzeGeneratedQueueFallibleProfile(coexports);
+  const tripleSize = [...receipts.values()].reduce(
+    (sum, profile) => sum + profile.bounds.computationOccurrences,
+    0,
+  );
+  const repeats = Math.floor(generatedDeferredGrowthLimits.moduleComputations / tripleSize) + 1;
+  const oversized = Object.fromEntries(
+    Array.from({ length: repeats }, (_, index) =>
+      Object.entries(coexports.functions).map(([name, fn]) => [`${name}_${index}`, fn]),
+    ).flat(),
+  );
+  expect(() => analyzeGeneratedQueueFallibleProfile(R.program(oversized))).toThrow(
+    /moduleComputations/,
+  );
   const hidden = Operation.make(
     SemanticRef.operation("test/queue-fallible-hidden"),
     [QueueDoneType],

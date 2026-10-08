@@ -1,5 +1,15 @@
+import { specializeQueueRuntime, type QueueRuntimeFamily } from "./queue-runtime-symbols.ts";
+
 /** Private current-thread host adapter; emitted beside asyncRuntime(false, false). */
-export const queueHostRuntime = (fallible = false): string => String.raw`
+export const queueHostRuntime = (
+  fallible = false,
+  family: QueueRuntimeFamily = "Default",
+): string => {
+  if (family === "Fallible" && !fallible) {
+    throw new Error("The mixed fallible Queue family requires fallible emission");
+  }
+  return specializeQueueRuntime(
+    String.raw`
 struct QueueCleanupMask<'a> { context: &'a mut AsyncContext, previous: bool }
 impl Drop for QueueCleanupMask<'_> {
     fn drop(&mut self) { self.context.interruptible = self.previous; }
@@ -90,4 +100,7 @@ impl<T: Copy, const C: usize, F: std::future::Future<Output = ${fallible ? "Resu
         }).await
     }
 }
-`;
+`,
+    family,
+  );
+};

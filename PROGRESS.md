@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-08 — Private Queue driver coexistence
+
+- Recorded [QCOEX-001–003](docs/research/queue-done-recovery.md#queue-driver-coexistence--preparation-2026-10-08) before implementation: independent static runtime families and per-function receipts, preserving ordinary costs and aggregate bounds. Public completion and PLAN.md remain unchanged.
+- Delivered private per-function ordinary/local-Done/All receipts and separate mixed request/task/bridge/driver/host families. Shared owner and Done/control definitions stay static; existing single-family template and ordinary/local module bytes are unchanged. No new crates, runtime fields or payload metadata.
+- Nine actual mixed roots equal their separately emitted versions; drivers remain 72/80 bytes. Quiet construction allocates 0 for all families, ordinary execution 0 in both policies; completion execution allocates 0 under None or one released trail under Bounded. The artifact/frame/debug/release matrix compares official log/interruption traces, consuming frames and stale-state handling; Rust refuses crossing task families. Aggregate mixed module growth still refuses over-budget coexports.
+- Independent review found no selection/diagnostic/family-threading blocker and raised the global rich-error carrier cost; measured roots remain unchanged in this bounded profile. Scoped checks and strict TypeScript pass. Final post-commit Queue regression, full workspace checks and build precede push. Updated the [resume doc](docs/effect-v4-workstream.md#queue-driver-coexistence--2026-10-08); next generated masked cleanup/retained outcomes, preserving eager observer-registration, Shutdown and public completion gates.
+
 ## 2026-10-08 — Private generated Queue fallible All
 
 - Recorded [QGALL-001–006](docs/research/queue-done-recovery.md#checked-generated-fallible-all--preparation-2026-10-08) before implementation. Fresh pinned source and existing Cause/frame/marker guards select a fixed private End-only All2 recovery profile; public admission and PLAN.md remain unchanged.

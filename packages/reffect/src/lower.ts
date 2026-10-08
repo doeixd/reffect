@@ -76,6 +76,7 @@ import { FailureFrames, checkFailureFramePolicy } from "./frame-policy.ts";
 import type { FailureFramePolicy } from "./frame-policy.ts";
 import { asyncRuntime } from "./async-runtime.ts";
 import { queueCauseRuntime } from "./queue-cause-runtime.ts";
+import { queueRuntimeSymbols } from "./queue-runtime-symbols.ts";
 import { causeRuntime } from "./cause-runtime.ts";
 import { structuredRuntime, fallibleStructuredRuntime } from "./structured-runtime.ts";
 import { analyzeGeneratedDeferredProfile } from "./deferred-generated-profile.ts";
@@ -2651,6 +2652,8 @@ export const emitFunctions = (
     );
   const fallibleGroups = hasFallibleTaskGroups(module);
   const fallibleQueue = module.functions.some((f) => f.queueProfile?.fallibleAll);
+  const mixedQueue =
+    fallibleQueue && module.functions.some((f) => f.queueProfile && !f.queueProfile.fallibleAll);
   if (fallibleGroups) write(causeRuntime(captureFrames, fallibleQueue));
   if (hasAsync)
     write(
@@ -2724,14 +2727,25 @@ export const emitFunctions = (
   }
   if (module.functions.some((f) => f.queueProfile)) {
     write(queueBoundedRuntime());
-    write(queueContinuationRuntime(fallibleQueue));
-    write(queueHostRuntime(fallibleQueue));
-    if (fallibleQueue) write(queueCauseRuntime());
+    if (mixedQueue) {
+      write(queueContinuationRuntime());
+      write(queueHostRuntime());
+      write(queueContinuationRuntime(true, "Fallible"));
+      write(queueHostRuntime(true, "Fallible"));
+      write(queueCauseRuntime("Fallible"));
+    } else {
+      write(queueContinuationRuntime(fallibleQueue));
+      write(queueHostRuntime(fallibleQueue));
+      if (fallibleQueue) write(queueCauseRuntime());
+    }
   }
   if (fallibleGroups && (!fallibleQueue || fallibleArities.length))
     write(fallibleStructuredRuntime(fallibleArities, captureFrames));
   writeCompositeTypes(module, write, typeName);
   for (const f of module.functions) {
+    const queueSymbols = queueRuntimeSymbols(
+      mixedQueue && f.queueProfile?.fallibleAll ? "Fallible" : "Default",
+    );
     const contextual = f.asynchronous || f.services.clock || f.services.random;
     const contextType = f.asynchronous ? "AsyncContext" : "SyncContext";
     const record = (helper: Helper): string => {
@@ -3368,7 +3382,7 @@ export const emitFunctions = (
           TaskGroup: (n) => {
             if (f.queueProfile?.fallibleAll) {
               const parts: Array<string | MappedFragment> = [
-                `{ let bridge = QueueBridge::new(); ${captureFrames ? "let domain_frames = std::cell::RefCell::new(None::<Box<FrameTrail>>); " : ""}`,
+                `{ let bridge = ${queueSymbols.QueueBridge}::new(); ${captureFrames ? "let domain_frames = std::cell::RefCell::new(None::<Box<FrameTrail>>); " : ""}`,
               ];
               n.children.forEach((index, i) => {
                 const child = f.helpers[index];
@@ -3393,7 +3407,7 @@ export const emitFunctions = (
                 );
               });
               parts.push(
-                `tokio::pin!(future0, future1); let driver = QueueDriver::new(${n.queueRoute!.owner}, &bridge, future0.as_mut(), future1.as_mut()); let interrupted = driver.run_hosted(ctx).await; let cause = driver.all_cause(interrupted); if !cause.interrupted && cause.first().is_none() { Ok(()) } else { `,
+                `tokio::pin!(future0, future1); let driver = ${queueSymbols.QueueDriver}::new(${n.queueRoute!.owner}, &bridge, future0.as_mut(), future1.as_mut()); let interrupted = driver.run_hosted(ctx).await; let cause = driver.all_cause(interrupted); if !cause.interrupted && cause.first().is_none() { Ok(()) } else { `,
                 captureFrames
                   ? `let frames = match domain_frames.borrow_mut().take() { Some(mut frames) => { frames.push(${frameOf(helper, "all").text}); frames }, None => FrameTrail::new(${frameOf(helper, "all").text}) }; Err((AsyncError::Combined(cause), frames))`
                   : "Err(AsyncError::Combined(cause))",
@@ -4427,7 +4441,7 @@ export const emitFunctions = (
                 : []),
               ...(f.queueProfile && helper.error
                 ? [
-                    `queue_task: Option<QueueTask<'_, ${typeName(f.queueProfile.success)}>>`,
+                    `queue_task: Option<${queueSymbols.QueueTask}<'_, ${typeName(f.queueProfile.success)}>>`,
                     ...(helper.queueOwners ?? []).map(
                       (owner) =>
                         `${owner.name}: &BoundedQueue<${typeName(owner.success)}, ${owner.capacity}, 2>`,

@@ -42,13 +42,26 @@ const remapGrowth = (error: unknown): never => {
 /** Checked representation/ownership receipt plus a conditional default-context budget. */
 const analyzeQueueProfile = (
   program: Program,
-  mode: "None" | "Local" | "All",
+  profileMode: "None" | "Local" | "All",
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => {
   const profiles = new Map<EffectFn, GeneratedQueueProfile>();
   const moduleGrowth: GeneratedDeferredGrowth[] = [];
   for (const [name, fn] of Object.entries(program.functions)) {
     if (!(fn instanceof EffectFn) || !hasQueueComputation(fn.body)) continue;
     const path = `functions.${name}.body`;
+    const mode =
+      profileMode === "All"
+        ? Match.value(fn.body.node).pipe(
+            Match.when(
+              {
+                _tag: "QueueScope",
+                body: { node: { _tag: "CatchAll", source: { node: { _tag: "TaskGroup" } } } },
+              },
+              () => "All" as const,
+            ),
+            Match.orElse(() => "Local" as const),
+          )
+        : profileMode;
     let bounds: GeneratedDeferredGrowth;
     try {
       bounds = analyzeGeneratedDeferredGrowth(fn, path, "Queue");
@@ -243,7 +256,7 @@ export const analyzeGeneratedQueueDoneProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Local");
 
-/** Private receipt for root All2 Done recovery; no ordinary Queue coexports. */
+/** Private per-function receipts for ordinary, local Done and root All2 recovery. */
 export const analyzeGeneratedQueueFallibleProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "All");
