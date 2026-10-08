@@ -433,5 +433,7 @@ test(
       await rm(directory, { recursive: true, force: true });
     }
   },
-  nativeTestBudget(4) + 300000,
+  // Eight fresh configurations plus four failing binaries exceeded seven minutes
+  // on the shared runner; each Cargo invocation still has its own 180s limit.
+  nativeTestBudget(4) + 480000,
 );
