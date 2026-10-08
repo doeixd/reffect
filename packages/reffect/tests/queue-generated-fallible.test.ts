@@ -131,7 +131,7 @@ const mixed = {
 const publicArtifact = async (
   program: ReturnType<typeof R.program>,
   artifacts: typeof SourceArtifacts.None | typeof SourceArtifacts.Full = SourceArtifacts.None,
-  frames: typeof FailureFrames.None   = FailureFrames.Bounded,
+  frames: typeof FailureFrames.None = FailureFrames.Bounded,
 ) => {
   const artifact = await Effect.runPromise(
     Compile.make(program).pipe(
