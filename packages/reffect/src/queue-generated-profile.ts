@@ -19,6 +19,7 @@ export interface GeneratedQueueProfile {
   readonly completion: "None" | "End";
   readonly fallibleAll?: true;
   readonly cleanup?: true;
+  readonly shutdown?: true;
   readonly ownerCount: 1;
   readonly taskCapacity: 2;
   readonly bounds: GeneratedDeferredGrowth;
@@ -43,7 +44,7 @@ const remapGrowth = (error: unknown): never => {
 /** Checked representation/ownership receipt plus a conditional default-context budget. */
 const analyzeQueueProfile = (
   program: Program,
-  profileMode: "None" | "Local" | "All" | "Cleanup",
+  profileMode: "None" | "Local" | "All" | "Cleanup" | "Shutdown",
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => {
   const profiles = new Map<EffectFn, GeneratedQueueProfile>();
   const moduleGrowth: GeneratedDeferredGrowth[] = [];
@@ -51,7 +52,7 @@ const analyzeQueueProfile = (
     if (!(fn instanceof EffectFn) || !hasQueueComputation(fn.body)) continue;
     const path = `functions.${name}.body`;
     const mode =
-      profileMode === "All" || profileMode === "Cleanup"
+      profileMode === "All" || profileMode === "Cleanup" || profileMode === "Shutdown"
         ? Match.value(fn.body.node).pipe(
             Match.when(
               {
@@ -92,8 +93,11 @@ const analyzeQueueProfile = (
       refuse(path, "Generated Queue requires zero inputs and builtin scalar/Never channels");
     const done = mode !== "None" && root.error === QueueDoneType;
     const fallibleAll = mode === "All";
-    const cleanupEnabled = profileMode === "Cleanup" && fallibleAll;
+    const cleanupEnabled = (profileMode === "Cleanup" || profileMode === "Shutdown") && fallibleAll;
     let finalizers = 0;
+    let offers = 0;
+    let shutdowns = 0;
+    let queueOperations = 0;
     if (
       fallibleAll &&
       (!done ||
@@ -129,7 +133,7 @@ const analyzeQueueProfile = (
       conditional = false,
       caught = false,
       cleanup = false,
-      childRoot = false,
+      childIndex?: number,
     ): void => {
       if (
         !scalar(body.output) ||
@@ -140,6 +144,7 @@ const analyzeQueueProfile = (
       Match.value(body.node).pipe(
         Match.tags({
           QueueOperation: (node) => {
+            queueOperations++;
             if (!grouped || cleanup)
               refuse(at, "Queue operations require an All2 source and cannot enter cleanup");
             if (
@@ -154,10 +159,15 @@ const analyzeQueueProfile = (
             if (
               node.operation !== "Offer" &&
               node.operation !== "Take" &&
-              !(done && node.operation === "End")
+              !(done && node.operation === "End") &&
+              !(profileMode === "Shutdown" && fallibleAll && node.operation === "Shutdown")
             )
               refuse(at, "End/shutdown and Done are outside generated Queue");
-            if (node.operation === "Offer") audit(node.value, `${at}.value`);
+            if (node.operation === "Offer") {
+              offers++;
+              audit(node.value, `${at}.value`);
+            }
+            if (node.operation === "Shutdown") shutdowns++;
           },
           TaskGroup: (node) => {
             if (
@@ -175,7 +185,7 @@ const analyzeQueueProfile = (
                 (child.error !== NeverType && !(fallibleAll && child.error === QueueDoneType))
               )
                 refuse(at, "All2 children require builtin Unit/Never channels");
-              walk(child, `${at}.children[${index}]`, true, false, false, false, true);
+              walk(child, `${at}.children[${index}]`, true, false, false, false, index);
             });
           },
           Succeed: (node) => audit(node.value, `${at}.value`),
@@ -206,7 +216,7 @@ const analyzeQueueProfile = (
             if (
               !cleanupEnabled ||
               !grouped ||
-              !childRoot ||
+              childIndex === undefined ||
               cleanup ||
               node.body.output !== UnitType ||
               node.finalizer.output !== UnitType ||
@@ -217,7 +227,19 @@ const analyzeQueueProfile = (
                 "Only outer Unit child Ensuring with infallible queue-free cleanup is supported",
               );
             finalizers++;
+            const sourceShutdowns = shutdowns;
+            const sourceQueueOperations = queueOperations;
             walk(node.body, `${at}.body`, true);
+            if (childIndex === 1 && queueOperations !== sourceQueueOperations)
+              refuse(
+                `${at}.body`,
+                "Second-child finalization requires a queue-free source under the pinned observer profile",
+              );
+            if (shutdowns !== sourceShutdowns)
+              refuse(
+                `${at}.body`,
+                "Shutdown source finalization is outside the pinned observer-registration profile",
+              );
             walk(node.finalizer, `${at}.finalizer`, true, false, false, true);
           },
           CatchAll: (node) => {
@@ -256,6 +278,8 @@ const analyzeQueueProfile = (
       );
     };
     walk(root.body, `${path}.body`);
+    if (shutdowns && offers)
+      refuse(path, "Shutdown requires an offer-free function under the pinned Queue profile");
     if (groups !== 1) refuse(path, "Exactly one unconditional unnested All2 is required");
     if (fallibleAll) check();
     const budget = analyzeQueueBudget(fn, path, undefined, true, finalizers > 0);
@@ -272,6 +296,7 @@ const analyzeQueueProfile = (
         completion: done ? "End" : "None",
         ...(fallibleAll ? { fallibleAll: true as const } : {}),
         ...(finalizers ? { cleanup: true as const } : {}),
+        ...(shutdowns ? { shutdown: true as const } : {}),
         ownerCount: 1,
         taskCapacity: 2,
         bounds: bounds!,
@@ -300,3 +325,8 @@ export const analyzeGeneratedQueueFallibleProfile = (
 export const analyzeGeneratedQueueCleanupProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Cleanup");
+
+/** Private offer-free Shutdown; buffered and cleanup termination remain refused. */
+export const analyzeGeneratedQueueShutdownProfile = (
+  program: Program,
+): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Shutdown");

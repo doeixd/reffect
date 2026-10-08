@@ -260,4 +260,4 @@ Use an original, unsplit conversation copy as input. The current op-expr-revisio
 
 [Queue terminal control](research/queue-terminal-control.md) records the cancellation-aware completion prerequisite and remaining generated/public Done gates.
 
-[Queue Done carrier and recovery](research/queue-done-recovery.md) records private typed/local and root-All recovery, runtime-family coexistence, generated queue-free masked cleanup, and remaining public completion gates.
+[Queue Done carrier and recovery](research/queue-done-recovery.md) records private typed/local and root-All recovery, runtime-family coexistence, generated masked cleanup with checked child/source placement, private offer-free Shutdown, and remaining public completion gates.

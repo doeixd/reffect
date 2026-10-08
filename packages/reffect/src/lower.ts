@@ -3,6 +3,7 @@ import {
   analyzeGeneratedQueueDoneProfile,
   analyzeGeneratedQueueFallibleProfile,
   analyzeGeneratedQueueCleanupProfile,
+  analyzeGeneratedQueueShutdownProfile,
   type GeneratedQueueProfile,
 } from "./queue-generated-profile.ts";
 import { queueBoundedRuntime } from "./queue-bounded-runtime.ts";
@@ -345,7 +346,7 @@ type HelperBody =
   | { readonly _tag: "QueueScope"; readonly owner: QueueCapture; readonly body: number }
   | {
       readonly _tag: "QueueOperation";
-      readonly operation: "Offer" | "Take" | "End";
+      readonly operation: "Offer" | "Take" | "End" | "Shutdown";
       readonly value?: RustBlock;
     }
   | {
@@ -818,6 +819,27 @@ export function lowerQueueCleanupFunctions(
     analyzeGeneratedSemaphoreProfile(program),
     analyzeGeneratedLatchProfile(program),
     analyzeGeneratedQueueCleanupProfile(program),
+  );
+}
+
+/** Private offer-free source Shutdown; public completion and terminal cleanup remain gated. */
+export function lowerQueueShutdownFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.None,
+  servicesSelection: RuntimeServicesSelection = {},
+): LoweredModule {
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
+    analyzeGeneratedLatchProfile(program),
+    analyzeGeneratedQueueShutdownProfile(program),
   );
 }
 
@@ -1551,7 +1573,8 @@ function lowerFunctionsInternal(
                 !queueProfile ||
                 (n.operation !== "Offer" &&
                   n.operation !== "Take" &&
-                  !(queueProfile.completion === "End" && n.operation === "End"))
+                  !(queueProfile.completion === "End" && n.operation === "End") &&
+                  !(queueProfile.shutdown && n.operation === "Shutdown"))
               )
                 return rejectQueueNative();
               return {
@@ -3251,7 +3274,9 @@ export const emitFunctions = (
               ? "queueOffer"
               : n.operation === "End"
                 ? "queueEnd"
-                : "queueTake",
+                : n.operation === "Shutdown"
+                  ? "queueShutdown"
+                  : "queueTake",
           LatchScope: () => "latchScope",
           LatchOperation: (n) => `latch${n.operation}`,
           SemaphoreScope: () => "semaphoreScope",
@@ -3319,7 +3344,9 @@ export const emitFunctions = (
                 ? "queueOffer"
                 : n.operation === "End"
                   ? "queueEnd"
-                  : "queueTake";
+                  : n.operation === "Shutdown"
+                    ? "queueShutdown"
+                    : "queueTake";
             const interrupted = captureFrames
               ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, kind).text})))`
               : "Err(AsyncError::Interrupted)";
@@ -3332,7 +3359,7 @@ export const emitFunctions = (
               );
             }
             return joinFragments([
-              `{ match queue_task.expect("Checked Queue child task").${n.operation === "Offer" ? "offer_exit(" : n.operation === "End" ? "end_exit(" : "take_exit("}`,
+              `{ match queue_task.expect("Checked Queue child task").${n.operation === "Offer" ? "offer_exit(" : n.operation === "End" ? "end_exit(" : n.operation === "Shutdown" ? "shutdown_exit(" : "take_exit("}`,
               ...(n.value ? [renderBlock(n.value)] : []),
               n.operation === "Take"
                 ? ").await { Ok(QueueTake::Value(value)) => Ok(value), Ok(QueueTake::Terminal(_)) | Err(_) => "

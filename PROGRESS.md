@@ -1,12 +1,18 @@
 # Progress
 
+## 2026-10-08 — Generated Queue Shutdown preparation
+
+- Recorded [QGSHUT-001–004](docs/research/queue-done-recovery.md#generated-queue-shutdown--preparation-2026-10-08) before feature code: separate private root-All shutdown, whole-function no-Offer safety proof, queue-free cleanup and preserved cause/control distinctions. No generated Closing claim or public widening; PLAN.md stays untouched.
+- Fresh exact-All-Exit probes expose eager observer-registration loss in the existing private cleanup selector: second-child Queue source operations can trigger peer failure before the finalizing child registers. Repairing that admission with queue-free second-child sources; first-child source operations remain supported. Added QGSHUT-005/QGCLEAN-006 and exact-boundary snapshot obligations before expanding Shutdown.
+- Implemented private offer-free root-All Shutdown lowering through the existing cancellable adapter, explicit queueShutdown frames and the repaired cleanup placement checks. Independent review found no gate/representation blocker. Six cheap selection/reference/hazard tests and scoped checks pass; all native conformance/cost matrices and final workspace checks remain required before push.
+
 ## 2026-10-08 — Private generated Queue cleanup
 
 - Recorded [QGCLEAN-001–005](docs/research/queue-done-recovery.md#generated-queue-cleanup--preparation-2026-10-08) before feature code: private outer-child Unit finalization, queue-free masked cleanup, managed positive timers, retained outcomes/trails and opted-in reference budgets. Existing selectors and public completion remain unchanged; PLAN.md belongs to the core instance.
 - Delivered private direct-child Ensuring with queue-free Unit/Never cleanup and managed positive timers. Masking spans the full finalizer; actual/sticky cancellation only replaces source success, retaining Done and its trail. No runtime fields, crates or payload metadata added. Existing selectors/public completion remain gated.
 - Eight native artifact/frame/debug/release configurations and four negative mutations pass for nine cleanup fixtures and three old Queue coexports. Actual cancellation, shared/unopened children, mixed families and owned frame normalization are covered; official child Exit independently corroborates sticky cancellation. Documented the canceled reference wrapper's diagnostic adapter policy separately from raw Cause parity.
 - Quiet construction allocates0; warmed execution allocates0 under None or one released temporary trail under Bounded. Roots measure1168..2152/1184..2360 bytes; Rust185010..263252 bytes. Independent review found no blocker. Scoped checks and reference probes pass; post-commit strict/workspace/build and targeted regression checks precede push. Updated [resume guide](docs/effect-v4-workstream.md#generated-queue-cleanup--2026-10-08); next safe Shutdown/terminal-cleanup reconciliation before public completion.
-- Post-commit strict TypeScript, full workspace check (614 formatted/396 linted files), build, 14 budget/admission tests and eight legacy selector checks pass. The native rerun passes all eight configurations but reaches the420s suite limit during mutations; extended its bounded fresh-build budget to600s, retaining180s per Cargo invocation. No semantic assertion failed; rerun required before push.
+- Post-commit strict TypeScript, full workspace check (614 formatted/396 linted files), build, 14 budget/admission tests and eight legacy selector checks pass. A native rerun reached the420s suite limit during mutations; extended its bounded fresh-build budget to600s, retaining180s per Cargo invocation. The isolated final rerun passes all three tests, eight configurations and four mutations in461.08s; reviewed commits are pushed.
 
 ## 2026-10-08 — Private Queue driver coexistence
 

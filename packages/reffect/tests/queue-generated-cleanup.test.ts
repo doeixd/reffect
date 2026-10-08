@@ -56,7 +56,10 @@ const make = (kind: string) =>
                   : kind === "sticky"
                     ? group(R.Effect.void.pipe(R.Effect.ensuring(finalizer)), seq(end, take))
                     : kind === "shared"
-                      ? group(completed, completed)
+                      ? group(
+                          take.pipe(R.Effect.ensuring(finalizer)),
+                          R.Effect.void.pipe(R.Effect.ensuring(finalizer)),
+                        )
                       : group(completed, R.Effect.void);
         return source.pipe(
           R.Effect.catch(() =>
@@ -115,6 +118,7 @@ const checked = (fn: EffectFn) => {
 const observe = async (name: string, framed: boolean, cancel = false) => {
   const fn = functions[name]!;
   const logs: string[] = [];
+  let logsAtExit: string[] | undefined;
   const controller = new AbortController();
   const context = Context.empty().pipe(
     Context.add(Scheduler.Scheduler, new Scheduler.MixedScheduler()),
@@ -133,7 +137,7 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
     ),
   );
   const frames = new DeferredInterruptionFrames();
-  const computation = framed
+  const computation: Effect.Effect<Exit.Exit<void, unknown>, unknown> = framed
     ? PrivateEffectReference.runWithFramesUnknown(
         fn,
         [],
@@ -147,8 +151,17 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
         frames.root(`functions.${name}.body`),
       ).pipe(Effect.map((value) => value.exit))
     : PrivateEffectReference.runUnknown(fn, [], () => checked(fn)).pipe(Effect.exit);
-  const pending = Effect.runPromiseExitWith(context)(computation, { signal: controller.signal });
-  if (cancel && name === "blocked") queueMicrotask(() => controller.abort());
+  const pending = Effect.runPromiseExitWith(context)(
+    computation.pipe(
+      Effect.onExit(() =>
+        Effect.sync(() => {
+          logsAtExit = [...logs];
+        }),
+      ),
+    ),
+    { signal: controller.signal },
+  );
+  if (cancel && (name === "blocked" || name === "shared")) queueMicrotask(() => controller.abort());
   const outer = await pending;
   const exit = Exit.isSuccess(outer) ? outer.value : outer;
   if (cancel) {
@@ -178,7 +191,12 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
       ];
     }
   }
-  return { logs, frames: trail };
+  expect(
+    logsAtExit,
+    "Function exit captures cleanup before outer child-scope retirement",
+  ).toBeDefined();
+  expect(logs, "Outer scope must not append cleanup after function exit").toEqual(logsAtExit);
+  return { logs: logsAtExit!, frames: trail };
 };
 
 test("cleanup is admitted only through its checked private Queue profile", () => {
@@ -227,6 +245,79 @@ test("cleanup is admitted only through its checked private Queue profile", () =>
     ),
   );
   expect(() => analyzeGeneratedQueueCleanupProfile(R.program({ work: queueCleanup }))).toThrow();
+  for (const terminalSource of [false, true]) {
+    const eagerCleanup = R.fn([], R.Unit, R.Never, () =>
+      Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+        R.Effect.flatMap((owner) => {
+          const take = Q.take(owner);
+          const end = Q.end(owner).pipe(R.Effect.asVoid);
+          const producer = seq(
+            Q.offer(owner, R.Unit.literal()).pipe(R.Effect.asVoid),
+            Q.offer(owner, R.Unit.literal()).pipe(R.Effect.asVoid),
+            end,
+            take,
+            take,
+          );
+          return group(
+            terminalSource ? take : producer,
+            (terminalSource ? seq(end, take) : take).pipe(R.Effect.ensuring(R.Effect.sleep(1))),
+          ).pipe(R.Effect.catch(() => R.Effect.void));
+        }),
+      ),
+    );
+    expect(() => analyzeGeneratedQueueCleanupProfile(R.program({ work: eagerCleanup }))).toThrow();
+  }
+}, 30000);
+
+test("official eager peer failure can return All before unregistered cleanup settles", async () => {
+  const logs: string[] = [];
+  let completed!: () => void;
+  const cleanupCompleted = new Promise<void>((resolve) => {
+    completed = resolve;
+  });
+  const atAll = await Effect.runPromise(
+    Effect.gen(function* () {
+      const queue = yield* Queue.bounded<void, Cause.Done>(1);
+      const log = (message: string) =>
+        Effect.sync(() => {
+          logs.push(message);
+          if (message === "end") completed();
+        });
+      const take = Queue.take(queue);
+      const cleanup = log("start").pipe(
+        Effect.andThen(Effect.sleep(1)),
+        Effect.andThen(log("end")),
+      );
+      const producer = Queue.offer(queue, undefined).pipe(
+        Effect.andThen(Queue.offer(queue, undefined)),
+        Effect.andThen(Queue.end(queue)),
+        Effect.andThen(take),
+        Effect.andThen(take),
+      );
+      const exit = yield* Effect.exit(
+        Effect.all([producer, take.pipe(Effect.ensuring(cleanup))], {
+          concurrency: "unbounded",
+          discard: true,
+        }),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasInterrupts(exit.cause)).toBe(false);
+        const failures = exit.cause.reasons.filter(Cause.isFailReason);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]!.error._tag).toBe("Done");
+      }
+      return [...logs];
+    }),
+  );
+  expect(atAll, "All returns while the eager child is absent from its observer set").toEqual([
+    "start",
+  ]);
+  await cleanupCompleted;
+  expect(
+    logs,
+    "A mutable log alias hides premature All settlement when cleanup later runs",
+  ).toEqual(["start", "end"]);
 });
 
 test("owned Queue cleanup reference settles masked cancellation", async () => {
@@ -255,13 +346,13 @@ test("owned Queue cleanup reference settles masked cancellation", async () => {
     "Registered successful sibling is interrupted after masked cleanup",
   ).toBe(true);
   expect(Exit.isFailure(official)).toBe(true);
-  for (const name of ["success", "done", "unopened", "sticky", "shared"]) {
+  for (const name of ["success", "done", "unopened", "sticky"]) {
     const observed = await observe(name, true);
     expect(observed.frames).toEqual([]);
   }
-  for (const name of ["retained", "successful_cancel", "blocked"]) {
+  for (const name of ["retained", "successful_cancel", "blocked", "shared"]) {
     const observed = await observe(name, true, true);
-    expect(observed.logs).toEqual([`cleanup:${name}:start`, `cleanup:${name}:end`]);
+    checkCancellationLogs(name, observed.logs);
     expect(observed.frames.length).toBeGreaterThan(0);
   }
 });
@@ -274,8 +365,15 @@ unsafe impl std::alloc::GlobalAlloc for Allocator{unsafe fn alloc(&self,l:std::a
 fn begin(){LIVE.store(0,Ordering::Relaxed);ALLOCATIONS.store(0,Ordering::Relaxed);TRACK.store(true,Ordering::Relaxed);}fn end()->usize{TRACK.store(false,Ordering::Relaxed);ALLOCATIONS.load(Ordering::Relaxed)}
 async fn once<F:std::future::Future>(mut f:std::pin::Pin<&mut F>){std::future::poll_fn(|cx|{assert!(f.as_mut().poll(cx).is_pending());std::task::Poll::Ready(())}).await;}
 `;
-const successful = ["success", "done", "unopened", "sticky", "shared"];
-const canceled = ["retained", "successful_cancel", "blocked"];
+const successful = ["success", "done", "unopened", "sticky"];
+const canceled = ["retained", "successful_cancel", "blocked", "shared"];
+const checkCancellationLogs = (name: string, logs: readonly string[]) => {
+  if (name === "shared") {
+    expect(logs).toHaveLength(4);
+    expect(logs.filter((message) => message === `cleanup:${name}:start`)).toHaveLength(2);
+    expect(logs.filter((message) => message === `cleanup:${name}:end`)).toHaveLength(2);
+  } else expect(logs).toEqual([`cleanup:${name}:start`, `cleanup:${name}:end`]);
+};
 const harness = (framed: boolean) => `use reffect_generated as r;${allocator}
 #[tokio::main(flavor="current_thread")]async fn main(){
  let(_tx,rx)=tokio::sync::watch::channel(false);let mut ctx=r::AsyncContext::new(rx);
@@ -308,7 +406,7 @@ test(
       const plain = await observe(name, false, true);
       const framed = await observe(name, true, true);
       expect(framed.logs).toEqual(plain.logs);
-      expect(plain.logs).toEqual([`cleanup:${name}:start`, `cleanup:${name}:end`]);
+      checkCancellationLogs(name, plain.logs);
       expectedLogs.push(...plain.logs);
       expectedFrames.set(
         name,
