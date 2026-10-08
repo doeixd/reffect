@@ -375,10 +375,10 @@ test(
             ),
           );
           const privateArtifact = emitFunctions(
-          lowerQueueDoneFunctions(R.program(mixed), selected, artifacts, frames),
-        );
-        expect(emitted.files["src/lib.rs"]).toBe(privateArtifact.files["src/lib.rs"]);
-        expect(Buffer.byteLength(emitted.files["src/lib.rs"]!)).toBeLessThanOrEqual(2097152);
+            lowerQueueDoneFunctions(R.program(mixed), selected, artifacts, frames),
+          );
+          expect(emitted.files["src/lib.rs"]).toBe(privateArtifact.files["src/lib.rs"]);
+          expect(Buffer.byteLength(emitted.files["src/lib.rs"]!)).toBeLessThanOrEqual(2097152);
           expect(emitted.files["src/lib.rs"]).not.toContain("__reffect_queue_done_unit");
           if (SourceArtifacts.isNone(emitted.sourceArtifacts))
             expect("sources" in emitted).toBe(false);

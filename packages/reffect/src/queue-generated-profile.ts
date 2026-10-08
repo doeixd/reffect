@@ -311,7 +311,7 @@ export const analyzeGeneratedQueueProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "None");
 
-/** Private End-only profile; compiler/public selection remains end-free. */
+/** Checked public End profile with child-local unit Done recovery. */
 export const analyzeGeneratedQueueDoneProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Local");
