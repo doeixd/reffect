@@ -158,7 +158,8 @@ struct QueueDriver<'a, T: Copy, const C: usize, F: std::future::Future<Output = 
     ${
       fallible
         ? `outcomes: [std::cell::Cell<Option<Result<(), QueueTakeFailure>>>; 2],
-    members: [std::cell::Cell<bool>; 2], terminal: std::cell::Cell<Option<QueueTakeFailure>>,`
+    members: [std::cell::Cell<bool>; 2], terminal: std::cell::Cell<Option<QueueTakeFailure>>,
+    terminal_interrupted: std::cell::Cell<bool>,`
         : ""
     }
 }
@@ -181,7 +182,8 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ${output}>, G:
             ${
               fallible
                 ? `, outcomes: std::array::from_fn(|_| std::cell::Cell::new(None)),
-            members: std::array::from_fn(|_| std::cell::Cell::new(false)), terminal: std::cell::Cell::new(None)`
+            members: std::array::from_fn(|_| std::cell::Cell::new(false)), terminal: std::cell::Cell::new(None),
+            terminal_interrupted: std::cell::Cell::new(false)`
                 : ""
             } }
     }
@@ -190,6 +192,9 @@ impl<'a, T: Copy, const C: usize, F: std::future::Future<Output = ${output}>, G:
         ? `fn record_outcome(&self, task: usize, result: Result<(), QueueTakeFailure>) {
         self.outcomes[task].set(Some(result));
         if let Err(error) = result {
+            if self.terminal.get().is_none() && !matches!(error, QueueTakeFailure::Done(_)) {
+                self.terminal_interrupted.set(true);
+            }
             if self.terminal.get().is_none() || matches!(error, QueueTakeFailure::Done(_)) {
                 self.terminal.set(Some(error));
             }

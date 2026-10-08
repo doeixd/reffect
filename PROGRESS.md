@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-08 — Private Queue Cause projection and recovery
+
+- Recorded [QCAUSE-001–005](docs/research/queue-done-recovery.md#private-queue-cause-projection--preparation-2026-10-08) before code. Fresh pinned All/catch/continuation source and existing scalar/native/compiler guards guide a selected Done tag and private cancellation-aware cause/recovery adapter. Generated/public admission and PLAN.md remain unchanged.
+- Added an explicitly selected native Done cause tag and private projection/recovery adapter. First-terminal interruption survives later retained Done; induced peer interruption stays filtered. Recovery consults actual invocation cancellation, clears handled reasons, and reports cancellation inside its synchronous handler without resurrecting Done. Ordinary compiler/public emission and scalar payload representations stay unchanged.
+- Seven official/native traces pass in debug/release with both ordinary and frame-capable declarations (no Queue trails attached). Four negative mutations fail. Linux failure/cause carriers remain 16/64 bytes; selected driver/host 80/232 and fixture children 560/464. 100 warmed projection/recovery groups allocate 0. All 13 tests across seven serial native suites, strict TypeScript, full workspace check and build pass. Repeat checks and review the committed diff before pushing.
+- Independent review found no blocker in the bounded unannotated observation contract. It identified composite-child Cause and annotated reason identity limits. Differential probing also exposed eager cleanup triggering a peer terminal callback before observer registration; the registered fixture passes, while compiler admission must refuse or adapt the eager topology. [Resume guide](docs/effect-v4-workstream.md#private-queue-cause-projection--2026-10-08) records these gates.
+
 ## 2026-10-07 — Private Queue fallible All
 
 - Recorded [QALL-001–005](docs/research/queue-done-recovery.md#private-fallible-all-driver--preparation-2026-10-07) before code. Fresh pinned concurrent iterator source, startup probes and existing driver/host retention guide a private emitted specialization. Implemented explicit private fallible runtime/host emission while preserving default runtime layouts and all public/compiler gates; core PLAN.md remains untouched.

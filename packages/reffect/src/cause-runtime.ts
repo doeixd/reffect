@@ -1,7 +1,7 @@
 /** Reachability-selected finite scalar failure carrier; ordinary values remain unwrapped. */
-export const causeRuntime = (frames: boolean): string => `
+export const causeRuntime = (frames: boolean, queueDone = false): string => `
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum RuntimeFailure { Bool(bool), U64(u64), Unit }
+pub enum RuntimeFailure { Bool(bool), U64(u64), Unit${queueDone ? ", QueueDone" : ""} }
 #[derive(Debug)]
 pub struct RuntimeCause {
     pub interrupted: bool,
@@ -26,7 +26,7 @@ impl RuntimeCause {
                 RuntimeFailure::Bool(value) => print!("bool:{}", value),
                 RuntimeFailure::U64(value) => print!("u64:{}", value),
                 RuntimeFailure::Unit => print!("unit"),
-            }
+${queueDone ? '                RuntimeFailure::QueueDone => print!("done"),\n' : ""}            }
         }
         println!();
     }
