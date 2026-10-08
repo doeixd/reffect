@@ -41,3 +41,22 @@ Alternatives: expose all private profiles at once (retained Cause/cleanup observ
 ## Public End integration
 
 The public facade and root witness reuse the canonical IR and existing local-Done runtime. Public compiler/owned runner select only the checked local completion profile; private retained All, cleanup and Shutdown selectors remain separate. Constructor implementation return unions preserve invariant channel types without casts while public overloads require the witness for an explicit completion channel. Independent review found no production admission blocker. Validation must inspect the inner Exit of framed interruption observations; the outer Exit succeeds when observation itself succeeds. Public artifacts are compared byte-for-byte with the previously audited local emitter, alongside native differential, disposal and cost assertions. Final validation results are recorded in PROGRESS.md.
+
+The public completion matrix passes all eight artifact/frame/debug/release configurations and two negative mutations through Compile.run. Public emission equals the previous private local emitter byte-for-byte; official reference and owned runner traces agree, including cancellation inside the framed observation. Native quiet construction allocates zero; quiet execution allocates zero under None or one released trail per handled Done under Bounded. Independent source admission review found no blocker. The old public artifact fixture's budget helper now receives zero process failures plus an explicit 240-second extension; passing milliseconds as a failure count previously produced the wrong Linux budget and Windows timer overflow.
+
+### Reproduce public validation
+
+From the repository root, use the installed vp/tsc binaries and Cargo environment. Keep both native suites serial and isolated from the workspace checker.
+
+```sh
+export PATH="$PWD/node_modules/.bin:$PATH"
+. "$HOME/.cargo/env"
+vp check
+tsc --noEmit -p packages/reffect/tsconfig.json
+vp run -r build
+vp test packages/reffect/tests/queue-public-done.test.ts --maxWorkers=1 --testTimeout=30000
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 vp test packages/reffect/tests/queue-generated-done.test.ts --maxWorkers=1 --testTimeout=30000
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 vp test packages/reffect/tests/queue-public.test.ts --maxWorkers=1 --testTimeout=30000
+```
+
+The native tests set their own longer per-test budgets; the 30-second CLI budget applies to the inexpensive checks. The delivered full workspace run used `vp check --fix`; final build verification after the timeout-only review was entirely cached. The six legacy non-Cargo suites are queue-ir, queue-execution, queue-budget, queue-generated-profile, queue-lowering and queue-public-done (40 tests); their run used `--maxWorkers=1 --testTimeout=30000`.
