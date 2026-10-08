@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-08 — Public Queue End and local Done
+
+- Recorded [QENDPUB-001–005](docs/research/queue-public-admission.md#public-end-and-unit-done--preparation-2026-10-08) before feature code: explicit unit Done witness, existing End/local recovery profile, receipt-scoped marker/type reporting and owned observations. Broader All recovery, cleanup and Shutdown remain private; PLAN.md stays untouched.
+- Implemented mandatory-witness constructor overloads, public End/root QueueDoneType, checked local-Done compiler/runner selection and receipt-scoped representation guards. No native fields, dependencies or scalar metadata added. Independent admission review found no source blocker; strengthened exact private root-All and forged-witness refusals.
+- Public API/stage tests and the existing completion differential matrix cover actual public artifacts; post-commit workspace checks and isolated native validation remain pending.
+
 ## 2026-10-08 — Private offer-free Queue Shutdown and cleanup repair
 
 - Recorded [QGSHUT-001–004](docs/research/queue-done-recovery.md#generated-queue-shutdown--preparation-2026-10-08) before feature code: separate private root-All shutdown, whole-function no-Offer safety proof, queue-free cleanup and preserved cause/control distinctions. No generated Closing claim or public widening; PLAN.md stays untouched.

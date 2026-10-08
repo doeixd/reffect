@@ -116,14 +116,42 @@ const shutdown = <A, E>(self: Expr<Queue.Queue<A, E>>): Computation<boolean> =>
 /** Internal reference builders retain End/shutdown and Done; public admission is narrower. */
 export const QueueIR = Object.freeze({ make, bounded, offer, take, end, shutdown });
 
-/** Public bounded suspend Queue; native admission requires the checked standalone All2 profile. */
+// Separate overloads keep the default Never channel honest: a Done channel requires a witness.
+function publicMake<A>(
+  success: IRType<A>,
+  options: { readonly capacity: number; readonly strategy?: "suspend" },
+): Computation<Queue.Queue<A, never>>;
+function publicMake<A, E extends Cause.Done<void>>(
+  success: IRType<A>,
+  options: { readonly capacity: number; readonly strategy?: "suspend" },
+  error: IRType<E>,
+): Computation<Queue.Queue<A, E>>;
+function publicMake<A, E extends Cause.Done<void>>(
+  success: IRType<A>,
+  options: { readonly capacity: number; readonly strategy?: "suspend" },
+  error?: IRType<E>,
+): Computation<Queue.Queue<A, never>> | Computation<Queue.Queue<A, E>> {
+  return error === undefined ? make(success, options) : make(success, options, error);
+}
+function publicBounded<A>(success: IRType<A>, capacity: number): Computation<Queue.Queue<A, never>>;
+function publicBounded<A, E extends Cause.Done<void>>(
+  success: IRType<A>,
+  capacity: number,
+  error: IRType<E>,
+): Computation<Queue.Queue<A, E>>;
+function publicBounded<A, E extends Cause.Done<void>>(
+  success: IRType<A>,
+  capacity: number,
+  error?: IRType<E>,
+): Computation<Queue.Queue<A, never>> | Computation<Queue.Queue<A, E>> {
+  return error === undefined ? bounded(success, capacity) : bounded(success, capacity, error);
+}
+
+/** Bounded suspend Queue with optional unit Done; native admission requires checked local recovery. */
 export const QueuePublic = Object.freeze({
-  make: <A>(
-    success: IRType<A>,
-    options: { readonly capacity: number; readonly strategy?: "suspend" },
-  ): Computation<Queue.Queue<A, never>> => make(success, options),
-  bounded: <A>(success: IRType<A>, capacity: number): Computation<Queue.Queue<A, never>> =>
-    bounded(success, capacity),
+  make: publicMake,
+  bounded: publicBounded,
   offer,
   take,
+  end,
 });

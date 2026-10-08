@@ -18,6 +18,7 @@ const channels = new WeakMap<
 const witnesses = new Map<IRType<unknown>, Map<IRType<unknown>, IRType<unknown>>>();
 export const queueScalar = (type: IRType<unknown>): boolean =>
   scalars.some((candidate) => IRType.same(candidate, type));
+/** Unit Cause.Done channel witness for completion-capable bounded queues; not a scalar value. */
 export const QueueDoneType: IRType<Cause.Done<void>> = IRType.make(
   SemanticRef.type("reffect/queue-done-unit@1"),
   Schema.declare(

@@ -759,7 +759,7 @@ export function lowerQueueFunctions(
   );
 }
 
-/** Private checked End/local Done lowering; not used by public Compile selection. */
+/** Checked standalone End/local Done lowering selected by public Compile. */
 export function lowerQueueDoneFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,

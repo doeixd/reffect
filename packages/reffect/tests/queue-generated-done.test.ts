@@ -5,13 +5,13 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { Cause, Context, Effect, Exit, Logger, Scheduler } from "effect";
 import { expect, test } from "vite-plus/test";
-import { FailureFrames, R, Rust, SourceArtifacts } from "../src/index.ts";
+import { nativeTestBudget } from "./native-test-budget.ts";
+import { Compile, FailureFrames, QueueDoneType, R, Rust, SourceArtifacts } from "../src/index.ts";
 import { PrivateEffectReference } from "../src/effect-ir.ts";
 import type { Computation } from "../src/effect-ir.ts";
 import { DeferredInterruptionFrames } from "../src/deferred-interruption-frames.ts";
 import { QueueIR as Q } from "../src/queue.ts";
 import { Expr, Operation, SemanticRef } from "../src/kernel.ts";
-import { QueueDoneType } from "../src/queue-model.ts";
 import {
   analyzeGeneratedQueueDoneProfile,
   analyzeGeneratedQueueProfile,
@@ -31,14 +31,14 @@ const seq = (...steps: Computation<void>[]) =>
   steps.reduce((body, next) => body.pipe(R.Effect.andThen(next)), R.Effect.void);
 const empty = (logging: boolean) =>
   R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.U64, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.U64, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         all(
-          Q.take(owner).pipe(
+          R.Queue.take(owner).pipe(
             R.Effect.asVoid,
             R.Effect.catch(() => (logging ? R.Log.info("recovered") : R.Effect.void)),
           ),
-          Q.end(owner).pipe(R.Effect.andThen(logging ? R.Log.info("ended") : R.Effect.void)),
+          R.Queue.end(owner).pipe(R.Effect.andThen(logging ? R.Log.info("ended") : R.Effect.void)),
         ),
       ),
     ),
@@ -46,14 +46,14 @@ const empty = (logging: boolean) =>
 const functions = {
   empty: empty(true),
   drain: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.U64, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.U64, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         all(
           seq(
-            Q.offer(owner, R.U64.literal(7n)).pipe(R.Effect.asVoid),
-            Q.end(owner).pipe(R.Effect.andThen(R.Log.info("drain-ended"))),
+            R.Queue.offer(owner, R.U64.literal(7n)).pipe(R.Effect.asVoid),
+            R.Queue.end(owner).pipe(R.Effect.andThen(R.Log.info("drain-ended"))),
           ),
-          Q.take(owner).pipe(
+          R.Queue.take(owner).pipe(
             R.Effect.catch(() => R.Effect.succeed(R.U64.literal(99n))),
             R.Effect.flatMap((value) =>
               R.Match.bool(
@@ -63,7 +63,7 @@ const functions = {
               ),
             ),
             R.Effect.andThen(
-              Q.take(owner).pipe(
+              R.Queue.take(owner).pipe(
                 R.Effect.asVoid,
                 R.Effect.catch(() => R.Log.info("drain-recovered")),
               ),
@@ -74,35 +74,35 @@ const functions = {
     ),
   ),
   nested: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         all(
-          Q.take(owner).pipe(
+          R.Queue.take(owner).pipe(
             R.Effect.catch(() =>
-              Q.take(owner).pipe(R.Effect.catch(() => R.Log.info("nested-recovered"))),
+              R.Queue.take(owner).pipe(R.Effect.catch(() => R.Log.info("nested-recovered"))),
             ),
           ),
-          Q.end(owner).pipe(R.Effect.andThen(R.Log.info("nested-ended"))),
+          R.Queue.end(owner).pipe(R.Effect.andThen(R.Log.info("nested-ended"))),
         ),
       ),
     ),
   ),
   closed: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Bool, 3, QueueDoneType).pipe(
+    R.Queue.bounded(R.Bool, 3, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         all(
-          Q.take(owner).pipe(
+          R.Queue.take(owner).pipe(
             R.Effect.asVoid,
             R.Effect.catch(() =>
-              Q.offer(owner, R.Bool.literal(true)).pipe(
+              R.Queue.offer(owner, R.Bool.literal(true)).pipe(
                 R.Effect.flatMap((value) =>
                   R.Match.bool(value, R.Log.info("wrong-offer"), R.Log.info("closed-offer")),
                 ),
               ),
             ),
           ),
-          Q.end(owner).pipe(
-            R.Effect.andThen(Q.end(owner)),
+          R.Queue.end(owner).pipe(
+            R.Effect.andThen(R.Queue.end(owner)),
             R.Effect.flatMap((value) =>
               R.Match.bool(value, R.Log.info("wrong-end"), R.Log.info("repeat-end")),
             ),
@@ -112,20 +112,20 @@ const functions = {
     ),
   ),
   boolean: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Bool, 2, QueueDoneType).pipe(
+    R.Queue.bounded(R.Bool, 2, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         all(
-          Q.offer(owner, R.Bool.literal(true)).pipe(
-            R.Effect.andThen(Q.end(owner)),
+          R.Queue.offer(owner, R.Bool.literal(true)).pipe(
+            R.Effect.andThen(R.Queue.end(owner)),
             R.Effect.asVoid,
           ),
-          Q.take(owner).pipe(
+          R.Queue.take(owner).pipe(
             R.Effect.catch(() => R.Effect.succeed(R.Bool.literal(false))),
             R.Effect.flatMap((value) =>
               R.Match.bool(value, R.Log.info("value:true"), R.Log.info("wrong-bool")),
             ),
             R.Effect.andThen(
-              Q.take(owner).pipe(
+              R.Queue.take(owner).pipe(
                 R.Effect.catch(() => R.Effect.succeed(R.Bool.literal(true))),
                 R.Effect.flatMap((value) =>
                   R.Match.bool(
@@ -142,10 +142,10 @@ const functions = {
     ),
   ),
   blocked: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         all(
-          Q.take(owner).pipe(R.Effect.catch(() => R.Log.info("wrong-interrupt-recovery"))),
+          R.Queue.take(owner).pipe(R.Effect.catch(() => R.Log.info("wrong-interrupt-recovery"))),
           R.Effect.void,
         ),
       ),
@@ -221,17 +221,45 @@ const observe = async (name: keyof typeof functions, framed: boolean, cancelled 
       throw new Error(`${name}/${framed}: ${String(Cause.squash(outer.cause))}`);
     expect(Exit.isSuccess(inner)).toBe(true);
   }
-  return { logs, frames: frames.snapshot() };
+  const ownedController = new AbortController();
+  if (framed) {
+    const ownedPending = QueueExecution.runWithFrames(fn, { signal: ownedController.signal });
+    if (cancelled) ownedController.abort();
+    const owned = await ownedPending;
+    expect(owned.logs).toEqual(logs);
+    expect(Object.isFrozen(owned.logs)).toBe(true);
+    expect(Exit.isSuccess(owned.exit)).toBe(true);
+    if (Exit.isSuccess(owned.exit)) {
+      const inner = owned.exit.value.exit;
+      if (cancelled)
+        expect(Exit.isFailure(inner) && Cause.hasInterruptsOnly(inner.cause)).toBe(true);
+      else expect(Exit.isSuccess(inner)).toBe(true);
+      expect(owned.exit.value.frames).toHaveLength(frames.snapshot().frames.length);
+      expect(owned.exit.value.omitted).toBe(frames.snapshot().omitted);
+    }
+  } else {
+    const ownedPending = QueueExecution.run(fn, { signal: ownedController.signal });
+    if (cancelled) ownedController.abort();
+    const owned = await ownedPending;
+    expect(owned.logs).toEqual(logs);
+    expect(Object.isFrozen(owned.logs)).toBe(true);
+    if (cancelled)
+      expect(Exit.isFailure(owned.exit) && Cause.hasInterruptsOnly(owned.exit.cause)).toBe(true);
+    else expect(Exit.isSuccess(owned.exit)).toBe(true);
+  }
+  return { logs: [...logs], frames: frames.snapshot() };
 };
 
-test("Done selection is private, child-local, canonical and End-only", async () => {
+test("Done selection is child-local, canonical and End-only", async () => {
   const profile = analyzeGeneratedQueueDoneProfile(R.program(mixed));
   expect(profile.get(functions.empty)?.completion).toBe("End");
   expect(profile.get(functions.plain)?.completion).toBe("None");
   for (const lower of [lowerFunctions, lowerQueueFunctions])
     expect(() => lower(R.program({ empty: functions.empty }), selected)).toThrow();
   expect(() => analyzeGeneratedQueueProfile(R.program({ empty: functions.empty }))).toThrow();
-  expect(Exit.isFailure((await QueueExecution.run(functions.empty)).exit)).toBe(true);
+  const observed = await QueueExecution.run(functions.empty);
+  expect(observed.exit).toEqual(Exit.succeed(undefined));
+  expect(observed.logs).toEqual(["recovered", "ended"]);
   const escaping = R.fn([], R.Unit, QueueDoneType, () =>
     Q.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
@@ -311,40 +339,111 @@ async fn main(){
 }
 `;
 
-test("private generated Done agrees with official traces, frame reset and native costs", async () => {
-  const expectedLogs: string[] = [];
-  for (const name of ["empty", "drain", "nested", "closed", "boolean", "quiet", "plain"] as const) {
-    const plain = await observe(name, false);
-    const framed = await observe(name, true);
-    expect(framed.logs).toEqual(plain.logs);
-    expect(framed.frames.frames).toEqual([]);
-    expectedLogs.push(...plain.logs);
-  }
-  expect(expectedLogs.slice(0, 2)).toEqual(["recovered", "ended"]);
-  for (const framed of [false, true])
-    expect((await observe("blocked", framed, true)).logs).toEqual([]);
-  const directory = await mkdtemp(join(tmpdir(), "reffect-queue-done-generated-"));
-  const run = promisify(execFile);
-  try {
-    for (const artifacts of [SourceArtifacts.None, SourceArtifacts.Full])
-      for (const frames of [FailureFrames.None, FailureFrames.Bounded]) {
-        const emitted = emitFunctions(
+test(
+  "public generated Done agrees with official traces, frame reset and native costs",
+  async () => {
+    const expectedLogs: string[] = [];
+    for (const name of [
+      "empty",
+      "drain",
+      "nested",
+      "closed",
+      "boolean",
+      "quiet",
+      "plain",
+    ] as const) {
+      const plain = await observe(name, false);
+      const framed = await observe(name, true);
+      expect(framed.logs).toEqual(plain.logs);
+      expect(framed.frames.frames).toEqual([]);
+      expectedLogs.push(...plain.logs);
+    }
+    expect(expectedLogs.slice(0, 2)).toEqual(["recovered", "ended"]);
+    for (const framed of [false, true])
+      expect((await observe("blocked", framed, true)).logs).toEqual([]);
+    const directory = await mkdtemp(join(tmpdir(), "reffect-queue-done-generated-"));
+    const run = promisify(execFile);
+    try {
+      for (const artifacts of [SourceArtifacts.None, SourceArtifacts.Full])
+        for (const frames of [FailureFrames.None, FailureFrames.Bounded]) {
+          const emitted = await Effect.runPromise(
+            Compile.make(R.program(mixed)).pipe(
+              Compile.withTarget(Rust.tokio),
+              Compile.withSourceArtifacts(artifacts),
+              Compile.withFailureFrames(frames),
+              Compile.run,
+            ),
+          );
+          const privateArtifact = emitFunctions(
           lowerQueueDoneFunctions(R.program(mixed), selected, artifacts, frames),
         );
+        expect(emitted.files["src/lib.rs"]).toBe(privateArtifact.files["src/lib.rs"]);
         expect(Buffer.byteLength(emitted.files["src/lib.rs"]!)).toBeLessThanOrEqual(2097152);
-        expect(emitted.files["src/lib.rs"]).not.toContain("__reffect_queue_done_unit");
-        if (SourceArtifacts.isNone(artifacts)) expect(emitted.ranges).toEqual([]);
-        else expect(emitted.ranges.length).toBeGreaterThan(0);
-        for (const [path, text] of Object.entries(emitted.files)) {
-          await mkdir(dirname(join(directory, path)), { recursive: true });
-          await writeFile(join(directory, path), text);
+          expect(emitted.files["src/lib.rs"]).not.toContain("__reffect_queue_done_unit");
+          if (SourceArtifacts.isNone(emitted.sourceArtifacts))
+            expect("sources" in emitted).toBe(false);
+          else expect("sources" in emitted).toBe(true);
+          for (const [path, text] of Object.entries(emitted.files)) {
+            await mkdir(dirname(join(directory, path)), { recursive: true });
+            await writeFile(join(directory, path), text);
+          }
+          await writeFile(
+            join(directory, "src/main.rs"),
+            `#![recursion_limit = "256"]\n${harness(!FailureFrames.isNone(frames))}`,
+          );
+          for (const mode of [[], ["--release"]]) {
+            const result = await run("cargo", ["run", "--offline", "--quiet", ...mode], {
+              cwd: directory,
+              timeout: 180000,
+              maxBuffer: 8 * 1024 * 1024,
+              env: {
+                ...process.env,
+                CARGO_PROFILE_DEV_DEBUG: "0",
+                CARGO_INCREMENTAL: "0",
+                CARGO_BUILD_JOBS: "1",
+              },
+            });
+            const logs = result.stderr
+              .split("\n")
+              .filter((line) => line.startsWith('{"schema":"reffect.log@1"'))
+              .map((line) => JSON.parse(line).message);
+            expect(logs).toEqual(expectedLogs);
+            expect(result.stdout).toContain("queue-done-generated-ok");
+            process.stdout.write(
+              `Queue Done ${artifacts._tag}/${frames._tag}/${mode.length ? "release" : "debug"}: ${result.stdout.trim()}\n`,
+            );
+          }
         }
+      const source = emitFunctions(
+        lowerQueueDoneFunctions(
+          R.program(mixed),
+          selected,
+          SourceArtifacts.None,
+          FailureFrames.Bounded,
+        ),
+      ).files["src/lib.rs"]!;
+      const mutations = [
+        [
+          source.replaceAll(
+            "Err(QueueTakeFailure::Done(done)) => Err((AsyncError::Fail(done),",
+            "Err(QueueTakeFailure::Done(done)) => Err((AsyncError::Interrupted,",
+          ),
+          "r::r_empty",
+        ],
+        [
+          source.replaceAll("drop(handled_frames);", "std::mem::forget(handled_frames);"),
+          "Handled Done trails must be released",
+        ],
+      ] as const;
+      for (const [mutated, reason] of mutations) {
+        expect(mutated).not.toBe(source);
+        await writeFile(join(directory, "src/lib.rs"), mutated);
         await writeFile(
           join(directory, "src/main.rs"),
-          `#![recursion_limit = "256"]\n${harness(!FailureFrames.isNone(frames))}`,
+          `#![recursion_limit = "256"]\n${harness(true)}`,
         );
-        for (const mode of [[], ["--release"]]) {
-          const result = await run("cargo", ["run", "--offline", "--quiet", ...mode], {
+        await expect(
+          run("cargo", ["run", "--offline", "--quiet"], {
             cwd: directory,
             timeout: 180000,
             maxBuffer: 8 * 1024 * 1024,
@@ -354,61 +453,12 @@ test("private generated Done agrees with official traces, frame reset and native
               CARGO_INCREMENTAL: "0",
               CARGO_BUILD_JOBS: "1",
             },
-          });
-          const logs = result.stderr
-            .split("\n")
-            .filter((line) => line.startsWith('{"schema":"reffect.log@1"'))
-            .map((line) => JSON.parse(line).message);
-          expect(logs).toEqual(expectedLogs);
-          expect(result.stdout).toContain("queue-done-generated-ok");
-          process.stdout.write(
-            `Queue Done ${artifacts._tag}/${frames._tag}/${mode.length ? "release" : "debug"}: ${result.stdout.trim()}\n`,
-          );
-        }
+          }),
+        ).rejects.toMatchObject({ stderr: expect.stringContaining(reason) });
       }
-    const source = emitFunctions(
-      lowerQueueDoneFunctions(
-        R.program(mixed),
-        selected,
-        SourceArtifacts.None,
-        FailureFrames.Bounded,
-      ),
-    ).files["src/lib.rs"]!;
-    const mutations = [
-      [
-        source.replaceAll(
-          "Err(QueueTakeFailure::Done(done)) => Err((AsyncError::Fail(done),",
-          "Err(QueueTakeFailure::Done(done)) => Err((AsyncError::Interrupted,",
-        ),
-        "r::r_empty",
-      ],
-      [
-        source.replaceAll("drop(handled_frames);", "std::mem::forget(handled_frames);"),
-        "Handled Done trails must be released",
-      ],
-    ] as const;
-    for (const [mutated, reason] of mutations) {
-      expect(mutated).not.toBe(source);
-      await writeFile(join(directory, "src/lib.rs"), mutated);
-      await writeFile(
-        join(directory, "src/main.rs"),
-        `#![recursion_limit = "256"]\n${harness(true)}`,
-      );
-      await expect(
-        run("cargo", ["run", "--offline", "--quiet"], {
-          cwd: directory,
-          timeout: 180000,
-          maxBuffer: 8 * 1024 * 1024,
-          env: {
-            ...process.env,
-            CARGO_PROFILE_DEV_DEBUG: "0",
-            CARGO_INCREMENTAL: "0",
-            CARGO_BUILD_JOBS: "1",
-          },
-        }),
-      ).rejects.toMatchObject({ stderr: expect.stringContaining(reason) });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-}, 300000);
+  },
+  nativeTestBudget(2) + 480000,
+);

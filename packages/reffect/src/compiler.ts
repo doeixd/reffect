@@ -1,5 +1,5 @@
-import { analyzeGeneratedQueueProfile } from "./queue-generated-profile.ts";
-import { containsQueue, containsQueueDone } from "./queue-model.ts";
+import { analyzeGeneratedQueueDoneProfile } from "./queue-generated-profile.ts";
+import { QueueDoneType, containsQueue, containsQueueDone } from "./queue-model.ts";
 import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { containsLatch, usesLatchExpression } from "./latch-model.ts";
 import { analyzeGeneratedLatchProfile } from "./latch-generated-profile.ts";
@@ -57,7 +57,7 @@ import {
   lowerDeferredFunctions,
   lowerSemaphoreFunctions,
   lowerLatchFunctions,
-  lowerQueueFunctions,
+  lowerQueueDoneFunctions,
   emitFunctions,
 } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -634,11 +634,11 @@ const checkedLatchProfiles = (program: Program) => {
   return profiles;
 };
 
-const queueProfiles = new WeakMap<Program, ReturnType<typeof analyzeGeneratedQueueProfile>>();
+const queueProfiles = new WeakMap<Program, ReturnType<typeof analyzeGeneratedQueueDoneProfile>>();
 const checkedQueueProfiles = (program: Program) => {
   const previous = queueProfiles.get(program);
   if (previous) return previous;
-  const profiles = analyzeGeneratedQueueProfile(program);
+  const profiles = analyzeGeneratedQueueDoneProfile(program);
   queueProfiles.set(program, profiles);
   return profiles;
 };
@@ -682,13 +682,13 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         ((hasQueueComputation(fn.body) && !queue.has(fn)) ||
           containsQueue(fn.error) ||
           containsQueueDone(fn.error))) ||
-      usesQueueNativeType(fn.body)
+      usesQueueNativeType(fn.body, fn instanceof EffectFn && queue.get(fn)?.completion === "End")
     )
       return yield* fail(
         "QUEUE_NATIVE_UNSUPPORTED",
         "check",
         `functions.${name}`,
-        "Queue/Done values require the checked standalone offer/take profile",
+        "Queue/Done values require the checked standalone Queue profile with child-local Done recovery",
       );
   }
   yield* Effect.try({
@@ -1190,7 +1190,7 @@ const plan = Effect.fn("Compile.plan")(function* (
       "QUEUE_NATIVE_INTEGRATION",
       "plan",
       "effects",
-      "Queue requires the checked standalone offer/take profile",
+      "Queue requires the checked standalone Queue profile with child-local Done recovery",
     );
   const semaphore = yield* Effect.try({
     try: () => checkedSemaphoreProfiles(analysis.program),
@@ -1397,9 +1397,14 @@ const verifyPlan = Effect.fn("Compile.verify")(function* (p: Plan) {
       "selections",
       "Selected plan does not cover the reachable graph with verified implementations",
     );
+  // Done has a representation only inside a checked completion owner, never as a scalar.
+  const localQueueDone = [...checkedQueueProfiles(expected.analysis.program).values()].some(
+    (profile) => profile.completion === "End",
+  );
   for (const type of expected.analysis.types) {
     if (
       type.layout === undefined &&
+      !(type === QueueDoneType && localQueueDone) &&
       ![
         U64Type,
         BoolType,
@@ -1461,7 +1466,7 @@ const lower = Effect.fn("Compile.lower")(function* (
   return yield* Effect.try({
     try: () =>
       (checkedQueueProfiles(p.analysis.program).size
-        ? lowerQueueFunctions
+        ? lowerQueueDoneFunctions
         : checkedLatchProfiles(p.analysis.program).size
           ? lowerLatchFunctions
           : checkedSemaphoreProfiles(p.analysis.program).size

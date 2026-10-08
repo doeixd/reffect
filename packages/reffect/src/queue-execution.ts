@@ -6,7 +6,7 @@ import { DeferredInterruptionFrames } from "./deferred-interruption-frames.ts";
 import { Cause, Context, Effect, Exit, Logger, Scheduler } from "effect";
 import type { EffectFn, FramedExit } from "./effect-ir.ts";
 import { PrivateEffectReference } from "./effect-ir.ts";
-import { analyzeGeneratedQueueProfile } from "./queue-generated-profile.ts";
+import { analyzeGeneratedQueueDoneProfile } from "./queue-generated-profile.ts";
 import { queueBudgetLimit } from "./queue-budget.ts";
 import { CompileError, Program } from "./kernel.ts";
 
@@ -31,7 +31,7 @@ const execute = <A, Out>(
   let signal: AbortSignal | undefined;
   try {
     signal = validateOwnedExecutionSignal(options, refusal);
-    if (!analyzeGeneratedQueueProfile(Program.make({ work: fn })).has(fn))
+    if (!analyzeGeneratedQueueDoneProfile(Program.make({ work: fn })).has(fn))
       throw refusal("function", "This runner requires the checked bounded Queue profile");
   } catch (error) {
     if (!(error instanceof CompileError)) throw error;
@@ -60,7 +60,7 @@ const execute = <A, Out>(
 /**
  * Execution of the bounded Queue profile in an owned official Effect context.
  * Observes Exit and captured logs; accepts only an optional AbortSignal.
- * Accepts the checked standalone offer/take profile; wider ownership stays gated.
+ * Accepts offer/take and End with child-local unit Done recovery; wider ownership stays gated.
  */
 export const QueueExecution = Object.freeze({
   run: <A>(fn: EffectFn<readonly [], A, never>, options?: QueueExecutionOptions) =>

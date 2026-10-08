@@ -11,6 +11,7 @@ import {
   NativeRpc,
   NativeRunner,
   Plan,
+  QueueDoneType,
   QueueExecution,
   QueueIR,
   R,
@@ -21,7 +22,7 @@ import {
 import type { Computation, EffectFn } from "../src/effect-ir.ts";
 import { Expr, Operation, EqU64, SemanticRef } from "../src/kernel.ts";
 import { QueueIR as ResearchQueue } from "../src/queue.ts";
-import { queueType, QueueDoneType } from "../src/queue-model.ts";
+import { queueType } from "../src/queue-model.ts";
 import { generatedDeferredGrowthLimits } from "../src/deferred-growth.ts";
 import { lowerFunctions } from "../src/lower.ts";
 import { nativeTestBudget } from "./native-test-budget.ts";
@@ -109,7 +110,7 @@ const compile = (work: EffectFn) =>
 test("public Queue exposes the bounded Never facade with both offer forms and owned observations", async () => {
   expect(QueueIR).toBe(R.Queue);
   expect(Object.isFrozen(QueueIR)).toBe(true);
-  expect(Object.keys(QueueIR).sort()).toEqual(["bounded", "make", "offer", "take"]);
+  expect(Object.keys(QueueIR).sort()).toEqual(["bounded", "end", "make", "offer", "take"]);
   for (const capacity of [1, 2, 3]) {
     const observation = await QueueExecution.run(transfer(capacity));
     expect(observation.exit).toEqual(Exit.succeed(7n));
@@ -137,11 +138,13 @@ test("public Queue exposes the bounded Never facade with both offer forms and ow
   }
   // Compile-time contracts are checked without evaluating unsupported authoring.
   const contracts = () => {
-    // @ts-expect-error Done/error witnesses are not part of public constructors.
     QueueIR.bounded(R.U64, 1, QueueDoneType);
+    // @ts-expect-error Scalar failures are outside the public Queue profile.
+    QueueIR.bounded(R.U64, 1, R.Bool);
+    // @ts-expect-error An explicit Done error parameter requires its witness.
+    QueueIR.bounded<bigint, Cause.Done<void>>(R.U64, 1);
     // @ts-expect-error Shutdown requires its own semantic admission.
     void QueueIR.shutdown;
-    // @ts-expect-error End is not admitted.
     void R.Queue.end;
     // @ts-expect-error Only the suspend strategy is supported.
     R.Queue.make(R.U64, { capacity: 1, strategy: "sliding" });
@@ -369,12 +372,14 @@ test("public Queue plans cannot bypass checked topology or conceal resource and 
     expect.objectContaining({ code: "QUEUE_STRUCTURAL_PROFILE" }),
   );
   const done = R.fn([], R.Unit, R.Never, () =>
-    ResearchQueue.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap(() => all(R.Effect.void, R.Effect.void)),
     ),
   );
-  expect(diagnostics(await compile(done))).toContainEqual(
-    expect.objectContaining({ code: "QUEUE_STRUCTURAL_PROFILE" }),
+  expect(Exit.isSuccess(await compile(done))).toBe(true);
+  expect((await QueueExecution.run(done)).exit).toEqual(Exit.succeed(undefined));
+  expect((await Effect.runPromise(Compile.derive(R.program({ done })))).types).toContain(
+    QueueDoneType,
   );
   const group = RpcGroup.make(Rpc.make("Value", { payload: {}, success: Schema.Boolean }));
   const rpc = await Effect.runPromise(

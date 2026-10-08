@@ -569,7 +569,7 @@ See [the runnable example](../../examples/rpc-async/README.md),
 
 ## Bounded standalone Queue
 
-`R.Queue` and exported `QueueIR` expose `make`, `bounded`, dual `offer` and `take` with explicit scalar witnesses:
+`R.Queue` and exported `QueueIR` expose `make`, `bounded`, dual `offer`, `take` and `end` with explicit scalar witnesses:
 
 ```ts
 const Transfer = R.fn([], R.Unit, R.Never, () =>
@@ -589,7 +589,11 @@ const Transfer = R.fn([], R.Unit, R.Never, () =>
 
 `QueueExecution.run(Transfer)` executes the checked profile through official Effect in an owned default scheduler context; `runWithFrames` adds bounded logical frames. Both capture logs and accept an optional AbortSignal, await interrupted child settlement and leave pre-aborted work unopened. Public Compile supports this profile with `Rust.tokio`, including independent Deferred/Semaphore/Latch and service-using exports in the same module.
 
-The supported shape is zero inputs, Bool/U64/Unit success and payloads, Never errors, literal capacity1..3 with suspend strategy, one root lexical owner and one unconditional All2 of Unit/Never children. Offer/take must occur inside those children. Growth, operation-budget, emitted-byte and returned-future limits are checked. None/Bounded failure frames and Full/None source artifacts are independent; scalar payloads remain plain native values. End/shutdown/Done, Sleep/Ensuring, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
+The supported shape is zero inputs, Bool/U64/Unit success and payloads, Never final errors, literal capacity 1..3 with suspend strategy, one root lexical owner and one unconditional All2 of Unit/Never children. Queue operations must occur inside those children. Growth, operation-budget, emitted-byte and returned-future limits are checked. None/Bounded failure frames and Full/None source artifacts are independent; scalar payloads remain plain native values.
+
+Constructors default to Never errors. To end a queue, import `QueueDoneType` from `reffect` and pass it as the third argument to `R.Queue.bounded(R.U64, 1, QueueDoneType)` or `R.Queue.make(R.U64, { capacity: 1 }, QueueDoneType)`. `R.Queue.end(queue)` returns whether completion was newly recorded. Buffered values remain available; subsequent empty takes fail with unit Done. Recover each take inside its child, for example `R.Queue.take(queue).pipe(R.Effect.asVoid, R.Effect.catch(() => R.Effect.void))`. Done is an internal terminal channel, not a scalar value you can return or inspect through expressions.
+
+Root All recovery, shutdown, Sleep/Ensuring, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
 
 ## Typed recovery and structured resource lifetimes
 
