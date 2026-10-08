@@ -221,5 +221,9 @@ export type { LatchExecutionOptions, LatchObservation } from "./latch-execution.
 
 export { QueuePublic as QueueIR } from "./queue.ts";
 export { QueueDoneType } from "./queue-model.ts";
-export { QueueExecution } from "./queue-execution.ts";
-export type { QueueExecutionOptions, QueueObservation } from "./queue-execution.ts";
+export { QueueExecution, QueueAllExecution } from "./queue-execution.ts";
+export type {
+  QueueExecutionOptions,
+  QueueObservation,
+  QueueAllObservation,
+} from "./queue-execution.ts";

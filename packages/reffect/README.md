@@ -593,7 +593,11 @@ The supported shape is zero inputs, Bool/U64/Unit success and payloads, Never fi
 
 Constructors default to Never errors. To end a queue, import `QueueDoneType` from `reffect` and pass it as the third argument to `R.Queue.bounded(R.U64, 1, QueueDoneType)` or `R.Queue.make(R.U64, { capacity: 1 }, QueueDoneType)`. `R.Queue.end(queue)` returns whether completion was newly recorded. Buffered values remain available; subsequent empty takes fail with unit Done. Recover each take inside its child, for example `R.Queue.take(queue).pipe(R.Effect.asVoid, R.Effect.catch(() => R.Effect.void))`. Done is an internal terminal channel, not a scalar value you can return or inspect through expressions.
 
-Root All recovery, shutdown, Sleep/Ensuring, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
+Root All2 recovery is also supported for a zero-input Unit/Never function: the root QueueScope body must be exactly the All2 followed by a synchronous, queue-free Unit/Never catch handler. Children may fail with unit Done. Use `QueueAllExecution.run` or `runWithFrames` for this shape; `QueueExecution` continues to accept only ordinary and child-local recovery.
+
+`QueueAllObservation` represents `CompileError | Cause.Done<void>` in its outer Exit; framed observations also represent unit Done in the inner Exit. Cancellation can bypass recovery while retaining a source Done. Recorded frames and all observed Cause reasons survive observation packaging; preabort opens no frames. This stronger observation contract is separate from the authored function’s final Never channel. Natural mixed Done/cancellation in the restricted owned JavaScript context remains unproved; native retained-outcome and synthetic adapter tests establish the corresponding boundaries separately.
+
+Shutdown, Sleep/Ensuring, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
 
 ## Typed recovery and structured resource lifetimes
 

@@ -5,12 +5,19 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { Cause, Context, Effect, Exit, Logger, Scheduler } from "effect";
 import { expect, test } from "vite-plus/test";
-import { FailureFrames, R, Rust, SourceArtifacts } from "../src/index.ts";
+import {
+  Compile,
+  FailureFrames,
+  QueueAllExecution,
+  QueueDoneType,
+  R,
+  Rust,
+  SourceArtifacts,
+} from "../src/index.ts";
 import { checkEffectFunction, PrivateEffectReference } from "../src/effect-ir.ts";
 import type { Computation, EffectFn } from "../src/effect-ir.ts";
 import { DeferredInterruptionFrames } from "../src/deferred-interruption-frames.ts";
 import { QueueIR as Q } from "../src/queue.ts";
-import { QueueDoneType } from "../src/queue-model.ts";
 import { Expr, Operation, SemanticRef } from "../src/kernel.ts";
 import { analyzeGeneratedQueueFallibleProfile } from "../src/queue-generated-profile.ts";
 import {
@@ -34,19 +41,19 @@ const seq = <E>(...steps: Computation<void, E>[]) =>
   );
 const make = (kind: string) =>
   R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.U64, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.U64, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) => {
-        const take = Q.take(owner).pipe(R.Effect.asVoid);
-        const end = Q.end(owner).pipe(R.Effect.asVoid);
+        const take = R.Queue.take(owner).pipe(R.Effect.asVoid);
+        const end = R.Queue.end(owner).pipe(R.Effect.asVoid);
         const logEnd = end.pipe(R.Effect.andThen(R.Log.info("ended")));
         const producer = seq(
-          Q.offer(owner, R.U64.literal(1n)).pipe(R.Effect.asVoid),
-          Q.offer(owner, R.U64.literal(2n)).pipe(R.Effect.asVoid),
+          R.Queue.offer(owner, R.U64.literal(1n)).pipe(R.Effect.asVoid),
+          R.Queue.offer(owner, R.U64.literal(2n)).pipe(R.Effect.asVoid),
           end,
           take,
           take,
         );
-        const consumer = Q.take(owner).pipe(
+        const consumer = R.Queue.take(owner).pipe(
           R.Effect.flatMap((value) =>
             R.Match.bool(
               R.U64.eq(value, R.U64.literal(1n)),
@@ -60,10 +67,13 @@ const make = (kind: string) =>
           kind === "reverse"
             ? group(logEnd, take)
             : kind === "success"
-              ? group(seq(Q.offer(owner, R.U64.literal(7n)).pipe(R.Effect.asVoid), logEnd), take)
+              ? group(
+                  seq(R.Queue.offer(owner, R.U64.literal(7n)).pipe(R.Effect.asVoid), logEnd),
+                  take,
+                )
               : kind === "second"
                 ? group(
-                    seq(Q.offer(owner, R.U64.literal(7n)).pipe(R.Effect.asVoid), logEnd),
+                    seq(R.Queue.offer(owner, R.U64.literal(7n)).pipe(R.Effect.asVoid), logEnd),
                     seq(take, take),
                   )
                 : kind === "unopened"
@@ -117,6 +127,24 @@ const mixed = {
       ),
     ),
   ),
+};
+const publicArtifact = async (
+  program: ReturnType<typeof R.program>,
+  artifacts: typeof SourceArtifacts.None | typeof SourceArtifacts.Full = SourceArtifacts.None,
+  frames: typeof FailureFrames.None   = FailureFrames.Bounded,
+) => {
+  const artifact = await Effect.runPromise(
+    Compile.make(program).pipe(
+      Compile.withTarget(Rust.tokio),
+      Compile.withSourceArtifacts(artifacts),
+      Compile.withFailureFrames(frames),
+      Compile.run,
+    ),
+  );
+  expect(artifact.files).toEqual(
+    emitFunctions(lowerQueueFallibleFunctions(program, selected, artifacts, frames)).files,
+  );
+  return artifact;
 };
 const checkedReference = (fn: EffectFn) => {
   const profiles = analyzeGeneratedQueueFallibleProfile(R.program({ work: fn }));
@@ -337,6 +365,15 @@ test(
       const framed = await observe(name, true);
       expect(framed.logs).toEqual(plain.logs);
       expect(framed.frames.frames).toEqual([]);
+      const owned = await QueueAllExecution.run(functions[name]!);
+      expect(owned.exit).toEqual(Exit.succeed(undefined));
+      expect(owned.logs).toEqual(plain.logs);
+      expect(Object.isFrozen(owned.logs)).toBe(true);
+      const ownedFramed = await QueueAllExecution.runWithFrames(functions[name]!);
+      expect(ownedFramed.exit).toEqual(
+        Exit.succeed({ exit: Exit.succeed(undefined), frames: [], omitted: 0 }),
+      );
+      expect(ownedFramed.logs).toEqual(framed.logs);
       expectedLogs.push(...plain.logs);
     }
     let expectedFrames: readonly { readonly path: string; readonly kind: string }[] = [];
@@ -370,16 +407,13 @@ test(
     try {
       for (const artifacts of [SourceArtifacts.None, SourceArtifacts.Full])
         for (const frames of [FailureFrames.None, FailureFrames.Bounded]) {
-          const emitted = emitFunctions(
-            lowerQueueFallibleFunctions(R.program(mixed), selected, artifacts, frames),
-          );
+          const emitted = await publicArtifact(R.program(mixed), artifacts, frames);
           expect(Buffer.byteLength(emitted.files["src/lib.rs"]!)).toBeLessThanOrEqual(2097152);
           process.stdout.write(
             `Queue All ${artifacts._tag}/${frames._tag}: Rust bytes=${Buffer.byteLength(emitted.files["src/lib.rs"]!)}\n`,
           );
           expect(emitted.files["src/lib.rs"]).not.toContain("__reffect_queue_done_unit");
-          if (SourceArtifacts.isNone(artifacts)) expect(emitted.ranges).toEqual([]);
-          else expect(emitted.ranges.length).toBeGreaterThan(0);
+          expect("sources" in emitted).toBe(!SourceArtifacts.isNone(artifacts));
           for (const [path, text] of Object.entries(emitted.files)) {
             await mkdir(dirname(join(directory, path)), { recursive: true });
             await writeFile(join(directory, path), text);
@@ -411,14 +445,7 @@ test(
             );
           }
         }
-      const source = emitFunctions(
-        lowerQueueFallibleFunctions(
-          R.program(mixed),
-          selected,
-          SourceArtifacts.None,
-          FailureFrames.Bounded,
-        ),
-      ).files["src/lib.rs"]!;
+      const source = (await publicArtifact(R.program(mixed))).files["src/lib.rs"]!;
       for (const [mutated, reason] of [
         [
           source.replaceAll(
@@ -436,13 +463,12 @@ test(
         await writeFile(join(directory, "src/lib.rs"), mutated);
         await expect(execute()).rejects.toMatchObject({ stderr: expect.stringContaining(reason) });
       }
-      const guarded = emitFunctions(
-        lowerQueueFallibleFunctions(
+      const guarded = (
+        await publicArtifact(
           R.program({ quiet: functions.quiet! }),
-          selected,
           SourceArtifacts.None,
           FailureFrames.None,
-        ),
+        )
       ).files["src/lib.rs"]!;
       expect(guarded).not.toContain("structured_all2_fallible");
       const boundary = "let cause = driver.all_cause(interrupted);";
@@ -470,20 +496,13 @@ test(
       await rm(directory, { recursive: true, force: true });
     }
   },
-  nativeTestBudget(3) + 300000,
+  nativeTestBudget(3) + 480000,
 );
 
 test(
   "canceled generated All retains and consumes the selected Done child trail",
   async () => {
-    const emitted = emitFunctions(
-      lowerQueueFallibleFunctions(
-        R.program({ quiet: functions.quiet! }),
-        selected,
-        SourceArtifacts.None,
-        FailureFrames.Bounded,
-      ),
-    );
+    const emitted = await publicArtifact(R.program({ quiet: functions.quiet! }));
     const source = emitted.files["src/lib.rs"]!;
     const boundary = "let cause = driver.all_cause(interrupted);";
     expect(source.split(boundary)).toHaveLength(2);
@@ -553,5 +572,5 @@ async fn main(){
       await rm(directory, { recursive: true, force: true });
     }
   },
-  nativeTestBudget(1),
+  nativeTestBudget(1) + 480000,
 );

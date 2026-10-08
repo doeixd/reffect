@@ -3021,8 +3021,43 @@ export const EffectReference = Object.freeze({
     basePath?: string,
   ) => runWithFramesUnknown(f, args, basePath),
 });
+// Cancellation can bypass the framed interpreter's envelope. Decode only its owned carriers.
+const projectFramedCause = (cause: Cause.Cause<unknown>) => {
+  const payload = (error: unknown): unknown => {
+    if (error instanceof FramedDomain) return error.error;
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "_tag" in error &&
+      error._tag === "Internal" &&
+      "cause" in error &&
+      error.cause instanceof CompileError
+    )
+      return error.cause;
+    return error;
+  };
+  const domain = cause.reasons.find(
+    (reason) => Cause.isFailReason(reason) && reason.error instanceof FramedDomain,
+  );
+  const trail =
+    domain && Cause.isFailReason(domain) && domain.error instanceof FramedDomain
+      ? domain.error
+      : undefined;
+  const wrapped = cause.reasons.some(
+    (reason) => Cause.isFailReason(reason) && payload(reason.error) !== reason.error,
+  );
+  return Object.freeze({
+    cause: wrapped ? Cause.map(cause, payload) : cause,
+    frames: Object.freeze(trail ? [...trail.frames] : []),
+    omitted: trail?.omitted ?? 0,
+  });
+};
 /** Internal evaluator reuse; package reference exports never expose checker injection. */
-export const PrivateEffectReference = Object.freeze({ runUnknown, runWithFramesUnknown });
+export const PrivateEffectReference = Object.freeze({
+  runUnknown,
+  runWithFramesUnknown,
+  projectFramedCause,
+});
 const logAttributes = (attributes: readonly LogAttribute[]): readonly LogAttribute[] => {
   const seen = new Set<string>();
   for (const [key] of attributes) {

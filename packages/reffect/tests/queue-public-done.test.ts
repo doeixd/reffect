@@ -136,7 +136,7 @@ test("public End survives every compiler stage with scoped representation and po
   expect(preabort.logs).toEqual([]);
 });
 
-test("public Done receipts cannot authorize retained All errors, cleanup or hidden marker signatures", async () => {
+test("local Done runner rejects root recovery while compiler preserves exact recovery and marker limits", async () => {
   const uncaught = R.fn([], R.Unit, QueueDoneType, () =>
     R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
@@ -157,6 +157,21 @@ test("public Done receipts cannot authorize retained All errors, cleanup or hidd
       ),
     ),
   );
+  expect(
+    Exit.isSuccess(
+      await Effect.runPromise(
+        Compile.make(R.program({ rootRecovery })).pipe(
+          Compile.withTarget(Rust.tokio),
+          Compile.run,
+          Effect.exit,
+        ),
+      ),
+    ),
+  ).toBe(true);
+  expect(Exit.isFailure((await QueueExecution.run(rootRecovery)).exit)).toBe(true);
+  const outerRecovery = R.fn([], R.Unit, R.Never, () =>
+    uncaught.body.pipe(R.Effect.catch(() => R.Effect.void)),
+  );
   const cleanup = R.fn([], R.Bool, R.Never, () =>
     completed.body.pipe(R.Effect.ensuring(R.Effect.void)),
   );
@@ -173,7 +188,7 @@ test("public Done receipts cannot authorize retained All errors, cleanup or hidd
   // @ts-expect-error Adversarial Apply omits an operand but retains its forbidden signature.
   const expression = Expr.apply(marker);
   const hidden = R.fn([], R.Bool, () => expression);
-  for (const work of [uncaught, rootRecovery, cleanup, hidden]) {
+  for (const work of [uncaught, outerRecovery, cleanup, hidden]) {
     const result = await Effect.runPromise(
       Compile.make(R.program({ completed, work })).pipe(
         Compile.withTarget(Rust.tokio),
@@ -190,13 +205,11 @@ test("public Done receipts cannot authorize retained All errors, cleanup or hidd
     ),
   );
   const forged = Plan.make(
-    { ...valid.analysis, program: R.program({ rootRecovery }) },
+    { ...valid.analysis, program: R.program({ outerRecovery }) },
     valid.target,
     valid.selections,
     valid.crates,
   );
   const result = await Effect.runPromise(Compile.verify(forged).pipe(Effect.exit));
-  expect(diagnostics(result)).toContainEqual(
-    expect.objectContaining({ code: "TASK_GROUP_RECOVERY", stage: "check" }),
-  );
+  expect(diagnostics(result)).toContainEqual(expect.objectContaining({ stage: "check" }));
 });

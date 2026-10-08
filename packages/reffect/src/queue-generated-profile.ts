@@ -106,7 +106,7 @@ const analyzeQueueProfile = (
         root.body.node.source.node._tag !== "TaskGroup" ||
         root.body.node.source.error !== QueueDoneType)
     )
-      refuse(path, "Private fallible Queue requires root unit Done All2 recovery");
+      refuse(path, "Fallible Queue requires root unit Done All2 recovery");
     if (
       !scalar(root.success) ||
       (!done && root.error !== NeverType) ||
@@ -316,7 +316,7 @@ export const analyzeGeneratedQueueDoneProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Local");
 
-/** Private per-function receipts for ordinary, local Done and root All2 recovery. */
+/** Checked per-function receipts for ordinary, local Done and public root All2 recovery. */
 export const analyzeGeneratedQueueFallibleProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "All");

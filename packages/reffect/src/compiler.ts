@@ -1,4 +1,4 @@
-import { analyzeGeneratedQueueDoneProfile } from "./queue-generated-profile.ts";
+import { analyzeGeneratedQueueFallibleProfile } from "./queue-generated-profile.ts";
 import { QueueDoneType, containsQueue, containsQueueDone } from "./queue-model.ts";
 import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { containsLatch, usesLatchExpression } from "./latch-model.ts";
@@ -57,7 +57,7 @@ import {
   lowerDeferredFunctions,
   lowerSemaphoreFunctions,
   lowerLatchFunctions,
-  lowerQueueDoneFunctions,
+  lowerQueueFallibleFunctions,
   emitFunctions,
 } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -634,11 +634,14 @@ const checkedLatchProfiles = (program: Program) => {
   return profiles;
 };
 
-const queueProfiles = new WeakMap<Program, ReturnType<typeof analyzeGeneratedQueueDoneProfile>>();
+const queueProfiles = new WeakMap<
+  Program,
+  ReturnType<typeof analyzeGeneratedQueueFallibleProfile>
+>();
 const checkedQueueProfiles = (program: Program) => {
   const previous = queueProfiles.get(program);
   if (previous) return previous;
-  const profiles = analyzeGeneratedQueueDoneProfile(program);
+  const profiles = analyzeGeneratedQueueFallibleProfile(program);
   queueProfiles.set(program, profiles);
   return profiles;
 };
@@ -688,7 +691,7 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
         "QUEUE_NATIVE_UNSUPPORTED",
         "check",
         `functions.${name}`,
-        "Queue/Done values require the checked standalone Queue profile with child-local Done recovery",
+        "Queue/Done values require the checked standalone Queue profile with local or root All2 Done recovery",
       );
   }
   yield* Effect.try({
@@ -753,7 +756,13 @@ const checkProgram = Effect.fn("Compile.check")(function* (program: Program) {
       : []),
     ...(f instanceof EffectFn
       ? checkEffectFunction(f, `functions.${name}`).filter(
-          (issue) => issue.code !== "NESTED_TASK_GROUP" || !profiles.has(f),
+          (issue) =>
+            (issue.code !== "NESTED_TASK_GROUP" || !profiles.has(f)) &&
+            !(
+              issue.code === "TASK_GROUP_RECOVERY" &&
+              queue.get(f)?.fallibleAll === true &&
+              issue.path === `functions.${name}.body.body`
+            ),
         )
       : checkFunction(f, `functions.${name}`)),
   ]);
@@ -1190,7 +1199,7 @@ const plan = Effect.fn("Compile.plan")(function* (
       "QUEUE_NATIVE_INTEGRATION",
       "plan",
       "effects",
-      "Queue requires the checked standalone Queue profile with child-local Done recovery",
+      "Queue requires the checked standalone Queue profile with local or root All2 Done recovery",
     );
   const semaphore = yield* Effect.try({
     try: () => checkedSemaphoreProfiles(analysis.program),
@@ -1466,7 +1475,7 @@ const lower = Effect.fn("Compile.lower")(function* (
   return yield* Effect.try({
     try: () =>
       (checkedQueueProfiles(p.analysis.program).size
-        ? lowerQueueDoneFunctions
+        ? lowerQueueFallibleFunctions
         : checkedLatchProfiles(p.analysis.program).size
           ? lowerLatchFunctions
           : checkedSemaphoreProfiles(p.analysis.program).size

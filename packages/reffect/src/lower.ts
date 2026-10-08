@@ -780,7 +780,7 @@ export function lowerQueueDoneFunctions(
   );
 }
 
-/** Private checked root All2 Done recovery; public completion remains gated. */
+/** Checked public root All2 Done recovery; broader lifecycle profiles stay private. */
 export function lowerQueueFallibleFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,

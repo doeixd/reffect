@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-08 — Public Queue All recovery
+
+- Recorded [QALLPUB-001–005](docs/research/queue-public-admission.md#public-root-all-recovery--preparation-2026-10-08) before implementation: exact root recovery receipt, separate QueueAllExecution observation contract, scoped diagnostic discharge and preserved cancellation-bypassed Done. Natural mixed Cause reachability in the restricted owned JS context is unproved; keep boundary injection evidence distinct. Cleanup/Shutdown remain private; PLAN.md stays untouched.
+- Implemented checked public root All2 Done recovery and separate QueueAllExecution/QueueAllObservation without changing the local runner contract. Exact receipt/path discharge, representation/marker audits and private lifecycle refusals remain enforced. Internal projection preserves cancellation-bypassed source payloads, annotations and recorded frames; unexpected errors become observation diagnostics. No native storage, dependencies or scalar metadata added.
+- Independent final source review found no blocker. Four adapter tests cover every mixed reason, annotation/payload retention, outer CompileError, unopened preabort, invalid carriers and a genuine private framed carrier. The genuine probe deliberately uses an out-of-profile synthetic source/finalizer/logger and proves projection only, not natural public cancellation. Updated the workstream handoff and current coverage/open-work docs; post-commit workspace/native validation follows.
+
 ## 2026-10-08 — Public Queue End and local Done
 
 - Recorded [QENDPUB-001–005](docs/research/queue-public-admission.md#public-end-and-unit-done--preparation-2026-10-08) before feature code: explicit unit Done witness, existing End/local recovery profile, receipt-scoped marker/type reporting and owned observations. Broader All recovery, cleanup and Shutdown remain private; PLAN.md stays untouched.
