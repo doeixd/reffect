@@ -421,4 +421,6 @@ The fresh owner must have zero Offer occurrences across every branch/shared edge
 
 Run queue-public-shutdown.test.ts with the inexpensive Queue regression suites first. Then run queue-generated-shutdown.test.ts alone with Cargo available and CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1. Preserve eight artifact/frame/debug/release configurations, exact public/private emitter equality, construction/released-trail/layout measurements, three meaningful runtime mutations and the official eager-terminal observer hazard. Native frame normalization remains explicitly separate from recorded public framing.
 
+The public native matrix passes four tests in 134.13s, eight configurations and three mutations; emission, layouts and allocation counts match the private profile. Public ownership tests prove real retained-Done cancellation and settled cleanup logs. All changes and decisions are recorded in the admission ledger.
+
 Next: assess buffered shutdown only with a pinned-version/topology safety proof; terminal cleanup, origin-aware diagnostic parity, broader ownership/Scope and PubSub remain independent gates. PLAN.md belongs to the core instance.
