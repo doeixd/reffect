@@ -1,4 +1,4 @@
-import { analyzeGeneratedQueueCleanupProfile } from "./queue-generated-profile.ts";
+import { analyzeGeneratedQueueShutdownProfile } from "./queue-generated-profile.ts";
 import { QueueDoneType, containsQueue, containsQueueDone } from "./queue-model.ts";
 import { hasQueueComputation, usesQueueNativeType } from "./queue-profile.ts";
 import { containsLatch, usesLatchExpression } from "./latch-model.ts";
@@ -57,7 +57,7 @@ import {
   lowerDeferredFunctions,
   lowerSemaphoreFunctions,
   lowerLatchFunctions,
-  lowerQueueCleanupFunctions,
+  lowerQueueShutdownFunctions,
   emitFunctions,
 } from "./lower.ts";
 import type { LoweredModule, RustModule, UnmappedRustModule } from "./lower.ts";
@@ -636,12 +636,12 @@ const checkedLatchProfiles = (program: Program) => {
 
 const queueProfiles = new WeakMap<
   Program,
-  ReturnType<typeof analyzeGeneratedQueueCleanupProfile>
+  ReturnType<typeof analyzeGeneratedQueueShutdownProfile>
 >();
 const checkedQueueProfiles = (program: Program) => {
   const previous = queueProfiles.get(program);
   if (previous) return previous;
-  const profiles = analyzeGeneratedQueueCleanupProfile(program);
+  const profiles = analyzeGeneratedQueueShutdownProfile(program);
   queueProfiles.set(program, profiles);
   return profiles;
 };
@@ -1475,7 +1475,7 @@ const lower = Effect.fn("Compile.lower")(function* (
   return yield* Effect.try({
     try: () =>
       (checkedQueueProfiles(p.analysis.program).size
-        ? lowerQueueCleanupFunctions
+        ? lowerQueueShutdownFunctions
         : checkedLatchProfiles(p.analysis.program).size
           ? lowerLatchFunctions
           : checkedSemaphoreProfiles(p.analysis.program).size

@@ -11,6 +11,7 @@ import {
   analyzeGeneratedQueueDoneProfile,
   analyzeGeneratedQueueFallibleProfile,
   analyzeGeneratedQueueCleanupProfile,
+  analyzeGeneratedQueueShutdownProfile,
 } from "./queue-generated-profile.ts";
 import { queueBudgetLimit } from "./queue-budget.ts";
 import { CompileError, Program } from "./kernel.ts";
@@ -37,7 +38,7 @@ const refusal = (path: string, message: string) =>
     diagnostics: [{ code: "QUEUE_EXECUTION_CONTEXT", stage: "check", path, message }],
   });
 
-type QueueProfileMode = "Local" | "All" | "Cleanup";
+type QueueProfileMode = "Local" | "All" | "Cleanup" | "Shutdown";
 
 const execute = <A, Out, E = never>(
   fn: EffectFn<readonly [], A, never>,
@@ -49,24 +50,29 @@ const execute = <A, Out, E = never>(
   try {
     signal = validateOwnedExecutionSignal(options, refusal);
     const analyze =
-      mode === "Cleanup"
-        ? analyzeGeneratedQueueCleanupProfile
-        : mode === "All"
-          ? analyzeGeneratedQueueFallibleProfile
-          : analyzeGeneratedQueueDoneProfile;
+      mode === "Shutdown"
+        ? analyzeGeneratedQueueShutdownProfile
+        : mode === "Cleanup"
+          ? analyzeGeneratedQueueCleanupProfile
+          : mode === "All"
+            ? analyzeGeneratedQueueFallibleProfile
+            : analyzeGeneratedQueueDoneProfile;
     const profile = analyze(Program.make({ work: fn })).get(fn);
     if (
       !profile ||
       (mode === "All" && !profile.fallibleAll) ||
-      (mode === "Cleanup" && (!profile.fallibleAll || !profile.cleanup))
+      (mode === "Cleanup" && (!profile.fallibleAll || !profile.cleanup)) ||
+      (mode === "Shutdown" && (!profile.fallibleAll || !profile.shutdown))
     )
       throw refusal(
         "function",
-        mode === "Cleanup"
-          ? "This runner requires checked root All2 unit Done recovery with child cleanup"
-          : mode === "All"
-            ? "This runner requires checked root All2 unit Done recovery"
-            : "This runner requires the checked bounded Queue profile",
+        mode === "Shutdown"
+          ? "This runner requires checked offer-free root All2 unit Done shutdown"
+          : mode === "Cleanup"
+            ? "This runner requires checked root All2 unit Done recovery with child cleanup"
+            : mode === "All"
+              ? "This runner requires checked root All2 unit Done recovery"
+              : "This runner requires the checked bounded Queue profile",
       );
   } catch (error) {
     if (!(error instanceof CompileError)) throw error;
@@ -200,4 +206,27 @@ export const QueueCleanupExecution = Object.freeze({
     options?: QueueExecutionOptions,
   ): Promise<QueueAllObservation<FramedExit<void, Cause.Done<void>>>> =>
     runWithFrames<void, Cause.Done<void>>(fn, options, "Cleanup", attachQueueAllRecordedFrames),
+});
+
+/**
+ * Owned offer-free Queue shutdown with root All2 Done recovery and optional checked child cleanup.
+ * Open shutdown interrupts; cancellation awaits masked cleanup and preserves retained unit Done.
+ * Framed observations preserve recorded evidence under the same policy as QueueCleanupExecution.
+ */
+export const QueueShutdownExecution = Object.freeze({
+  run: (
+    fn: EffectFn<readonly [], void, never>,
+    options?: QueueExecutionOptions,
+  ): Promise<QueueAllObservation<void>> =>
+    execute<void, void, Cause.Done<void>>(
+      fn,
+      options,
+      () => PrivateEffectReference.runUnknown(fn, [], () => []),
+      "Shutdown",
+    ),
+  runWithFrames: (
+    fn: EffectFn<readonly [], void, never>,
+    options?: QueueExecutionOptions,
+  ): Promise<QueueAllObservation<FramedExit<void, Cause.Done<void>>>> =>
+    runWithFrames<void, Cause.Done<void>>(fn, options, "Shutdown", attachQueueAllRecordedFrames),
 });

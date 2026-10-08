@@ -5,12 +5,11 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { Cause, Context, Effect, Exit, Logger, Queue, Scheduler } from "effect";
 import { expect, test } from "vite-plus/test";
-import { FailureFrames, R, Rust, SourceArtifacts } from "../src/index.ts";
+import { Compile, FailureFrames, QueueDoneType, R, Rust, SourceArtifacts } from "../src/index.ts";
 import { Computation, PrivateEffectReference } from "../src/effect-ir.ts";
 import type { EffectFn } from "../src/effect-ir.ts";
 import { DeferredInterruptionFrames } from "../src/deferred-interruption-frames.ts";
 import { QueueIR as Q } from "../src/queue.ts";
-import { QueueDoneType } from "../src/queue-model.ts";
 import { analyzeGeneratedQueueShutdownProfile } from "../src/queue-generated-profile.ts";
 import {
   emitFunctions,
@@ -29,11 +28,11 @@ const seq = <E>(...steps: Computation<void, E>[]) =>
   steps.reduce((a, b) => a.pipe(R.Effect.andThen(b)), R.Effect.void as Computation<void, E>);
 const make = (name: string) =>
   R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) => {
-        const take = Q.take(owner);
+        const take = R.Queue.take(owner);
         const quiet = name === "quiet";
-        const terminal = Q.shutdown(owner).pipe(
+        const terminal = R.Queue.shutdown(owner).pipe(
           R.Effect.flatMap((value) =>
             quiet
               ? R.Effect.void
@@ -44,7 +43,7 @@ const make = (name: string) =>
                 ),
           ),
         );
-        const end = Q.end(owner).pipe(R.Effect.asVoid);
+        const end = R.Queue.end(owner).pipe(R.Effect.asVoid);
         const cleanup = quiet
           ? R.Effect.sleep(1)
           : seq(
@@ -86,19 +85,19 @@ const old = {
     ),
   ),
   local: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         group(
-          Q.take(owner).pipe(R.Effect.catch(() => R.Effect.void)),
-          Q.end(owner).pipe(R.Effect.asVoid),
+          R.Queue.take(owner).pipe(R.Effect.catch(() => R.Effect.void)),
+          R.Queue.end(owner).pipe(R.Effect.asVoid),
         ),
       ),
     ),
   ),
   fallible: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
-        group(Q.take(owner), Q.end(owner).pipe(R.Effect.asVoid)).pipe(
+        group(R.Queue.take(owner), R.Queue.end(owner).pipe(R.Effect.asVoid)).pipe(
           R.Effect.catch(() => R.Effect.void),
         ),
       ),
@@ -106,6 +105,24 @@ const old = {
   ),
 };
 const mixed = { ...functions, ...old };
+const publicArtifact = async (
+  program: ReturnType<typeof R.program>,
+  artifacts: typeof SourceArtifacts.None | typeof SourceArtifacts.Full = SourceArtifacts.None,
+  frames: typeof FailureFrames.None = FailureFrames.Bounded,
+) => {
+  const artifact = await Effect.runPromise(
+    Compile.make(program).pipe(
+      Compile.withTarget(Rust.tokio),
+      Compile.withSourceArtifacts(artifacts),
+      Compile.withFailureFrames(frames),
+      Compile.run,
+    ),
+  );
+  expect(artifact.files).toEqual(
+    emitFunctions(lowerQueueShutdownFunctions(program, selected, artifacts, frames)).files,
+  );
+  return artifact;
+};
 const checked = (fn: EffectFn) => {
   expect(analyzeGeneratedQueueShutdownProfile(R.program({ work: fn })).has(fn)).toBe(true);
   return [];
@@ -182,7 +199,7 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
   return { logs: settledLogs!, frames: trail.map(({ path, kind }) => ({ path, kind })) };
 };
 
-test("private Shutdown selection excludes every Offer edge and terminal cleanup", () => {
+test("Shutdown selection excludes every Offer edge and terminal cleanup", () => {
   const profiles = analyzeGeneratedQueueShutdownProfile(R.program(mixed));
   expect(profiles.size).toBe(9);
   for (const fn of Object.values(functions)) expect(profiles.get(fn)?.shutdown).toBe(true);
@@ -195,10 +212,10 @@ test("private Shutdown selection excludes every Offer edge and terminal cleanup"
         emitFunctions(lowerQueueCleanupFunctions(R.program(old), selected, artifacts, frames)),
       );
   const oldCleanup = R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         group(
-          seq(Q.end(owner).pipe(R.Effect.asVoid), Q.take(owner)).pipe(
+          seq(R.Queue.end(owner).pipe(R.Effect.asVoid), R.Queue.take(owner)).pipe(
             R.Effect.ensuring(R.Effect.sleep(1)),
           ),
           R.Effect.void,
@@ -383,14 +400,14 @@ test(
     try {
       for (const artifacts of [SourceArtifacts.None, SourceArtifacts.Full])
         for (const frames of [FailureFrames.None, FailureFrames.Bounded]) {
-          const emitted = emitFunctions(
-            lowerQueueShutdownFunctions(R.program(mixed), selected, artifacts, frames),
-          );
+          const emitted = await publicArtifact(R.program(mixed), artifacts, frames);
           expect(Buffer.byteLength(emitted.files["src/lib.rs"]!)).toBeLessThanOrEqual(2097152);
           process.stdout.write(
             `Queue Shutdown ${artifacts._tag}/${frames._tag}: Rust bytes=${Buffer.byteLength(emitted.files["src/lib.rs"]!)}\n`,
           );
-          expect(emitted.ranges.length > 0).toBe(!SourceArtifacts.isNone(artifacts));
+          if (SourceArtifacts.isNone(emitted.sourceArtifacts))
+            expect("sources" in emitted).toBe(false);
+          else expect(emitted.sources?.ranges.length).toBeGreaterThan(0);
           for (const [path, text] of Object.entries(emitted.files)) {
             await mkdir(dirname(join(directory, path)), { recursive: true });
             await writeFile(join(directory, path), text);
@@ -426,13 +443,8 @@ test(
             );
           }
         }
-      const source = emitFunctions(
-        lowerQueueShutdownFunctions(
-          R.program(mixed),
-          selected,
-          SourceArtifacts.None,
-          FailureFrames.Bounded,
-        ),
+      const source = (
+        await publicArtifact(R.program(mixed), SourceArtifacts.None, FailureFrames.Bounded)
       ).files["src/lib.rs"]!;
       for (const [mutated, reason] of [
         [

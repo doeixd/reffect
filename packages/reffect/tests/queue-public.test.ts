@@ -110,7 +110,14 @@ const compile = (work: EffectFn) =>
 test("public Queue exposes the bounded Never facade with both offer forms and owned observations", async () => {
   expect(QueueIR).toBe(R.Queue);
   expect(Object.isFrozen(QueueIR)).toBe(true);
-  expect(Object.keys(QueueIR).sort()).toEqual(["bounded", "end", "make", "offer", "take"]);
+  expect(Object.keys(QueueIR).sort()).toEqual([
+    "bounded",
+    "end",
+    "make",
+    "offer",
+    "shutdown",
+    "take",
+  ]);
   for (const capacity of [1, 2, 3]) {
     const observation = await QueueExecution.run(transfer(capacity));
     expect(observation.exit).toEqual(Exit.succeed(7n));
@@ -143,7 +150,7 @@ test("public Queue exposes the bounded Never facade with both offer forms and ow
     QueueIR.bounded(R.U64, 1, R.Bool);
     // @ts-expect-error An explicit Done error parameter requires its witness.
     QueueIR.bounded<bigint, Cause.Done<void>>(R.U64, 1);
-    // @ts-expect-error Shutdown requires its own semantic admission.
+    // Building Shutdown does not bypass its checked offer-free native admission.
     void QueueIR.shutdown;
     void R.Queue.end;
     // @ts-expect-error Only the suspend strategy is supported.

@@ -326,7 +326,7 @@ export const analyzeGeneratedQueueCleanupProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Cleanup");
 
-/** Private offer-free Shutdown; buffered and cleanup termination remain refused. */
+/** Checked public offer-free Shutdown; buffered and cleanup termination remain refused. */
 export const analyzeGeneratedQueueShutdownProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Shutdown");

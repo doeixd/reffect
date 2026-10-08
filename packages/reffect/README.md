@@ -569,7 +569,7 @@ See [the runnable example](../../examples/rpc-async/README.md),
 
 ## Bounded standalone Queue
 
-`R.Queue` and exported `QueueIR` expose `make`, `bounded`, dual `offer`, `take` and `end` with explicit scalar witnesses:
+`R.Queue` and exported `QueueIR` expose `make`, `bounded`, dual `offer`, `take`, `end` and `shutdown` with explicit scalar witnesses:
 
 ```ts
 const Transfer = R.fn([], R.Unit, R.Never, () =>
@@ -601,7 +601,9 @@ Root All2 recovery is also supported for a zero-input Unit/Never function: the r
 
 Cancellation awaits masked cleanup, preserves an earlier unit Done, and bypasses recovery. Logs are captured at settlement. Owned framed observations preserve recorded source evidence; native Bounded diagnostics apply the separately documented [restoration policy](../../docs/native-divergences.md#queue-cleanup-diagnostic-policies). Under cancellation those trails can differ, and canonical shared-source paths do not identify the failing invocation.
 
-Shutdown, source Sleep, nested/root/handler finalization, Queue operations in finalizers, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
+`QueueShutdownExecution.run` and `runWithFrames` additionally support offer-free root-All Done recovery with actual `R.Queue.shutdown` use. Open shutdown interrupts; shutdown after End returns false and preserves Done. The entire function must contain zero offers, including dormant branches and recovery handlers. Checked child cleanup is optional, but Shutdown cannot occur in an Ensuring source or finalizer. Observation and recorded-frame policies match QueueCleanupExecution; older runners refuse Shutdown.
+
+Buffered Shutdown, source Sleep, nested/root/handler finalization, Queue operations in finalizers, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
 
 ## Typed recovery and structured resource lifetimes
 

@@ -1,5 +1,9 @@
 # Progress
 
+## 2026-10-08 — Public offer-free Queue shutdown preparation
+
+Recorded [QSHUTPUB-001–003](docs/research/queue-public-admission.md#public-offer-free-shutdown--preparation-2026-10-08) before implementation. Rechecked pinned upstream source; reuse the private offer-free proof, selector and lowerer, separate owned runner and recorded-only framing. Buffered shutdown and terminal cleanup remain refused. Implemented public shutdown construction/compiler routing and separate QueueShutdownExecution with exact shutdown+fallibleAll receipts. Independent admission review found no blocker. Workspace lint/types (403 files), strict TypeScript, build and 44 inexpensive tests across nine suites pass; existing facade key/type contracts updated. Native matrix and final formatting/post-commit validation pending.
+
 ## 2026-10-08 — Public Queue cleanup
 
 - Recorded [QCLEANPUB-001–005](docs/research/queue-public-admission.md#public-queue-cleanup--preparation-2026-10-08) before feature code and QCLEANPUB-006 before the additional other-child conformance fixture: existing repaired cleanup receipt, separate owned runner, natural retained-Done cancellation and recorded-only reference framing. Native restoration diagnostics remain a separate explicit policy; canonical paths cannot establish shared-source invocation origin. Preserve second-child queue-free source/terminal refusals, operation/cost gates and exact-Exit logs. PLAN.md stays untouched.

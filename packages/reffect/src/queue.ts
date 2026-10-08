@@ -113,7 +113,7 @@ const shutdown = <A, E>(self: Expr<Queue.Queue<A, E>>): Computation<boolean> =>
     operation: "Shutdown",
     ...handle(self),
   });
-/** Internal reference builders retain End/shutdown and Done; public admission is narrower. */
+/** Internal builders; native admission is checked separately from node construction. */
 export const QueueIR = Object.freeze({ make, bounded, offer, take, end, shutdown });
 
 // Separate overloads keep the default Never channel honest: a Done channel requires a witness.
@@ -154,4 +154,5 @@ export const QueuePublic = Object.freeze({
   offer,
   take,
   end,
+  shutdown,
 });
