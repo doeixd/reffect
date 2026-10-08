@@ -57,6 +57,7 @@ export const analyzeQueueBudget = (
   path = "body",
   context: DeferredBudgetContext = defaultDeferredBudgetContext,
   interruptionFrames = true,
+  cleanup = false,
 ): QueueBudgetAnalysis => {
   const diagnostics: Diagnostic[] = [];
   const active = new Set<Computation<unknown, unknown>>();
@@ -104,6 +105,20 @@ export const analyzeQueueBudget = (
               : n.operation === "End" || n.operation === "Shutdown"
                 ? summary(16, 16, 0, 0, 1)
                 : unaccounted(),
+        Ensuring: (n) =>
+          cleanup
+            ? add(
+                summary(12, 14),
+                add(child(n.body, "body"), walk(n.finalizer, `${at}.finalizer`, false)),
+              )
+            : unaccounted(),
+        Sleep: (n) =>
+          cleanup &&
+          Number.isInteger(n.milliseconds) &&
+          n.milliseconds >= 1 &&
+          n.milliseconds <= 2147483647
+            ? summary(14)
+            : unaccounted(),
         TaskGroup: (n) => {
           if (n.mode !== "All" || n.children.length !== 2)
             return issue("QUEUE_BUDGET_TOPOLOGY", at, "Queue group receipt covers only All2");

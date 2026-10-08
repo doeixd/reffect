@@ -18,6 +18,7 @@ export interface GeneratedQueueProfile {
   readonly capacity: number;
   readonly completion: "None" | "End";
   readonly fallibleAll?: true;
+  readonly cleanup?: true;
   readonly ownerCount: 1;
   readonly taskCapacity: 2;
   readonly bounds: GeneratedDeferredGrowth;
@@ -42,7 +43,7 @@ const remapGrowth = (error: unknown): never => {
 /** Checked representation/ownership receipt plus a conditional default-context budget. */
 const analyzeQueueProfile = (
   program: Program,
-  profileMode: "None" | "Local" | "All",
+  profileMode: "None" | "Local" | "All" | "Cleanup",
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => {
   const profiles = new Map<EffectFn, GeneratedQueueProfile>();
   const moduleGrowth: GeneratedDeferredGrowth[] = [];
@@ -50,7 +51,7 @@ const analyzeQueueProfile = (
     if (!(fn instanceof EffectFn) || !hasQueueComputation(fn.body)) continue;
     const path = `functions.${name}.body`;
     const mode =
-      profileMode === "All"
+      profileMode === "All" || profileMode === "Cleanup"
         ? Match.value(fn.body.node).pipe(
             Match.when(
               {
@@ -91,6 +92,8 @@ const analyzeQueueProfile = (
       refuse(path, "Generated Queue requires zero inputs and builtin scalar/Never channels");
     const done = mode !== "None" && root.error === QueueDoneType;
     const fallibleAll = mode === "All";
+    const cleanupEnabled = profileMode === "Cleanup" && fallibleAll;
+    let finalizers = 0;
     if (
       fallibleAll &&
       (!done ||
@@ -125,6 +128,8 @@ const analyzeQueueProfile = (
       grouped = false,
       conditional = false,
       caught = false,
+      cleanup = false,
+      childRoot = false,
     ): void => {
       if (
         !scalar(body.output) ||
@@ -135,7 +140,8 @@ const analyzeQueueProfile = (
       Match.value(body.node).pipe(
         Match.tags({
           QueueOperation: (node) => {
-            if (!grouped) refuse(at, "Queue operations are only supported inside All2 children");
+            if (!grouped || cleanup)
+              refuse(at, "Queue operations require an All2 source and cannot enter cleanup");
             if (
               node.binder !== root.binder ||
               node.success !== root.success ||
@@ -169,22 +175,50 @@ const analyzeQueueProfile = (
                 (child.error !== NeverType && !(fallibleAll && child.error === QueueDoneType))
               )
                 refuse(at, "All2 children require builtin Unit/Never channels");
-              walk(child, `${at}.children[${index}]`, true, false);
+              walk(child, `${at}.children[${index}]`, true, false, false, false, true);
             });
           },
           Succeed: (node) => audit(node.value, `${at}.value`),
           Map: (node) => {
-            walk(node.source, `${at}.source`, grouped, conditional, caught);
+            walk(node.source, `${at}.source`, grouped, conditional, caught, cleanup);
             audit(node.body, `${at}.body`);
           },
           FlatMap: (node) => {
-            walk(node.source, `${at}.source`, grouped, conditional, caught);
-            walk(node.body, `${at}.body`, grouped, conditional, caught);
+            walk(node.source, `${at}.source`, grouped, conditional, caught, cleanup);
+            walk(node.body, `${at}.body`, grouped, conditional, caught, cleanup);
           },
           Match: (node) => {
             audit(node.condition, `${at}.condition`);
-            walk(node.onTrue, `${at}.onTrue`, grouped, true, caught);
-            walk(node.onFalse, `${at}.onFalse`, grouped, true, caught);
+            walk(node.onTrue, `${at}.onTrue`, grouped, true, caught, cleanup);
+            walk(node.onFalse, `${at}.onFalse`, grouped, true, caught, cleanup);
+          },
+          Sleep: (node) => {
+            if (
+              !cleanupEnabled ||
+              !cleanup ||
+              !Number.isInteger(node.milliseconds) ||
+              node.milliseconds < 1 ||
+              node.milliseconds > 60000
+            )
+              refuse(at, "Only positive literal default-clock cleanup Sleep is supported");
+          },
+          Ensuring: (node) => {
+            if (
+              !cleanupEnabled ||
+              !grouped ||
+              !childRoot ||
+              cleanup ||
+              node.body.output !== UnitType ||
+              node.finalizer.output !== UnitType ||
+              node.finalizer.error !== NeverType
+            )
+              refuse(
+                at,
+                "Only outer Unit child Ensuring with infallible queue-free cleanup is supported",
+              );
+            finalizers++;
+            walk(node.body, `${at}.body`, true);
+            walk(node.finalizer, `${at}.finalizer`, true, false, false, true);
           },
           CatchAll: (node) => {
             if (fallibleAll) {
@@ -224,7 +258,7 @@ const analyzeQueueProfile = (
     walk(root.body, `${path}.body`);
     if (groups !== 1) refuse(path, "Exactly one unconditional unnested All2 is required");
     if (fallibleAll) check();
-    const budget = analyzeQueueBudget(fn, path);
+    const budget = analyzeQueueBudget(fn, path, undefined, true, finalizers > 0);
     if (!budget.admitted)
       throw new CompileError({
         message: "Unsupported Queue reference budget",
@@ -237,6 +271,7 @@ const analyzeQueueProfile = (
         capacity: root.capacity,
         completion: done ? "End" : "None",
         ...(fallibleAll ? { fallibleAll: true as const } : {}),
+        ...(finalizers ? { cleanup: true as const } : {}),
         ownerCount: 1,
         taskCapacity: 2,
         bounds: bounds!,
@@ -260,3 +295,8 @@ export const analyzeGeneratedQueueDoneProfile = (
 export const analyzeGeneratedQueueFallibleProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "All");
+
+/** Private outer-child cleanup receipt; terminal operations in finalizers stay refused. */
+export const analyzeGeneratedQueueCleanupProfile = (
+  program: Program,
+): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Cleanup");

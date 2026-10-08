@@ -81,3 +81,7 @@ The injected millis driver also admits only signed safe-integer readings, while 
 - Exit/Cause outside the [Fail-only value profile](research/exit-cause.md): Die/Interrupt reasons, annotations, equality/combination and upstream branding. Effect.exit refuses captured async work (including cleanup/Scope) and Clock/Random reads. Async work outside synchronous capture remains allowed.
 
 The [fallible task runtime observation profile](research/fallible-concurrency.md) compares ordered reason tags and scalar error payloads. It does not preserve interruptor fiber identities or reason annotations. These are declared observation limits; richer protocol consumers are refused, including NativeRpc handlers that reach fallible groups. Ordinary single typed errors and infallible groups retain their prior representation.
+
+## Private Queue cleanup diagnostic policy
+
+Generated queue-free cleanup preserves the source failure trail and appends Ensuring and parent boundaries after masked cleanup. Under actual parent cancellation, the official framed wrapper can omit post-mask domain decorators; its raw source prefix is normalized to the owned boundary policy for frame conformance. Raw Interrupt+Done cause and cleanup log order are checked independently. This private diagnostic adapter does not widen public Queue admission. See [QGCLEAN](research/queue-done-recovery.md#cleanup-diagnostic-policy-refinement).

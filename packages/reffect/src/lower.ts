@@ -2,6 +2,7 @@ import {
   analyzeGeneratedQueueProfile,
   analyzeGeneratedQueueDoneProfile,
   analyzeGeneratedQueueFallibleProfile,
+  analyzeGeneratedQueueCleanupProfile,
   type GeneratedQueueProfile,
 } from "./queue-generated-profile.ts";
 import { queueBoundedRuntime } from "./queue-bounded-runtime.ts";
@@ -796,6 +797,27 @@ export function lowerQueueFallibleFunctions(
     analyzeGeneratedSemaphoreProfile(program),
     analyzeGeneratedLatchProfile(program),
     analyzeGeneratedQueueFallibleProfile(program),
+  );
+}
+
+/** Private generated child cleanup; general finalizers and public completion remain gated. */
+export function lowerQueueCleanupFunctions(
+  program: Program,
+  selected: ReadonlyMap<OperationRef, Implementation>,
+  policy: ArtifactPolicy = SourceArtifacts.Full,
+  failureFrames: FailureFramePolicy = FailureFrames.None,
+  servicesSelection: RuntimeServicesSelection = {},
+): LoweredModule {
+  return lowerFunctionsInternal(
+    program,
+    selected,
+    policy,
+    failureFrames,
+    servicesSelection,
+    analyzeGeneratedDeferredProfile(program),
+    analyzeGeneratedSemaphoreProfile(program),
+    analyzeGeneratedLatchProfile(program),
+    analyzeGeneratedQueueCleanupProfile(program),
   );
 }
 
@@ -3789,13 +3811,17 @@ export const emitFunctions = (
             );
           },
           Sleep: (n) =>
-            joinFragments([
-              `{ match ${f.semaphoreProfile || f.latchProfile ? "task.sleep(ctx, " : f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
-              captureFrames
-                ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
-                : "Err(error) => Err(error)",
-              " } }",
-            ]),
+            f.queueProfile?.cleanup
+              ? textFragment(
+                  `{ queue_task.expect("Checked Queue cleanup task").cleanup_sleep(ctx, ${Rs.litU64(BigInt(n.milliseconds)).text}).await; Ok(()) }`,
+                )
+              : joinFragments([
+                  `{ match ${f.semaphoreProfile || f.latchProfile ? "task.sleep(ctx, " : f.deferredProfile ? "turn.sleep(ctx, " : "ctx.sleep("}${Rs.litU64(BigInt(n.milliseconds)).text}).await { Ok(()) => Ok(()), `,
+                  captureFrames
+                    ? `Err(error) => Err((error, FrameTrail::new(${frameOf(helper, "sleep").text})))`
+                    : "Err(error) => Err(error)",
+                  " } }",
+                ]),
           Launch: (n) =>
             joinFragments([
               "{ let error = ctx.launch((",
@@ -4047,7 +4073,7 @@ export const emitFunctions = (
               adaptFrag(n.body, helper.output, use("body")),
               "; let saved_interruptible = ctx.interruptible; ctx.interruptible = false; let cleanup = ",
               callFrag(n.finalizer, use("finalizer")),
-              '; ctx.interruptible = saved_interruptible; if cleanup.is_err() { panic!("Non-failing masked finalizer returned an error"); } match result { Ok(value) => { if ctx.is_cancelled() { ',
+              `; ctx.interruptible = saved_interruptible; if cleanup.is_err() { panic!("Non-failing masked finalizer returned an error"); } match result { Ok(value) => { if ${f.queueProfile?.cleanup ? 'ctx.is_cancelled() || { let task = queue_task.expect("Checked Queue cleanup task"); task.bridge.interrupted[task.task].get() }' : "ctx.is_cancelled()"} { `,
               captureFrames
                 ? `Err((AsyncError::Interrupted, FrameTrail::new(${frameOf(helper, "ensuring").text})))`
                 : "Err(AsyncError::Interrupted)",

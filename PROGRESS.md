@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-08 — Private generated Queue cleanup
+
+- Recorded [QGCLEAN-001–005](docs/research/queue-done-recovery.md#generated-queue-cleanup--preparation-2026-10-08) before feature code: private outer-child Unit finalization, queue-free masked cleanup, managed positive timers, retained outcomes/trails and opted-in reference budgets. Existing selectors and public completion remain unchanged; PLAN.md belongs to the core instance.
+- Delivered private direct-child Ensuring with queue-free Unit/Never cleanup and managed positive timers. Masking spans the full finalizer; actual/sticky cancellation only replaces source success, retaining Done and its trail. No runtime fields, crates or payload metadata added. Existing selectors/public completion remain gated.
+- Eight native artifact/frame/debug/release configurations and four negative mutations pass for nine cleanup fixtures and three old Queue coexports. Actual cancellation, shared/unopened children, mixed families and owned frame normalization are covered; official child Exit independently corroborates sticky cancellation. Documented the canceled reference wrapper's diagnostic adapter policy separately from raw Cause parity.
+- Quiet construction allocates0; warmed execution allocates0 under None or one released temporary trail under Bounded. Roots measure1168..2152/1184..2360 bytes; Rust185010..263252 bytes. Independent review found no blocker. Scoped checks and reference probes pass; post-commit strict/workspace/build and targeted regression checks precede push. Updated [resume guide](docs/effect-v4-workstream.md#generated-queue-cleanup--2026-10-08); next safe Shutdown/terminal-cleanup reconciliation before public completion.
+
 ## 2026-10-08 — Private Queue driver coexistence
 
 - Recorded [QCOEX-001–003](docs/research/queue-done-recovery.md#queue-driver-coexistence--preparation-2026-10-08) before implementation: independent static runtime families and per-function receipts, preserving ordinary costs and aggregate bounds. Public completion and PLAN.md remain unchanged.
