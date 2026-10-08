@@ -219,13 +219,13 @@ test("capacity bound counts drained, dormant and shared Offers and preserves cle
           const shutdown = R.Queue.shutdown(owner).pipe(R.Effect.asVoid);
           const before =
             kind === "drained"
-              ? seq(seq(offer, take), offer)
+              ? seq(seq(seq(seq(offer, take), offer), take), offer)
               : kind === "branch"
-                ? seq(offer, R.Match.bool(R.Bool.literal(false), offer, R.Effect.void))
+                ? seq(seq(offer, offer), R.Match.bool(R.Bool.literal(false), offer, R.Effect.void))
                 : kind === "branchSum"
-                  ? R.Match.bool(R.Bool.literal(false), offer, offer)
+                  ? R.Match.bool(R.Bool.literal(false), seq(offer, offer), seq(offer, offer))
                   : kind === "shared"
-                    ? seq(offer, offer)
+                    ? seq(seq(offer, offer), offer)
                     : offer;
           const source = seq(seq(before, shutdown), take);
           return group(

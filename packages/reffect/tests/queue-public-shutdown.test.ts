@@ -221,9 +221,9 @@ test("shutdown receipts reject excess Offer edges and unsafe finalization placem
           const offer = R.Queue.offer(owner, R.Unit.literal()).pipe(R.Effect.asVoid);
           const left =
             kind === "offer"
-              ? seq(seq(offer, offer), take)
+              ? seq(seq(seq(offer, offer), offer), take)
               : kind === "branch"
-                ? R.Match.bool(R.Bool.literal(false), seq(offer, offer), take)
+                ? R.Match.bool(R.Bool.literal(false), seq(seq(offer, offer), offer), take)
                 : kind === "sourceCleanup"
                   ? seq(shutdown, take).pipe(R.Effect.ensuring(R.Effect.sleep(1)))
                   : kind === "finalizer"

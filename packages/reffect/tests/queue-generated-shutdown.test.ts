@@ -254,10 +254,10 @@ test("Shutdown selection excludes excess Offer edges and terminal cleanup", () =
               : kind === "cleanup"
                 ? take.pipe(R.Effect.ensuring(shutdown))
                 : kind === "branch"
-                  ? R.Match.bool(R.Bool.literal(false), seq(offer, offer), take)
+                  ? R.Match.bool(R.Bool.literal(false), seq(offer, offer, offer), take)
                   : kind === "handler"
                     ? take
-                    : seq(offer, offer, take);
+                    : seq(offer, offer, offer, take);
           return (
             kind === "second_take_cleanup"
               ? group(shutdown, take.pipe(R.Effect.ensuring(R.Effect.sleep(1))))

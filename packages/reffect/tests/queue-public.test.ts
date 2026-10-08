@@ -150,7 +150,7 @@ test("public Queue exposes the bounded Never facade with both offer forms and ow
     QueueIR.bounded(R.U64, 1, R.Bool);
     // @ts-expect-error An explicit Done error parameter requires its witness.
     QueueIR.bounded<bigint, Cause.Done<void>>(R.U64, 1);
-    // Building Shutdown does not bypass its checked no-pending-producer admission.
+    // Building Shutdown does not bypass its checked shutdown admission.
     void QueueIR.shutdown;
     void R.Queue.end;
     // @ts-expect-error Only the suspend strategy is supported.
