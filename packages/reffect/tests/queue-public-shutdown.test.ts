@@ -209,7 +209,7 @@ test("caller cancellation waits for masked cleanup and retains recorded Done wit
   }
 });
 
-test("shutdown receipts reject every Offer edge and unsafe finalization placement before execution", async () => {
+test("shutdown receipts reject excess Offer edges and unsafe finalization placement before execution", async () => {
   const invalid = (
     kind: "offer" | "branch" | "handler" | "sourceCleanup" | "finalizer" | "secondCleanup",
   ) =>
@@ -221,9 +221,9 @@ test("shutdown receipts reject every Offer edge and unsafe finalization placemen
           const offer = R.Queue.offer(owner, R.Unit.literal()).pipe(R.Effect.asVoid);
           const left =
             kind === "offer"
-              ? seq(offer, take)
+              ? seq(seq(offer, offer), take)
               : kind === "branch"
-                ? R.Match.bool(R.Bool.literal(false), offer, take)
+                ? R.Match.bool(R.Bool.literal(false), seq(offer, offer), take)
                 : kind === "sourceCleanup"
                   ? seq(shutdown, take).pipe(R.Effect.ensuring(R.Effect.sleep(1)))
                   : kind === "finalizer"

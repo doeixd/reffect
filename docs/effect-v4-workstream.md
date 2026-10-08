@@ -424,3 +424,13 @@ Run queue-public-shutdown.test.ts with the inexpensive Queue regression suites f
 The public native matrix passes four tests in 134.13s, eight configurations and three mutations; emission, layouts and allocation counts match the private profile. Public ownership tests prove real retained-Done cancellation and settled cleanup logs. All changes and decisions are recorded in the admission ledger.
 
 Next: assess buffered shutdown only with a pinned-version/topology safety proof; terminal cleanup, origin-aware diagnostic parity, broader ownership/Scope and PubSub remain independent gates. PLAN.md belongs to the core instance.
+
+## Public Queue buffered shutdown — 2026-10-08
+
+Resume from [QBUFSHUT-001–003](research/queue-public-admission.md#buffered-shutdown--preparation-2026-10-08). The existing Shutdown selector and QueueShutdownExecution now admit total Offer occurrences <= owner capacity1..3. Count every branch/shared use; never deduplicate or infer drain/branch feasibility. Fresh empty lexical ownership and no replay imply every Offer has space, excluding pending producers and the pinned release-offers defect throughout execution. Buffered Open shutdown discards values and interrupts; buffered End enters Closing, and Shutdown clears messages while retaining Done.
+
+Only buffered shutdown receipts gain build-owned shutdownOfferBound; older receipt shapes/emitted bytes and local/All/cleanup runner admissions remain unchanged. All source-Shutdown/finalizer/second-child cleanup, type/channel/marker, budget/growth and ownership guards stay intact. Native runtime and value representations are unchanged. Recorded-only owned framing remains distinct from native restoration diagnostics.
+
+Run queue-public-buffered-shutdown.test.ts with inexpensive Queue suites first; bound-accounting mutation must fail. Then run queue-generated-buffered-shutdown.test.ts serially with Cargo available and CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1. Preserve scalar Open/Closing buffers, repeated terminals, capacity3, caller cancellation with another child’s retained Done, exact public/private emission, frame/artifact/debug/release policies, allocation/disposal/layout gates and runtime mutations. Old shutdown selector/reference/hazard checks remain useful regressions; their excess-Offer fixtures now exceed capacity.
+
+Next: shutdown with possible pending producers needs a separate topology or pinned-version decision. Terminal cleanup, diagnostic-origin parity, broader ownership and PubSub remain independent gates. PLAN.md belongs to the core instance.

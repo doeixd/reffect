@@ -20,6 +20,8 @@ export interface GeneratedQueueProfile {
   readonly fallibleAll?: true;
   readonly cleanup?: true;
   readonly shutdown?: true;
+  /** Conservative per-function occurrence bound; present only for buffered shutdown. */
+  readonly shutdownOfferBound?: number;
   readonly ownerCount: 1;
   readonly taskCapacity: 2;
   readonly bounds: GeneratedDeferredGrowth;
@@ -278,8 +280,10 @@ const analyzeQueueProfile = (
       );
     };
     walk(root.body, `${path}.body`);
-    if (shutdowns && offers)
-      refuse(path, "Shutdown requires an offer-free function under the pinned Queue profile");
+    // Even without a consumer, each admitted Offer sees space in this fresh owner.
+    // Count occurrences across all branches/shared edges to exclude pending producers.
+    if (shutdowns && offers > root.capacity)
+      refuse(path, "Shutdown requires total Offer occurrences at or below owner capacity");
     if (groups !== 1) refuse(path, "Exactly one unconditional unnested All2 is required");
     if (fallibleAll) check();
     const budget = analyzeQueueBudget(fn, path, undefined, true, finalizers > 0);
@@ -297,6 +301,7 @@ const analyzeQueueProfile = (
         ...(fallibleAll ? { fallibleAll: true as const } : {}),
         ...(finalizers ? { cleanup: true as const } : {}),
         ...(shutdowns ? { shutdown: true as const } : {}),
+        ...(shutdowns && offers ? { shutdownOfferBound: offers } : {}),
         ownerCount: 1,
         taskCapacity: 2,
         bounds: bounds!,
@@ -326,7 +331,7 @@ export const analyzeGeneratedQueueCleanupProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Cleanup");
 
-/** Checked public offer-free Shutdown; buffered and cleanup termination remain refused. */
+/** Checked Shutdown without pending producers; terminal cleanup remains refused. */
 export const analyzeGeneratedQueueShutdownProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Shutdown");

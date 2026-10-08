@@ -67,7 +67,7 @@ const execute = <A, Out, E = never>(
       throw refusal(
         "function",
         mode === "Shutdown"
-          ? "This runner requires checked offer-free root All2 unit Done shutdown"
+          ? "This runner requires checked root All2 unit Done shutdown without pending producers"
           : mode === "Cleanup"
             ? "This runner requires checked root All2 unit Done recovery with child cleanup"
             : mode === "All"
@@ -209,7 +209,8 @@ export const QueueCleanupExecution = Object.freeze({
 });
 
 /**
- * Owned offer-free Queue shutdown with root All2 Done recovery and optional checked child cleanup.
+ * Owned Queue shutdown without pending producers, with root All2 Done recovery and checked cleanup.
+ * Total Offer occurrences across all branches and shared uses must not exceed owner capacity.
  * Open shutdown interrupts; cancellation awaits masked cleanup and preserves retained unit Done.
  * Framed observations preserve recorded evidence under the same policy as QueueCleanupExecution.
  */

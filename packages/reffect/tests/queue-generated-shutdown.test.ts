@@ -199,7 +199,7 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
   return { logs: settledLogs!, frames: trail.map(({ path, kind }) => ({ path, kind })) };
 };
 
-test("Shutdown selection excludes every Offer edge and terminal cleanup", () => {
+test("Shutdown selection excludes excess Offer edges and terminal cleanup", () => {
   const profiles = analyzeGeneratedQueueShutdownProfile(R.program(mixed));
   expect(profiles.size).toBe(9);
   for (const fn of Object.values(functions)) expect(profiles.get(fn)?.shutdown).toBe(true);
@@ -254,10 +254,10 @@ test("Shutdown selection excludes every Offer edge and terminal cleanup", () => 
               : kind === "cleanup"
                 ? take.pipe(R.Effect.ensuring(shutdown))
                 : kind === "branch"
-                  ? R.Match.bool(R.Bool.literal(false), offer, take)
+                  ? R.Match.bool(R.Bool.literal(false), seq(offer, offer), take)
                   : kind === "handler"
                     ? take
-                    : seq(offer, take);
+                    : seq(offer, offer, take);
           return (
             kind === "second_take_cleanup"
               ? group(shutdown, take.pipe(R.Effect.ensuring(R.Effect.sleep(1))))
