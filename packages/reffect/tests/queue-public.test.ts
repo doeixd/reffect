@@ -512,5 +512,5 @@ async fn main(){
       ).pipe(Effect.provide(NodeServices.layer)),
     );
   },
-  nativeTestBudget(360000),
+  nativeTestBudget(0) + 240000,
 );
