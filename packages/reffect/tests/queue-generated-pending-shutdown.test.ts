@@ -464,13 +464,15 @@ unsafe impl std::alloc::GlobalAlloc for Allocator{unsafe fn alloc(&self,l:std::a
 fn begin(){LIVE.store(0,Ordering::Relaxed);ALLOCATIONS.store(0,Ordering::Relaxed);TRACK.store(true,Ordering::Relaxed);}fn end()->usize{TRACK.store(false,Ordering::Relaxed);ALLOCATIONS.load(Ordering::Relaxed)}
 async fn once<F:std::future::Future>(mut f:std::pin::Pin<&mut F>){std::future::poll_fn(|cx|{assert!(f.as_mut().poll(cx).is_pending());std::task::Poll::Ready(())}).await;}
 `;
+// Quiet has two Done Take sites: each creates a Bounded trail. All retains
+// the first and drops the second; root recovery releases the retained trail.
 const harness = (framed: boolean) => `use reffect_generated as r;${allocator}
 #[tokio::main(flavor="current_thread")]async fn main(){let(_tx,rx)=tokio::sync::watch::channel(false);let mut ctx=r::AsyncContext::new(rx);
 ${ordinaryCases.map(([name]) => `{let exit=r::r_${name}(&mut ctx).await;${name.startsWith("closing_") || name === "retained_peer" ? `assert!(exit.is_ok(),"Closing Done recovery ${name}");` : `assert!(matches!(exit,Err(r::AsyncError::Combined(cause)) if cause.interrupted && cause.first().is_none()),"Open pending-producer Shutdown interrupts ${name}");`}${framed ? `let(frames,omitted)=ctx.take_frames();assert_eq!(omitted,0);for frame in frames{println!("FRAME:${name}:{}",frame);}` : ""}}`).join("\n")}
 let layouts=r::reffect_queue_future_layouts(&mut ctx);assert!(layouts.iter().all(|size|*size<=20480));
 assert!(r::r_quiet(&mut ctx).await.is_ok());${framed ? "let _=ctx.take_frames();" : ""}
 begin();for _ in 0..100{let future=r::r_quiet(&mut ctx);std::hint::black_box(&future);drop(future);}let construction=end();assert_eq!(construction,0);
-begin();for _ in 0..100{assert!(r::r_quiet(&mut ctx).await.is_ok());${framed ? "let _=ctx.take_frames();" : ""}}let execution=end();assert_eq!(LIVE.load(Ordering::Relaxed),0,"Pending producer Shutdown trails released");assert_eq!(execution,${framed ? 100 : 0},"Quiet pending-producer Shutdown cost");
+begin();for _ in 0..100{assert!(r::r_quiet(&mut ctx).await.is_ok());${framed ? "let _=ctx.take_frames();" : ""}}let execution=end();assert_eq!(LIVE.load(Ordering::Relaxed),0,"Pending producer Shutdown trails released");assert_eq!(execution,${framed ? 200 : 0},"Quiet pending-producer Shutdown cost");
 {let(tx,rx)=tokio::sync::watch::channel(false);let mut ctx=r::AsyncContext::new(rx);{let future=r::r_retained_peer(&mut ctx);tokio::pin!(future);once(future.as_mut()).await;tx.send(true).unwrap();match future.await{Err(r::AsyncError::Combined(cause))=>{assert!(cause.interrupted,"Parent cancellation survives pending-producer cleanup");assert_eq!(cause.first(),Some(r::RuntimeFailure::QueueDone),"Pending producer peer retains Done");},_=>panic!("Cancellation bypasses pending-producer recovery")}}${framed ? `let(frames,omitted)=ctx.take_frames();assert_eq!(omitted,0);for frame in frames{println!("FRAME:cancel_retained_peer:{}",frame);}assert!(ctx.take_frames().0.is_empty());` : ""}}
 println!("COST construction={construction} execution={execution} layouts={layouts:?}");println!("queue-pending-producer-shutdown-ok");}
 `;
