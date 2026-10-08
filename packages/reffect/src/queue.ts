@@ -147,7 +147,7 @@ function publicBounded<A, E extends Cause.Done<void>>(
   return error === undefined ? bounded(success, capacity) : bounded(success, capacity, error);
 }
 
-/** Bounded suspend Queue with optional unit Done; native admission requires checked local recovery. */
+/** Bounded suspend Queue with optional unit Done; native admission requires a checked lexical profile. */
 export const QueuePublic = Object.freeze({
   make: publicMake,
   bounded: publicBounded,

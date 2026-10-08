@@ -822,7 +822,7 @@ export function lowerQueueCleanupFunctions(
   );
 }
 
-/** Private offer-free source Shutdown; public Shutdown and terminal cleanup remain gated. */
+/** Checked offer-free source Shutdown; buffered shutdown and terminal cleanup remain gated. */
 export function lowerQueueShutdownFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
