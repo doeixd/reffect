@@ -321,7 +321,7 @@ export const analyzeGeneratedQueueFallibleProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "All");
 
-/** Private outer-child cleanup receipt; terminal operations in finalizers stay refused. */
+/** Checked public outer-child cleanup receipt; terminal finalizers stay refused. */
 export const analyzeGeneratedQueueCleanupProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Cleanup");

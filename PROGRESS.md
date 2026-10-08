@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-08 — Public Queue cleanup
+
+- Recorded [QCLEANPUB-001–006](docs/research/queue-public-admission.md#public-queue-cleanup--preparation-2026-10-08) before feature code: existing repaired cleanup receipt, separate owned runner, natural retained-Done cancellation and recorded-only reference framing. Native restoration diagnostics remain a separate explicit policy; canonical paths cannot establish shared-source invocation origin. Preserve second-child queue-free source/terminal refusals, operation/cost gates and exact-Exit logs. PLAN.md stays untouched.
+- Implemented public checked cleanup compiler routing and separate QueueCleanupExecution with exact cleanup+fallibleAll receipts. Old runners retain their selectors. The shared recorded-only Cause/frame projector is unchanged; no native fields, crates or scalar metadata added. Independent production review found no blocker.
+- All 57 inexpensive tests across ten Queue suites pass in 30.24s; scoped source/test formatting, lint/types and three private cleanup regression checks pass. Public tests prove natural masked cancellation retaining unit Done, settled logs, old-runner/unsafe-source refusals and shared-source ambiguity. The native matrix now compiles publicly with private-emitter byte equality and includes another child’s retained Done without a spurious Ensuring boundary. Post-commit workspace/native validation follows.
+
 ## 2026-10-08 — Public Queue All recovery
 
 - Recorded [QALLPUB-001–005](docs/research/queue-public-admission.md#public-root-all-recovery--preparation-2026-10-08) before implementation: exact root recovery receipt, separate QueueAllExecution observation contract, scoped diagnostic discharge and preserved cancellation-bypassed Done. Natural mixed Cause reachability in the restricted owned JS context is unproved; keep boundary injection evidence distinct. Cleanup/Shutdown remain private; PLAN.md stays untouched.

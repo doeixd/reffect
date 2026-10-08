@@ -10,6 +10,7 @@ import { PrivateEffectReference } from "./effect-ir.ts";
 import {
   analyzeGeneratedQueueDoneProfile,
   analyzeGeneratedQueueFallibleProfile,
+  analyzeGeneratedQueueCleanupProfile,
 } from "./queue-generated-profile.ts";
 import { queueBudgetLimit } from "./queue-budget.ts";
 import { CompileError, Program } from "./kernel.ts";
@@ -36,24 +37,36 @@ const refusal = (path: string, message: string) =>
     diagnostics: [{ code: "QUEUE_EXECUTION_CONTEXT", stage: "check", path, message }],
   });
 
+type QueueProfileMode = "Local" | "All" | "Cleanup";
+
 const execute = <A, Out, E = never>(
   fn: EffectFn<readonly [], A, never>,
   options: QueueExecutionOptions | undefined,
   reference: () => Effect.Effect<Out, CompileError | E>,
-  all = false,
+  mode: QueueProfileMode = "Local",
 ): Promise<Observation<Out, E>> => {
   let signal: AbortSignal | undefined;
   try {
     signal = validateOwnedExecutionSignal(options, refusal);
-    const profile = (all ? analyzeGeneratedQueueFallibleProfile : analyzeGeneratedQueueDoneProfile)(
-      Program.make({ work: fn }),
-    ).get(fn);
-    if (!profile || (all && !profile.fallibleAll))
+    const analyze =
+      mode === "Cleanup"
+        ? analyzeGeneratedQueueCleanupProfile
+        : mode === "All"
+          ? analyzeGeneratedQueueFallibleProfile
+          : analyzeGeneratedQueueDoneProfile;
+    const profile = analyze(Program.make({ work: fn })).get(fn);
+    if (
+      !profile ||
+      (mode === "All" && !profile.fallibleAll) ||
+      (mode === "Cleanup" && (!profile.fallibleAll || !profile.cleanup))
+    )
       throw refusal(
         "function",
-        all
-          ? "This runner requires checked root All2 unit Done recovery"
-          : "This runner requires the checked bounded Queue profile",
+        mode === "Cleanup"
+          ? "This runner requires checked root All2 unit Done recovery with child cleanup"
+          : mode === "All"
+            ? "This runner requires checked root All2 unit Done recovery"
+            : "This runner requires the checked bounded Queue profile",
       );
   } catch (error) {
     if (!(error instanceof CompileError)) throw error;
@@ -82,7 +95,7 @@ const execute = <A, Out, E = never>(
 const runWithFrames = <A, E = never>(
   fn: EffectFn<readonly [], A, never>,
   options?: QueueExecutionOptions,
-  all = false,
+  mode: QueueProfileMode = "Local",
   attachRecorded?: (
     observation: Observation<FramedExit<A, E>, E>,
     boundary: Pick<FramedExit<A, E>, "frames" | "omitted">,
@@ -109,7 +122,7 @@ const runWithFrames = <A, E = never>(
         },
         frames.root("functions.work.body"),
       ),
-    all,
+    mode,
   ).then((observation) => {
     const { exit } = observation;
     const trail = frames.snapshot();
@@ -158,11 +171,33 @@ export const QueueAllExecution = Object.freeze({
       fn,
       options,
       () => PrivateEffectReference.runUnknown(fn, [], () => []),
-      true,
+      "All",
     ),
   runWithFrames: (
     fn: EffectFn<readonly [], void, never>,
     options?: QueueExecutionOptions,
   ): Promise<QueueAllObservation<FramedExit<void, Cause.Done<void>>>> =>
-    runWithFrames<void, Cause.Done<void>>(fn, options, true, attachQueueAllRecordedFrames),
+    runWithFrames<void, Cause.Done<void>>(fn, options, "All", attachQueueAllRecordedFrames),
+});
+
+/**
+ * Owned checked child cleanup; cancellation awaits masked finalizers and may retain unit Done.
+ * Framed observations preserve recorded evidence; native restoration diagnostics are a separate policy.
+ */
+export const QueueCleanupExecution = Object.freeze({
+  run: (
+    fn: EffectFn<readonly [], void, never>,
+    options?: QueueExecutionOptions,
+  ): Promise<QueueAllObservation<void>> =>
+    execute<void, void, Cause.Done<void>>(
+      fn,
+      options,
+      () => PrivateEffectReference.runUnknown(fn, [], () => []),
+      "Cleanup",
+    ),
+  runWithFrames: (
+    fn: EffectFn<readonly [], void, never>,
+    options?: QueueExecutionOptions,
+  ): Promise<QueueAllObservation<FramedExit<void, Cause.Done<void>>>> =>
+    runWithFrames<void, Cause.Done<void>>(fn, options, "Cleanup", attachQueueAllRecordedFrames),
 });

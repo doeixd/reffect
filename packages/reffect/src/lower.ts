@@ -801,7 +801,7 @@ export function lowerQueueFallibleFunctions(
   );
 }
 
-/** Private generated child cleanup; general finalizers and public completion remain gated. */
+/** Checked public child cleanup; general finalizers and terminal cleanup remain gated. */
 export function lowerQueueCleanupFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,
@@ -822,7 +822,7 @@ export function lowerQueueCleanupFunctions(
   );
 }
 
-/** Private offer-free source Shutdown; public completion and terminal cleanup remain gated. */
+/** Private offer-free source Shutdown; public Shutdown and terminal cleanup remain gated. */
 export function lowerQueueShutdownFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,

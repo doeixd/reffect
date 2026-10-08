@@ -595,9 +595,13 @@ Constructors default to Never errors. To end a queue, import `QueueDoneType` fro
 
 Root All2 recovery is also supported for a zero-input Unit/Never function: the root QueueScope body must be exactly the All2 followed by a synchronous, queue-free Unit/Never catch handler. Children may fail with unit Done. Use `QueueAllExecution.run` or `runWithFrames` for this shape; `QueueExecution` continues to accept only ordinary and child-local recovery.
 
-`QueueAllObservation` represents `CompileError | Cause.Done<void>` in its outer Exit; framed observations also represent unit Done in the inner Exit. Cancellation can bypass recovery while retaining a source Done. Recorded frames and all observed Cause reasons survive observation packaging; preabort opens no frames. This stronger observation contract is separate from the authored function’s final Never channel. Natural mixed Done/cancellation in the restricted owned JavaScript context remains unproved; native retained-outcome and synthetic adapter tests establish the corresponding boundaries separately.
+`QueueAllObservation` represents `CompileError | Cause.Done<void>` in its outer Exit; framed observations also represent unit Done in the inner Exit. Cancellation can bypass recovery while retaining a source Done. Recorded frames and all observed Cause reasons survive observation packaging; preabort opens no frames. This stronger observation contract is separate from the authored function’s final Never channel. Natural mixed Done/cancellation in the End-only owned JavaScript profile remains unproved; native retained-outcome and synthetic adapter tests establish the corresponding boundaries separately.
 
-Shutdown, Sleep/Ensuring, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
+`QueueCleanupExecution.run` and `runWithFrames` support root-All recovery with checked child cleanup. A child may have one direct outer `R.Effect.ensuring` whose finalizer is queue-free Unit/Never scalar/log work, optionally with positive integer `R.Effect.sleep(1..60000)`. The second child's finalizing source must also be completely queue-free; the first child's source may use Queue. The runner requires actual cleanup and returns `QueueAllObservation`; the older runners keep their existing profiles.
+
+Cancellation awaits masked cleanup, preserves an earlier unit Done, and bypasses recovery. Logs are captured at settlement. Owned framed observations preserve recorded source evidence; native Bounded diagnostics apply the separately documented [restoration policy](../../docs/native-divergences.md#queue-cleanup-diagnostic-policies). Under cancellation those trails can differ, and canonical shared-source paths do not identify the failing invocation.
+
+Shutdown, source Sleep, nested/root/handler finalization, Queue operations in finalizers, parent operations, mixed coordinators in one function, wider ownership and RPC hosting remain refused. See [admission decisions](../../docs/research/queue-public-admission.md).
 
 ## Typed recovery and structured resource lifetimes
 

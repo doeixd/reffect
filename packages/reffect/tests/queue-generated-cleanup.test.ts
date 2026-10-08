@@ -5,12 +5,19 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { Cause, Context, Effect, Exit, Logger, Queue, Scheduler } from "effect";
 import { expect, test } from "vite-plus/test";
-import { FailureFrames, R, Rust, SourceArtifacts } from "../src/index.ts";
+import {
+  Compile,
+  FailureFrames,
+  QueueCleanupExecution,
+  QueueDoneType,
+  R,
+  Rust,
+  SourceArtifacts,
+} from "../src/index.ts";
 import { Computation, PrivateEffectReference } from "../src/effect-ir.ts";
 import type { EffectFn } from "../src/effect-ir.ts";
 import { DeferredInterruptionFrames } from "../src/deferred-interruption-frames.ts";
 import { QueueIR as Q } from "../src/queue.ts";
-import { QueueDoneType } from "../src/queue-model.ts";
 import { analyzeGeneratedQueueCleanupProfile } from "../src/queue-generated-profile.ts";
 import {
   emitFunctions,
@@ -28,10 +35,10 @@ const seq = <E>(...steps: Computation<void, E>[]) =>
   steps.reduce((a, b) => a.pipe(R.Effect.andThen(b)), R.Effect.void as Computation<void, E>);
 const make = (kind: string) =>
   R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) => {
-        const take = Q.take(owner);
-        const end = Q.end(owner).pipe(R.Effect.asVoid);
+        const take = R.Queue.take(owner);
+        const end = R.Queue.end(owner).pipe(R.Effect.asVoid);
         const finalizer =
           kind === "quiet"
             ? R.Effect.sleep(1)
@@ -45,7 +52,7 @@ const make = (kind: string) =>
           kind === "success"
             ? group(
                 R.Effect.void.pipe(R.Effect.ensuring(finalizer)),
-                seq(Q.offer(owner, R.Unit.literal()).pipe(R.Effect.asVoid), end, take),
+                seq(R.Queue.offer(owner, R.Unit.literal()).pipe(R.Effect.asVoid), end, take),
               )
             : kind === "successful_cancel"
               ? group(R.Effect.void.pipe(R.Effect.ensuring(finalizer)), take)
@@ -53,7 +60,7 @@ const make = (kind: string) =>
                 ? group(take.pipe(R.Effect.ensuring(finalizer)), R.Effect.void)
                 : kind === "unopened"
                   ? group(seq(end, take), R.Effect.void.pipe(R.Effect.ensuring(finalizer)))
-                  : kind === "sticky"
+                  : kind === "sticky" || kind === "retained_peer"
                     ? group(R.Effect.void.pipe(R.Effect.ensuring(finalizer)), seq(end, take))
                     : kind === "shared"
                       ? group(
@@ -78,6 +85,7 @@ const functions = Object.fromEntries(
     "shared",
     "quiet",
     "retained",
+    "retained_peer",
     "successful_cancel",
     "blocked",
   ].map((kind) => [kind, make(kind)]),
@@ -92,24 +100,42 @@ const mixed = {
     ),
   ),
   local: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
         group(
-          Q.take(owner).pipe(R.Effect.catch(() => R.Effect.void)),
-          Q.end(owner).pipe(R.Effect.asVoid),
+          R.Queue.take(owner).pipe(R.Effect.catch(() => R.Effect.void)),
+          R.Queue.end(owner).pipe(R.Effect.asVoid),
         ),
       ),
     ),
   ),
   old_fallible: R.fn([], R.Unit, R.Never, () =>
-    Q.bounded(R.Unit, 1, QueueDoneType).pipe(
+    R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
       R.Effect.flatMap((owner) =>
-        group(Q.take(owner), Q.end(owner).pipe(R.Effect.asVoid)).pipe(
+        group(R.Queue.take(owner), R.Queue.end(owner).pipe(R.Effect.asVoid)).pipe(
           R.Effect.catch(() => R.Effect.void),
         ),
       ),
     ),
   ),
+};
+const publicArtifact = async (
+  program: ReturnType<typeof R.program>,
+  artifacts: typeof SourceArtifacts.None | typeof SourceArtifacts.Full = SourceArtifacts.None,
+  frames: typeof FailureFrames.None = FailureFrames.Bounded,
+) => {
+  const artifact = await Effect.runPromise(
+    Compile.make(program).pipe(
+      Compile.withTarget(Rust.tokio),
+      Compile.withSourceArtifacts(artifacts),
+      Compile.withFailureFrames(frames),
+      Compile.run,
+    ),
+  );
+  expect(artifact.files).toEqual(
+    emitFunctions(lowerQueueCleanupFunctions(program, selected, artifacts, frames)).files,
+  );
+  return artifact;
 };
 const checked = (fn: EffectFn) => {
   expect(analyzeGeneratedQueueCleanupProfile(R.program({ work: fn })).has(fn)).toBe(true);
@@ -171,7 +197,7 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
     }
   } else expect(Exit.isSuccess(exit)).toBe(true);
   let trail: readonly { readonly path: string; readonly kind: string }[] = frames.snapshot().frames;
-  if (cancel && name === "retained" && Exit.isFailure(exit)) {
+  if (cancel && (name === "retained" || name === "retained_peer") && Exit.isFailure(exit)) {
     const retained = exit.cause.reasons.find(Cause.isFailReason);
     expect(retained, "Actual parent cancellation retains Done").toBeDefined();
     const reason = retained?.error as unknown as { _tag: string; error?: { _tag: string } };
@@ -186,11 +212,22 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
       // normalize the statically owned restoration boundaries to native policy.
       trail = [
         ...domain.frames,
-        { path: `functions.${name}.body.body.source.children[0]`, kind: "ensuring" },
+        ...(name === "retained"
+          ? [{ path: `functions.${name}.body.body.source.children[0]`, kind: "ensuring" }]
+          : []),
         ...trail,
       ];
     }
   }
+  if (framed && cancel && name === "retained_peer")
+    expect(trail.map((frame) => frame.kind)).toEqual([
+      "queueTake",
+      "flatMap",
+      "all",
+      "catchAll",
+      "queueScope",
+      "function",
+    ]);
   expect(
     logsAtExit,
     "Function exit captures cleanup before outer child-scope retirement",
@@ -199,8 +236,8 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
   return { logs: logsAtExit!, frames: trail };
 };
 
-test("cleanup is admitted only through its checked private Queue profile", () => {
-  expect(analyzeGeneratedQueueCleanupProfile(R.program(mixed)).size).toBe(12);
+test("public cleanup is admitted only through its checked Queue profile", async () => {
+  expect(analyzeGeneratedQueueCleanupProfile(R.program(mixed)).size).toBe(13);
   const old = R.program({
     ordinary: mixed.ordinary,
     local: mixed.local,
@@ -211,6 +248,9 @@ test("cleanup is admitted only through its checked private Queue profile", () =>
       expect(emitFunctions(lowerQueueCleanupFunctions(old, selected, artifacts, frames))).toEqual(
         emitFunctions(lowerQueueFallibleFunctions(old, selected, artifacts, frames)),
       );
+  for (const artifacts of [SourceArtifacts.None, SourceArtifacts.Full])
+    for (const frames of [FailureFrames.None, FailureFrames.Bounded])
+      await publicArtifact(R.program(mixed), artifacts, frames);
   for (const lower of [lowerFunctions, lowerQueueDoneFunctions, lowerQueueFallibleFunctions])
     expect(() => lower(R.program({ work: functions.done! }), selected)).toThrow();
   const invalid = (cleanup: Computation<void>, nested = false, sourceSleep = false) =>
@@ -349,8 +389,18 @@ test("owned Queue cleanup reference settles masked cancellation", async () => {
   for (const name of ["success", "done", "unopened", "sticky"]) {
     const observed = await observe(name, true);
     expect(observed.frames).toEqual([]);
+    const plain = await QueueCleanupExecution.run(functions[name]!);
+    expect(plain.exit).toEqual(Exit.succeed(undefined));
+    expect(plain.logs).toEqual(observed.logs);
+    expect(Object.isFrozen(plain.logs)).toBe(true);
+    const framed = await QueueCleanupExecution.runWithFrames(functions[name]!);
+    expect(framed.exit).toEqual(
+      Exit.succeed({ exit: Exit.succeed(undefined), frames: [], omitted: 0 }),
+    );
+    expect(framed.logs).toEqual(observed.logs);
+    expect(Object.isFrozen(framed.logs)).toBe(true);
   }
-  for (const name of ["retained", "successful_cancel", "blocked", "shared"]) {
+  for (const name of ["retained", "retained_peer", "successful_cancel", "blocked", "shared"]) {
     const observed = await observe(name, true, true);
     checkCancellationLogs(name, observed.logs);
     expect(observed.frames.length).toBeGreaterThan(0);
@@ -366,7 +416,7 @@ fn begin(){LIVE.store(0,Ordering::Relaxed);ALLOCATIONS.store(0,Ordering::Relaxed
 async fn once<F:std::future::Future>(mut f:std::pin::Pin<&mut F>){std::future::poll_fn(|cx|{assert!(f.as_mut().poll(cx).is_pending());std::task::Poll::Ready(())}).await;}
 `;
 const successful = ["success", "done", "unopened", "sticky"];
-const canceled = ["retained", "successful_cancel", "blocked", "shared"];
+const canceled = ["retained", "retained_peer", "successful_cancel", "blocked", "shared"];
 const checkCancellationLogs = (name: string, logs: readonly string[]) => {
   if (name === "shared") {
     expect(logs).toHaveLength(4);
@@ -383,7 +433,7 @@ const harness = (framed: boolean) => `use reffect_generated as r;${allocator}
  assert!(r::r_quiet(&mut ctx).await.is_ok());
  begin();for _ in 0..100{let future=r::r_quiet(&mut ctx);std::hint::black_box(&future);drop(future);}let construction=end();assert_eq!(construction,0);
  begin();for _ in 0..100{assert!(r::r_quiet(&mut ctx).await.is_ok());}let execution=end();assert_eq!(LIVE.load(Ordering::Relaxed),0,"Cleanup releases handled trails");assert_eq!(execution,${framed ? 100 : 0},"Quiet masked timer cost");
- ${canceled.map((name) => `{let(tx,rx)=tokio::sync::watch::channel(false);let mut ctx=r::AsyncContext::new(rx);{let future=r::r_${name}(&mut ctx);tokio::pin!(future);once(future.as_mut()).await;tx.send(true).unwrap();match future.await{Err(r::AsyncError::Combined(cause))=>{assert!(cause.interrupted,"Parent cancellation survives cleanup ${name}");assert_eq!(cause.first(),${name === "retained" ? "Some(r::RuntimeFailure::QueueDone)" : "None"},"Retained source outcome ${name}");},_=>panic!("Cancellation bypasses recovery ${name}")}}${framed ? `let(frames,omitted)=ctx.take_frames();assert_eq!(omitted,0);for frame in frames{println!("FRAME:${name}:{}",frame);}assert!(ctx.take_frames().0.is_empty());` : ""}}`).join("\n")}
+ ${canceled.map((name) => `{let(tx,rx)=tokio::sync::watch::channel(false);let mut ctx=r::AsyncContext::new(rx);{let future=r::r_${name}(&mut ctx);tokio::pin!(future);once(future.as_mut()).await;tx.send(true).unwrap();match future.await{Err(r::AsyncError::Combined(cause))=>{assert!(cause.interrupted,"Parent cancellation survives cleanup ${name}");assert_eq!(cause.first(),${name === "retained" || name === "retained_peer" ? "Some(r::RuntimeFailure::QueueDone)" : "None"},"Retained source outcome ${name}");},_=>panic!("Cancellation bypasses recovery ${name}")}}${framed ? `let(frames,omitted)=ctx.take_frames();assert_eq!(omitted,0);for frame in frames{println!("FRAME:${name}:{}",frame);}assert!(ctx.take_frames().0.is_empty());` : ""}}`).join("\n")}
  println!("COST construction={construction} execution={execution} layouts={layouts:?}");println!("queue-cleanup-ok");}
 `;
 
@@ -430,15 +480,14 @@ test(
     try {
       for (const artifacts of [SourceArtifacts.None, SourceArtifacts.Full])
         for (const frames of [FailureFrames.None, FailureFrames.Bounded]) {
-          const emitted = emitFunctions(
-            lowerQueueCleanupFunctions(R.program(mixed), selected, artifacts, frames),
-          );
+          const emitted = await publicArtifact(R.program(mixed), artifacts, frames);
           expect(Buffer.byteLength(emitted.files["src/lib.rs"]!)).toBeLessThanOrEqual(2097152);
           process.stdout.write(
             `Queue cleanup ${artifacts._tag}/${frames._tag}: Rust bytes=${Buffer.byteLength(emitted.files["src/lib.rs"]!)}\n`,
           );
-          if (SourceArtifacts.isNone(artifacts)) expect(emitted.ranges).toEqual([]);
-          else expect(emitted.ranges.length).toBeGreaterThan(0);
+          if (SourceArtifacts.isNone(emitted.sourceArtifacts))
+            expect("sources" in emitted).toBe(false);
+          else expect(emitted.sources?.ranges.length).toBeGreaterThan(0);
           for (const [path, text] of Object.entries(emitted.files)) {
             await mkdir(dirname(join(directory, path)), { recursive: true });
             await writeFile(join(directory, path), text);
@@ -476,14 +525,7 @@ test(
             );
           }
         }
-      const source = emitFunctions(
-        lowerQueueCleanupFunctions(
-          R.program(mixed),
-          selected,
-          SourceArtifacts.None,
-          FailureFrames.Bounded,
-        ),
-      ).files["src/lib.rs"]!;
+      const source = (await publicArtifact(R.program(mixed))).files["src/lib.rs"]!;
       const boundary = "let cause = driver.all_cause(interrupted);";
       const audited = source.replaceAll(
         boundary,
