@@ -226,3 +226,7 @@ Alternatives: a fixed higher Offer count only delays the unsupported boundary wi
 ### QREPEAT-004 — Native coverage review 2026-10-09
 
 Review expands the focused native matrix from10 to12 roots with repeated Bool capacity2 and U64 capacity3, so the phase proof is executed at every admitted capacity rather than inferred from earlier finite-offer fixtures. The cancellation root naturally starts two blocked producers, aborts the owned invocation, awaits first-child masked cleanup and compares actual enclosing interruption evidence without inventing a Done source. Explicit receipt checks preserve the old offer-free/buffered/finite-pending property shapes. The six public tests and native reference oracle pass before native execution; preserve semantic log/payload comparison separately from the documented native diagnostic policy.
+
+### QREPEAT-005 — Mutation oracle review 2026-10-09
+
+The initial full native run passes all eight normal configurations, including two-pending cleanup cancellation, exact semantic logs and diagnostic policies, then its first mutation check fails on the expected label. Capacity review inserted open_cap2 and closing_cap3 before earlier fixtures; replacing Shutdown with End now correctly fails the first Open assertion at open_cap2, while the test still expected open_unit. Correct both first-failure labels, keep all semantic mutations intact and rerun the complete suite. No production change.

@@ -581,14 +581,14 @@ test(
       for (const [mutated, reason] of [
         [
           source.replaceAll(".shutdown_exit().await", ".end_exit().await"),
-          "Open repeated-registration Shutdown interrupts open_unit",
+          "Open repeated-registration Shutdown interrupts open_cap2",
         ],
         [
           source.replaceAll(
             "Err(QueueTakeFailure::Done(done)) => Err((AsyncError::Fail(done),",
             "Err(QueueTakeFailure::Done(done)) => Err((AsyncError::Interrupted,",
           ),
-          "Closing Done recovery closing_unit",
+          "Closing Done recovery closing_cap3",
         ],
         [
           source.replaceAll("drop(frames);", "std::mem::forget(frames);"),
