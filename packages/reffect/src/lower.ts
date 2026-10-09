@@ -822,7 +822,7 @@ export function lowerQueueCleanupFunctions(
   );
 }
 
-/** Checked source Shutdown with an exhausted offer budget; terminal cleanup remains gated. */
+/** Checked source Shutdown under the All2 release-phase proof; terminal cleanup remains gated. */
 export function lowerQueueShutdownFunctions(
   program: Program,
   selected: ReadonlyMap<OperationRef, Implementation>,

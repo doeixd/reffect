@@ -1,5 +1,9 @@
 # Progress
 
+## 2026-10-08 — Repeated Queue backpressure preparation
+
+Recorded [QREPEAT-001–003](docs/research/queue-public-admission.md#repeated-backpressure-shutdown--preparation-2026-10-08) before implementation. A running All2 consumer has at most one peer pending Offer; removal before resume and full-buffer suspension exclude reentrant Shutdown with a nonempty captured Set. Two globally pending producers are possible, so new receipts must report global2/release1 rather than reuse an inaccurate global1 claim. Keep all existing context/budget, ownership, cleanup and type/recovery gates. Fresh pinned source and independent review agree. Implemented the selector/accurate optional receipt distinction without runtime changes; older receipt shapes remain unchanged. All 66 inexpensive tests across16 suites pass; the expanded twelve-root native reference oracle also passes at capacities1..3. Restoring the obsolete capacity limit fails the new admission test; original source restored. Changed-file formatting, workspace lint/types (409 files), strict TypeScript and build pass. Full native matrix and post-commit checks pending. PLAN.md untouched.
+
 ## 2026-10-08 — Single pending producer Queue shutdown
 
 Recorded [QONEPEND-001–003](docs/research/queue-public-admission.md#single-pending-producer-shutdown--preparation-2026-10-08) before implementation. The existing Shutdown selector/runner now permits total Offer occurrences <= capacity+1, with optional build-owned shutdownPendingOfferBound:1. Exhausting the occurrence budget at first suspension excludes a second pending producer or reentrant Offer. All ownership/context/budget/cleanup/type/recovery guards remain; no runtime fields/crates/value metadata changes. Independent production review found no blocker. QONEPEND-004 records reversed asynchronous taker dispatch and receipt compatibility; tests execute producer Shutdown inside Take's callback, not merely afterward.

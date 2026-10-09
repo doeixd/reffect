@@ -209,7 +209,7 @@ test("caller cancellation awaits successful child cleanup and preserves the othe
   expect(getEventListeners(framedController.signal, "abort")).toHaveLength(0);
 });
 
-test("capacity bound counts drained, dormant and shared Offers and preserves cleanup refusals", async () => {
+test("All2 admits drained, dormant and shared Offers while preserving cleanup refusals", async () => {
   const invalid = (kind: "drained" | "branch" | "branchSum" | "shared" | "cleanup") =>
     R.fn([], R.Unit, R.Never, () =>
       R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
@@ -240,13 +240,20 @@ test("capacity bound counts drained, dormant and shared Offers and preserves cle
     const checked = await Effect.runPromise(
       Compile.check(R.program({ invalid: fn })).pipe(Effect.exit),
     );
-    expect(diagnostics(checked), kind).toContainEqual(
-      expect.objectContaining({ code: "QUEUE_STRUCTURAL_PROFILE", stage: "check" }),
-    );
-    const refused = await QueueShutdownExecution.run(fn);
-    expect(diagnostics(refused.exit), kind).toContainEqual(
-      expect.objectContaining({ stage: "check" }),
-    );
-    expect(refused.logs).toEqual([]);
+    if (kind === "cleanup") {
+      expect(diagnostics(checked), kind).toContainEqual(
+        expect.objectContaining({ code: "QUEUE_STRUCTURAL_PROFILE", stage: "check" }),
+      );
+      const refused = await QueueShutdownExecution.run(fn);
+      expect(diagnostics(refused.exit), kind).toContainEqual(
+        expect.objectContaining({ stage: "check" }),
+      );
+      expect(refused.logs).toEqual([]);
+    } else {
+      expect(Exit.isSuccess(checked), kind).toBe(true);
+      const canceled = await QueueShutdownExecution.run(fn, { signal: AbortSignal.abort() });
+      assertInterrupted(canceled.exit, false);
+      expect(canceled.logs).toEqual([]);
+    }
   }
 });

@@ -209,8 +209,9 @@ export const QueueCleanupExecution = Object.freeze({
 });
 
 /**
- * Owned Queue shutdown with at most one pending producer, root All2 Done recovery and checked cleanup.
- * Total Offer occurrences across branches/shared uses must not exceed owner capacity plus one.
+ * Owned Queue shutdown with root All2 Done recovery and checked cleanup.
+ * Two children may block as producers; a running consumer has at most one peer pending Offer.
+ * Repeated backpressure remains within the checked default operation and generated growth bounds.
  * Open shutdown interrupts; cancellation awaits masked cleanup and preserves retained unit Done.
  * Framed observations preserve recorded evidence under the same policy as QueueCleanupExecution.
  */

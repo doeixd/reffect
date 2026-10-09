@@ -199,7 +199,7 @@ const observe = async (name: string, framed: boolean, cancel = false) => {
   return { logs: settledLogs!, frames: trail.map(({ path, kind }) => ({ path, kind })) };
 };
 
-test("Shutdown selection excludes excess Offer edges and terminal cleanup", () => {
+test("Shutdown selection excludes wider task topology and terminal cleanup", () => {
   const profiles = analyzeGeneratedQueueShutdownProfile(R.program(mixed));
   expect(profiles.size).toBe(9);
   for (const fn of Object.values(functions)) expect(profiles.get(fn)?.shutdown).toBe(true);
@@ -253,22 +253,25 @@ test("Shutdown selection excludes excess Offer edges and terminal cleanup", () =
               ? seq(shutdown, take).pipe(R.Effect.ensuring(R.Effect.sleep(1)))
               : kind === "cleanup"
                 ? take.pipe(R.Effect.ensuring(shutdown))
-                : kind === "branch"
-                  ? R.Match.bool(R.Bool.literal(false), seq(offer, offer, offer), take)
-                  : kind === "handler"
-                    ? take
-                    : seq(offer, offer, offer, take);
+                : take;
           return (
-            kind === "second_take_cleanup"
-              ? group(shutdown, take.pipe(R.Effect.ensuring(R.Effect.sleep(1))))
-              : kind === "second_end_cleanup"
-                ? group(
-                    take,
-                    seq(Q.end(owner).pipe(R.Effect.asVoid), take).pipe(
-                      R.Effect.ensuring(R.Effect.sleep(1)),
-                    ),
-                  )
-                : group(child, shutdown)
+            kind === "all3"
+              ? R.Effect.all([take, shutdown, R.Effect.void], {
+                  concurrency: "unbounded",
+                  discard: true,
+                })
+              : kind === "nested"
+                ? group(group(take, shutdown), R.Effect.void)
+                : kind === "second_take_cleanup"
+                  ? group(shutdown, take.pipe(R.Effect.ensuring(R.Effect.sleep(1))))
+                  : kind === "second_end_cleanup"
+                    ? group(
+                        take,
+                        seq(Q.end(owner).pipe(R.Effect.asVoid), take).pipe(
+                          R.Effect.ensuring(R.Effect.sleep(1)),
+                        ),
+                      )
+                    : group(child, shutdown)
           ).pipe(R.Effect.catch(() => (kind === "handler" ? offer : R.Effect.void)));
         }),
       ),
@@ -278,9 +281,9 @@ test("Shutdown selection excludes excess Offer edges and terminal cleanup", () =
     "source_cleanup",
     "second_take_cleanup",
     "second_end_cleanup",
-    "branch",
+    "nested",
     "handler",
-    "source",
+    "all3",
   ])
     expect(
       () => analyzeGeneratedQueueShutdownProfile(R.program({ work: invalid(kind) })),

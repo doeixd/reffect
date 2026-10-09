@@ -254,7 +254,7 @@ test("caller cancellation awaits entered pending-producer cleanup and retains th
   expect(getEventListeners(framedController.signal, "abort")).toHaveLength(0);
 });
 
-test("offer occurrence bound includes dormant, shared and both-branch edges", async () => {
+test("All2 admits shared and dormant Offer edges while keeping All3 refused", async () => {
   const invalid = (kind: "shared" | "dormant" | "branchSum" | "all3") =>
     R.fn([], R.Unit, R.Never, () =>
       R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
@@ -288,13 +288,20 @@ test("offer occurrence bound includes dormant, shared and both-branch edges", as
     const checked = await Effect.runPromise(
       Compile.check(R.program({ invalid: fn })).pipe(Effect.exit),
     );
-    expect(diagnostics(checked), kind).toContainEqual(
-      expect.objectContaining({ code: "QUEUE_STRUCTURAL_PROFILE", stage: "check" }),
-    );
-    const refused = await QueueShutdownExecution.run(fn);
-    expect(diagnostics(refused.exit), kind).toContainEqual(
-      expect.objectContaining({ stage: "check" }),
-    );
-    expect(refused.logs).toEqual([]);
+    if (kind === "all3") {
+      expect(diagnostics(checked), kind).toContainEqual(
+        expect.objectContaining({ code: "QUEUE_STRUCTURAL_PROFILE", stage: "check" }),
+      );
+      const refused = await QueueShutdownExecution.run(fn);
+      expect(diagnostics(refused.exit), kind).toContainEqual(
+        expect.objectContaining({ stage: "check" }),
+      );
+      expect(refused.logs).toEqual([]);
+    } else {
+      expect(Exit.isSuccess(checked), kind).toBe(true);
+      const canceled = await QueueShutdownExecution.run(fn, { signal: AbortSignal.abort() });
+      assertInterrupted(canceled.exit, false);
+      expect(canceled.logs).toEqual([]);
+    }
   }
 });

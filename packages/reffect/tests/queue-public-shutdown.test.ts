@@ -209,9 +209,9 @@ test("caller cancellation waits for masked cleanup and retains recorded Done wit
   }
 });
 
-test("shutdown receipts reject excess Offer edges and unsafe finalization placement before execution", async () => {
+test("shutdown receipts reject wider task topology and unsafe finalization placement before execution", async () => {
   const invalid = (
-    kind: "offer" | "branch" | "handler" | "sourceCleanup" | "finalizer" | "secondCleanup",
+    kind: "all3" | "nested" | "handler" | "sourceCleanup" | "finalizer" | "secondCleanup",
   ) =>
     R.fn([], R.Unit, R.Never, () =>
       R.Queue.bounded(R.Unit, 1, QueueDoneType).pipe(
@@ -220,26 +220,29 @@ test("shutdown receipts reject excess Offer edges and unsafe finalization placem
           const shutdown = R.Queue.shutdown(owner).pipe(R.Effect.asVoid);
           const offer = R.Queue.offer(owner, R.Unit.literal()).pipe(R.Effect.asVoid);
           const left =
-            kind === "offer"
-              ? seq(seq(seq(offer, offer), offer), take)
-              : kind === "branch"
-                ? R.Match.bool(R.Bool.literal(false), seq(seq(offer, offer), offer), take)
-                : kind === "sourceCleanup"
-                  ? seq(shutdown, take).pipe(R.Effect.ensuring(R.Effect.sleep(1)))
-                  : kind === "finalizer"
-                    ? take.pipe(R.Effect.ensuring(shutdown))
-                    : take;
+            kind === "sourceCleanup"
+              ? seq(shutdown, take).pipe(R.Effect.ensuring(R.Effect.sleep(1)))
+              : kind === "finalizer"
+                ? take.pipe(R.Effect.ensuring(shutdown))
+                : take;
           const source =
-            kind === "secondCleanup"
-              ? group(shutdown, take.pipe(R.Effect.ensuring(R.Effect.sleep(1))))
-              : group(left, shutdown);
+            kind === "all3"
+              ? R.Effect.all([take, shutdown, R.Effect.void], {
+                  concurrency: "unbounded",
+                  discard: true,
+                })
+              : kind === "nested"
+                ? group(group(take, shutdown), R.Effect.void)
+                : kind === "secondCleanup"
+                  ? group(shutdown, take.pipe(R.Effect.ensuring(R.Effect.sleep(1))))
+                  : group(left, shutdown);
           return source.pipe(R.Effect.catch(() => (kind === "handler" ? offer : R.Effect.void)));
         }),
       ),
     );
   for (const kind of [
-    "offer",
-    "branch",
+    "all3",
+    "nested",
     "handler",
     "sourceCleanup",
     "finalizer",

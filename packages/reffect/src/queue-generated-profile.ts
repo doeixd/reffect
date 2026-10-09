@@ -22,8 +22,10 @@ export interface GeneratedQueueProfile {
   readonly shutdown?: true;
   /** Conservative occurrence bound for shutdown-bearing functions with Offers. */
   readonly shutdownOfferBound?: number;
-  /** Exhausted offer budget permits at most one pending Single Offer. */
-  readonly shutdownPendingOfferBound?: 1;
+  /** Maximum pending Single producers: one from the offer budget, or two from All2. */
+  readonly shutdownPendingOfferBound?: 1 | 2;
+  /** A running consumer has at most one peer pending Offer at capacity release. */
+  readonly shutdownReleaseOfferBound?: 1;
   readonly ownerCount: 1;
   readonly taskCapacity: 2;
   readonly bounds: GeneratedDeferredGrowth;
@@ -282,10 +284,8 @@ const analyzeQueueProfile = (
       );
     };
     walk(root.body, `${path}.body`);
-    // A pending Offer consumes the capacity+1th occurrence: none remain to
-    // repopulate the captured offer set after its entry is removed before resume.
-    if (shutdowns && offers > root.capacity + 1)
-      refuse(path, "Shutdown requires total Offer occurrences at or below owner capacity plus one");
+    // In All2 a running consumer cannot also be a pending producer. Re-offering
+    // suspends its peer on a full buffer before that peer can execute Shutdown.
     if (groups !== 1) refuse(path, "Exactly one unconditional unnested All2 is required");
     if (fallibleAll) check();
     const budget = analyzeQueueBudget(fn, path, undefined, true, finalizers > 0);
@@ -304,7 +304,14 @@ const analyzeQueueProfile = (
         ...(finalizers ? { cleanup: true as const } : {}),
         ...(shutdowns ? { shutdown: true as const } : {}),
         ...(shutdowns && offers ? { shutdownOfferBound: offers } : {}),
-        ...(shutdowns && offers > root.capacity ? { shutdownPendingOfferBound: 1 as const } : {}),
+        ...(shutdowns && offers > root.capacity
+          ? {
+              shutdownPendingOfferBound: offers === root.capacity + 1 ? (1 as const) : (2 as const),
+            }
+          : {}),
+        ...(shutdowns && offers > root.capacity + 1
+          ? { shutdownReleaseOfferBound: 1 as const }
+          : {}),
         ownerCount: 1,
         taskCapacity: 2,
         bounds: bounds!,
@@ -334,7 +341,7 @@ export const analyzeGeneratedQueueCleanupProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Cleanup");
 
-/** Checked Shutdown with at most one exhausted-budget producer; terminal cleanup stays refused. */
+/** Checked All2 Shutdown with at most one peer producer at release; terminal cleanup stays refused. */
 export const analyzeGeneratedQueueShutdownProfile = (
   program: Program,
 ): ReadonlyMap<EffectFn, GeneratedQueueProfile> => analyzeQueueProfile(program, "Shutdown");
